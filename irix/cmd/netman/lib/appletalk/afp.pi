@@ -1,0 +1,983 @@
+/*
+ * Copyright 1991, Silicon Graphics, Inc.
+ * All Rights Reserved.
+ *
+ * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Silicon Graphics, Inc.;
+ * the contents of this file may not be disclosed to third parties, copied or
+ * duplicated in any form, in whole or in part, without the prior written
+ * permission of Silicon Graphics, Inc.
+ *
+ * RESTRICTED RIGHTS LEGEND:
+ * Use, duplication or disclosure by the Government is subject to restrictions
+ * as set forth in subdivision (c)(1)(ii) of the Rights in Technical Data
+ * and Computer Software clause at DFARS 252.227-7013, and/or in similar or
+ * successor clauses in the FAR, DOD or NASA FAR Supplement. Unpublished -
+ * rights reserved under the Copyright Laws of the United States.
+ *
+ * $Revision: 1.15 $
+ */
+
+/*
+ * AppleTalk Filing Protocol
+ */
+import elap, ddp, atp, asp;
+
+protocol afp "AppleTalk Filing Protocol" : asp(0)
+{
+    cache	func_cache;
+
+    const u_char ResType = 4;
+
+    enum bitval {
+	False, True
+    };
+
+    enum afpfunc {
+	EnumerateFragment=0xff, UnknownResponse=0,
+	ByteRangeLock=1, CloseVol, CloseDir, CloseFork, CopyFile,
+	CreateDir, CreateFile, Delete, Enumerate, Flush, FlushFork,
+	GetForkParms=14, GetSrvrInfo, GetSrvrParms, GetVolParms, Login,
+	LoginCont, Logout, MapID, MapName, MoveAndRename, OpenVol,
+	OpenDir, OpenFork, Read, Rename, SetDirParms, SetFileParms,
+	SetForkParms, SetVolParms, Write, GetFileDirParms, SetFileDirParms,
+	ChangePassword, GetUserInfo, OpenDT=48, CloseDT, GetIcon=51,
+	GetIconInfo, AddAPPL, RemoveAPPL, GetAPPL, AddComment,
+	RemoveComment, GetComment, AddIcon=192
+    };
+
+    enum ptype { Short=1, Long=2 };
+
+    enum unlflag { Lock, Unlock };
+
+    enum seflag { Start, End };
+
+    enum shflag { Soft, Hard };
+
+    enum idflag { UserIdToName=1, GroupIdToName=2 };
+
+    enum nflag { NameToUserId=3, NameToGroupID=4 };
+
+    enum drflag { Data, Resource };
+
+    enum fdflag { File, Directory };
+
+    struct findinfo {
+	char	type "Type" [ResType];
+	char	cr "Creator" [ResType];
+	u_short	flags "Attribute flags";  // hex
+	u_char	pad1 "Padding" [12] -vv;
+	u_short	ldl "Logical Data Length" [2];
+	u_short pdl "Physical Data Length" [2];
+	u_char	pad2 "Padding" [2] -vv;
+    };
+
+    /* file bitmap */
+    struct fbmap {
+	u_short	bpad1 "Bit Padding" : 2 -vv;
+	bitval	prodos "ProDos Info" : 1;
+	u_short	bpad2 "Bit Padding" : 2 -vv;
+	bitval	rflen "Resource Fork Length" : 1;
+	bitval	dflen "Data Fork Length" : 1;
+	bitval	fnum "File Number" : 1;
+	bitval	sname "Short Name" : 1;
+	bitval	lname "Long Name" : 1;
+	bitval	finfo "Finder Info" : 1;
+	bitval	bpdate "Backup Date" : 1;
+	bitval	modate "Modification Date" : 1;
+	bitval	crdate "Creation Date" : 1;
+	bitval	pdirid "Parent Directory ID" : 1;
+	bitval	attr "Attributes" : 1;
+    };
+
+    struct fparm {
+	if (filebmap.attr)
+	{
+	    bitval	setclr "Set/Clear" : 1;
+	    u_short	bpad1 : 4 -vv;
+	    bitval	cprot "Copy Protect" : 1;
+	    u_short	bpad2 : 1 -vv;
+	    bitval	delinh "Delete Inhibit" : 1;
+	    bitval	reninh "Rename Inhibit" : 1;
+	    bitval	bkup "Backup Needed" : 1;
+	    bitval	wrtinh "Write Inhibit" : 1;
+	    bitval	ropen "Resouces Already Open" : 1;
+	    bitval	dopen "Data Already Open" : 1;
+	    bitval	sys "System" : 1;
+	    bitval	multi "Multiple User" : 1;
+	    bitval	invis "Invisible" : 1;
+	}
+	if (filebmap.pdirid)
+	    long	pdirid "Parent Directory ID";
+	if (filebmap.crdate)
+	    long	crdate "Creation Date";
+	if (filebmap.modate)
+	    long	modate "Modification Date";
+	if (filebmap.bpdate)
+	    long	bpdate "Backup Date";
+	if (filebmap.finfo)
+	    findinfo	finfo "Finder Info";
+	if (filebmap.lname)
+	    short	lname "Long Name";
+	if (filebmap.sname)
+	    short	sname "Short Name";
+	if (filebmap.fnum)
+	    long	fnum "File Number";
+	if (filebmap.dflen)
+	    long	dflen "Data Fork Length";
+	if (filebmap.rflen)
+	    long	rflen "Resource Fork Length";
+	if (filebmap.prodos)
+	    u_char	prodos "ProDos Info" [6];
+	// Name here if lname or sname is set
+	if (filebmap.lname || filebmap.sname)
+	{
+	    u_char	namelen "Name Length" -v;
+	    char	name "Name" [namelen];
+	}
+    };
+
+    /* Directory bitmap */
+    struct dbmap {
+	u_short	bpad "Bit Padding" : 2 -vv;
+	bitval	prodos "ProDos Info" : 1;
+	bitval	access "Access Right" : 1;
+	bitval	groupid "Group ID" : 1;
+	bitval	ownerid "Owner ID" : 1;
+	bitval	offspr "Offspring Count" : 1;
+	bitval	dirid "Directory ID" : 1;
+	bitval	sname "Short Name" : 1;
+	bitval	lname "Long Name" : 1;
+	bitval	finfo "Finder Info" : 1;
+	bitval	bpdate "Backup Date" : 1;
+	bitval	modate "Modification Date" : 1;
+	bitval	crdate "Creation Date" : 1;
+	bitval	pdirid "Parent Directory ID" : 1;
+	bitval	attr "Attributes" : 1;
+    };
+
+    struct accright {
+	bitval	owner "Owner Access" : 1;
+	u_short	bpad : 4 -vv;			// u_short??
+	bitval	write "Write Access" : 1;
+	bitval	read "Read Access" : 1;
+	bitval	search "Search Access" : 1;
+    };
+
+    struct dirattr {
+	bitval	setclr "Set/Clear" : 1;
+	u_short	bpad1 : 6 -vv;
+	bitval	delinh "Delete Inhibit" : 1;
+	bitval	reninh "Rename Inhibit" : 1;
+	bitval	bkup "Backup Needed" : 1;
+	u_short	bpad2 : 3 -vv;
+	bitval	sys "System" : 1;
+	u_short	bpad3 "Bit Padding" : 1 -vv;
+	bitval	invis "Invisible" : 1;
+    };
+
+    struct dparm {
+	if (dirbmap.attr)
+	    dirattr	attr "Attributes";
+	if (dirbmap.pdirid)
+	    long	pdirid "Parent Directory ID";
+	if (dirbmap.crdate)
+	    long	crdate "Creation Date";
+	if (dirbmap.modate)
+	    long	modate "Modification Date";
+	if (dirbmap.bpdate)
+	    long	bpdate "Backup Date";
+	if (dirbmap.finfo)
+	    findinfo	finfo "Finder Info";
+	if (dirbmap.lname)
+	    short	lname "Long Name";
+	if (dirbmap.sname)
+	    short	sname "Short Name";
+	if (dirbmap.dirid)
+	    long	dirid "Directory ID";
+	if (dirbmap.offspr)
+	    short	offspr "Offsprint Count";
+	if (dirbmap.ownerid)
+	    long	ownerid "Owner ID";
+	if (dirbmap.groupid)
+	    long	groupid "Group ID";
+	if (dirbmap.access)
+	{
+	    accright	uaright "User Access Rights";
+	    accright	world "World Access Rights";
+	    accright	group "Group Access Rights";
+	    accright	owner "Owner Access Rights";
+	}
+	if (dirbmap.prodos)
+	    u_char	prodos "ProDos Info" [6];
+	if (dirbmap.lname || dirbmap.sname)
+	{
+	    u_char	namelen -v;
+	    char	name [namelen];
+	}
+    };
+
+    /* File and Directory common bitmap */
+    struct fdbmap {
+	u_short	bpad1 : 2 -vv;
+	bitval	prodos "ProDos Info" : 1;
+	u_short	bpad2 : 5 -vv;
+	bitval	sname "Short Name" : 1;
+	bitval	lname "Long Name" : 1;
+	bitval	finfo "Finder Info" : 1;
+	bitval	bpdate "Backup Date" : 1;
+	bitval	modate "Modification Date" : 1;
+	bitval	crdate "Creation Date" : 1;
+	bitval	pdirid "Parent Directory ID" : 1;
+	bitval	attr "Attributes" : 1;
+    };
+
+    struct fdparm {
+	if (bmap.attr)
+	    dirattr	attr "Attributes";
+	if (bmap.pdirid)
+	    long	pdirid "Parent Directory ID";
+	if (bmap.crdate)
+	    long	crdate "Creation Date";
+	if (bmap.modate)
+	    long	modate "Modification Date";
+	if (bmap.bpdate)
+	    long	bpdate "Backup Date";
+	if (bmap.finfo)
+	    findinfo	finfo "Finder Info";
+	if (bmap.lname)
+	    short	lname "Long Name";
+	if (bmap.sname)
+	    short	sname "Short Name";
+	if (bmap.prodos)
+	    u_char	prodos "ProDos Info" [6];
+	if (bmap.lname || bmap.sname)
+	{
+	    u_char	namelen -v;
+	    char	name [namelen];
+	}
+    };
+
+    /* Volume bitmap */
+    struct vbmap {
+	u_short	bpad : 7 -vv;
+	bitval	vname "Volume Name" : 1;
+	bitval	btotal "Bytes Total" : 1;
+	bitval	bfree "Bytes Free" : 1;
+	bitval	vid "Volume ID" : 1;
+	bitval	bkdate "Backup Date" : 1;
+	bitval	modate "Modification Date" : 1;
+	bitval	crdate "Creation Date" : 1;
+	bitval	sign "Signature" : 1;
+	bitval	attr "Attributes" : 1;
+    };
+
+    struct vparm {
+	if (volbmap.attr)
+	{
+	    u_short	bpad : 15 -vv;
+	    bitval	read "Read Only" : 1;
+	}
+	if (volbmap.sign)
+	    short	sign "Signature";
+	if (volbmap.crdate)
+	    long	crdate "Creation Date";
+	if (volbmap.modate)
+	    long	modate "Modification Date";
+	if (volbmap.bkdate)
+	    long	bkdate "Backup Date";
+	if (volbmap.vid)
+	    short	vid "Volume ID";
+	if (volbmap.bfree)
+	    u_long	bfree "Bytes Free";
+	if (volbmap.btotal)
+	    u_long	btotal "Bytes Total";
+	if (volbmap.vname)
+	{
+	    short	vname "Volume Name";
+// The book is not clear on how to decode the following.
+	    u_char	name [];
+	}
+    };
+
+    /* User Info bitmap */
+    struct uimap {
+	u_short	bpad : 14 -vv;
+	bitval	gid "Primary Group ID (long)" : 1;
+	bitval	uid "User ID (long)" : 1;
+    };
+
+    struct enumparm {
+	// Pad2 is for padding at the end of the previous struct.
+	if (structlen == 0)
+	    u_char	pad2 -vv;
+	u_char	structlen "Length of this Structure" -v;
+	fdflag	fildirflag "File/Directory Flag" : 1;
+	u_short	bpad1 : 7 -vv;
+	if (fildirflag)
+	    dparm	dirparm;
+	else
+	    fparm	filparm;
+    };
+
+    struct volparm {
+	bitval	pwd "Has Password Protection" : 1;
+	u_short	bpad : 6 -vv;
+	bitval	config "Has Configuration Info" : 1;
+	u_char	volnamelen "Volume Name Length" -v;
+	char	volname "Volume Name" [volnamelen];
+    };
+
+    switch (atp.func) {
+      case atp.TReq:
+	/* interpret request */
+	afpfunc		func "AFP Function Code" : 8;
+
+	/* save func indexed by TID and source address for recognizing TResp */
+	afpfunc_cache_enter(func_cache, atp.tid,
+			    (ddp.srcnetnum<<8)|ddp.srcnodeid, elap.srcnodeid,
+			    func);
+
+	switch (func) {
+	  case AddAPPL:
+	    u_char	pad "Padding" -vv;
+	    short	ddrefnum "Desktop Database Reference Number";
+	    long	ancestdir "Ancestor Directory ID";
+	    char	fcreat "File Creator" [ResType];
+	    long	appltag "User-define tag with APPL mapping";
+	    ptype 	pathtype "Pathname Type" : 8 -v;
+	    u_char	pathlen "Pathname Length" -v;
+	    char	pname "Pathname" [pathlen];
+
+	  case AddComment:
+	    u_char	pad1 -vv;
+	    short	ddrefnum;
+	    long	dirid "Directory ID";
+	    ptype 	pathtype : 8 -v;
+	    u_char	pathlen -v;
+	    char	pname [pathlen];
+
+	    if (ds_tell($ds) % 2 == 1 ? !(pathlen & 1) : (pathlen & 1))
+		u_char	pad2 -vv;
+	    u_char	comlen "Comment Length" -v;
+	    char	comment "Comment" [comlen];
+
+	  case AddIcon:
+	    u_char	pad1 -vv;
+	    short	ddrefnum;
+	    char	ifcreat "Icon File Creator" [ResType];
+	    char	ftype "Icon File Type" [ResType];
+	    u_char	icontype "Type of icon";
+	    u_char	pad2 -vv;
+	    long	icontag "Icon Tag Information";
+	    u_short	bmapsize "Bitmap size for this Icon";
+
+	  case ByteRangeLock:
+	    seflag	startend "Start/End Flag" : 1;
+	    u_short	bpad : 6 -vv;
+	    unlflag	unlockflag "Lock/Unlock Flag" : 1;
+	    short	ofrefnum "Open Fork Reference Number";
+	    long	boffset "Offset to the First Byte";
+	    long	Len "# of Bytes to Lock or Unlock";
+
+	  case ChangePassword:
+	    u_char	pad1 -vv;
+	    u_char	uamlen "User Authentication Method Length" -v;
+	    char	uam "User Authentication Method" [uamlen];
+	    if (ds_tell($ds) % 2 == 1 ? !(uamlen & 1) : (uamlen & 1))
+		u_char	pad2 -vv;
+	    u_char	unamelen "User Name Length" -v;
+	    char	uname "User Name" [unamelen];
+	    if (ds_tell($ds) % 2 == 1 ? !(unamelen & 1) : (unamelen & 1))
+		u_char	pad3 "Padding" -vv;
+	    char	oldpwd "Old Password" [8];
+	    char	newpwd "New Password" [8];
+
+	  case CloseDir:
+	    u_char	pad -vv;
+	    short	vid "Volume ID";
+	    long	dirid;
+
+	  case CloseDT:
+	    u_char	pad -vv;
+	    short	ddrefnum;
+
+	  case CloseFork:
+	    u_char	pad -vv;
+	    short	ofrefnum;
+
+	  case CloseVol:
+	    u_char	pad -vv;
+	    short	vid "Volume ID";
+
+	  case CopyFile:
+	    u_char	pad -vv;
+	    short	srcvid "Source Volume ID";
+	    long	srcdid "Source Ancestor Directory ID";
+	    short	dstvid "Destination Volume ID";
+	    long	dstdid "Destination Ancestor Directory ID";
+	    ptype 	srcptype "Source Pathname Type" : 8 -v;
+	    u_char	srcplen "Source Pathname Length" -v;
+	    char	spname "Source Pathname" [srcplen];
+	    ptype 	dstptype "Destination Pathname Type" : 8 -v;
+	    u_char	dstplen "Destination Pathname Length" -v;
+	    char	dpname "Destination Pathname" [dstplen];
+	    ptype 	newptype "New Pathname Type" : 8 -v;
+	    u_char	newplen "New Pathname Length" -v;
+	    char	npname "New Pathname" [newplen];
+
+	  case CreateDir:
+	    u_char	pad -vv;
+	    short	vid "Volume ID";
+	    long	dirid;
+	    ptype 	pathtype : 8 -v;
+	    u_char	pathlen -v;
+	    char	pname [pathlen];
+
+	  case CreateFile:
+	    shflag	creatflag "Hard/Soft Create" : 1;
+	    u_short	bpad : 7 -vv;
+	    short	vid "Volume ID";
+	    long	dirid;
+	    ptype 	pathtype : 8 -v;
+	    u_char	pathlen -v;
+	    char	pname [pathlen];
+
+	  case Delete:
+	    u_char	pad -vv;
+	    short	vid "Volume ID";
+	    long	dirid;
+	    ptype 	pathtype : 8 -v;
+	    u_char	pathlen -v;
+	    char	pname [pathlen];
+
+	  case Enumerate:
+	    u_char	pad -vv;
+	    short	vid "Volume ID";
+	    long	dirid;
+	    fbmap	filebmap "File Bitmap";
+	    dbmap	dirbmap "Directory Bitmap";
+	    short	reqcnt "Maximum Structures to Return";
+	    short	startind "Directory Offspring Index";
+	    short	maxreply "Maximum size of Reply Block";
+	    ptype 	pathtype : 8 -v;
+	    u_char	pathlen -v;
+	    char	pname [pathlen];
+
+	  case Flush:
+	    u_char	pad -vv;
+	    short	vid "Volume ID";
+
+	  case FlushFork:
+	    u_char	pad -vv;
+	    short	ofrefnum;
+
+	  case GetAPPL:
+	    u_char	pad -vv;
+	    short	ddrefnum;
+	    char	fcreat [ResType];
+	    short	applind "APPL Mapping Index for Retrieval";
+	    fbmap	filebmap;
+
+	  case GetComment:
+	    u_char	pad -vv;
+	    short	ddrefnum;
+	    long	dirid;
+	    ptype 	pathtype : 8 -v;
+	    u_char	pathlen -v;
+	    char	pname [pathlen];
+
+	  case GetFileDirParms:
+	    u_char	pad -vv;
+	    short	vid "Volume ID";
+	    long	dirid;
+	    fbmap	filebmap;
+	    dbmap	dirbmap;
+	    ptype 	pathtype : 8 -v;
+	    u_char	pathlen -v;
+	    char	pname [pathlen];
+
+	  case GetForkParms:
+	    u_char	pad -vv;
+	    short	ofrefnum;
+	    fbmap	filebmap;
+
+	  case GetIcon:
+	    u_char	pad1 -vv;
+	    short	ddrefnum;
+	    char	ifcreat [ResType];
+	    char	ftype [ResType];
+	    u_char	icontype;
+	    u_char	pad2 -vv;
+	    short	len "# of Bytes for Icon Bitmap";
+
+	  case GetIconInfo:
+	    u_char	pad -vv;
+	    short	ddrefnum;
+	    char	ifcreat [ResType];
+	    short	iconind "Index of Requested Icon";
+
+/*	    case GetSrvrInfo: */
+
+/*	    case GetSrvrParms: */
+
+	  case GetUserInfo:
+	    u_short	bpad : 7 -vv;
+	    bitval	thisuser "This User Bit" : 1;
+	    long	uid "User ID";
+	    uimap	uibmap "User Info Parameters Bitmap";
+
+	  case GetVolParms:
+	    u_char	pad -vv;
+	    short	vid "Volume ID";
+	    vbmap	volbmap "Volume Parameters to be Returned";
+
+	  case Login:
+	    u_char	verlen "AFP Version Length" -v;
+	    char	version "AFP Version" [verlen];
+	    u_char	uamlen -v;
+	    char	uam [uamlen];
+	    if (afp_option_needed($ds))
+//	      opaque	uainfo "User Authentication Info" [];
+	      u_char	uainfo "User Authentication Info" [];
+
+	  case LoginCont:
+	    u_char	pad -vv;
+	    short	idnum "ID number from Previous Login";
+//	    opaque	uainfo[];
+	    u_char	uainfo[];
+
+/*	    case Logout: */
+
+	  case MapID:
+	    idflag	subfunc "Subfunction Code" : 8;
+	    long	id "User/Group ID to map";
+
+	  case MapName:
+	    nflag 	subfunc "Subfunction Code" : 8;
+	    u_char	mapnamelen "User/Group Name Length" -v;
+	    char	mapname "User/Group Name" [mapnamelen];
+
+	  case MoveAndRename:
+	    u_char	pad -vv;
+	    short	vid "Volume ID";
+	    long	srcdid "Source Ancestor Directory ID";
+	    long	dstdid "Destination Ancestor Directory ID";
+	    ptype 	srcptype "Source Pathname Type" : 8 -v;
+	    u_char	srclen "Source Pathname Length" -v;
+	    char	spname "Source Pathname" [srclen];
+	    ptype 	dstptype "Destination Pathname Type" : 8 -v;
+	    u_char	dstlen "Destination Pathname Length" -v;
+	    char	dpname "Destination Pathname" [dstlen];
+	    ptype 	newptype "New Pathname Type" : 8 -v;
+	    u_char	newlen "New Pathname Length" -v;
+	    char	npname "New Pathname" [newlen];
+
+	  case OpenDir:
+	    u_char	pad -vv;
+	    short	vid "Volume ID";
+	    long	ancestdir;
+	    ptype 	pathtype : 8 -v;
+	    u_char	pathlen -v;
+	    char	pname [pathlen];
+
+	  case OpenDT:
+	    u_char	pad -vv;
+	    short	vid "Volume ID";
+
+	  case OpenFork:
+	    drflag	rsrcdata "Resource/Data Flag" : 1;
+	    u_short	bpad : 7 -vv;
+	    short	vid "Volume ID";
+	    long	ancestdir;
+	    fbmap	filebmap;
+	    u_short	bpad1 : 10 -vv;
+	    bitval	denywrite "Deny Other User's Right to Write" : 1;
+	    bitval	denyread "Deny Other User's Right to Read" : 1;
+	    u_short	bpad2 : 2 -vv;
+	    bitval	write "Allow Fork to be Written to" : 1;
+	    bitval	read "Allow Fork to be Read" : 1;
+	    ptype 	pathtype : 8 -v;
+	    u_char	pathlen -v;
+	    char	pname [pathlen];
+
+	  case OpenVol:
+	    u_short	bpad1 : 8 -vv;
+	    vbmap	volbmap;
+	    u_char	volnamelen "Volume Name Length" -v;
+	    char	volname "Volume Name" [volnamelen];
+	    // pwd is optional
+	    if (afp_option_needed($ds))
+	    {
+	      if (ds_tell($ds) % 2 == 1 ? !(volnamelen & 1) : (volnamelen & 1))
+		u_char	pad2 -vv;
+	      char	pwd "Password" [8];
+	    }
+
+	  case Read:
+	    u_char	pad -vv;
+	    short	ofrefnum;
+	    long	readoffset "# of 1st Byte to be Read";
+	    long	readreqcnt "# of Bytes to be Read";
+	    u_char	newmask "Mask to Stop Read";
+	    u_char	newchar "Character to Stop Read";
+
+	  case RemoveAPPL:
+	    u_char	pad -vv;
+	    short	ddrefnum;
+	    long	ancestdir;
+	    char	fcreat [ResType];
+	    ptype 	pathtype : 8 -v;
+	    u_char	pathlen -v;
+	    char	pname [pathlen];
+
+	  case RemoveComment:
+	    u_char	pad -vv;
+	    short	ddrefnum;
+	    long	ancestdir;
+	    ptype	pathtype : 8 -v;
+	    u_char	pathlen -v;
+	    char	pname [pathlen];
+
+	  case Rename:
+	    u_char	pad -vv;
+	    short	vid "Volume ID";
+	    long	ancestdir;
+	    ptype 	pathtype : 8 -v;
+	    u_char	pathlen -v;
+	    char	pname [pathlen];
+	    ptype 	newtype "New Name Type" : 8 -v;
+	    u_char	newlen -v;
+	    char	newname "New Name of File/Directory" [newlen];
+
+	  case SetDirParms:
+	    u_char	pad1 -vv;
+	    short	vid "Volume ID";
+	    long	ancestdir;
+	    dbmap	dirbmap;
+	    ptype 	pathtype : 8 -v;
+	    u_char	pathlen -v;
+	    char	pname [pathlen];
+	    if (ds_tell($ds) % 2 == 1 ? !(pathlen & 1) : (pathlen & 1))
+		u_char	pad2 -vv;
+	    dparm	dirparm "Directory Parameters";
+
+	  case SetFileDirParms:
+	    u_char	pad1 -vv;
+	    short	vid "Volume ID";
+	    long	ancestdir;
+	    fdbmap	bmap "Parameters Bitmap";
+	    ptype 	pathtype : 8 -v;
+	    u_char	pathlen -v;
+	    char	pname [pathlen];
+	    if (ds_tell($ds) % 2 == 1 ? !(pathlen & 1) : (pathlen & 1))
+		u_char	pad2 -vv;
+	    fdparm	fdirparm "File/Directory Common Parameters";
+
+	  case SetFileParms:
+	    u_char	pad1 -vv;
+	    short	vid "Volume ID";
+	    long	ancestdir;
+	    fbmap	filebmap;
+	    ptype 	pathtype : 8 -v;
+	    u_char	pathlen -v;
+	    char	pname [pathlen];
+	    if (ds_tell($ds) % 2 == 1 ? !(pathlen & 1) : (pathlen & 1))
+		u_char	pad2 -vv;
+	    fparm	filparm "File Parameters";
+
+	  case SetForkParms:
+	    u_char	pad -vv;
+	    short	ofrefnum;
+	    fbmap	filebmap;
+	    long	forklen "New End of Fork Value" -v;
+
+	  case SetVolParms:
+	    u_char	pad -vv;
+	    short	vid "Volume ID";
+	    u_short	bpad1 : 11 -vv;
+	    bitval	backupdate "Backup Date" : 1;
+	    u_short	bpad2 : 4 -vv;
+	    long	bpdate "Backup Date";
+
+	  case Write:
+	    seflag	startend "Start/End Flag" : 1;
+	    u_short	bpad : 7 -vv;
+	    short	ofrefnum;
+	    long	offset "# of Byte Where Write to Begin";
+	    long	wrtreqcnt "# of Bytes to be Written";
+	}
+      case atp.TResp:
+	/* find function code indexed by TID and destination address */
+	afpfunc		func : 8 =
+			  afpfunc_cache_match(func_cache, atp.tid,
+					      (ddp.dstnetnum<<8)|ddp.dstnodeid,
+					      elap.dstnodeid, $ps);
+
+	/* interpret responses */
+	switch (func) {
+	  case ByteRangeLock:
+	    long	rangestart "Number of First Byte Locked";
+
+	  case CreateDir:
+	    long	newdid "ID of New Directory";
+
+	  case Enumerate:
+	    fbmap	filebmap;
+	    dbmap	dirbmap "Directory Bitmap";
+	    short	actcnt "Actual # of Structures Returned";
+	    enumparm	parms "Offspring Parameters Structure" [actcnt];
+
+	  case GetAPPL:
+	    fbmap	filebmap;
+	    long	tag "APPL Tag";
+	    fparm	filparm;
+
+	  case GetComment:
+	    u_char	comlen "Comment Length" -v;
+	    char	comment [comlen];
+
+	  case GetFileDirParms:
+	    fbmap	filebmap;
+	    dbmap	dirbmap;
+	    fdflag	fildirflag : 1;
+	    u_short	bpad : 15 -vv;
+	    if (fildirflag)
+		dparm	dirparm;
+	    else
+		fparm	filparm;
+
+	  case GetForkParms:
+	    fbmap	filebmap;
+	    fparm	filparm;
+
+	  /* Not enought info from the book, may not be right */
+	  case GetIcon:
+	    u_char	ibmap "Actual Bitmap of the Icon" [];
+
+	  case GetIconInfo:
+	    long	icontag;
+	    char	ftype [ResType];
+	    u_char	icontype;
+	    u_char	pad -vv;
+	    short	size "Size of Icon Bitmap";
+
+	  case GetSrvrInfo:
+	    short	offsetmt "Offset to Machine Type";
+	    short	offsetafp "Offset to Count of AFP Versions";
+	    short	offsetuam "Offset to Count of UAMs";
+	    short	offsetvol "Offset to Volume Icon and Mask";
+	    u_short	bpad : 14 -vv;
+	    bitval	chgpwd "Support Change of Password" : 1;
+	    bitval	copyfile "Support Copy File" : 1;
+	    u_char	sernamelen "Server Name Length" -v;
+	    char	sername "Server Name" [sernamelen];
+	    u_char	typelen "Machine Type Length" -v;
+	    char	machine "Machine Type" [typelen];
+	    u_char	cntafp "Count of AFP Version";
+	    u_char	afplen "AFP Versions Length" -v;
+	    char	afpvers "AFP Versions the Server using" [afplen];
+	    u_char	cntuam "Count of UAMs";
+	    u_char	uamlen -v;
+	    char	uam [uamlen];
+	    /* viconmask can be 0 - 256 bytes */
+	    if (afp_option_needed($ds))
+//	      opaque	viconmask "Volume Icon and Mask" [];
+	      u_char	viconmask "Volume Icon and Mask" [];
+
+	  case GetSrvrParms:
+	    long	srvtime "Server Date and Time";
+	    u_char	numvols "# of Volumes Managed by Server";
+	    volparm	volume "Server Volume Information" [numvols];
+
+	  case GetUserInfo:
+	    uimap	uibmap;
+	    if (uibmap.gid)
+		long	c_gid "Primary Group ID";
+	    if (uibmap.uid)
+		long	c_uid "User ID";
+
+	  case GetVolParms:
+	  case OpenVol:
+	    vbmap	volbmap;
+	    vparm	vlparm "Volume Parameters Requested";
+
+	  case Login:
+	  case LoginCont:
+	    short	uamid "ID for UAMs";
+	    if (afp_option_needed($ds))
+//	      opaque	uaminfo "User Auth Info" [];
+	      u_char	uaminfo "User Auth Info" [];
+
+	  case MapID:
+	    u_char	mnamelen "Name Length" -v;
+	    char	mname "Name Corresponding to ID" [mnamelen];
+
+	  case MapName:
+	    long	mapid "ID Corresponding to Name";
+
+	  case OpenDir:
+	    long	dirid;
+
+	  case OpenDT:
+	    short	ddrefnum;
+
+	  case OpenFork:
+	    fbmap	filebmap;
+	    short	refnum "Reference Number";
+	    fparm	filparm;
+
+	  case Read:
+//	    opaque	fdata "Fork Data Requested" [];
+	    u_char	fdata "Fork Data Requested" [];
+
+	  case Write:
+	    long	lastwrite "# of Bytes Past Last Byte Written";
+	}
+    }
+}
+
+// pass through afpfunc cache code
+%{
+#include <rpc/types.h>
+#include <rpc/xdr.h>
+#include <net/raw.h>
+
+struct afpfunc_cache_key {
+	u_int	tid;		/* atp transaction identifier */
+	u_int	addr;		/* ddp long header address or elap nodeid */
+};
+
+struct afpfunc_cache_value {
+	u_short	refcount;	/* reference count */
+	u_char	func;		/* afp request function code */
+	u_char	resp_hit;	/* whether response hit cache yet */
+	u_long	resp_seq;	/* response sequence number */
+};
+
+#define ACK(p)  ((struct afpfunc_cache_key *)(p))
+#define	ACV(p)	((struct afpfunc_cache_value *)(p))
+
+static unsigned int
+afpfunc_cache_hash(void *key)
+{
+	return ACK(key)->tid ^ ACK(key)->addr;
+}
+
+static int
+afpfunc_cache_cmpkeys(void *key1, void *key2)
+{
+	return ACK(key1)->tid != ACK(key2)->tid
+	    || ACK(key1)->addr != ACK(key2)->addr;
+}
+
+static bool_t
+xdr_afpfunc_cache_value(XDR *xdr, void **valp, void *key)
+{
+	struct afpfunc_cache_value *acv;
+
+	switch (xdr->x_op) {
+	  case XDR_DECODE:
+		acv = *valp;
+		if (acv == 0) {
+			*valp = acv = new(struct afpfunc_cache_value);
+			acv->refcount = 1;
+		}
+		/* FALL THROUGH */
+	  case XDR_ENCODE:
+		return xdr_u_char(xdr, &acv->func)
+		    && xdr_u_char(xdr, &acv->resp_hit)
+		    && xdr_u_long(xdr, &acv->resp_seq);
+	  case XDR_FREE:
+		acv = *valp;
+		if (--acv->refcount == 0)
+			delete(acv);
+		*valp = 0;
+	}
+	return TRUE;
+}
+
+static void
+afpfunc_cache_dump(void *key, void *value, long exptime)
+{
+	printf("tid %u addr %#x -> func %u resp_hit %u resp_seq %lu\n",
+		ACK(key)->tid, ACK(key)->addr, ACV(value)->func,
+		ACV(value)->resp_hit, ACV(value)->resp_seq);
+}
+
+static struct cacheops afpfunc_cache_ops = {
+	{ afpfunc_cache_hash, afpfunc_cache_cmpkeys, xdr_afpfunc_cache_value },
+	0, afpfunc_cache_dump
+};
+
+static void
+afpfunc_cache_create(Cache **self)
+{
+	c_create("afpfunc", 64, sizeof(struct afpfunc_cache_key), 2 MINUTES,
+		 &afpfunc_cache_ops, self);
+}
+
+static void
+afpfunc_cache_enter(Cache *c, u_short tid, u_long addr, u_int node, u_char func)
+{
+	struct afpfunc_cache_key key;
+	struct afpfunc_cache_value *acv;
+
+	key.tid = tid;
+	key.addr = addr;
+	acv = new(struct afpfunc_cache_value);
+	acv->refcount = 2;
+	acv->func = func;
+	acv->resp_hit = 0;
+	c_enter(c, &key, acv);
+	key.addr = node;
+	c_enter(c, &key, acv);
+}
+
+#define	afpEnumerateFragment	-1
+#define	afpUnknownResponse	0
+#define	afpEnumerate		9
+
+static u_char
+afpfunc_cache_match(Cache *c, u_short tid, u_long addr, u_int node,
+		    ProtoStack *ps)
+{
+	struct afpfunc_cache_key key;
+	struct afpfunc_cache_value *acv;
+	u_long curseq;
+
+	key.tid = tid;
+	key.addr = addr;
+	acv = c_match(c, &key);
+	if (acv == 0) {
+		key.addr = node;
+		acv = c_match(c, &key);
+		if (acv == 0)
+			return afpUnknownResponse;
+	}
+
+	/*
+	 * We cannot decode non-initial AFP Enumerate fragments yet, so we
+	 * must poison the cache entry that we hit with the initial frag's
+	 * sequence number.
+	 */
+	curseq = ps->ps_snhdr->snoop_seq;
+	if (acv->resp_hit) {
+		if (acv->func == afpEnumerate && acv->resp_seq != curseq)
+			return afpEnumerateFragment;
+	} else {
+		acv->resp_hit = 1;
+		acv->resp_seq = curseq;
+	}
+	return acv->func;
+}
+
+/*
+ * Gross: we must check for undecoded trailing data to decide whether
+ * there's an afp field at hand.
+ */
+static int
+afp_option_needed(DataStream *ds)
+{
+	return ds->ds_count > 0;
+}
+%}

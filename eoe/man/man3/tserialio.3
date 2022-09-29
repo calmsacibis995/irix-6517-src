@@ -1,0 +1,710 @@
+'\"macro stdmacro
+.TH TSERIALIO 3 
+.SH NAME
+.upperok
+
+tserialio, libtserialio, tsintro, tsClosePort, tsCopyConfig, tsFreeConfig, tsGetErrorHandler, tsGetFD, tsGetFillPoint, tsGetFillPointBytes, tsGetFilledBytes, tsNewConfig, tsNewConfigFromPort, tsOpenPort, tsRead, tsSetCflag, tsSetDirection, tsSetErrorHandler, tsSetExternalClockFactor, tsSetFillPointBytes, tsSetOspeed, tsSetPortName, tsSetProtocol, tsSetQueueSize, tsWrite \- timestamped serial port i/o 
+.Op c p a
+.SH C SYNOPSIS
+.B "#include <tserialio.h>"
+.PP
+Link with -ltserialio
+.PP
+.sp
+.nf
+Choosing a Port Configuration:
+.PP
+.B "TSconfig tsNewConfig(void);"
+.B "TSconfig tsNewConfigFromPort(TSport port);"
+.B "TSconfig tsCopyConfig(TSconfig from);"
+.B "TSstatus tsFreeConfig(TSconfig config);"
+.B "TSstatus tsSetPortName(TSconfig config, char *name);"
+.B "TSstatus tsSetDirection(TSconfig config, int direction);"
+.B "TSstatus tsSetQueueSize(TSconfig config, int queuesize);"
+.B "TSstatus tsSetCflag(TSconfig config, tcflag_t cflag);"
+.B "TSstatus tsSetOspeed(TSconfig config, speed_t ospeed);"
+.B "TSstatus tsSetProtocol(TSconfig config, int protocol);"
+.B "TSstatus tsSetExternalClockFactor(TSconfig config, "
+.B "                                  int extclock_factor);"
+.PP
+Opening and Using a Port:
+.PP
+.B "TSstatus tsOpenPort(TSconfig config, TSport *returnPort);"
+.B "TSstatus tsClosePort(TSport port);"
+.B "int tsGetFilledBytes(TSport port);"
+.B "TSstatus tsRead(TSport port, unsigned char *data, stamp_t *stamps, "
+.B "                int nbytes);"
+.B "TSstatus tsWrite(TSport port, unsigned char *data, stamp_t *stamps, "
+.B "                 int nbytes);"
+.B "TSstatus tsSetFillPointBytes(TSport port, int nbytes);"
+.B "int tsGetFillPointBytes(TSport port);"
+.B "int tsGetFD(TSport port);"
+.PP
+Error Handling:
+.PP
+.B "TSerrfunc tsSetErrorHandler(TSerrfunc newfunc, int includefuncname); "
+.B "TSerrfunc tsGetErrorHandler(int *includefuncname);"
+.fi
+.PP
+.Op
+.SH DESCRIPTION
+
+The tserialio library provides millisecond accurate, timestamped
+access to a serial port.  An application can measure the time at which
+each input byte arrived at a serial port to within plus or minus one
+millisecond.  An application can also schedule bytes to go out a
+serial port at a specified time in the future.  The operating system
+will output each byte at the specified time with an accuracy of plus
+or minus one millisecond.  Times are specified on the UST timeline,
+the same timeline used for other devices such as audio and video (see
+.BR dmGetUST (3dm)).
+See ACCURACY AND LATENCY below for more information about the accuracy
+and latency guarantees which tserialio offers.
+
+Tserialio is useful for timely serial port tasks such as machine
+control, video deck control, or motion capture.  It is also useful for
+MIDI, though the MIDI library (see
+.BR mdIntro (3dm))
+may be more appropriate in this case.
+
+Tserialio is currently only supported on O2 workstations.
+
+.SH OVERVIEW
+
+A TSport represents one serial port open in one direction.  In order
+to open a TSport, you specify how you would like the port configured
+using a TSconfig.  This code shows you how to create a TSconfig and
+set its various members:
+.nf
+.Ex
+{
+  TSconfig config = tsNewConfig();
+  TSport port;
+
+  tsSetPortName(config, "/dev/ttyts1");          /* required */
+  tsSetDirection(config, TS_DIRECTION_TRANSMIT); /* required */
+  tsSetQueueSize(config, 200);                   /* required */
+  tsSetCflag(config, CS8|PARENB|PARODD);         /* required */
+  tsSetOspeed(config, 38400);                    /* required */
+  tsSetProtocol(config, TS_PROTOCOL_RS232);      /* optional */
+  tsSetExternalClockFactor(config, 0);           /* optional */
+
+  if (TS_SUCCESS != tsOpenPort(config, &port))
+    exit(2);
+
+  tsFreeConfig(config);
+
+  ... use the port ...
+   
+  tsClosePort(port);
+}
+.Ee
+.fi
+
+The C types TSport and TSconfig are opaque pointers which you
+should simply pass into the tserialio calls and never dereference.
+The format of the data to which they point is not exported.
+
+If you opened a TS_DIRECTION_TRANSMIT port, then use code like this to
+actually schedule bytes for output:
+
+.nf
+.Ex
+{
+  stamp_t stamps[NBYTES];
+  unsigned char data[NBYTES];
+  int i;
+  for(i=0; i < NBYTES; i++) {
+    data[i] = a byte of data;
+    stamps[i] = UST time to transmit that byte;
+  }
+  tsWrite(port, &data, &stamps, NBYTES);
+}
+.Ee
+.fi
+
+If you opened a TS_DIRECTION_RECEIVE port, then use code like this to
+acquire input bytes and their arrival times:
+
+.nf
+.Ex
+{
+  stamp_t stamps[NBYTES];
+  unsigned char data[NBYTES];
+  tsRead(port, &data, &stamps, NBYTES);
+  int i;
+  for(i=0; i < NBYTES; i++) {
+    data[i] contains a byte of data;
+    stamps[i] contains UST time at which byte arrived;
+  }
+}
+.Ee
+.fi
+
+A TSport has a queue of (byte,timestamp) pairs whose capacity you
+specify with
+.BR tsSetQueueSize (3).
+
+For an input port (TS_DIRECTION_RECEIVE), this queue holds the bytes
+which have been received but which you have not yet read using
+.BR tsRead (3).
+Characters that arrive on a port whose queue is full will be
+discarded.  If you attempt to read more characters than are currently
+available on the queue, then
+.BR tsRead (3)
+will block until your request can be satisfied.
+
+For an output port (TS_DIRECTION_TRANSMIT), this queue holds the bytes
+which you have enqueued using
+.BR tsWrite (3)
+but which have not yet been transmitted.  If you
+attempt to enqueue so much data that this queue would fill past its
+capacity, then
+.BR tsWrite (3) 
+will block until enough space has become available to enqueue all of
+your data.  
+
+You can determine the number of (byte,timestamp) pairs currently enqueued
+on a TSport using
+.BR tsGetFilledBytes (3).
+You can also use
+.BR tsSetFillPointBytes (3)
+and
+.BR tsGetFD (3)
+to get a file descriptor for use in
+.BR select (2)
+or
+.BR poll (2)
+which will unblock when a specified amount of data or space has become
+available in a TSport.
+
+TS functions which can err return a TSstatus.  A return value of
+TS_SUCCESS means that the function was successful, otherwise
+a TS_ERROR_ token is returned to describe the error.  See
+ERROR HANDLING below for more information.
+
+.SH CONFIGURING A PORT
+
+.nf
+.B "TSconfig tsNewConfig(void);"
+.fi
+.PP
+Create a new TSconfig.
+Can fail with NULL (oserror()==TS_ERROR_OUT_OF_MEM).
+.PP
+.nf
+.B "TSconfig tsNewConfigFromPort(TSport port);"
+.fi
+.PP
+Create a new TSconfig with the same configuration as \fIport\fP.
+Can fail with NULL (oserror()==TS_ERROR_OUT_OF_MEM).
+.PP
+.nf
+.B "TSconfig tsCopyConfig(TSconfig from);"
+.fi
+.PP
+Create a new TSconfig in exactly the same state as \fIfrom\fP.
+\fIFrom\fP is not modified.  Can fail with NULL
+(oserror()==TS_ERROR_OUT_OF_MEM).
+.PP
+.nf
+.B "TSstatus tsFreeConfig(TSconfig config);"
+.fi
+.PP
+Free a TSconfig.
+.PP
+.nf
+.B "TSstatus tsSetPortName(TSconfig config, char *name);"
+.fi
+.PP
+Set UNIX filename of timestamped serial port to open.
+This should be a UNIX device node of the form
+.BR /dev/ttyts n.
+.BR /dev/ttyts n
+represents the same physical port as the traditional device node
+.BR /dev/ttyd n
+as described in
+.BR serial (7).
+This call can fail with TS_ERROR_OUT_OF_MEM.
+.PP
+.nf
+.B "TSstatus tsSetDirection(TSconfig config, int direction);"
+.fi
+.PP
+Specify direction of timestamped serial port:
+
+o TS_DIRECTION_TRANSMIT for an "output" port to which you can
+.BR tsWrite (3).
+.P
+o TS_DIRECTION_RECEIVE  for in "input" port from which you can
+.BR tsRead (3).
+.P
+o call fails with TS_ERROR_BAD_LIBRARY_CALL for any other
+\fIdirection\fP
+.PP
+.nf
+.B "TSstatus tsSetQueueSize(TSconfig config, int queuesize);"
+.fi
+.PP
+Specify the number of (byte,timestamp) pairs which the port's queue
+can hold.  Fails with TS_ERROR_BAD_LIBRARY_CALL if specified size is 0
+or less.  Currently, the queue size must be greater than or equal to
+20, and less than 102400.  See OVERVIEW above for information about
+this queue.
+.PP
+.nf
+.B "TSstatus tsSetCflag(TSconfig config, tcflag_t cflag);"
+.fi
+.PP
+Specify most serial communication parameters, using the
+traditional struct termios.c_cflag flags (see
+.BR termios (7)):
+
+.nf
+    CSIZE bits (CS5, CS6, CS7, CS8) 
+    CSTOPB bit (1==2 stop bits, 0==1 stop bits) 
+    PARENB (0==no parity, 1==see PARODD) 
+    PARODD (1==odd parity, 0==even parity) 
+    CBAUD (B9600 etc.) is IGNORED 
+          this field of c_cflag has been obsoleted. 
+          use tsSetOspeed(3) instead. 
+.fi
+.PP
+.B "TSstatus tsSetOspeed(TSconfig config, speed_t ospeed);"
+.fi
+.PP
+Specify baud rate as integer in symbols per second (e.g. 9600, 31250
+(MIDI), 38400 (video deck control)).  Fails with
+TS_ERROR_BAD_LIBRARY_CALL if \fIspeed\fP is 0.
+.PP
+.nf
+.B "TSstatus tsSetProtocol(TSconfig config, int protocol);"
+.fi
+.PP
+Specify electrical protocol to use on serial port:
+.P
+o TS_PROTOCOL_RS232 (the default): EIA/TIA-232-E
+.P
+o TS_PROTOCOL_RS422: EIA/TIA-422-B
+.P
+o TS_PROTOCOL_MACINTOSH: Macintosh compatible serial levels
+.P
+o fails with TS_ERROR_BAD_LIBRARY_CALL for other \fIprotocol\fP.
+.P
+See
+.BR serial (7)
+for information about which protocols are supported on which
+platforms.
+.PP
+.nf
+.B "TSstatus tsSetExternalClockFactor(TSconfig config, "
+.B "                                  int extclock_factor);"
+.fi
+.PP
+Specify clock source for serial port:
+.P
+o 0 (the default) means the serial port should use its internal clock.
+.P
+o N (N > 1) means the serial port should clock itself off of the provided 
+external clock divided by N.  
+.BR tsSetOSpeed (3)
+is ignored in this case.
+.P
+o N < 0 fails with TS_ERROR_BAD_LIBRARY_CALL.
+.P
+To use a Macintosh-compatible MIDI dongle plugged into a serial port
+of an Indigo, Indy, and Indigo2, specify 32.  The MIDI dongle provides
+a 1 MHz external clock signal on a pin of the serial port, which drives
+the serial port at the MIDI (1,000,000/32==31.25kHz) baud rate.  On the
+O2 system, use the internal clock and set ospeed to 31250.
+
+.SH OPENING AND USING A PORT
+
+.PP
+.nf
+.B "TSstatus tsOpenPort(TSconfig config, TSport *returnPort);"
+.fi
+.PP
+Open a timestamped serial port.  Each TSport represents a connection
+to one physical serial port in one direction.  Each
+TS_DIRECTION_RECEIVE TSport will receive its own copy of the data
+arriving at the physical serial port.  On TS_PROTOCOL_RS232 serial
+ports, DTR and RTS are always asserted, and DCD and CTS are ignored.
+Hanging up the serial line (see 
+.BR termios (3))
+is not currently supported.
+
+.BR tsOpenPort (3)
+can fail in the following cases:
+.P
+o TS_ERROR_BAD_LIBRARY_CALL if \fIconfig\fP or \fIreturnPort\fP
+are NULL or invalid.
+.P
+o TS_ERROR_BAD_LIBRARY_CALL if you had not set the following parameters
+of \fIconfig\fP:
+.BR tsSetPortName (3),
+.BR tsSetDirection (3),
+.BR tsSetQueueSize (3),
+.BR tsSetCflag (3),
+or
+.BR tsSetOspeed (3).
+.P
+o TS_ERROR_OPENING_PORT if a parameter specified in \fIconfig\fP is
+not supported on the specified serial port, or there is some problem
+interfacing with the tserialio driver.
+.P
+o TS_ERROR_OPENING_PORT if \fIconfig\fP specifies an invalid queuesize
+(see
+.BR tsSetQueueSize (3)).
+.P
+o TS_ERROR_OPENING_PORT if opening the port would exceed tserialio's
+fixed per-system limit on the number of simultaneously open TSports.
+This limit is at least eight times the number of physical serial
+ports on the machine.
+.P
+o TS_ERROR_PORT_BUSY if \fIconfig\fP specifies TS_DIRECTION_TRANSMIT
+on a port which is already open for transmit using tserialio.
+.P
+o TS_ERROR_PORT_BUSY if \fIconfig\fP specifies a physical port which
+is already open using tserialio with different communications
+parameters (cflag, ospeed, protocol, or extclock).
+.P
+o TS_ERROR_PORT_BUSY if \fIconfig\fP specifies a port which is
+already open using the traditional serial interface (see
+.BR serial (7)).
+.P
+o TS_ERROR_OUT_OF_MEM.
+.P
+.PP
+.nf
+.B "TSstatus tsClosePort(TSport port);"
+.fi
+.PP
+Close a TSport.  If the port is a TS_DIRECTION_TRANSMIT port,
+all currently enqueued (byte,timestamp) pairs will be discarded
+immediately and not transmitted.
+.PP
+.nf
+.B "int tsGetFilledBytes(TSport port);"
+.fi
+.PP
+Returns the total number of (byte,timestamp) pairs currently in 
+the TSport's queue.
+.PP
+.nf
+.B "TSstatus tsRead(TSport port, unsigned char *data, stamp_t *stamps, "
+.B "                int nbytes);"
+.fi
+.PP
+Reads nbytes (byte,timestamp) pairs from the specified port's queue.
+The port must be a TS_DIRECTION_RECEIVE port (see
+.BR tsSetDirection (3)).
+The function returns the data of each byte in data[i], and the UST
+time at which the byte came in the input jack of the machine in
+stamps[i].  The actual reception time of data[i] is guaranteed to be
+within the interval from (stamps[i] - 2 milliseconds) to (stamps[i]).
+If nbytes (byte,timestamp) pairs are not currently available in the
+port's queue, then
+.BR tsRead (3) 
+will block until it has
+been able to read all nbytes pairs.  
+
+If 
+.BR tsRead (3)
+needs to block, it will call 
+.BR select (2). 
+If that select fails for any reason other than EINTR, the call will
+return with TS_ERROR_SELECT_FAILED.
+
+Currently, tserialio does not provide an indication of framing,
+parity, or overrun errors.
+
+.PP
+.nf
+.B "TSstatus tsWrite(TSport port, unsigned char *data, stamp_t *stamps, "
+.B "                 int nbytes);"
+.fi
+.PP
+Writes (enqueues) nbytes (byte,timestamp) pairs to the specified
+port's queue.  The port must be a TS_DIRECTION_TRANSMIT port (see
+.BR tsSetDirection (3)).
+This call schedules each byte data[i] to go out at the UST time given
+by stamps[i].  The actual transmission time of data[i] is guaranteed
+to be within the interval from (stamps[i]) to (stamps[i] + 2
+milliseconds).  If sufficient space is not available in the port's
+queue to write all nbytes (byte,timestamp) pairs immediately, then
+.BR tsWrite (3)
+will block until it has been able to write all nbytes pairs.
+
+If 
+.BR tsWrite (3)
+needs to block, it will call 
+.BR select (2). 
+If that select fails for any reason other than EINTR, the call
+will return with TS_ERROR_SELECT_FAILED. 
+ 
+The timestamps you provide to
+.BR tsWrite (3)
+must be non-decreasing.  Tserialio will transmit every byte you
+enqueue exactly once; it will transmit a byte late rather than
+dropping it.  Be careful that the (byte,timestamp) pairs you enqueue
+on the serial port are (at least in the long term) realizable given
+the baud rate and communications parameters you have chosen, otherwise
+you will lose the accuracy guarantee described above, and possibly
+also overflow your queue.
+.PP
+.nf
+.B "int tsGetFD(TSport port);"
+.B "TSstatus tsSetFillPointBytes(TSport port, int nbytes);"
+.B "int tsGetFillPointBytes(TSport port);"
+.fi
+.PP
+
+.BR tsGetFD (3)
+returns a file descriptor which you can pass to 
+.BR select (2) 
+or 
+.BR poll (2)
+if you want to block until data becomes available in an input port, or
+space becomes available in an output port.
+
+Before calling 
+.BR select (2) 
+or
+.BR poll (2),
+you must first call 
+.BR tsSetFillPointBytes (3)
+to specify when you want to unblock:
+
+.nf
+INPUT PORTS:  will unblock from select() or poll() when 
+              tsGetFilledBytes() >= tsGetFillPointBytes() 
+
+OUTPUT PORTS: will unblock from select() or poll() when 
+              tsGetFilledBytes() <  tsGetFillPointBytes()
+.fi
+
+The calls 
+.BR tsWrite (3)
+and 
+.BR tsRead (3)
+may change the fillpoint, so you should 
+make sure to call 
+.BR tsSetFillPointBytes (3)
+before each invocation of
+.BR select (2) 
+or
+.BR poll (2).
+
+When using 
+.BR select (2),
+an input port's file descriptor is used in a read
+fdset and an output port's file descriptor is used in a write fdset.
+
+When using 
+.BR poll (2),
+an input port's file descriptor is used with the
+POLLIN event flag and an output port's file descriptor is used with a
+POLLOUT event flag.
+
+AL Note: the definition of output fillpoint differs from that in the
+SGI Audio Library (see
+.BR ALintro (3dm)).
+The AL file descriptor unblocks when there are more than "fillpoint"
+spaces in the queue.  This inconsistency was necessary to facilitate a
+future feature of this library: the ability to choose fillpoints in
+units of time rather than data.
+
+.BR tsSetFillPointBytes (3)
+will fail with TS_ERROR_BAD_LIBRARY_CALL if \fInbytes\fP
+is less than zero or greater than the port's queue size.
+
+.SH THREAD SAFETY
+
+Applications can make multiple, simultaneous, uncoordinated TS calls
+on different TSports from different threads and the library will
+operate fine.  Each TSport completely encapsulates the state needed to
+do operations on that TSport (except for error handling, which is
+explained next).
+
+Applications cannot make multiple, simultaneous, uncoordinated TS
+calls from different threads to set or access the library's global
+state--namely, the error handler function described below.  If two
+threads simultaneously try to set the global error handler (even the
+same error handler), the behavior is undefined.  Furthermore, if the
+application writes an error handler, then makes multiple,
+simultaneous, uncoordinated TS calls on different TSports from
+different threads, and both TS calls issue an error simultaneously,
+then two instances of the application's error handler will be called
+in a simultaneous, uncoordinated manner in two threads.  Applications
+may need semaphore protection in their error handler if this is
+possible.  Each function in this man page documents the possible error
+return values.
+
+Applications cannot make multiple, simultaneous, uncoordinated TS
+calls on the same TSport from different threads, even if the order of
+execution of those calls does not matter to the application.  Doing so
+will very likely cause a core dump, or at least corruption of the
+TSport.  An application which accesses a given TSport from multiple
+threads should use a semaphore package such as POSIX semaphores (man
+.BR sem_init (3C)).
+
+.SH ERROR HANDLING
+
+.nf
+.B "TSerrfunc tsSetErrorHandler(TSerrfunc newfunc, int includefuncname); "
+.B "TSerrfunc tsGetErrorHandler(int *includefuncname_ret);"
+.fi
+.PP
+
+Functions that can err return a TSstatus.  TS_SUCCESS means success.
+On failure, functions return a TS_ERROR_ token as seen in
+<tserialio.h>, and also set
+.BR oserror (3C) 
+to the value of that token.
+
+Errors are also reported as they occur by the execution of a
+process-global, non-thread-safe error handler callback which you can
+set.  The string passed to the error handler contains detailed
+error information which is useful for debugging.
+
+The default error handler prints an error to stderr.  When defining an
+error handler, you can specify using \fIincludefuncname\fP whether or
+not to include the TS function name that is erring in the string.
+Most applications will want to turn off the error handler in non-debug
+compiles using something like this:
+
+.nf
+.Ex
+#ifdef NDEBUG 
+   tsSetErrorHandler(NULL, FALSE); 
+#endif 
+.Ee
+.fi
+
+.BR tsSetErrorHandler (3)
+sets a new error handler and returns the previous handler.
+.BR tsGetErrorHandler (3)
+returns the current error handler and \fIincludefuncname\fP
+status.  \fIincludefuncname_ret\fP can be NULL.
+
+Programmatic errors, where you pass an out-of-range, nonsensical, or
+otherwise illegal value to an TS library call, all return
+TS_ERROR_BAD_LIBRARY_CALL.
+
+.SH PERFORMANCE TIPS
+
+Tserialio is built on a mechanism which is extremely lightweight
+compared to the standard
+.BR /dev/ttyd n
+serial interface.  The mechanism is similar to the lightweight mapped
+ringbuffers offered by the Audio Serial Option (see
+.BR asoserns (7)).
+These facts are true of the current implementation and are likely (not
+guaranteed) to remain true:
+.P
+o
+.BR tsGetFilledBytes (3)
+performs no system calls and is extremely efficient. 
+.P
+o A 
+.BR tsRead (3)
+which can be satisfied by data currently in the port's queue is little
+more than a bcopy and requires no system calls.  
+.P
+o A
+.BR tsWrite (3)
+for which there is room in the port's queue is similarly efficient.
+
+Therefore, an application which periodically polls 
+.BR tsGetFilledBytes (3)
+can perform all of its serial i/o without any system calls.  This may
+be desirable for applications in which a convenient periodic
+opportunity for polling the serial device is available without
+spinning on the CPU.  For example, this may be the case with a video
+deck control application.
+
+
+.SH ACCURACY AND LATENCY
+
+Tserialio offers guarantees about the accuracy of its input byte
+timestamping and its output byte scheduling.  These guarantees
+are described along with
+.BR tsWrite (3)
+and 
+.BR tsRead (3)
+above.
+
+Tserialio offers no guarantees about the latencies your application
+sees.  It has no interactions whatsoever with the IRIX scheduler.  It
+is a service which pairs together bytes of data and UST times in such
+a way that your application can manipulate the pair atomically.
+
+1. for input ports, tserialio offers no guarantees about the maximum
+time between when a byte arrives at the port and when
+.BR tsRead (3)
+unblocks.
+
+2. for input and output ports, tserialio offers no guarantees about
+the maximum time between when a byte arrives at the port or is
+transmitted out the port and when
+.BR tsGetFilledBytes (3)
+starts returning a different value to reflect that transfer.  
+
+3. for input and output ports, tserialio offers no guarantees about
+the maximum time between when a port reaches its fillpoint and when a
+TSport's file descriptor unblocks a
+.BR select (2) 
+or 
+.BR poll (2). 
+ 
+4. every program that outputs a serial signal has some "operating
+latency" \fBL\fP, such that for any given byte that needs to go out at
+time \fBT\fP, the program will choose to enqueue that byte on the
+TSport at time \fBT\fP-\fBL\fP or later.  Generally (see below) the
+IRIX scheduler does not guarantee that a process will be running at
+any given time.  Therefore, as \fBL\fP decreases, it becomes
+increasingly likely that your IRIX process will not be running in the
+interval between \fBT\fP-\fBL\fP and \fBT\fP and thus will not be able
+to enqueue the byte for timely transmission.  Tserialio offers no
+guarantee that any particular value of \fBL\fP will always be big
+enough to avoid this situation.
+
+5. when writing a given (byte, timestamp) pair to an output port using
+.BR tsWrite (3),
+you must provide tserialio with enough "advance warning" (ie, the
+difference between the current UST at the time of 
+.BR tsWrite (3)
+and the UST timestamp in the pair must be large enough) so that
+tserialio can schedule output of the data with the
+accuracy described in
+.BR tsWrite (3).
+This "advance warning" must be added
+into your "operating latency" as described above.  Tserialio offers no
+guarantee that any particular amount of "advance warning" will always
+be enough.
+
+Here are some useful facts about the current implementation (not guaranteed
+to be true of all implementations):
+.P
+o The latency described in item 2 is at most 2ms.
+.P
+o The minimum advance warning described in item 5 is 2ms.
+.P
+o it is possible to reliably perform certain tasks, such as playing a
+MIDI file or controlling a Sony-protocol RS-422 VTR, using the
+latencies practically available to a non-degrading-priority IRIX
+process (see
+.BR schedctl (2)). 
+Note that emulating
+a Sony-protocol RS-422 VTR is not necessarily possible.
+
+Real latency guarantees such as those described in items 1, 3, and 4
+are currently available in multiprocessor configurations using the
+REACT/Pro product.  Such guarantees may be available on all SGI
+workstations in a future IRIX release.  For now, tserialio provides
+the critical functionality for many timely serial applications.
+
+.SH SEE ALSO
+
+dmGetUST(3dm), serial(7), asoserns(7), termios(7), mdIntro(3dm)

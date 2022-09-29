@@ -1,0 +1,234 @@
+.\" Copyright (c) 1985 The Regents of the University of California.
+.\" All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms are permitted
+.\" provided that the above copyright notice and this paragraph are
+.\" duplicated in all such forms and that any documentation,
+.\" advertising materials, and other materials related to such
+.\" distribution and use acknowledge that the software was developed
+.\" by the University of California, Berkeley.  The name of the
+.\" University may not be used to endorse or promote products derived
+.\" from this software without specific prior written permission.
+.\" THIS SOFTWARE IS PROVIDED ``AS IS'' AND WITHOUT ANY EXPRESS OR
+.\" IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
+.\" WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.
+.\"
+.\"	@(#)resolver.3	6.3 (Berkeley) 12/14/89
+.\"
+.TH res_query 3N
+.SH NAME
+res_query, res_search, res_mkquery, res_send, res_init, dn_comp, dn_expand \- resolver routines
+.SH SYNOPSIS
+.nf
+\f3#include <sys/types.h>\f1
+\f3#include <netinet/in.h>\f1
+\f3#include <arpa/nameser.h>\f1
+\f3#include <resolv.h>\f1
+.sp .8v
+\f3int res_query (const char *dname, int class, int type,\f1
+\f3                u_char *answer, int anslen);\f1
+.sp .8v
+\f3int res_search (const char *dname, int class, int type,\f1
+\f3                u_char *answer, int anslen);\f1
+.sp .8v
+\f3int res_mkquery (int op, const char *dname, int class, int type,\f1
+\f3                 const char *data, int datalen, const char *newrr,\f1
+\f3                 char *buf, int buflen);\f1
+.sp .8v
+\f3int res_send (const char *msg, int msglen, char *answer, int anslen);\f1
+.sp .8v
+\f3int res_init (void);\f1
+.sp .8v
+\f3int dn_comp (const u_char *exp_dn, u_char *comp_dn, int length,\f1
+\f3             u_char **dnptrs, u_char **lastdnptr);\f1
+.sp .8v
+\f3int dn_expand (const u_char *msg, const u_char *eomorig,\f1
+\f3               const u_char *comp_dn, char *exp_dn, int length);\f1
+.fi
+.SH DESCRIPTION
+These routines are used for making, sending, and interpreting
+query and reply messages with Internet domain name servers.
+.PP
+Global configuration and state information that is used by the
+resolver routines is kept in the structure
+.IR _res .
+Most of the values have reasonable defaults and can be ignored.
+Options
+stored in
+.I _res.options
+are defined in
+.I resolv.h
+and are as follows.
+Options are stored as a simple bit mask containing the bitwise ``or''
+of the options enabled.
+.IP RES_INIT 15
+True if the initial name server address and default domain name are
+initialized
+.RI ( res_init
+has been called).
+.IP RES_DEBUG
+Print debugging messages.
+.IP RES_AAONLY
+Accept authoritative answers only.
+With this option,
+.I res_send
+should continue until it finds an authoritative answer or finds an error.
+Currently this is not implemented.
+.IP RES_USEVC
+Use TCP connections for queries instead of UDP datagrams.
+.IP RES_STAYOPEN
+Used with RES_USEVC to keep the TCP connection open between
+queries.
+This is useful only in programs that regularly do many queries.
+UDP should be the normal mode used.
+.IP RES_IGNTC
+Unused currently (ignore truncation errors; don't retry with TCP).
+.IP RES_RECURSE
+Set the recursion-desired bit in queries.
+This is the default.
+.RI ( res_send
+does not do iterative queries and expects the name server
+to handle recursion.)
+.IP RES_DEFNAMES
+If set,
+.I res_search
+appends the default domain name to single-component names
+(those that do not contain a dot).
+This option is enabled by default.
+.IP RES_DNSRCH
+If this option is set,
+.I res_search
+searches for hostnames in the current domain and in parent domains; see
+.IR hostname (5).
+This is used by the standard host lookup routine
+.IR gethostbyname (3N).
+This option is enabled by default.
+.PP
+The
+.I res_init
+routine
+reads the configuration file (if any; see
+.IR resolver (4))
+to get the default domain name,
+search list and
+the Internet address of the local name server(s).
+If no server is configured, the host running
+the resolver is tried.
+The current domain name is defined by the hostname
+if not specified in the configuration file;
+it can be overridden by the environment variable LOCALDOMAIN.
+Initialization normally occurs on the first call
+to one of the following routines.
+.PP
+The
+.I res_query
+function provides an interface to the server query mechanism.
+It constructs a query, sends it to the local server,
+awaits a response, and makes preliminary checks on the reply.
+The query requests information of the specified
+.I type
+and
+.I class
+for the specified fully-qualified domain name
+.IR dname .
+The reply message is left in the
+.I answer
+buffer with length
+.I anslen
+supplied by the caller.
+.PP
+The
+.I res_search
+routine makes a query and awaits a response like
+.IR res_query ,
+but in addition, it implements the default and search rules
+controlled by the RES_DEFNAMES and RES_DNSRCH options.
+It returns the first successful reply.
+.PP
+The remaining routines are lower-level routines used by
+.IR res_query .
+The
+.I res_mkquery
+function
+constructs a standard query message and places it in
+.IR buf .
+It returns the size of the query, or \-1 if the query is
+larger than
+.IR buflen .
+The query type
+.I op
+is usually QUERY, but can be any of the query types defined in
+.IR <arpa/nameser.h> .
+The domain name for the query is given by
+.IR dname .
+.I newrr
+is currently unused but is intended for making update messages.
+.PP
+The
+.I res_send
+routine
+sends a preformatted query and returns an answer.
+It calls
+.I res_init
+if RES_INIT is not set, sends the query to the local name server, and
+handles timeouts and retries.
+The length of the reply message is returned, or
+\-1 if there were errors.
+.PP
+The
+.I dn_comp
+function
+compresses the domain name
+.I exp_dn
+and stores it in
+.IR comp_dn .
+The size of the compressed name is returned or \-1 if there were errors.
+The size of the array pointed to by
+.I comp_dn
+is given by
+.IR length .
+The compression uses
+an array of pointers
+.I dnptrs
+to previously-compressed names in the current message.
+The first pointer points to
+the beginning of the message and the list ends with NULL.
+The limit to the array is specified by
+.IR lastdnptr .
+A side effect of
+.I dn_comp
+is to update the list of pointers for
+labels inserted into the message
+as the name is compressed.
+If
+.I dnptr
+is NULL, names are not compressed.
+If
+.I lastdnptr
+is NULL, the list of labels is not updated.
+.PP
+The
+.I dn_expand
+entry
+expands the compressed domain name
+.I comp_dn
+to a full domain name
+The compressed name is contained in a query or reply message;
+.I msg
+is a pointer to the beginning of the message.
+The uncompressed name is placed in the buffer indicated by
+.IR exp_dn ,
+which is of size
+.IR length .
+The size of compressed name is returned or \-1 if there was an error.
+.SH FILES
+/etc/resolv.conf	see resolver(4)
+.SH "SEE ALSO"
+named(1M),
+gethostbyname(3N),
+resolver(4),
+hostname(5).
+.PP
+RFC1032, RFC1033, RFC1034, RFC1035, RFC974
+.PP
+\f2IRIX Admin: Networking and Mail\f1

@@ -1,0 +1,349 @@
+.nr X
+.if \nX=0 .ds x} fsck 1M "Essential Utilities" "\&"
+.TH \*(x}
+.SH NAME
+fsck \- check and repair filesystems for EFS
+.SH SYNOPSIS
+.nf
+\f3/etc/fsck\f1 [\f3\-c\f1] [\f3\-f\f1] [\f3\-g\f1] [\f3\-m\f1] \c
+[\f3\-n\f1] [\f3\-q\f1] [\f3\-y\f1] [\f3\-l\f1 dir] \c
+[filesystems]
+.fi
+.SH DESCRIPTION
+.I fsck
+is applicable only to EFS filesystems.
+To repair XFS filesystems, see xfs_repair(1M).
+.PP
+.I fsck
+audits and repairs inconsistent conditions for filesystems.
+You must have both read and write permission for the device containing
+the filesystem unless you give the
+.B \-n
+flag, in which case only read permission is required.
+.PP
+If the filesystem is inconsistent, you are
+normally prompted for concurrence
+before each correction is attempted.
+Most corrective actions result in some loss
+of data.
+The amount and severity of data loss can be determined from the diagnostic
+output.
+The default action for each correction
+is to wait for you to respond \f3yes\fP or \f3no\fP.
+However, certain option flags cause
+.I fsck
+to run in a non-interactive mode.
+.PP
+On completion, the number of files, blocks used, and blocks free are reported.
+.PP
+.B Note:
+Checking the raw device is almost always faster.
+.PP
+The following options are accepted by
+.IR fsck :
+.TP 6
+.B \-c
+Checks the filesystem only if the superblock indicates
+that it is dirty, otherwise a message is printed saying
+that the filesystem is clean and no
+check is performed.
+The default in the absence of this option is to always
+perform the check.
+.TP 6
+.B \-f
+Fast check.
+Check block and sizes and check the free list.
+The free list is reconstructed if it is necessary.
+No directory or pathname checks are performed.
+.TP 6
+.B \-g
+A low risk "gentle" mode, similar to BSD preen.
+Problems that do not
+present any risk of data loss are fixed: these include bad link counts,
+bad free list, and dirty superblock.
+If any serious damage is encountered that
+cannot be repaired without risk of data loss,
+.I fsck
+terminates with a warning message.
+.TP 6
+.B \-l
+Allows a directory on a mounted filesystem, located elsewhere
+on the system, to be specified as a salvage directory.
+Unreferenced regular files,
+named after their inode numbers,
+are copied into this salvage directory.
+This allows files to be salvaged from very badly corrupted
+filesystems that may not be repairable in place --
+if the root inode is lost, for example.
+.TP 6
+.B \-m
+Forks multiple instances of
+.I fsck
+to check filesystems
+in parallel for improved speed.
+This option is effective only when
+.I fsck
+is working from the filesystems listed in
+.I /etc/fstab
+and is ignored if explicit filesystem arguments are given.
+Also, when this option is specified, entries in
+.I /etc/fstab
+with the
+.B noauto
+option are ignored.
+.TP 6
+.B \-n
+Assumes a \f3no\f1 response to all questions asked by
+.IR fsck ;
+does not open the filesystem for writing.
+.TP 6
+.B \-q
+Quiet
+.IR fsck .
+This option is effectively a version of the
+.B \-y
+option with less verbose output.
+.TP 6
+.B \-y
+Assumes a \f3yes\f1 response to all questions asked by
+.IR fsck .
+.PP
+If no
+.I filesystems
+are specified,
+.I fsck
+reads a list of default filesystems from
+the file
+.IR /etc/fstab .
+This does not include the root filesystem;
+.I fsck
+runs on root only if this is explicitly specified.
+.PP
+Normally, a filesystem must be unmounted in order to run
+.I fsck
+on it, an error message is printed and no action taken if invoked on a
+mounted filesystem.
+The one exception to this is the root
+filesystem, which must be mounted to run
+.IR fsck .
+If inconsistencies are detected when running on root,
+.I fsck
+causes a remount of root.
+.SH PARALLEL OPERATION
+When invoked with the
+.B \-m
+flag and without explicit filesystem parameters,
+.I fsck
+scans
+.I /etc/fstab
+and attempts to fork a check process for each
+.B efs
+filesystem found.
+These checks proceed in parallel,
+for improved speed.
+.PP
+The name of the device holding the filesystem
+is printed as each check begins.
+However, to avoid confusion, the remaining output from these parallel checks
+is not printed; instead it is placed in log files in the directory
+.IR /etc/fscklogs .
+This directory is created if it does not currently exist.
+.PP
+The log files are named after the last component of the pathname of the
+device where the filesystem resides.
+For example,
+if a filesystem was on
+.I /dev/dsk/ips0d1s7
+the logfile is named
+.IR /etc/fscklogs/ips0d1s7 .
+.PP
+Because there is no interaction with the checks, the
+.B \-m
+option is accepted only in combination with another option implying non
+interactive behavior:
+.B \-y
+or
+.BR \-g .
+.PP
+As each check completes, the name of the device is printed along with a
+message indicating success or failure.
+In the event of failure, the name
+of the logfile containing the output from the check of
+that filesystem is also printed.
+.PP
+Some control over the parallelization is possible by placing
+.I passnumbers
+in
+.I /etc/fstab
+(see
+.IR fstab (4)).
+If pass numbers are given for filesystems, they are checked in the
+order of their pass numbers.
+All filesystems with a given pass number
+are checked (in parallel, if more than one filesystem
+has the same pass number) before the next highest pass number.
+A missing pass number defaults to zero.
+If no pass numbers are present, all filesystems are checked
+simultaneously if possible.
+.PP
+.B Note:
+In fact,
+.I fsck
+takes note of the amount of memory available in the system, and limits
+the number of simultaneous check processes to avoid swapping.
+If there is not enough memory to avoid swapping for a particular filesystem,
+the message
+.Ex
+Warning - Low free memory, swapping likely
+.Ee
+is printed.
+If this occurs when
+.IR fsck 'ing
+the root or usr filesystem after a crash, the crash dump is lost.
+In this case the
+.I fsck
+takes longer, but the results are otherwise normal.
+.SH CHECKS PERFORMED
+Inconsistencies checked are as follows:
+.TP 6
+1.
+Inode block addressing checks:
+Too many
+direct or indirect extents, extents out of order, bad magic number in extents,
+blocks that are not in a legal data area of the filesystem,
+blocks that are claimed by more than one inode.
+.TP 6
+2.
+Size checks:
+Number of blocks claimed by inode inconsistent with inode size,
+directory size not block aligned.
+.TP 6
+3.
+Directory checks:
+Illegal number of entries in a directory block, bad freespace pointer in
+directory block, entry pointing to unallocated or outrange inode, overlapping
+entries, missing or incorrect dot and dotdot entries.
+.TP 6
+4.
+Pathname checks:
+Files or directories not referenced by a pathname starting from
+the filesystem root.
+.TP 6
+5.
+Link count checks:
+Link counts that do not agree with the number of
+directory references to the inode.
+.TP 6
+6.
+Freemap checks:
+Blocks claimed free by the freemap but also claimed by an inode, blocks
+unclaimed by any inode but not appearing in the freemap.
+.TP 6
+7.
+Super Block checks:
+Total free block and/or free i-node count incorrect.
+.PP
+Orphaned files and directories (allocated but unreferenced) are,
+with the your concurrence, reconnected by
+placing them in the
+.I lost+found
+directory, if the files are nonempty.
+You are notified if the file or directory is empty or not.
+Empty files or directories are removed, as long as the
+.B \-n
+option is not specified.
+.I fsck
+forces the reconnection of nonempty directories.
+The name assigned is the i-node number.
+The directory
+.I lost+found
+must preexist in the root of the filesystem being checked and
+must have empty slots in which entries can be made.
+This directory is always created by
+.IR mkfs (1M)
+when a filesystem is first created.
+.SH SUPERBLOCKS AND FILESYSTEM ROBUSTNESS
+In IRIX 3.3 and later, a replicated superblock exists in the
+EFS filesystem,
+situated at the end of the filesystem space.
+If
+.I fsck
+cannot read the primary superblock it attempts to use the replicated
+superblock.
+It prints a message to notify you of the situation.
+This is automatic; no user intervention is required.
+Further,
+.I fsck
+attempts to determine if a replicated superblock exists, and if not,
+optionally creates one.
+Thus, older filesystems benefit from
+this feature.
+.P
+Finally, if no superblock can be found on a damaged filesystem,
+it may be possible to regenerate one by using the new
+.B \-r
+option of
+.IR mkfs (1M),
+and then use
+.I fsck
+to salvage the filesystem.
+.PP
+.B Warning:
+This is
+.B not
+effective if the filesystem was created under a version of
+IRIX other than the currently running version, since
+.I mkfs
+defaults have changed from release to release.
+.SH OBSOLETE OPTIONS
+The options
+.BR \-b ,
+.BR \-D ,
+.BR \-s ,
+.BR \-S ,
+and
+.BR -t ,
+which were supported by earlier versions of
+.IR fsck ,
+are now obsolete.
+.PP
+The
+.B \-b
+option caused a reboot of the system when
+.I fsck
+was run on the root filesystem and errors were detected.
+The
+behavior now is always to remount the root filesystem in this case.
+.PP
+The
+.B \-t
+option specified a scratch file for temporary storage; this is now never
+required.
+.PP
+The
+.B \-D
+option added extra directory checks; these are now always done by default.
+.PP
+The
+.B \-s
+and
+.B \-S
+options caused conditional or forced rebuild of the freelist.
+The freelist
+is now exhaustively checked and is always rebuilt if necessary.
+.PP
+All of these options are now legal no-ops.
+.SH FILES
+.PD 0
+.TP 15
+/etc/fstab
+default list of filesystems to check
+.PD
+.SH "SEE ALSO"
+findblk(1M),
+fpck(1M),
+mkfs(1M),
+ncheck(1M),
+uadmin(2),
+filesystems(4),
+fstab(4).

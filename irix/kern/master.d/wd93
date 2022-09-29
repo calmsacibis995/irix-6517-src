@@ -1,0 +1,106 @@
+*#ident	"master.d/wd93: $Revision $"
+*
+* MEM
+*
+*FLAG	PREFIX	SOFT	#DEV	DEPENDENCIES
+ns	wd93	-	-	scsi
+
++thread_class	scsi
+$$$
+/* wd93 driver variable tables */
+#include "sys/scsi.h"
+#include "sys/wd93.h"
+
+/*      If non-zero, the minimum number of seconds for any SCSI timeout
+	(i.e., timeouts shorter than this value will be increased to
+	this value.  If zero, whatever timeout the various upper level
+	drivers specified is used.  This may be useful when disconnects
+	are enabled, but some devices hold the bus for a very long
+	period, and devices that had started commands are therefore not
+	able to reconnect to complete;  that is, it may be an
+	alternative to changing wd93_enable_disconnect[] below.
+*/
+uint wd93mintimeout = 0;
+
+/*  delay after a driver initiated reset before new commands will
+	be issued to any device on that bus.  Some devices take a long
+	time to become fully ready after a reset, and if this interval
+	is shoerter than that period, the driver may end up issuing a
+	command, having it timeout, reset, etc. in a cycle for quite some
+	time.  Units are in HZ (1*HZ == 1 second).
+*/
+uint wd93reset_delay = 1*HZ;
+
+/*  Bitmap of target ID's for which synchronous SCSI mode may be
+	negotiated (per scsi adapter, or channel or bus).  If unit
+	doesn't support this mode, and the device obeys the protocols,
+	then it is OK to enable it here;  If device doesn't follow
+	protocols, then do not set the bit (devices that don't follow
+	the protocols typically result in SCSI bus timeouts and
+	resets.  At this time, only disks and DAT tape are considered
+	candidates.  Set the 0x80 bit for ID 7, 0x40 for ID 6 ... 0x2
+	for ID 1.  On machines that don't support sync. SCSI, (such as
+	4D80 and 4D70) this variable will be zeroed at boot time.  This
+	is a bitmap per adapter; for systems with a single SCSI
+	channel, you only need to change the first value.
+*/
+u_char wd93_syncenable[SC_MAXADAP] = {0xfe /* scsibus 0 */,
+	0xfe /* scsibus 1 */, 0xfe /* scsibus 2 */, 0xfe /* scsibus 3 */};
+
+/* if set non-zero, the selection timeout will be longer on that SCSI
+	bus during probing (boot, and scsiha -p), which may increase
+	boot time and probe duration.  Some devices fail to respond to selection
+	for longer periods immediately after power on or reset, and setting a
+	longer delay may allow those devices to be probed where they
+	would otherwise fail.  The timeout change is only for probing.
+*/
+u_char wd93_longselect[SC_MAXADAP] = { 0, 0, 0, 0 };
+
+/*	This is the period to use for sync negotiations, one per adapter
+	(SCSI channel or SCSI bus).  It is *IGNORED* if the appropriate
+	target ID bit for the appropriate SCSI adapter is not set in
+	wd93_syncenable above.  The value is in 4 nanosecond
+	increments, so 25 is 100 ns or 10 Mbytes/sec (fast SCSI).  This
+	is only what we the target, the value used will match what the
+	target negotiates.  For drives not supporting fast SCSI, this
+	will be at least 50 (200 ns, or 5 MB/sec max).  It doesn't
+	affect throughput much for any (currently available) single
+	drive, but becomes important when multiple targets are on the
+	SCSI bus (particularly for logical volumes).  You may wish to
+	increase this value if you have marginal cabling, so that  you
+	can still use sync SCSI, but not at the maximum rate, since
+	cabling problems are usually much more obvious at higher data
+	rates.  Only the 93B SCSI chip currently supports fast SCSI, so
+	if the value is less than 50 and the chip is a 93 or 93A, a
+	value of 50 is used.  For the 93B, legal fast values are 25 and
+	38 (other values are possible, but are 5 Mb/sec or less, but
+	use the fast SCSI timings).  For SCSI 1 (not fast SCSI), legal
+	values are 50, 75, 100, 125, 150, and 175.  Anything longer
+	than 175 uses 175.  These values may be used on any of the 3
+	chips (93, 93A, and 93B).
+*/
+u_char wd93_syncperiod[SC_MAXADAP] = {25 /* scsibus 0 */, 25 /* scsibus 1 */,
+	25 /* scsibus 2 */, 25 /* scsibus 3 */};
+
+
+/*	If this is 0, the driver will not enable disconnects on that
+	host adapter (SCSI channel or bus).  This is allows use of devices
+	that either don't support disconnect, or that don't work correctly
+	with disconnect enabled.  When 0, overall performance usually 
+	suffers when more than one SCSI device (particularly disks)
+	is in use, and SCSI system disks may wait a LONG time while
+	SCSI tapes are rewinding, etc.
+*/
+int wd93_enable_disconnect[SC_MAXADAP] = {1 /* scsibus 0 */, 1 /* scsibus 1 */,
+	1 /* scsibus 2 */, 1 /* scsibus 3 */};
+
+/* if non-zero, the wd93 driver will print some info whenever a 
+ * checkcondition (an unusual or unexpected event on the scsi target
+ * device) occurs, and a request sense is done in response.
+ * This may be useful when debugging problems with SCSI devices.
+ * Normally, just the sense key and addititional sense code values
+ * and text are printed, along with additional sense qualifier (the
+ * latter two may not always be present).  If the value is > 1,
+ * all the returned sense data is also printed in hex.
+*/
+int wd93_printsense = 0;

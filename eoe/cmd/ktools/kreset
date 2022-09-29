@@ -1,0 +1,357 @@
+#!/bin/perl
+#
+# kreset -- reset a machine that we've got a connection via the annex box
+#
+#  $Header: /proj/irix6.5.7m/isms/eoe/cmd/ktools/RCS/kreset,v 1.20 1997/12/08 19:29:16 cwilson Exp $
+#  $Modified: Mon Dec  8 20:06:54 1997 by cwilson $
+#
+#
+ 
+$REVISION	= '$Revision: 1.20 $';
+$REVISION =~ s/.*(\d\.\d+).*/$1/;
+
+$KTOOLS_HOME	= '/usr/annex';	                          # here lie dragons
+$KWHO		= "$KTOOLS_HOME/kwho";			  # don't rely on PATH
+$PORTSFILE 	= "$KTOOLS_HOME/ktools.map";		  # when NIS isn't here.
+
+require 'newgetopt.pl';
+require 'chat2.pl';
+
+@sync = (255,255,255,255,255,255,255,255,255,255,255,
+	 255,255,255,255,255,01);
+
+%house_table = (
+	A, 0x60,
+	B, 0xE0,
+	C, 0x20,
+	D, 0xA0,
+	E, 0x10,
+	F, 0x90,
+	G, 0x50,
+	H, 0xD0,
+	I, 0x70,
+	J, 0xF0,
+	K, 0x30,
+	L, 0xB0,
+	M, 0x00,
+	N, 0x80,
+	O, 0x40,
+	P, 0xC0,
+);
+
+# there's some clever way of calculating this...
+%unit_table = (
+	 1, "0x00, 0x80",
+	 2, "0x00, 0x40",
+	 3, "0x00, 0x20",
+	 4, "0x00, 0x10",
+	 5, "0x00, 0x08",
+	 6, "0x00, 0x04",
+	 7, "0x00, 0x02",
+	 8, "0x00, 0x01",
+	 9, "0x80, 0x00",
+	10, "0x40, 0x00",
+	11, "0x20, 0x00",
+	12, "0x10, 0x00",
+	13, "0x08, 0x00",
+	14, "0x04, 0x00",
+	15, "0x02, 0x00",
+	16, "0x01, 0x00",
+	     );
+
+
+
+&Usage if !&NGetOpt( "f", "noyp", "power", "nmi", "off", "on" );
+
+# If running under IRIX (nothing else is currently supported, but soon to happen)
+# check to see if we're running yp.  Note that as of Irix 6.5 (kudzu) nsd replaces
+# yp.
+#
+$uname = `/bin/uname -sr`;
+
+if ($uname =~ /IRIX/) {
+    if ($uname =~ /6\.5/) {
+	`/etc/chkconfig nsd`;
+    } else {
+	`/etc/chkconfig yp`;
+    }
+}
+
+$KWHO .= ' -noyp' if $opt_noyp || $? ;
+$KWHO .= " -m $NIS_MAP" if $opt_m;
+
+print (stderr "Sorry, you can't use the ktools with the -noyp option until you copy\n" . 
+    "the ktools configuration file, ktools.map, to your system.\n"), exit 1 if $opt_noyp && !-e $PORTSFILE;
+
+close stdin;
+
+&Usage, exit(1) if $#ARGV != 0;
+
+@kwho = `$KWHO $ARGV[0]`;
+
+if (!(@result2=grep(/$ENV{USER}/, @kwho))) {
+    print STDERR "Not connected to any hosts\n";
+    if ($opt_f) {
+	print STDERR "But since you used the -f option, I'll reset it anyway.\n";
+    } else { exit(1); }
+}
+
+if (!$opt_f) {
+    if (!(@result3=grep(/^$ARGV[0]/, @result2))) {
+	print STDERR "Host not found/connected. Connected hosts are:\n";
+	print @result2;
+	exit(1);
+    }
+}
+
+$sysinfo = &ypmatch($ARGV[0]);
+$reset = (split('`', $sysinfo))[16]; $reset =~ s/\s//g;
+
+if (!$reset) {
+    print "No reset line connected, unable to reset machine.\n";
+    &checkversion;
+    exit(0);
+}
+
+
+# 
+# Reset via system controller
+#
+if ($reset eq 'sc') {
+    # everest system, use system controller to reset system
+    $sc = (split(',', (split('`', $sysinfo))[17]))[1];
+    $annex = (split('`', $sysinfo))[15];
+    if (!$sc) {			# 
+	print "No system controller line connected, unable to reset machine.\n";
+	&checkversion;
+	exit(0);
+    }
+
+    die "Sorry, can't power-off the system via the system controller"
+	if $opt_off;
+
+    print "Attempting to ";
+    if ($opt_power) { print "power-cycle"; $tstring = "c"; }
+    elsif ($opt_nmi) { print "send an NMI to"; $tstring = "n"}
+    else { print "reset"; $tstring = "r"; }
+    
+    print " the system via the System Controller port.\n" .
+	"This may fail if the controller port is busy.\n";
+
+    print `(echo $tstring; sleep 2;echo c) | telnet $annex 50$sc`;
+#
+# Reset via SN0 entry-level system controller
+#
+} elsif ($reset eq 'elsc') {
+    # SN0 system with entry-level system controller, use system controller to reset system
+    $sc = (split(',', (split('`', $sysinfo))[17]))[1];
+    $annex = (split('`', $sysinfo))[15];
+    if (!$sc) {			# 
+	print "No system controller line connected, unable to reset machine.\n";
+	&checkversion;
+	exit(0);
+    }
+
+    print "Attempting to ";
+    if ($opt_power) { print "power-cycle"; $tstring = "pwr c"; }
+    elsif ($opt_nmi) { print "send an NMI to"; $tstring = "nmi"}
+    elsif ($opt_off) { print "power off"; $tstring = "pwr d"; }
+    elsif ($opt_on) { print "power on"; $tstring = "pwr u"; }
+    else { print "reset"; $tstring = "rst"; }
+    
+    print " the system via the System Controller port.\n" .
+	"This may fail if the controller port is busy.\n";
+
+    print `(echo $tstring; sleep 2;echo c) | telnet $annex 50$sc`;
+#
+# Reset via vme relay board
+#
+} elsif ($reset =~ /^vme_relay/) {
+    ($reset_machine, $port) = $reset =~ /^vme_relay:(\S+):(\d+)/;
+    die "Incomplete reset entry for $ARGV[0]:\n\t$reset\n" .
+	"Unable to reset machine.\n" if (! length($port));
+    die "Sorry, can't power-off the system via reset board in $reset_machine"
+	if $opt_off;
+
+    print "Resetting $ARGV[0] via reset board in $reset_machine...";
+    system ("rsh guest\@$reset_machine /usr/annex/real_reset " . $ARGV[0] ); 
+    print "done.\n";
+# 
+# Reset via x10 controller hooked up to an annex box
+#
+} elsif ($reset =~ /^x10_annex/) {
+    ($x10_box, $info) = $reset =~ /^x10_annex:(\S+):(.*)/;
+    die "Incomplete reset entry for $ARGV[0]:\n\t$reset\n" .
+	"Unable to reset machine.\n" if (! length($x10_box) || !length($info));
+    
+    die "Can't send an NMI, sorry.\n" if $opt_nmi;
+    
+    ($reset) = $info =~ /reset=(\w+)/;
+    ($power) = $info =~ /power=(\w+)/;
+
+    # option to get number of seconds of delay between turning a system
+    # off and on, this is needed for IP30 - this is an optional field
+   ($restart_delay) = $info =~ /restart_delay=(\w+)/; 
+
+    $opt_power = 1 if $reset eq 'power';
+
+    print "Attempting to " ,
+	$opt_power ? "power-cycle " : "reset ",
+	"the system via the X10 box $x10_box.\n";
+    
+    if ($opt_off) {
+	($housecode, $unit) = $power =~ /(\S)(\d+)/;
+	&reset_via_x10('off', $housecode, $unit, $x10_box);
+    }
+    elsif ($opt_power) {
+	($housecode, $unit) = $power =~ /(\S)(\d+)/;
+
+	&reset_via_x10('cycle', $housecode, $unit, $x10_box);
+    } else {
+	($housecode, $unit) = $reset =~ /(\S)(\d+)/;
+
+	&reset_via_x10('on', $housecode, $unit, $x10_box);
+    }
+} else {
+# 
+# old style entry, remove this once the ktools file has been
+# updated
+#
+    ($reset_machine, $port) = $reset =~ /(\S+):(\d+)/;
+    die "Incomplete reset entry for $ARGV[0]:\n\t$reset\n" .
+	"Unable to reset machine.\n" if (! length($port));
+
+    print "Resetting $ARGV[0] via reset board in $reset_machine...";
+    system ("rsh guest\@$reset_machine /usr/annex/real_reset " . $ARGV[0] ); 
+    print "done.\n";
+}    
+
+&checkversion;
+
+######################################################################
+
+
+
+sub reset_via_x10 {
+    local($cmd, $housecode, $unit, $x10) = @_;
+    local($my_reset_delay,$sec);
+
+    if ($cmd eq 'cycle') {
+	# off
+	&reset_via_x10('off', $housecode, $unit, $x10);
+	if (!$restart_delay) {
+	    $my_reset_delay = 2; # if not set, use default
+	}
+	else {
+	    $my_reset_delay = $restart_delay;
+	}
+	# sleep
+	select((select(STDOUT), $| = 1)[0]);  # force flush after every write
+	print "Power Off - waiting $my_reset_delay seconds before turning power back on ";
+        $sec = 0;
+	while ($sec < $my_reset_delay) {
+	    print ".";
+	    sleep 1;
+	    $sec++;
+        }
+	print " - Power On\n";
+	select((select(STDOUT), $| = 0)[0]);  # unforce flush after every write
+	# on
+	&reset_via_x10('on', $housecode, $unit, $x10);
+    }; 
+
+    $cmd = 2 if $cmd eq 'on';
+    $cmd = 3 if $cmd eq 'off';
+
+    $housecode =~ tr/[a-z]/[A-Z]/;
+
+    die "Invalid configuration\n" if (!$house_table{$housecode} || !$unit_table{$unit} ||
+				      !$x10);
+
+    $chksum = ($cmd + 
+	       eval(join("+", split(/,/, $unit_table{$unit}))) +
+	       $house_table{$housecode}) % 0x100;
+
+
+    local($sysinfo) = &ypmatch($x10);
+    die "Unable to determine where $x10 is\n" if !length($sysinfo);
+
+    $annex = (split('`', $sysinfo))[15];
+    ($port = (split('`', $sysinfo))[17]) =~ s/r//;
+
+
+    $Control = &chat'open_port($annex, 50 . $port) || #'
+	die "Couldn't open $annex CLI port $port, $!.\n"; 
+
+
+    $string = pack("c24", (@sync, $cmd, $house_table{$housecode},
+			   eval($unit_table{$unit}), $chksum));
+
+    &chat'print($Control, $string);#';
+
+    # this sleep is necessary, don't quite know why.
+    sleep 1;
+
+    &chat'close($Control);
+
+}
+
+
+
+# checkversion:
+# check to make sure that we've got the latest version of this
+#
+sub checkversion {
+    $nis_version = &ypmatch("kreset_version");
+
+    if (!$nis_version) {
+	printf(stderr "\n$0: unable to find kreset_version in ktools NIS map.\n");
+    } else {
+	  if ($nis_version > $REVISION) {
+	      printf(stderr "\n NOTICE: A newer version of $0 is available.  \n         Please upgrade at your earliest convenience\n");
+	      printf(stderr   "         for added functionality and bug fixes.\n        Install from dist.engr:/sgi/hacks/ktools\n");
+	  }
+      }
+}
+
+#
+# ypmatch:
+# do the ypmatch thing
+#
+sub ypmatch {
+    local($foo) = $opt_noyp ? `grep ^$_[0] $PORTSFILE` : `ypmatch -k $_[0] ktools 2>&1`;
+
+    if ($opt_noyp) {
+	if ($foo !~ /$_[0]/) { return 0; }
+	$foo =~ s/(.*)$_[0]\s*(.*)/$2/;
+    } else {
+	if ($foo !~ /$_[0]:/) { return 0; }
+	$foo =~ s/(.*)$_[0]: (.*)/$2/;
+    }
+    $foo;
+}
+
+#
+# Usage: print usage info
+#
+sub Usage {
+    print "Usage: kreset [-f] [-noyp] [-power] [-nmi] [-off] <systemname>\n",
+    "\t-f\tForcefully reset regardless if console is held\n",
+    "\t-noyp\tUse if no YP (NIS) ktools map is available\n",
+    "\t-power\tPower cycle the system (if possible)\n",
+    "\t-nmi\tSend an NMI to the system (if possible)\n";
+    "\t-off\tShut off system power(if possible)\n";
+
+}
+
+
+format mach =
+  @<<<<<<<<<<<<    @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+$_, $Conf{$_}
+.
+format note =
+      @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+$_
+.
+
+

@@ -1,0 +1,329 @@
+#!/bin/sh
+# This shell script is launched by ESPartner.ftr or command line 
+# and is supposed to launch in "theBrowser" with predefined 
+# URL. 
+# 
+# Only two browsers are supported for now
+#
+#     (1) netscape
+#     (2) lynx
+# 
+#  The netscape is a prefered browser
+# 
+
+Success=0
+Failure=1
+XMode=0
+TargetHostName=""
+WinList=""
+WinId=""
+TheURL=""
+theBrowser=""
+
+netscape="`which -f netscape`"
+if [ ! -x "$netscape" ]; then
+   netscape=""
+fi
+
+lynx="`which -f lynx`"
+if [ ! -x "$lynx" ]; then
+   lynx=""
+fi
+
+Xlynx="/usr/sbin/xwsh -display $DISPLAY -name Lynx -e $lynx"
+portno="`fgrep -e sgi-esphttp /etc/services | cut -f2 | cut -f1 -d"/"`"
+
+IsNetscapeRunning()
+{
+  # is netscape running on this system?
+  
+  netscapeOn="`ps -e | grep -i netscape | egrep -v grep | head -1`"
+  if [ "$netscapeOn" = "" ] ; then
+     return $Failure
+  fi
+  # may be
+  # let's check lock file
+
+  if [ -h "$HOME/.netscape/lock" ] > /dev/null; then
+    return $Success
+  else
+    # ps again, in case previous ps caught a dying process
+    sleep 1
+    netscapeOn="`ps -e|grep -i netscape|egrep -v grep|head -1`"
+    
+    if [ "$netscapeOn" = "" ]; then
+      return $Failure
+    fi
+
+    # Check lock again
+    if [ -h "$HOME/.netscape/lock" ] > /dev/null; then
+      return $Success
+    fi
+  fi
+  return $Failure
+}
+
+
+FindWindowID()
+{
+  echo "$WinList" |            
+  while read WinId PrName      
+  do 
+    if [ "$WinId" = "" ]; then  
+      WinId="0"
+      return $Success
+    fi
+    
+    wndmozl=`2>/dev/null xprop -notype -id $WinId  _MOZILLA_VERSION   | \
+             2>/dev/null cut -d"\"" -f2 | grep -v _MOZILLA_VERSION`
+             
+    wndhost=`2>/dev/null xprop -notype -id $WinId   WM_CLIENT_MACHINE | \
+             2>/dev/null cut -d"\"" -f2`
+  
+    if [ "$wndhost" = "$TargetHostName" ]; then
+      if [ "$wndmozl" != "" ]; then 
+       return $Success
+      fi
+    fi
+  done  
+  WinId="0"
+  return $Success
+}
+
+# ------------------- openNetscape ---------------------
+# Open URL using netscape 
+# Takes one argument: the URL.
+openNetscape()
+{
+  TargetHostName="`uname -n`"
+
+  #we want to launch Netscape in separate window
+  IsNetscapeRunning
+  if [ "$?" = "$Failure" ]; then    
+       # it is simple then
+      if  [ "$XMode" = "1" ]; then
+        2>/dev/null $theBrowser -display $DISPLAY $1 &
+      else
+        $theBrowser -display $DISPLAY $1 &
+      fi
+  else
+    # o-o-oh man this is pain 
+    WinList=""
+    if [ -x /usr/bin/X11/xlswins -a -x /usr/bin/X11/xprop ] > /dev/null; then
+       WinList="`2>/dev/null /usr/bin/X11/xlswins -display $DISPLAY | grep -i netscape`"
+    fi
+
+    if [ "$WinList" = "" ]; then 
+       # it looks like it is not possible to avoid locked cashe message and 
+       # it is nothing we can do about it
+       $theBrowser -display $DISPLAY $1 &
+       return $Success
+    fi
+      
+    FindWindowID  
+    if [ "$WinId" != "0" ]; then  
+       # window found, so we can use -remote api to connect to this window
+       $theBrowser -display $DISPLAY -id $WinId -noraise -remote "openURL(`echo $1`,new-window)" &
+    else
+       # it looks like it is not possible to avoid locked cashe message and 
+       # it is nothing we can do about it
+       $theBrowser -display $DISPLAY $1 &
+    fi
+  fi
+  
+  return $Success
+}
+
+# #######################
+# Script Starts here
+# #######################
+
+if [ "$1" = "-h" ]; then
+# Display usage message
+  echo  "Usage : launchESPartner [-h -l] [-host hostname]"
+  echo  "  -h  -  displays this message"
+  echo  "  -l  -  force to use Lynx browser"
+  echo  "  -host hostname - launch ESP for host 'hostname'"
+  exit 0
+fi
+
+# Check is there any terminal present
+tty -s
+if [ "$?" != "0" ]; then
+# There is no terminal present
+# we must report 
+  XMode=1
+fi
+
+#
+# Figure out what browser to use.
+# check -l flag
+# Netscape
+# lynx
+#
+
+if [ "$1" = "-l" ]; then
+  # force Lynx as a web browser
+  if [ -x "$lynx" ]; then
+     theBrowser="$lynx"
+  else
+    if  [ "$XMode" = "1" ]; then
+      /usr/bin/X11/xconfirm \
+      -h "Embedded Support Partner" \
+      -icon error \
+      -t "Unable to find Lynx WEB Browser" \
+      -t "" \
+      -t "Please, install Lynx WEB Browser and try again."
+      -t "" \
+      -t "ESP console launch operation aborted" \
+      -b "OK" > /dev/null &
+    else
+      echo "ESP console launch operation aborted : Unable to find Lynx WEB Browser."
+      echo "Please, install Lynx WEB browser and try again."
+    fi
+    exit 1
+  fi   
+  shift 1
+ 
+elif [ -x "$netscape" ] > /dev/null; then
+  # netscape exist
+  theBrowser="$netscape"
+elif [ -x "$lynx" ] > /dev/null; then 
+  theBrowser="$lynx" 
+else
+  # Browser not found 
+  if  [ "$XMode" = "1" ]; then
+     /usr/bin/X11/xconfirm \
+    -h "Embedded Support Partner" \
+    -icon error \
+    -t "Unable to determine your Web browser" \
+    -t "" \
+    -t "Please, install Netscape or Lynx web browser and try again."
+    -t "" \
+    -t "ESP console launch operation aborted" \
+    -b "OK" > /dev/null &
+  else
+    echo "ESP console launch operation aborted : Unable to determine your Web browser."
+    echo "Please, install Netscape or Lynx WEB browser and try again."
+  fi  
+  exit 1 
+fi
+
+# OK Browser found
+# Now run through URLs. 
+#
+
+if [ $# -le 0 ]; then
+  # there is no args left 
+  # so we must launch ESP for localhost
+  if [ "$theBrowser" = "$lynx" ]; then
+     TheURL="http://localhost:$portno/index_sem.txt.html"
+  else
+     TheURL="http://localhost:$portno/index.html"
+  fi   
+  
+elif [ "$1" = "-host" ]; then  
+  # hostname is specified
+  shift 1
+  if [ $# -ge 0 ]; then 
+     if [ "$theBrowser" = "$lynx" ]; then
+        TheURL="http://$1:$portno/index_sem.txt.html"
+     else
+        TheURL="http://$1:$portno/index.html"
+     fi   
+  else   
+     # hostname not found
+    if  [ "$XMode" = "1" ]; then
+      /usr/bin/X11/xconfirm \
+      -h "Embedded Support Partner" \
+      -icon error \
+      -t "Hostname expected in the command line" \
+      -t "" \
+      -t "ESP console launch operation aborted" \
+      -b "OK" > /dev/null  &
+    else
+      echo "ESP console launch operation aborted : Hostname expected in the command line."
+    fi
+    exit 1
+  fi
+  
+else
+
+  # Launch from file
+  # read URL index
+  LineToLaunch="$1"
+ 
+  shift 1
+  if [ $# -le 0 ]; then 
+    if  [ "$XMode" = "1" ]; then
+      /usr/bin/X11/xconfirm \
+      -h "Embedded Support Partner" \
+      -icon error \
+      -t "Filename expected in the command line" \
+      -t "" \
+      -t "ESP console launch operation aborted" \
+      -b "OK" > /dev/null &
+    else
+       echo "ESP console launch operation aborted : Filename expected in the command line."
+    fi
+   
+    exit 1
+  fi
+  
+  # Next Args must be a launchESPartnerType file 
+  # and it must contains URL in it's $LineToLaunch's string
+ 
+  TheURL=""
+  if [ -r $1 ]; then
+     TheURL="`head -$LineToLaunch $1 | tail -1`"
+  else   
+     if [ "$XMode" = "1" ]; then
+        /usr/bin/X11/xconfirm \
+            -h "Missing launchESPartnerType file" \
+            -icon error \
+            -t "The file that is containing ESP console URL was not found." \
+            -t "" \
+            -t "ESP console launch operation aborted" \
+            -b "OK" > /dev/null &
+     else
+         echo "ESP console launch operation aborted : \n The file that is containing ESP console URL was not found."
+     fi
+     exit 1
+  fi
+
+  if [ "$TheURL" = "" ]; then
+     if [ "$XMode" = "1" ]; then
+        /usr/bin/X11/xconfirm \
+            -h "Missing URL" \
+            -icon error \
+            -t "The line number $LineToLaunch does not contains URL in ESP console URL file." \
+            -t "" \
+            -t "ESP console launch operation aborted." \
+            -b "OK" > /dev/null &
+     else
+         echo "ESP console launch operation aborted : \n The line number $LineToLaunch does not contains URL in ESP console URL file."
+     fi
+     exit 1
+  fi
+fi
+
+# TheURL is ready, TheBrowser is ready
+# Time to Launch
+if   [ "$theBrowser" = "$netscape" ]; then
+
+     openNetscape $TheURL &
+     
+elif [ "$theBrowser" = "$lynx" ]; then 
+
+  if [ "$XMode" = "1" ]; then
+     #we want to launch Lynx in separate window
+     $Xlynx -cache=0 $TheURL &
+  else
+     #we want to launch Lynx in the same window
+     $lynx  -cache=0 $TheURL
+  fi
+fi
+
+################################
+# This is it folks             #
+################################

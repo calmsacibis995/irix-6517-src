@@ -1,0 +1,565 @@
+#!/usr/annex/perl
+#
+# kcons, the perl version.
+#  kgrab merged into this.
+#  kfree too
+#  klist also
+#  ksteal as well
+#
+#	$Header: /proj/irix6.5.7m/isms/eoe/cmd/ktools/RCS/ksteal,v 1.7 1996/01/23 08:15:03 ack Exp $
+#	$Revision: 1.7 $
+#	$Modified: Fri Apr 21 14:49:48 1995 by cwilson $
+#   Set up a session between this system and the indicated target
+#	(debug) system's console port.  The session is composed of
+#	a TELNET process.
+#
+#  If invoked as kgrab,
+#   Set up a session between this system and the indicated target
+#	(debug) system.  The session is composed of a TELNET
+#	process for each console port on the target, and a shell
+#	window for each debug port on the target.  The shells for
+#	the debug ports will have the KDBXPORT environment variable
+#	set to the appropriate path (ie: /dev/annex/foo.d0).
+#
+#
+#	-lock locks the port
+#	-cu   uses cu (if possible) to talk to the system.
+#	-nodebug|-nodbg  -- we won't bring up the debug ports if running as kgrab.
+#	-q 	quiet mode.  Mostly for quietly stealing a tap session
+#
+
+$REVISION	= '$Revision: 1.7 $'; # ";" <-- this fixes indenting and highlighting
+$TELNET 	= 'telnet';
+$RCFILE		= "$ENV{'HOME'}/.kgrabrc"; # for kgrab
+$KWHO		= '/usr/annex/kwho';
+$HOSTNAME	= `hostname -s`;chop $HOSTNAME;
+$CONSOLE	= 0;		# default console to grab.
+$| = 1;
+$PORTSFILE 	= '/usr/annex/ktools.map';
+
+# we can now require this, since the ktools are an inst image
+# that has pre-reqs on eoe2.sw.gifts_perl or perl.sw.perl
+require 'newgetopt.pl';
+
+
+&NGetOpt( "c:s", "lock", "cu", "steal", "grab", "f", "a:s",
+	"nodebug", "nodbg", "debug", "dbg", "DEBUG", "noyp", "q");
+$opt_nodbg += $opt_nodebug;
+$opt_dbg += $opt_debug;
+
+$REVISION =~ s/.*(\d\.\d+).*/$1/;
+
+`/etc/chkconfig yp`;			
+$KWHO .= ' -noyp' if $opt_noyp || $? ;
+print (stderr "Sorry, you can't use the ktools with the -noyp option until you copy\n" . 
+    "the ktools configuration file, ktools.map, to your system.\n"), exit 1 if $opt_noyp && !-e $PORTSFILE;
+
+$CONSOLE = $ARGV[1] if $ARGV[1];
+
+&checkclasses;			# validate classes, if any
+
+&kfree if ($0 =~ /kfree$/);
+
+&klist if ($0 =~ /klist$/);
+
+&Usage, exit(1) if $#ARGV > 1 || $#ARGV == -1;
+
+&kgrab_setup if ($0 =~ /kgrab/ || $opt_grab);
+
+
+# if attempting to use cu, make sure there's a device to talk to
+#
+if ($opt_cu) {
+    # verify device entry
+    $dev = `grep $ARGV[0] /usr/annex/cu_device_names`;
+
+    # verify rtelnetd is running
+    if ($dev) {
+	$rt = `ps -elf|grep rtelnetd`;
+    }
+    if (!$dev || !$rt) {
+	print stderr "cu device doesn't exist or rtelenetd not running.\n";
+	exit(1);
+    }
+}
+
+@kwho = `$KWHO $ARGV[0]`;
+
+&tapcheck if $#kwho;			# check to see if there's a tap session running
+
+&ksteal if ($0 =~ /ksteal$/ || $opt_steal);
+
+if (($sysinfo = &ypmatch($ARGV[0])))  {
+    &Doit($ARGV[0]);
+    &checkversion;
+    exit(0);
+}
+else {
+    print "$0: Unknown system: $ARGV[0]\n";
+    &Usage, exit(1);
+}
+
+#
+# ypmatch:
+# do the ypmatch thing
+#
+sub ypmatch {
+    local($foo) = $opt_noyp ? `grep ^$_[0] $PORTSFILE` : `ypmatch -k $_[0] ktools 2>&1`;
+
+    if ($opt_noyp) {
+	if ($foo !~ /$_[0]/) { return 0; }
+	$foo =~ s/(.*)$_[0]\s*(.*)/$2/;
+    } else {
+	if ($foo !~ /$_[0]:/) { return 0; }
+	$foo =~ s/(.*)$_[0]: (.*)/$2/;
+    }
+    $foo;
+}
+
+#
+# ypcat:
+# do the ypcat thing
+#
+sub ypcat {
+    local(@foo) = $opt_noyp ? `cat $PORTSFILE` : `ypcat -k ktools 2>&1`;
+
+    @foo;
+}
+	
+#
+# slurpMachInfo:
+# a single point to futz with splitting the info from the maps.
+# presumes that $_[0] holds the info string.
+#
+sub slurpMachInfo {
+    
+    ($M_desc, $M_mach_type, $M_mktg_mach_type, $M_chassis, $M_gfx, $M_mem,
+     $M_special, $M_loc, $M_asset, $M_serial, $M_notes, $M_owner,
+     $M_owner_uname, $M_owner_ext, $M_ports, $M_annex, $M_reset,
+     $M_consoles, $M_dbg_consoles, $M_access) = split('`', $_[0]);
+
+    @M_consoles = split(',', $M_consoles);
+    @M_dbg_consoles = split(',', $M_dbg_consoles);
+    grep(s/\s//g, @M_consoles);
+    grep(s/\s//g, @M_dbg_consoles);
+
+    $M_notes =~ s/^\s+//;
+    $M_full_owner = '';
+    $M_full_owner = "$M_owner ($M_owner_uname), $M_owner_ext" if 
+	( length($M_owner) && length($M_owner_uname) && length($M_owner_ext));
+
+}
+
+#
+# Doit:
+# start the telnet session
+#
+sub Doit {
+    $machine = $ARGV[0];
+    &slurpMachInfo($sysinfo);
+    grep(s/r//, @M_consoles);
+    &PrintNote if $M_notes;
+    
+    $ARGV[0] .= ".con.$CONSOLE";# if $CONSOLE;
+    if (grep(/$ARGV[0]/, @kwho)) {
+	print "$ARGV[0] appears to be in use:\n", @kwho;
+	exit(1) ;
+    }
+#    print "$TELNET $annex 50$Console{$_}\n";
+
+    if ($0 =~ /kgrab/) {
+	# tell the annex box who's connected.
+	foreach ( defined($ARGV[1]) ? $M_consoles[$CONSOLE] :
+		 @M_consoles) {
+	    &NA($_, $M_annex);
+	}
+	if ($opt_dbg) {
+	    foreach ( defined($ARGV[1]) ? $M_dbg_consoles[$CONSOLE] :
+		     @M_dbg_consoles) {
+		&NA($_, $M_annex);
+	    }
+	}
+	foreach ( defined($ARGV[1]) ? $CONSOLE :
+		 (0..$#M_consoles)) {
+	    if ($CMD eq "xwsh") {
+		$conargs = "-icontitle $machine" . "_c_$_ -title $machine" . "_cons_$_";
+		$dbgargs = "-icontitle $machine" . "_debug_$_ -title $machine" . "_debug_$_";
+		*x = $machine  . '_con_' . $_;
+		$conargs .= " $x";
+
+		*x = $machine  . '_dbg_' . $_;
+		$dbgargs .= " $x";
+
+	    }
+	    elsif ($CMD eq "xterm") {
+		$conargs = "-n $machine" . "_c_$_ -title $machine" . "_c_$_";
+		$dbgargs = "-n $machine" . "_debug_$_ -title $machine" . "_debug_$_";
+	    }
+	    print "$CMD $iconic $con_geom[$_] $conargs -e $TELNET $M_annex 50$M_consoles[$_] &\n" if $opt_DEBUG;
+	    system "$CMD $iconic $con_geom[$_] $conargs -e $TELNET $M_annex 50$M_consoles[$_] &\n";
+	    $ENV{'KDBXPORT'} = "/dev/annex/$machine.dbg.$_";
+	    print "$CMD $iconic $dbg_geom[$_] $dbgargs -e $ENV{'SHELL'} &\n" if !$opt_nodbg && $opt_DEBUG;
+	    system "$CMD $iconic $dbg_geom[$_] $dbgargs -e $ENV{'SHELL'} &\n" if $opt_dbg;
+	}
+    }
+    else {			# kcons
+# change the xwsh title bar && icon if we've got an xwsh
+	if ($ENV{'TERM'} eq 'iris-ansi') {
+	    print "P1.ykcons:$machine\\P3.ykcons:$machine\\";
+	}
+	$M_consoles[$CONSOLE] =~ s/^r//;
+	&NA($M_consoles[$CONSOLE], $M_annex);
+	if (!$opt_cu) {
+	    print "$TELNET $M_annex 50$M_consoles[$CONSOLE]\n" if $opt_DEBUG;
+	    system("$TELNET $M_annex 50$M_consoles[$CONSOLE];echo 'P1.y$HOSTNAME\\P3.y$HOSTNAME\\'");
+	}
+	else {
+	    print "cu -lannex/$machine.con.$CONSOLE\n" if $opt_DEBUG;
+	    system("cu -lannex/$machine.con.$CONSOLE;echo 'P1.y$HOSTNAME\\P3.y$HOSTNAME\\'");
+	}
+    }    
+}
+
+# talk to na to set the username for the port
+#
+#
+sub NA {
+    local ($port, $annex) = @_;
+    $user = $opt_lock ? '[' . $ENV{'USER'} . ']' : $ENV{'USER'};
+    system $opt_DEBUG ? "/bin/echo 'set port=$port\@$annex user_name \"$user\"' | /usr/annex/na" :
+	"/bin/echo 'set port=$port\@$annex user_name \"$user\"' | /usr/annex/na  1>/dev/null 2>&1";
+}
+
+# usage:
+#
+sub Usage {
+    print "Usage: $0 sysname\nWhere sysname is one of:\n";
+    &ListMachines;
+}
+
+# checkversion:
+# check to make sure that we've got the latest version of this
+#
+sub checkversion {
+    $nis_version = &ypmatch("kcons_version");
+    if (!$nis_version) {
+	printf(stderr "\n$0: unable to find kcons_version in ktools NIS map.\n");
+    } else {
+	  if ($nis_version > $REVISION) {
+	      printf(stderr "\n NOTICE: A newer version of $0 is available.  \n         Please upgrade at your earliest convenience\n");
+	      printf(stderr   "         for added functionality and bug fixes.\n        Install from babylon:/usr/dist/misc/ktools\n");
+	  }
+      }
+}
+
+# checkclasses:  verify that there's a classes map to check against, and that
+# the KTOOLS_CLASS envariable has valid values.
+#
+sub checkclasses {
+    chop ($x = &ypmatch('classes'));
+    if (!length($x)) {
+	die "No classes found in ktools NIS map.\n";
+    }
+    
+    foreach $class (split ('`', $x)) {
+	$Class{$class} = &ypmatch($class . '_config');
+    }
+
+    if ($ENV{KTOOLS_CLASS}) {
+	foreach (split(':', $ENV{KTOOLS_CLASS})) {
+	    if (!$Class{$_}) {
+		print "ERROR: Unknown class: $ENV{KTOOLS_CLASS}.   Valid classes are:\n";
+		&PrintClasses;	 
+		exit 1;		
+	    }
+	}
+    }
+}
+
+########################################
+#
+sub PrintClasses {
+    $^ = 'ch';
+    $~ = 'cd';
+
+    foreach (keys Class) {
+	($C_desc, @x) = split('`', $Class{$_});
+	$x = join(',', @x);
+	$C_name = $_;
+	write;
+    }
+}
+
+########################################
+#
+sub ListMachines {
+    $~ = 'mach';
+    @ypinfo = &ypcat;
+    foreach (@ypinfo) {
+	/^(\S+)\s+(.*)/;
+	$ktools{$1} = $2;
+    }
+    if (defined ($_[0])) {
+	@classes = $_[0];
+    } elsif (defined ($ENV{'KTOOLS_CLASS'})) {
+	@classes = split(':', $ENV{'KTOOLS_CLASS'});
+    }
+	     
+    if (defined @classes) {
+	foreach $class (@classes)  {
+	    $annexes = (split('`', $ktools{$class . '_config'}))[4];
+	    foreach $annex (split(',', $annexes)) {
+		    push( machines, split('`', $ktools{$annex . '_machines'}));
+	    }
+	}
+    } else {
+	foreach (split('`', $ktools{'annexes'})) {
+	    if ($opt_a) {
+		push( machines, split('`', $ktools{$_ . '_machines'})) 
+		    if $opt_a eq $_; 
+	    } else { 
+		push( machines, split('`', $ktools{$_ . '_machines'}));
+	    }
+	}
+    }
+
+    foreach $machine (sort @machines) {
+	$machine =~ s/\s//g;
+	$M_mach = $machine;
+	&slurpMachInfo($ktools{$machine});
+	write;
+    }
+}
+
+# tapcheck:  check to see if a tap session is running
+# if so, steal it.
+#
+sub tapcheck {
+    if ((($who) = grep(/$ARGV[0].con.$CONSOLE/, @kwho)) && $who =~ /tapper/) {
+	print STDERR "Tap session for $who found, stealing.\n" if $opt_DEBUG;
+	$opt_f = 1;
+	$opt_steal = 1;
+	$opt_q = 1 if !$opt_DEBUG;
+	@kwho = ();		# so kcons later succeeds
+	&ksteal;
+    }
+}
+
+# ksteal:  Steal a session from someone else
+#
+sub ksteal {
+    if (@kwho) {		# somebody's using the desired machine
+	@x = grep(/$ARGV[0].con.$CONSOLE/, @kwho);
+	$host   = substr($x[0], 19, 15); $host =~ s/\s//g;
+	$person = substr($x[0], 37, 11); $person =~ s/\s//g;
+	$idle   = substr($x[0], 65, 11); $idle =~ s/\s//g;
+	if ($person =~ /\[(\w+)\]/) {
+	    $person = $1;
+	    print "$ARGV[0] is being used by $person@$host, idle $idle \n";
+	    print "However, it has been locked.  Please contact $person directly\n";
+	    print "and have them release the port(s).\n";
+	    exit 1;
+	}
+	print "$ARGV[0] is being used by $person@$host, idle $idle \n" if !$opt_q;
+	if (($hour, $min) = $idle =~ /(\d+):(\d+)/) {
+	    $waylong = 1 if $hour >= 2;
+	}
+	$waylong = $opt_f if $opt_f;
+	if (!$waylong) {
+	    print "Can't steal $ARGV[0], idle time less than 2 hours.\n" if !$opt_q;
+	    exit (1);
+	}
+    }
+    &ResetEm;
+    grep(s/$ARGV[0]//, @kwho); # remove old status info from kwho
+    $stole = $opt_f ? "forcefully stole" : "stole";
+    `echo "$ENV{'USER'} $stole $ARGV[0] from you at $DATE, idle $idle\n" | Mail -s 'Annex Box Notice' $person@$host` if !$opt_q;
+}
+
+#########################################
+#
+sub PrintNote {
+    $~ = note;
+    print "NOTES:\n";
+    write;
+}
+#########################################
+#
+sub ResetEm {
+    print "Stealing $ARGV[0]\n" if !$opt_q;
+    $sysinfo = &ypmatch($ARGV[0]);
+    &slurpMachInfo($sysinfo);
+
+#    $consoles = (split('`', $sysinfo))[17]; $consoles =~ s/,\s*$//;
+#    $annex = (split('`', $sysinfo))[15];
+
+    $M_consoles =~ s/r//g;
+    if ($opt_DEBUG) {
+	print "/bin/echo 'reset $M_consoles@$M_annex' | /usr/annex/na 1>/dev/null 2>&1\n";
+	system "/bin/echo 'reset $M_consoles@$M_annex' | /usr/annex/na";
+    } else {
+	system "/bin/echo 'reset $M_consoles@$M_annex' | /usr/annex/na 1>/dev/null 2>&1";
+    }
+}
+
+#########################################
+#
+sub klist {
+    if (defined $opt_c && !length($opt_c)) {
+	&PrintClasses;
+	exit 0;
+    } else {
+	if (length($opt_c)) {
+	    print "\n        Machines hooked up to the annex boxes:\n" . ' ' x 15 . "class = $opt_c\n" . '=' x 50 . "\n";
+	} else {
+	    print "\n        Machines hooked up to the annex boxes:\n" . ' ' x 15 . "KTOOLS_CLASS = $ENV{KTOOLS_CLASS}\n" . '=' x 50 . "\n";
+	}
+	&ListMachines($opt_c);
+	&checkversion;
+	exit 0;
+    }
+}
+
+#########################################
+#
+sub kfree {
+    $~ = 'mach';
+    @kwho = `$KWHO`;
+    @ypinfo = &ypcat;
+    foreach (@ypinfo) {
+	/^(\S+)\s+(.*)/;
+	$ktools{$1} = $2;
+    }
+    if (length($opt_c)) {
+	@classes = $opt_c;
+    } else {
+	@classes = split(':', $ENV{'KTOOLS_CLASS'});
+    }
+
+    if (defined @classes) {
+	foreach $class (@classes)  {
+	    foreach $annex (split(',', (split('`', $ktools{$class . '_config'}))[4])) {
+		push( machines, split('`', $ktools{$annex . '_machines'}));
+	    }
+	}
+    } else {
+	foreach (split('`', $ktools{'annexes'})) {
+	    push( machines, split('`', $ktools{$_ . '_machines'}));
+	}
+    }
+
+    print "     Unused Machines";
+    if (length($opt_c)) {
+	print " (class = $opt_c):\n";
+    } else {
+	print $ENV{'KTOOLS_CLASS'} ? " (KTOOLS_CLASS = $ENV{'KTOOLS_CLASS'}):\n" : ":\n";
+    }
+    print '=' x 60 . "\n";
+    foreach $machine (sort @machines) {
+	$machine =~ s/\s//g;
+	$M_mach = $machine;
+	&slurpMachInfo($ktools{$machine});
+	if (!grep(/$M_mach/, @kwho)) {
+	    write;
+	}
+    }
+    &checkversion;
+    exit 0;
+}
+
+#########################################
+#
+sub kgrab_setup {
+#customizable defaults:
+    $con1_geom = ""; 	$dbg1_geom = "";
+    $con2_geom = ""; 	$dbg2_geom = "";
+    $con3_geom = "";	$dbg3_geom = "";
+    $con4_geom = "";	$dbg4_geom = "";
+    $con5_geom = "";	$dbg5_geom = "";
+    $con6_geom = "";	$dbg6_geom = "";
+    $con7_geom = "";	$dbg7_geom = "";
+    $con8_geom = "";	$dbg8_geom = "";
+    $CMD = "xwsh";
+    $openiconic = 0;
+#
+
+#pick up any customizations from the user:
+    if ( -r $RCFILE) {
+	open (RCFILE, $RCFILE);
+	while (<RCFILE>) {
+	    s/set /\$/; $_ .= ';';
+	    eval "$_";
+	}
+    }
+
+    $opt_dbg = $debug if $debug;
+    @con_geom = ($con1_geom, $con2_geom, $con3_geom, $con4_geom,
+		 $con5_geom, $con6_geom, $con7_geom, $con8_geom);
+    
+    @dbg_geom = ($dbg1_geom, $dbg2_geom, $dbg3_geom, $dbg4_geom,
+		 $dbg5_geom, $dbg6_geom, $dbg7_geom, $dbg8_geom);
+    $iconic = '-iconic' if $openiconic;	# 
+}
+
+#########################################
+#
+sub Keys {
+    local ($sub) = $_[1];
+    local (@keys) = eval "keys %$_[0]";
+    local (@return);
+    foreach (@keys) {
+	push (@return, $1) if /$sub$;(\S+)/;
+    }
+    @return;
+}
+
+sub Values {	
+    local ($sub) = $_[1];
+    local (@keys) = &Keys($_[0], $sub);
+    local (@return);
+    foreach (@keys) {
+	eval "push (\@return, \$$_[0]{$sub, $_})";
+    }
+    @return;
+}
+
+sub Defined {
+    local ($sub) = $_[1];
+    local (@keys) = &Keys($_[0], $sub);
+    foreach (@keys) {
+	return 1 if eval "defined \$$_[0]{$sub, $_}";
+    }
+    return 0;
+}
+format mach =
+ @<<<<<<<<<    @<<<<<  @<<<<<<<<<< @<<<<< ^<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+$M_mach, $M_mach_type, $M_mktg_mach_type, $M_mem, $M_desc
+~     @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+"$M_loc  $M_full_owner"
+.
+
+format note =
+~^<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+$M_notes
+~^<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+$M_notes
+~^<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+$M_notes
+~^<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+$M_notes
+~^<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+$M_notes
+~^<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+$M_notes
+.
+
+format ch = 
+Class name    Class description          Class owner, email, extension
+----------    -----------------          -----------------------------
+.
+
+format cd = 
+@<<<<<<<<<<  @<<<<<<<<<<<<<<<<<<<<<<    @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+$_, $C_desc, $x
+.
+

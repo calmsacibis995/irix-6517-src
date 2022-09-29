@@ -1,0 +1,244 @@
+'\"!tbl|mmdoc
+'\"macro stdmacro
+.TH grio 5
+.SH NAME
+grio \- guaranteed-rate I/O
+.SH DESCRIPTION
+Guaranteed-rate I/O (GRIO) refers to a guarantee made by the system to a user
+process indicating that the given process will receive data from a
+system resource at a predefined rate regardless of any other activity
+on the system.
+The purpose of this mechanism is to manage the sharing of scarce I/O
+resources amongst a number of competing processes, and to permit a given
+process to reserve a portion of the system's resources for its exclusive
+use for a period of time.
+.PP
+Currently, the only system resources that can be reserved using the GRIO
+mechanism are files stored on an XFS filesystem.
+.PP
+A GRIO guarantee is defined as the number of bytes that can be read or written
+to a given file by a given process over a set period of time.
+If a process has a GRIO guarantee on a file, 
+it can write data to or read data from the file at the guaranteed rate 
+regardless of other I/O activity on the system.
+If the process issues I/O requests at a size or rate greater than
+the guarantee, the behavior of the system is determined by the type of
+rate guarantee. The excess requests  may be blocked until such time as they
+fall within the scope of the guarantee, or the requests may be allowed
+up to the limit of the device bandwidth before that are blocked.
+.PP
+The following types of rate guarantees are supported:
+.PP
+.columns 2 2 4
+.TS
+lf4 l.
+PER_FILE_GUAR      \f1 - the GRIO reservation is associated with a\f3
+                   \f1   single file and may not be transferred\f3
+PER_FILE_SYS_GUAR  \f1 - the GRIO reservation may be transferred to any\f3
+                   \f1   file on a given file system\f3
+
+PROC_PRIVATE_GUAR  \f1 - the GRIO reservation may not transferred to\f3
+                   \f1   another process\f3
+PROC_SHARE_GUAR    \f1 - the GRIO reservation may be transferred to\f3
+                   \f1   another process\f3
+
+FIXED_ROTOR_GUAR   \f1 - the GRIO reservation is the VOD (ie. ROTOR)\f3
+                   \f1   type of reservation and the rotor position is\f3
+                   \f1   established at the start of the reservation\f3
+SLIP_ROTOR_GUAR    \f1 - the GRIO reservation is the VOD (ie. ROTOR)\f3
+                   \f1   type of reservation and the rotor position will\f3
+                   \f1   vary according to the access pattern of the\f3
+                   \f1   process\f3
+NON_ROTOR_GUAR     \f1 - the GRIO reservation is a regular\f3
+                   \f1   (ie. NONROTOR) type of reservation\f3
+
+REALTIME_SCHED_GUAR\f1 - the GRIO reservation specifies the rate at\f3
+                   \f1   which data will be provided to the process\f3
+		   \f1   instead of the default deadline behavior\f3
+		   \f1   where the reservation specifies the minimum\f3
+		   \f1   rate\f3
+NON_SCHED_GUAR     \f1 - the I/O requests associated with the GRIO\f3
+                   \f1   reservation are non-scheduled, this will\f3
+                   \f1   affect other GRIO reservations on the system\f3
+.TE
+.PP
+Only one GRIO reservation characteristic may be chosen from each group.
+The \f3PROC_SHARE_GUAR\f1, non \f3REALTIME_SCHED_GUAR\f1, and
+\f3NON_ROTOR_GUAR\f1 characteristics are set by
+default.
+.PP
+There are a number of components in the GRIO mechanism.
+The first is the guarantee-granting daemon,
+.I ggd.
+This is a user level process that is started when the system is booted.
+It controls the granting of guarantees, the initiation and expiration of
+existing guarantees, and the monitoring of the available bandwidths of
+each I/O device on the system.
+User processes communicate with the daemon via the grio library using the
+following calls:
+.PP
+.columns 2 2 4
+.TS
+lf4 l.
+grio_associate_file()        \f1- associate a file with a guarantee\f4
+grio_query_fs()              \f1- query filesystem \f4
+grio_action_list()           \f1- issue list of GRIO reservation requests \f4
+grio_reserve_file()          \f1- issue GRIO reservation request \f4
+grio_reserve_fs()            \f1- issue GRIO reservation request \f4
+grio_unreserve_bw()          \f1- remove grio reservation\f4
+.TE
+.PP
+When \f2ggd\f1 is started, it reads the file \f2/etc/grio_disks\f1 
+and uses its inbuilt system knowledge to determine the bandwidths of 
+the various devices on the system.
+The \f2/etc/grio_disks\f1 file may be edited by the system administrator 
+to tune performance.
+If \f2ggd\f1 is terminated, all existing rate guarantees are removed.
+.PP
+The next component of the GRIO mechanism is the XLV volume manager.
+Rate guarantees may be obtained from files on the real-time and non-realtime
+subvolumes of
+an XFS filesystem as well as non-XLV disk partitions having XFS filesystems.
+The disk driver command retry mechanism is disabled on the disks
+that make up the real-time subvolume.
+This means that if a drive error
+occurs, the data is lost.
+The intent of real-time files is to read/write data from the disk as
+rapidly as possible.
+If the device driver is forced to retry one process's disk request, it
+causes the requests from other processes to become delayed.
+.PP
+If one partition of a disk is used in a real-time subvolume, the entire
+disk is considered to be used for real-time operation.
+If one disk on a SCSI controller is  used for real-time operation then all the
+other devices on that controller must be used for real-time operation as
+well.
+.PP
+In order to use the guaranteed-rate I/O mechanism effectively, the XLV volume
+and XFS filesystem must be set up properly.
+The next section gives an example.
+.PP
+By default, the \f2ggd\f1 daemon will allow four process streams
+to obtain rate guarantees. 
+If support for more streams is desired, it is necessary to
+obtain licenses for the additional streams.
+The license information is stored in the 
+\f2/usr/var/netls/nodelock\f1 file and interpreted by the
+\f2ggd\f1 daemon on startup.
+.PP
+While configuring a system that will be used for guaranteed rate
+I/O, it is important to recognize that the system setup can affect
+grio. For example, if non standard disk drives are added and the 
+\f2grio_disks\f1 file updated, this might have an impact on the performance
+of the SCSI controllers (which should then be tuned thru \f2grio_disks\f1).
+Also, it is recommended that the real time disks to which grio is 
+needed should be placed all by themselves on the SCSI bus. This is 
+becauses devices like CDROMs and tapes might hold up the bus if 
+accessed while a grio request is being serviced. Grio does not model
+file system meta data writes, so keeping the data and log volumes
+of the XLV on different SCSI busses from the real time disks help 
+in satisfying the guarantees. For real time disks, it is strongly 
+recommended that the disks be partitioned to have only one partition,
+the real time partition. Finally, some system components are used 
+for I/O as well as other data traffic, so it is important to not
+overload these components with other data requests while grio requests 
+are being serviced.
+.SH EXAMPLE
+The example in this section describes a method of laying out the disks,
+filesystem, and real-time file that enables the greatest number
+of processes to obtain guarantees on a single file concurrently.
+It is not necessary to construct a file in this manner in order to use
+GRIO, however fewer processes can obtain rate guarantees on the
+file as a result.
+It is also not necessary to use a real-time file, however guarantees
+obtained on non-real time files can only be considered to be "soft"
+guarantees at best which may not be sufficient for some applications.
+Assume that there are four disk partitions available for the real-time
+subvolume of an XLV volume.
+Each one of the partitions is on a different physical disk.
+.PP
+Before setting up the XFS filesystem,
+the I/O request size used by the user process must be determined.
+In order to get the greatest I/O rate, the file data should be striped across
+all the disks in the subvolume.
+To avoid filesystem fragmentation and to force all I/O operations to be
+on stripe boundaries, the file extent size should be an even multiple of
+the volume stripe width.
+Rate guarantees should be made with sizes equal to even multiples of
+I/O request sizes.
+All I/O request sizes must be even multiples of the optimal I/O size
+of the underlying disk devices.
+The optimal I/O size is specified on a per device basis in the
+.I /etc/grio_disks.
+The disk device characteristics for optimal I/O sizes of 64k, 128k, 256k,
+and 512k bytes are supplied.
+The 
+.I grio_bandwidth(1M)
+utility can be used to determine the device characteristics for different
+optimal I/O sizes.
+For simplicity, this example will use an optimal I/O size of 64K bytes.
+Also, the stripe size of the XLV realtime subvolume for this file system
+will be set to an even multiple of 64K bytes.
+If there are four disks available, let the stripe step size be equal to
+64k bytes, and the volume stripe width be 256k bytes.
+The file extent size should be set to a multiple of the volume stripe width.
+In this example, let the file extent size be equal to the stripe width.
+Assume that the application always issues I/O requests in sizes equal to the
+extent size.
+.PP
+Once the XLV volume and XFS filesystem have been created, the application
+can create the real-time file.
+Real-time files must be read or written using direct, synchronous I/O
+requests. (This is also true for GRIO accesses to non-real time files.)
+The \f2open\f1(2) manual page describes the use and buffer
+alignment restrictions when using direct I/O.
+When creating a real-time file,
+the \f3F_FSSETXATTR\f1 command must be issued
+to set the \f3XFS_XFLAG_REALTIME\f1 flag.
+This can only be issued on a newly created file.
+It is not possible to mark a file as real-time once non-real-time data
+blocks have been allocated to it.
+.PP
+After the real-time file has been created, the application can
+issue \f2grio_reserve_fs(3X)]\f1 and \f2grio_associate_file(3x)\f1 
+pair, to obtain the rate guarantee.
+Once the rate guarantee is established, any read or write requests that the
+application issues to the file will be completed within the
+parameters of the guarantee.
+This will continue until the file is closed, the guarantee is removed by
+the application via \f2grio_unreserve_bw\f1(3X), or the guarantee
+expires.
+.PP
+Any process can use the \f2grio_associate_file()\f1 call to
+switch the GRIO reservation to itself if the \f3PROC_SHARE_GUAR\f1 
+characteristic is set. This causes the first process to lose the
+rate guarantee and the second process to receive it.
+Similarly, the \f2grio_associate_file()\f1 call can be used to switch
+the GRIO reservation from one file to another, within the same filesystem,
+if the \f3PER_FILE_SYS_GUAR\f1 characteristic is set.
+.SH DIAGNOSTICS
+If a rate cannot be guaranteed, \f2ggd\f1 returns an error to the
+requesting process.
+It also returns the amount of bandwidth currently available on the device.
+The process can then determine if this amount is sufficient and if so
+issue another rate guarantee request.
+.SH FILES
+.nf
+/etc/grio_disks
+/usr/var/netls/nodelock
+.fi
+.SH SEE ALSO
+ggd(1M),
+grio(1M),
+grio_bandwidth(1M),
+grio_associate_file(3X),
+grio_query_fs(3X),
+grio_action_list(3X),
+grio_reserve_file(3X),
+grio_reserve_fs(3X),
+grio_unreserve_bw(3X),
+grio_disks(4)
+.SH NOTES
+To make grio more secure, processes requesting guaranteed rate I/O
+need the priviledge of CAP_DEVICE_MGMT or root permissions,
+else their requests will fail.

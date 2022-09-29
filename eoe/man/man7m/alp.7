@@ -1,0 +1,412 @@
+'\"macro stdmacro
+.if n .pH g7.alp @(#)alp	41.6 of 5/26/91
+.\" Copyright 1991 UNIX System Laboratories, Inc.
+.\" Copyright 1990 AT&T
+.nr X
+.if \nX=0 .ds x} alp 7  "" "\&"
+.if \nX=1 .ds x} alp 7  ""
+.if \nX=2 .ds x} alp 7  "" "\&"
+.if \nX=3 .ds x} alp "" "\&"
+.TH \*(x}
+.SH NAME
+\f4alp\fP \- algorithm pool management module
+.SH DESCRIPTION
+The \s-1STREAMS\s+1 module \f4alp\fP maintains a pool of algorithms
+(in the form of \s-1STREAMS\s+1-compatible subroutines)
+that may be used for processing \s-1STREAMS\s+1 data messages.
+Interfaces
+are defined allowing modules to request and initiate
+processing by any of the algorithms maintained in the pool.
+It is
+expected to help centralize and standardize the interfaces to
+algorithms that now represent a proliferation of similar-but-different
+\s-1STREAMS\s+1 modules.
+Its major use is envisioned as a central
+registry of available code set conversion algorithms or other types
+of common data-manipulating routines.
+.PP
+An \f2algorithm pool\fP is a registry (or \f2pool\fP) of
+available functions; in this case, routines for performing
+transformations on \s-1STREAMS\s+1 data messages.
+Registered functions may keep
+information on attached users, which means that algorithms
+need not be stateless, but may maintain extensive state information
+related to each connection.
+An algorithm from the pool is called by another in-kernel module
+with arguments that are a \s-1STREAMS\s+1 data
+message and a unique identifier.
+If a message is passed back
+to the caller, it is
+the algorithm's output, otherwise the
+algorithm may store partially convertible input until enough input is
+received to give back output on a subsequent call.
+.PP
+This pool is one means for providing a consistent and
+flexible interface for \f2code set conversion\fP within \s-1STREAMS\s+1
+modules, especially \f4kbd\fP,
+but it may also be used to provide other services that are commonly
+duplicated by several modules.
+.PP
+The \f4alp\fP module contains
+some subroutines dealing with its (minor) role as a module,
+a data definition for an algorithm list,
+connection and disconnection routines, and a search
+routine for finding registered items. 
+The
+module interface incorporated into \f4alp\fP serves the
+purpose of providing an \f4ioctl\fP interface,
+so that users can find out what algorithms are registered
+[see \f4alpq\fP(1)].
+.PP
+The programmer of a function for use with \f4alp\fP
+provides a simple module with a simple specified
+interface.
+The module must have
+an initialization routine (\f2xxx\fP\f4init\fP) which
+is called at system startup time to register
+itself with \f4alp\fP, an open routine, and an interface routine (which
+actually implements the algorithm).
+.PP
+The registry method of dynamically building the list of available
+functions
+obviates the need for recompiling modules or otherwise
+updating a list or reconfiguring other parts of the system to
+accommodate additions or deletions. 
+To
+install a new function module, one merely links it with the kernel
+in whatever manner is standard for that system; there is no need for
+updating or re-configuring any other parts of the kernel (including
+\f4alp\fP itself).
+The remainder of this discussion concerns the in-kernel operation
+and use of the module.
+.SS "Calling Sequence"
+An algorithm is called from the pool by first requesting a connection via
+the \f4alp\fP connection interface.
+The \f4alp\fP module returns the function address of an
+interface routine, and fills
+in a unique identifier (\f4id\fP) for the connection.
+The returned function address is \s-1NULL\s+1 on failure (and \f4id\fP
+is undefined).
+This is a sample of making a connection to a function
+managed by \f4alp\fP:
+.br
+.ne 5
+.nf
+.sp .5
+	\f4unsigned char \(**name;    /\(** algorithm name \(**/
+	caddr_t id;             /\(** unique id \(**/
+	mblk_t \(**(\(**func)();      /\(** func returns pointer to mblk_t \(**/
+	mblk_t \(**(\(**alp_con())(); /\(** returns pointer to mblk_t \(**/
+	...
+	if (func = alp_con(name, (caddr_t) &id))
+		\f2regular processing\fP;
+	else
+		\f2error processing\fP;
+.sp .5
+.fi
+.PP
+Once the connection has been made, the interface routine can be
+called directly by the connecting module to process messages:
+.nf
+.sp .5
+	\f4mblk_t \(**inp, \(**outp;
+	mblk_t \(**(\(**func)();
+	...
+	outp = (\(**func)(mp, id);
+	mp = NULL;   /\(** mp cannot be re-used! \(**/
+	if (outp)\fP
+		\f2regular processing\fP;
+.sp .5
+.fi
+.PP
+If the interface routine processed the entire message,
+then \f4outp\fP is a
+valid pointer to the algorithm's output message.
+If, however, the routine needs
+more information, or is buffering something, \f4outp\fP will be
+a null pointer.
+In either case, the original
+message (\f4mp\fP) may not be subsequently
+accessed by the caller.
+The interface routine takes charge of the
+message \f4mp\fP, and may free it or otherwise dispose of it
+(it may even return the same message).
+The caller may pass a null message pointer to an interface
+routine to cause a flush of any
+data being held by the routine; this is useful for end-of-file
+conditions to insure that all data have been passed through.
+(Interface
+routines must thus recognize a null message pointer and deal with it.)
+.PP
+Synchronization between input and output messages is not guaranteed
+for all items in the pool.
+If one message of input does not produce one message of
+output, this fact should be documented for that particular module.
+Many multibyte code set conversion algorithms, to cite one instance,
+buffer partial sequences, so that if a multibyte character happens to
+be spread across more than one message, it may take two or more output
+messages to complete translation; in this case, it is only possible
+to synchronize when input message boundaries coincide with character
+boundaries.
+.SS "Building an Algorithm for the Pool"
+As mentioned, the modules managed by \f4alp\fP
+are implemented as simple
+modules\(emnot \s-1STREAMS\s+1 modules\(emeach with
+an initialization routine, an open routine,
+and a user-interface routine.
+The initialization
+routine is called when the system is booted and prior to nearly
+everything else that happens at boot-time.
+The routine
+takes no arguments and
+its sole purpose is to register the algorithm with the \f4alp\fP
+module, so that it may subsequently accessed.
+Any other required
+initialization may also be performed at that time. 
+A generic
+initialization
+routine for a module called \f4GEN\fP, with prefix \f4gen\fP
+is as follows:
+.br
+.ne 8
+.nf
+.sp .5
+	\f4geninit()
+	{
+		mblk_t \(**genfunc(); /\(** interface routine \(**/
+		int rval;          /\(** return value from registrar \(**/
+
+		rval = alp_register(genfunc, "\f2name\fP", "\f2explanation\fP");
+		if (rval) cmn_err(CE_WARN, "\f2warning message\fP");
+	}
+.sp .5
+.fi
+.PP
+The registration routine, \f4alp_register\fP takes three arguments and
+returns zero if successful.
+The arguments
+are (1) a pointer to the algorithm's entry point (in this case,
+the function \f4genfunc\fP), (2) a pointer to its name, and (3)
+a pointer to
+a character string containing a brief explanation.
+The name should be
+limited to under 16 bytes, and the explanation to under 60 bytes, as
+shown in the following example.
+Neither the name nor the explanation
+need include a newline.
+.nf
+.sp .5
+   \f4i = alp_register(sjisfunc, "stou", "Shift-JIS to UJIS converter")\fP;
+.sp .5
+.fi
+.PP
+It is possible for a single module to contain several different, related
+algorithms, which can each be registered separately by a single \f4init\fP
+routine.
+.PP
+A module's open routine is called by \f4alp_con\fP when a connection
+is first requested by a user (that is, a module that wishes to
+use it).
+The open routine takes two arguments.
+The
+first argument is an integer;
+if it is non-zero, the request is an open request,
+and the second argument is unused.
+The function should allocate a unique identifier and return
+it as a generic
+address pointer.
+If the first argument is zero, the request
+is a close request, and
+the second argument is the unique identifier that was returned by a
+previous open request, indicating which of (potentially several)
+connections is to be closed.
+The routine does any necessary clean-up and closes the
+connection; thereafter,
+any normal interface requests on that identifier will fail.
+This use of unique identifiers allows these modules to keep
+state information relating to each open connection; no format
+is imposed upon the unique identifier, so it may contain any
+arbitrary type of information, equivalent in size to a core address;
+\f4alp\fP and most callers will treat it as being of
+type \f4caddr_t\fP, in a manner similar to the private
+data held by each instantiation of a \s-1STREAMS\s+1 module.
+.PP
+A skeleton for the \f4gen\fP module's open routine is:
+.nf
+.sp .5
+	\f4genopen(arg, id)
+		int arg;
+		caddr_t id;
+	{
+		if ( arg ) {
+			\f2open processing\fP;
+			return( \f2unique-id\fP );
+		}
+		\f2close processing for\fP id;
+		return(0);\fP
+	}
+.sp .5
+.fi
+.PP
+Once a connection has been made, users may proceed as in the example in
+the previous section.
+When
+the connection is to be closed (for example, the connecting module is
+being popped), a call is made to \f4alp_discon\fP, passing the
+unique id and the name:
+.nf
+.sp .5
+	\f4caddr_t id;
+	char \(**name;
+	mblk_t \(**alp_discon(), \(**mp;
+	...
+	mp = alp_discon(name, id);
+	if (mp)
+		\f2process ``left-over'' data\fP;
+
+.sp .5
+.fP
+.fi
+.PP
+If the disconnect request returns a valid message pointer (\f4mp\fP)
+then there was unprocessed or partially processed data left in an
+internal buffer, and it should be dealt with by the
+caller (for example,
+by flushing it or sending it to the neighboring module).
+.SS "The ioctl and Query Interfaces"
+A kernel-level query interface is provided in addition to the query
+interface supported by the \f4alpq\fP command.
+The routine \f4alp_query\fP
+takes a single argument, a pointer to a \f2name\fP.
+If the name matches
+a registered function, \&\f4alp_query\fP returns a pointer to
+the function's \f2explanation\fP string, otherwise it returns
+a null pointer.
+A calling example is:
+.nf
+.sp .5
+	\f4unsigned char \(**alp_query(), \(**name, \(**expl;
+	...
+	if (expl = alp_query(name))
+		\f2regular processing\fP;
+	else
+		\f2error processing\fP;
+.sp .5
+.fi
+.ft 1
+.PP
+The \f4ioctl\fP interface provides calls for querying registered
+functions (for which the \f2explanation\fP discussed above is necessary);
+this is supported by the \f4alpq\fP command, which may be used
+whenever user-level programs need the associated information.
+.SS "Uses"
+The \f4alp\fP module can be used to replace various kernel-resident
+code set conversion functions in international or multi-language
+environments.
+The \s-1KBD\s+1 subsystem
+(which supplies code set conversion and keyboard mapping) supports
+the use of \f4alp\fP algorithms as processing elements.
+.PP
+Since state information may be maintained, functions may also
+implement processing on larger or more structured data elements, such
+as transaction records and network packets.
+Currently, \s-1STREAMS\s+1 \s-1CPU\s+1 priority is
+assumed by \f4alp\fP or should be set individually by interface
+and open routines.
+.bp
+.SH EXAMPLES
+.ft CW
+.nf
+.sp
+/\(**
+ \(** This is a SAMPLE module that registers with ALP and performs
+ \(** a one-message delay.
+ \(**/
+#include <sys/types.h>
+#include <sys/stream.h>
+#include <sys/stropts.h>
+#include <sys/kmem.h>
+#include <sys/alp.h>
+
+static mblk_t \(**dely();
+caddr_t delyopen();
+
+/\(**
+ \(** Our state structure.  Keeps its own address and a pointer.
+ \(**/
+struct dstruct {
+	caddr_t d_unique;
+	mblk_t \(**d_mp;
+};
+
+/\(**
+ \(** The name is "Dely".  It has an open routine "delyopen"
+ \(** and an interface "dely".
+ \(**/
+static struct algo delyalgo =
+{
+	0, (queue_t \(**) 0, (queue_t \(**) 0, dely, delyopen,
+	(unsigned char \(**) "Dely",
+	(unsigned char \(**) "One Message Delay Buffer",
+	(struct algo \(**) 0
+};
+
+/\(**
+ \(** This is the sysinit routine, called when the system is
+ \(** being brought up.  It registers "Dely" with ALP.
+ \(**/
+delyinit()
+{
+	if (alp_register(&delyalgo))	/\(** then register with ALP \(**/
+		printf("DELY: register failed\e\|n");
+}
+/\(**
+ \(** This is the interface routine itself. 
+ \(** Holds onto "mp" and returns whatever it had before.
+ \(**/
+static mblk_t \(**
+dely(mp, id)
+	mblk_t \(**mp;
+	caddr_t id;
+{
+	register mblk_t \(**rp;
+	register struct dstruct \(**d;
+
+	d = (struct dstruct \(**) id;	/\(** clarify the situation \(**/
+	rp = d->d_mp;
+	d->d_mp = mp;
+	return(rp);		/\(** return the previous message \(**/
+}
+
+/\(**
+ \(** The open (and close) routine.  Use kmem_alloc() to get a private
+ \(** structure for saving state info.
+ \(**/
+caddr_t
+delyopen(arg, id)
+	int arg;	/\(** 1 = open, 0 = close \(**/
+	caddr_t id;	/\(** ignored on open; is unique id on close \(**/
+{
+	register struct dstruct \(**d;
+	register mblk_t \(**rp;
+
+	if (! arg) {	/\(** close processing \(**/
+		d = (struct dstruct \(**) id;
+		d->d_unique = (caddr_t) -1;
+		rp = d->d_mp;
+		kmem_free(d, sizeof(struct dstruct));
+		return((caddr_t) rp);
+	}
+	/\(** otherwise, open processing \(**/
+	d = (struct dstruct \(**) kmem_zalloc(sizeof(struct dstruct),
+                KM_NOSLEEP);
+	d->d_unique = (caddr_t) &d;
+	return((caddr_t) d);
+}
+.fi
+.ft 1
+.SH SEE ALSO
+.na
+\f4alpq\fP(1),
+\f4kbd\fP(7).
+.ad

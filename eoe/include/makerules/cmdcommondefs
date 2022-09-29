@@ -1,0 +1,136 @@
+#
+# $Revision: 1.8 $
+#
+# Commondefs for building multiple versions of commands with different
+# compiler flags.
+#
+# One can either select from one of the 'popular' versions, as defined in
+#	commondefs, or invent a new version. If one picks from the list
+#	in commondefs, then all the compiler flags will be set automatically
+#	otherwise one must use VERSION_* flags to customize the compile.
+#	commondefs defines generic versions for each ABI -
+#		32 - for the ucode/MIPS ABI
+#		64 - for 64 bit
+#	       N32 - for the new 32 bit ABI
+#	These are independent of ISA, which can be decided on a release by
+#	release basis. It is recommended that 1 or all of these be chosen
+#	rather than any of the others in commondefs or a private version.
+#
+# Before including cmdcommondefs the Makefile must define:
+#
+#  BASEVERSION - a string identifying the build to take place in the current
+#		 directory, such as '32bit'.
+#  ALTVERSIONS - a list of strings identifying other alternate build areas.
+#
+# Every version requires a `versiondefs' file that customize that make for that
+# version.  The BASEVERSION versiondefs file is simply 'versiondefs' in the
+# current directory; other alternate versiondefs files are prepended with the
+# version name.  For example, if the ALTVERSIONS=64bit, a `64bitversiondefs'
+# file is required.
+# Note that the values for BASEVERSION/ALTVERSIONS affect ONLY the makefile
+# targets/operations - they have nothing to do with options or objects produced.
+#
+# Each versiondefs file MUST define:
+#
+# VERSION  - this must match either BASEVERSION or something in the ALTVERSIONS
+#	     list.
+#
+# Each versiondefs file will probably want to define:
+#
+# OBJECT_STYLE - which ABI/ISA should this version be built as.
+#	     If left blank, than either the one specified in the top makefile
+#	     or the default specified in releasedefs will be used.
+#
+# COMMANDS - the list of targets to build - if the list of objects to make
+#	     is the same for all versions, COMMANDS may be set once in the
+#	     top makefile. It must be set EITHER in a versiondefs file OR
+#	     in the top makefile.
+#
+# Options common to all versions should be specified in the top Makefile
+#	by setting LCOPTS, LCDEFS, etc..
+#	Additional options for a particular verion can be added using:
+#	LCOPTS+=-foo
+#	In the appropriate versiondefs file
+#	Note that one should either:
+#	 a) include cmdcommondefs AFTER setting L* OR
+#	 b) use the += construct in the top makefile also
+#
+# N.B. - a) assumes that the default rule in the makefile contains $(TARGETS)
+#	 b) assumes that makefile doesn't redefine TARGETS
+#
+
+CMDCOMMONRULES=$(ROOT)/usr/include/make/cmdcommonrules
+
+#
+# include releasedefs - it defines compiler versions and default build modes
+# versiondefs needs it. It will also be included later from commondefs
+#
+include $(ROOT)/usr/include/make/releasedefs
+
+#
+# include version specific definitions
+# This most likely sets OBJECT_STYLE which commondefs needs
+#
+#include <versiondefs>
+
+#
+# include normal commondefs
+#
+include $(ROOT)/usr/include/make/commondefs
+
+COMMONPREF=cmd
+
+#
+# NOTE - the quotes are important here to force a string comaprison - otherwise
+#  #if the variable value began with a number, it might match (e.g. 32bit and
+#  32elf match)
+#
+#if $(VERSION) == "$(BASEVERSION)"
+
+TARGETS = $(COMMANDS) $(ALTVERSIONS)
+
+SUBDIRS=$(ALTVERSIONS)
+
+#if defined(ALTVERSIONS)
+ALTVERSIONS_MAKERULE=$(SUBDIRS_MAKERULE)
+#else
+ALTVERSIONS_MAKERULE=
+#endif
+
+#
+# sigh - we really can't afford to be doing the ALTVERSIONS at the same
+# time as the top level makefile - but this means that the top level doesn't
+# get run in parallel. There are some solutions (using .ORDER) if we can
+# redefine the default rule, but that doesn't seem like a good idea.
+# So we offer a solution - if the makefile doesn't mind having a new 'default'
+# target, they can get parallelism
+#
+#if defined(WANTPARALLEL)
+cmddefault!cmdbase $(ALTVERSIONS)
+#else
+.NOTPARALLEL:
+#endif
+
+#else
+
+TARGETS=$(COMMANDS)
+ALTVERSIONS_MAKERULE=
+
+#endif
+
+#
+# The ALTVERSIONS dirs are created by tlinking. We exclude the a.outs in
+# the base version, all intermediate objects, the depend file and versiondefs.
+# We also exclude ALTVERSIONS itself to prevent infinite recursion by tlink.
+# 
+TLINKXARGS = $(COMMANDS:S/^/-x'^/g:S/$/\$'/g) -x '^.*\.[oai]$$' \
+	     -x '^.*\.so$$' \
+	     -x '$(MKDEPFILE)' -x 'versiondefs' \
+	     -x 'y.output' -x 'y.tab.[ch]' \
+	     $(ALTVERSIONS:S/^/-x'^/g:S/$/\$'/g)
+
+#
+# IDB tags for 32 and 64 bit versions
+#
+IDB_TAG32=-idb "mach(MODE=32bit)"
+IDB_TAG64=-idb "mach(MODE=64bit)"

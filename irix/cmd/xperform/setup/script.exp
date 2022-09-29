@@ -1,0 +1,647 @@
+# This file is a library of useful utilities designed to help automatic
+# OS installation.  It was written by Jerry Wei and modified by Jason
+# Hunter.
+
+# expect script file contains all expect procedures available for target
+# specific installation script
+
+global timeout
+global inprom
+global cmd_out server path
+#global ip_dist mach_dist
+
+#############################################################################
+# different states of target machine during installation
+#----------------------------------------------------------------------------
+# p_mon		in prom command monitor
+# p_menu	in prom menu
+# u_root	in unix logined as root
+# u_user	in unix logined other than root
+# u_login	in unix waiting for login
+# i_top		in inst top menu
+# i_intr	in inst interrupted menu
+# i_adm		in inst admin menu
+# i_quit	in inst waiting for confirmation of quit
+# u_res		in unix, finished inst waiting for confirmation to restart
+#		system
+# u_rec		in unix, during bootup ask for automatic system reconfigura-
+#		tion
+#############################################################################
+
+
+# trap interrupt in interact on the inst process
+proc intr_intr {} {
+        send "\003"
+        trap {intr_intr} 2
+}
+
+# use interrupt to start interact on the inst process
+proc intr {} {
+global timeout
+        send_error "\ninterract with inst process directly\n"
+        send_error "use '^' to get back to expect, in expect use inter_return\n"
+        send_error "command to continue script execution\n"
+        set stimeout $timeout
+        trap {intr_intr} 2
+        interact ^
+        trap {intr} 2
+        set timeout $stimeout
+}
+
+# inst error
+proc inst_go_err {} {
+	send_error "\007\ninst detect error, direct interact with inst\n"
+	send_error "after go again, use ^ to get back to expect, then type\n"
+	send_error "inter_return to continue\n"
+	trap {intr_intr} 2
+	interact ^
+	trap {intr} 2
+#	expect -re "Inst> $" {send"\r"} \
+#		timeout {send_error "install default failed"}
+}
+
+# change state, from u_login to u_root
+proc u_login2u_root {} {
+        set timeout 300
+	send "root\r"
+	expect -re "# $" {send "\r"} \
+		"TERM = " {send "\r"} \
+		"TERM=" {send "\r"} \
+		timeout {send_error "timeout in u_login2u_root\n"; intr; send "\r"} 
+}
+
+# change state, from p_menu to p_mon
+proc p_menu2p_mon {} {
+	send "5\r"
+	expect -re ">> $" { } \
+		timeout {send_error "timeout in p_menu2p_mon\n"; intr; send "\r"} 
+}
+
+# change state, from i_intr to i_top by stop command in interrupted menu
+# to get into state in unix logined as root
+# modified to handle failed autoboot's "Hit Enter to continue."
+proc 2u_root {} {
+    global timeout
+    send "\r"
+    set timeout 900
+    for {} {1} {} {
+        expect  {
+		-re "# $" {send "\r"; break}
+		-re "ogin: $" {u_login2u_root; set timeout 300}
+		"assword:" {send "\r"}
+		-re "% $" {send "exit\r"}
+		-re ">> $" {send "\003"}
+                -re "Inst> $" {send "q\r"}
+                "<Enter> to continue" {send "\r"}
+                "Option\\? \007\012" {send "1\r"}
+                "Option\\? \007" {send "1\r"}
+                "Option\\? $" {send "1\r"}
+		-ex "Restart? { (y)es, (n)o, (sh)ell, (h)elp }: " {send "y\r"}
+		-re "Restart\\? \\\[y, n] $" {send "y\r"}
+                -re "restart.$" {send "\r"}
+                -re "start\\? $" {send "y\r"}
+                "system (y or n)\\? " {send "y\r"}
+                -re "quit\\? $" {send "y\r"}
+		"2. Quit now" {send "2\r"}
+		-re ": \\\[y] $" {send "y\r"}
+		"Press <Enter> to continue" {send "\r"}
+		"Hit Enter to continue." {send "\r"}
+		"sash: " {send "\$OSLoadPartition\$OSLoadFilename\r"}
+                "PENDING INSTALATION " {inst_go_err}
+                "INCOMPATIBLE SUBSYSTEMS INSTALLED" {inst_go_err}
+                "Interrupt> " {send "1\r"}
+                timeout {send_user "timeout in 2U_root\n"; intr; send "\r"}
+                }
+    }
+}
+
+proc i_top2u_root {} {
+    send "\r"
+    set timeout 1800
+    for {} {1} {} {
+        expect  {
+		-re "# $" {send "\r"; break}
+		-re "ogin: $" {u_login2u_root; set timeout 300}
+                -re "Inst> $" {send "q\r"}
+                -ex "Restart? { (y)es, (n)o, (sh)ell, (h)elp }: " {send "y\r"}
+                -re "Restart\\? \\\[y, n] $" {send "y\r"}
+                -re "restart.$" {send "\r"}
+                -re "start\\? $" {send "y\r"}
+                "system (y or n)\\? " {send "y\r"}
+                -re "quit\\? $" {send "y\r"}
+                "2. Quit now" {send "2\r"}
+                -re ": \\\[y] $" {send "y\r"}
+		"Press <Enter> to continue" {send "\r"}
+		"sash: " {send "\$OSLoadPartition\$OSLoadFilename\r"}
+                "PENDING INSTALATION " {inst_go_err}
+                "INCOMPATIBLE SUBSYSTEMS INSTALLED" {inst_go_err}
+                "Interrupt> " {send "1\r"}
+                timeout {send_user "timeout in i_top2u_root\n"; intr; send "\r"}
+                }
+    }
+}
+
+proc reboot {} {
+    send "reboot\r"
+    set timeout 600
+    for {} {1} {} {
+    expect {
+	-re "login: $" {u_login2u_root; break} 
+	-re "Enter Reason for Shutdown.*>> $" {send "4\r" }
+	"Press <Enter> to continue" {send "\r"}
+	"sash: " {send "\$OSLoadPartition\$OSLoadFilename\r"}
+	timeout {send_error "timeout in reboot\n"; intr; send "\r"}
+    }
+    }
+}
+
+# to get into state in prom command monitor
+proc u_root2p_mon {} {
+    send "\r"
+    expect {#\ } {set timeout 600; send "sync;sync;init 0\r"}
+    for {} {1} {} {
+	expect {
+	 	-re "restart.$" {send "\033"}
+		"<Esc>" {send "\033\033"}
+		"<Enter> to continue" {send "\r"}
+                "Option? \007\012" {send "5\r"; set timout 500}
+        	"Option? " {send "5\r"}
+		-re "Enter Reason for Shutdown.*>> $" {send "4\r"}
+        	-re ">> $" {break}
+	   	timeout {send_error "timeout in u_root2p_mon\n"; intr; send "\r"}
+	}
+    }
+}
+
+# to get into single user mode
+proc u_root2u_s {} {
+    send "\r"
+    expect {#\ } {set timeout 600; send "sync;sync;init 1\r"}
+    for {} {1} {} {
+	expect {
+	    "Single User Mode): " {send "\r"}
+	    "TERM = " {send "\r"; break}
+	    timeout {send_error "timeout in u_root2u_s\n"; intr; send "\r"}
+	}
+    }
+}
+
+# from single user mode to multi user mode
+proc u_s2u_login {} {
+    send "\r"
+    expect {#\ } {set timeout 600; send "init 3\r"}
+    for {} {1} {} {
+	expect {
+	    "login: " {break}
+	    timeout {send_error "timeout in u_s2u_login; intr; send "\r"}
+	}
+    }
+}
+
+# execute acceptance test
+proc exec_accept acceptcmd {
+    set timeout 5400
+    send "$acceptcmd \r"
+    for {} {1} {} {
+    expect {
+	" ,default y: " {send "n\r"}
+	-re "# $" {break}
+	-timestamp timeout {
+		send_error "acceptance timeout $expect_out(seconds) seconds\n";
+		intr; send "\r"
+		}
+	}
+    }
+}
+
+# execute a root shell command
+proc sh_root_cmd shcmd {
+global timeout
+    if {[string compare [lindex $shcmd 0] "TimeOut"] == 0} {
+        set timeout [lindex $shcmd 1]; return
+    }
+    if {[string match "*acceptance" [lindex $shcmd 0]] } {
+	exec_accept $shcmd ; return
+    }
+
+    send "$shcmd \r"
+    for {} {1} {} {
+    expect  {
+	    "more? " {send " "}
+	    -re "# $" {break }
+	    -re "Inst> $" {break}
+	    -re "> $" {break}
+           -timestamp timeout {
+                send_error "sh_root_cmd $expect_out(seconds) seconds\n";
+	        send_error "timeout in sh_root_cmd $shcmd\n"; intr; send "\r"
+		}
+	    }
+    }
+}
+
+# to run a command in shell and get the output to return
+proc sh_cmd_out shcmd {
+    send "$shcmd \r"
+    for {} {1} {} {
+        expect {
+            -re "\n(.*)# " {
+		if {[string first $shcmd $expect_out(buffer)] >= 0} {
+		    break 
+		} else {
+		    continue
+		}
+	    }
+            -timestamp timeout {
+                send_error "sh_cmd_out $expect_out(seconds) seconds\n";
+                send_error "timeout in sh_cmd_out $shcmd\n"; intr; send "\r"
+                }
+        }
+    }
+    # get cmd_out as in expect_out buffer after shcmd and before last newline
+    set s_last [expr [string last "\n" $expect_out(0,string)] -2]
+    set s_first [string first $shcmd $expect_out(0,string)]
+    if {$s_first >= 0} {
+        set s_first [expr $s_first + [string length $shcmd] + 3]
+    } else {
+	set s_first 1
+    }
+    set cmd_out [string range $expect_out(0,string) $s_first $s_last]
+    return "$cmd_out"
+}
+
+# execute a prom monitor command
+proc prom_cmd promcmd {
+    send "$promcmd \r"
+    expect -re ">> $" { } \
+	   timeout {send_error "timeout in prom_cmd $promcmd\n"; intr; send "\r"}
+}
+
+# execute a inst command in i_top
+proc inst_cmd instcmd {
+    send "$instcmd \r"
+    set timeout 1800
+    for {} {1} {} {
+    expect {
+	   -re "Inst> $" {break}
+	   -re "# $" {break}
+           "more? " {send " "}
+	   -ex {more? (h=help)} {send " "}
+	   timeout {send_error "timeout in inst_cmd $instcmd\n"; intr; send "\r"}
+	   }
+    }
+}
+
+# set root disk in p_mon
+proc set_rdisk rdisk {
+    send "setenv root $rdisk \r"
+    expect -re ">> $" {send "init\r"}
+    p_menu2p_mon
+}
+
+# load miniroot in p_mon state to get in i_top state from remote disk
+# modified by jhunter to read global targmach and targaddr
+# XXX it should be passed these!
+#set mach_dist dist
+#set ip_dist 192.26.80.118
+proc load_mr_rdisk {mrloc distmach distaddr targmach targaddr platform} {
+#   global distmach distaddr targmach targaddr 
+
+    puts "===$distmach===$distaddr==="
+    send "\r"
+#    if { !([ string compare $platform "IP17" ]) } {
+#	expect -re ">> $" {send "setenv tapedevice bootp()$mrloc/sa.IP17\r"}
+#    } else {
+	expect -re ">> $" {send "setenv tapedevice bootp()$mrloc/sa\r"}
+#    }
+    if { !([ string compare $platform "IP19" ]) || \
+	 !([ string compare $platform "IP20" ]) || \
+	 !([ string compare $platform "IP22" ]) } { 
+	 expect -re ">> $" {send "boot -f \$tapedevice(sashARCS) --m\r"} 
+    } elseif { !([ string compare $platform "IP10" ]) } {
+	 expect -re ">> $" {send "boot -f \$tapedevice(sash.IP6) --m\r"}
+    } elseif { !([ string compare $platform "IP21" ]) || \
+	       !([ string compare $platform "IP26" ]) } {
+	 expect -re ">> $" {send "boot -f \$tapedevice(sash64) --m\r"}
+    } else {
+	 expect -re ">> $" {send "boot -f \$tapedevice(sash.$platform) --m\r"} }
+    set timeout 2000
+    for {} {1} {} {
+    expect {
+	   "Inst> " {set timeout 60; break}
+	   "execute this script" {send "y\r"}
+	   "ready to continue." {send "\r"}
+           "more? " {send " "} 
+	   "ENTER (c, r, or a) " {send "r\r"}
+	   -ex {enter a choice [1]:} {send "2\r"}
+	   -ex {(yes/no) [yes] } {send "\r"}
+	   -ex {(yes/no) [no] } {send "\r"}
+	   -ex {(yes/no)[no] :} {send "\r"}
+	   "address of IRIS? " {send "$targaddr\r"}
+	   [format "address of %s? " $targmach] {send "$targaddr\r"}
+	   "hostname of this machine?" {send "$targmach\r"} 
+	   [format "address of %s? " $distmach] {send "$distaddr\r"}
+	   -timestamp timeout {
+		send_error "load_mr_rdisk $expect_out(seconds) seconds\n";
+		send_error "              $expect_out(seconds_total) total\n";
+		send_error "timeout in load_mr_rdisk\n"; intr; send "\r"}
+	   }
+    }
+}
+
+# clean_inst, go to admin then mkfs
+# modified by jhunter to take optional fstype; default to xfs
+# also modified to handle inst core-dumping (Restart/more/choice)
+# we should find a way to report errors like this!
+proc clean_inst {args} {                          
+	# args holds fstype
+	if {[string match $args "efs"] == 1} {
+            set fstype "efs"
+        } else {
+	    set fstype "xfs"
+	}
+	send "\r"
+	expect -re "Inst> $" {send "admin\r"}
+        expect -re "Admin> $" {send "mkfs\r"}
+        set timeout 600
+	for {} {1} {} {
+	    expect {
+		-re "s0\\? |s6\\? |usr\\? |dev\\? $" {send "yes\r"}
+		"want to clean your disks ?" {send "yes\r"}
+		-ex {[efs/xfs]: } {send "$fstype\r"}
+		-ex "s0? " {send "yes\r"}
+		-ex "s6? " {send "yes\r"}
+		-ex "usr? " {send "yes\r"}
+		-ex "dev? " {send "yes\r"}
+	        -re "Admin> $" {send "return\r"}
+	        -re "Inst> $" {set timeout 20; break}
+		-ex "Restart? { (y)es, (n)o, (sh)ell, (h)elp }: " {send "n\r"}
+                "more? " {send " "} 
+	        -ex {enter a choice [1]:} {send "2\r"}
+        	timeout {send_error "timeout in clean_inst\n"; intr; send "\r"}
+	    }
+	}
+}
+
+# from_dist, specify distribution source with from command in inst
+proc from_dist {distpath distmach distaddr targmach targaddr} {
+	send "from  ${distpath} \r"
+	set timeout 600
+	for {} {1} {} {
+	    expect {
+		   "No route to host*Inst> " {sleep 5; send "from  ${distpath} \r"}
+		   -re "Inst> $" {break}
+	    	   "CD-ROM drive\\?*n, y\] " {send "n\r"}
+	   	   "execute this script" {send "y\r"}
+		   -ex {more? (h=help)} {send " "}
+		   -ex {enter a choice [1]:} {send "2\r"}
+		   -ex {(yes/no) [yes] } {send "\r"}
+		   -ex {(yes/no) [no] } {send "\r"}
+		   -ex {(yes/no)[no] :} {send "\r"}
+		   [format " %s? " $distmach] {send "$distaddr\r"}
+	           "hostname of this machine?" {send "$targmach\r"} 
+		   "more\\? " {send " "} 
+		   "press ENTER to continue $" {send "\r"}
+	   	   timeout {send_error "timeout in from_dist\n"; intr; send "\r"}
+		   }
+	}
+}
+
+# live_inst, specify distribution source
+proc live_inst distfrom {
+    send "inst -f $distfrom\r"
+    set timeout 120
+    for {} {1} {} {
+	expect {
+	    -re "Inst> $" {break}
+	    -ex {enter a choice [1]:} {send "2\r"}
+	    "execute this script" {send "y\r"}
+	    -ex {more? (h=help)} {send " "}
+	    -ex {(yes/no) [yes] } {send "\r"}
+	    -ex {(yes/no) [no] } {send "\r"}
+	    -ex {(yes/no)[no] :} {send "\r"}
+	    "more\\? " {send " "}
+	    -re "press ENTER to continue $" {send "\r"}
+	    timeout { expect * {puts "==<$expect_out(buffer)>"}; send_error "timeout in live_inst: \n"; intr; send "\r"}
+	    }
+    }
+}
+
+# expect after go in inst
+# If there are conflicts the logic we follow is to repeatedly resolve
+# the conflicts with choice "1b" unless we see that 1b is "not on current
+# distrubution".  The coding to handle this is very ugly.  The trick is to
+# find the sentinel value which indicates that you have seen all of the
+# possible solutions for "conflict 1".  Since I cannot think of a better
+# way, the method I use to do this is to use 1c as the sentinel if we see
+# 1c.  Otherwise use 2a if it exists, and otherwise to just eat to EOF.
+# We look for the keyword "current" to indicate that there is the message
+# "not on current distribution" was present.  Due to line breaks we can't
+# search for the whole string sequence.
+#
+proc wait_inst {} {
+	set timeout 36000
+        set corrupt_retries 0   ;# number of corrupt retries
+	for {} {1} {} {
+        expect {
+                eof {send_user "inst finished\n"; exit}
+               "Archive*corrupt*Interrupt>" {if {[incr corrupt_retries] <= 3} {
+                                               send "1\r" } else { 
+                                               inst_go_err} }
+               "OLDER VERSIONS REQUESTED" {inst_go_err}
+               "INCOMPATIBLE SYSTEM" {inst_go_err}
+               "NOT ENOUGH DISK SPACE" {inst_go_err}
+               "MISSING PREREQUISITES" {inst_go_err}
+               "Installation failed." {inst_go_err}
+               "can't proceed with installation" {inst_go_err}
+               "What is the network address of" {inst_go_err}
+	       -re "\r\n  1a\..*\r\n  1c\." {
+		  if {[string match "*current*" $expect_out(0,string)]} {
+		    set choice "conflicts 1a\r"
+		  } else {
+		    set choice "conflicts 1b\r"
+		  }
+	       }
+	       -re "\r\n  1a\..*\r\n  2a\." {
+		  if {[string match "*current*" $expect_out(0,string)]} {
+		    set choice "conflicts 1a\r"
+		  } else {
+		    set choice "conflicts 1b\r"
+		  }
+	       }
+	       -re "  1a\..*\r\nResolve conflicts" {
+		  if {[string match "*current*" $expect_out(0,string)]} {
+		    set choice "conflicts 1a\r"
+		  } else {
+		    set choice "conflicts 1b\r"
+		  }
+	       }
+	       -re "conflicts choice choice.*Inst> $" {send "$choice"}
+	       -re "No conflicts.*Inst> $" {send "go\r"}
+	       "more\? " {send " "}
+	       "2. Quit now" {send "2\r"; set timeout 900; break}
+	       -re "Error extracting file .*Interrupt> " {send "1\r"}
+	       "Installations and removals were successful" {set timeout 900;break}
+               -re "Interrupt> $" {inst_go_err}
+               -re "Inst> $" {set timeout 900; break}
+                timeout {send_error "install failed with timeout"; inst_go_err}
+                }
+	}
+}
+
+# default_inst, install default
+proc default_inst {} {
+	send "\r"
+	expect -re "Inst> $" {send "install default\r"}
+	expect -re "Inst> $" {send "go\r"}
+	wait_inst
+}
+
+# all_inst, install all
+proc all_inst {} {
+	send "\r"
+	expect -re "Inst> $" {send "install *\r"}
+	expect -re "Inst> $" {send "go\r"} 
+	wait_inst
+}
+
+# update_inst, install
+proc update_inst {} {
+	send "\r"
+	expect -re "Inst> $" {send "keep install\r"}
+	expect -re "Inst> $" {send "install keep\r"}
+	expect -re "Inst> $" {send "go\r"}
+	wait_inst
+}
+
+# choice_inst, installation based on install commands
+proc choice_inst {} {
+	send "\r"
+	expect -re "Inst> $" {send "go\r"}
+	wait_inst
+}
+
+# check if machine in prom mode, it might not need to go back to unix to
+# start mini-root installation
+proc checkinprom {} {
+    global timeout inprom
+    set stimeout $timeout
+    set timeout 5
+    send "\r"
+    for {} {1} {} {
+	expect {
+	    -re ">> $" { set inprom 1; break}
+	    "Option? " {send "5\r"}
+	    timeout { set inprom -1; break}
+	}
+    }
+}
+
+# add sybtcl part to query adhoc for inst server for a alpha number
+set env(DSQUERY) SGIBASE_CORP_1001_B
+set env(SYBASE) /usr/local/lib/pv+
+
+proc curdist alpha_num {
+global server path
+    if {[catch {set connection [sybconnect adhoc_dbo gamma1]}] != 0} {
+        puts "sybconnect failed, try again"
+    } else {
+        set sybcmd "select server,path from AH_Product_alpha where alpha = $alpha_num"
+        if {[catch {sybsql $connection $sybcmd} errmsg] != 0} {
+            puts "sybsql failed due to:"
+            puts $errmsg
+        } else {
+            catch {sybnext $connection} row
+            scan $row "%s %s" server path
+        }
+	sybclose $connection
+    }
+}
+
+# procedure to send mail in the begining of testing
+proc send_bmail {t_name t_case prod p_ver os alpha owner rid} {
+    sh_root_cmd " echo \"$t_name,$t_case,$prod,$p_ver,-1,,\" > /tmp/iNsT.tMp "
+    sh_root_cmd { echo "----------" >> /tmp/iNsT.tMp }
+    sh_root_cmd { hinv -c graphics >> /tmp/iNsT.tMp }
+    sh_root_cmd { echo "----------" >> /tmp/iNsT.tMp }
+    sh_root_cmd { /bin/sh -c "if [ -x /usr/gfx/gfxinfo ]; then /usr/gfx/gfxinfo; fi" >> /tmp/iNsT.tMp }
+    sh_root_cmd { echo "----------" >> /tmp/iNsT.tMp }
+    sh_root_cmd { hinv -c processor | grep -v MIPS >> /tmp/iNsT.tMp }
+    sh_root_cmd { echo "----------" >> /tmp/iNsT.tMp }
+    sh_root_cmd " echo $os >> /tmp/iNsT.tMp "
+    sh_root_cmd { echo "----------" >> /tmp/iNsT.tMp }
+    sh_root_cmd " echo $alpha >> /tmp/iNsT.tMp "
+    sh_root_cmd { echo "----------" >> /tmp/iNsT.tMp }
+    sh_root_cmd " echo $owner >> /tmp/iNsT.tMp "
+    sh_root_cmd { echo "----------" >> /tmp/iNsT.tMp }
+    sh_root_cmd { date "+%R %D" >> /tmp/iNsT.tMp }
+    sh_root_cmd { echo "----------" >> /tmp/iNsT.tMp }
+    sh_root_cmd { nvram netaddr >> /tmp/iNsT.tMp }
+    sh_root_cmd { echo "----------" >> /tmp/iNsT.tMp }
+    sh_root_cmd { echo >> /tmp/iNsT.tMp }
+    sh_root_cmd { echo "----------" >> /tmp/iNsT.tMp }
+    sh_root_cmd " echo $rid >> /tmp/iNsT.tMp "
+    sh_root_cmd { Mail -s "new-adhoc-testresult : inst" testec@tao.engr < /tmp/iNsT.tMp }
+}
+
+# procedure directly insert AH_Testresult_n for begining of test instead of
+# using send_bmail
+proc testr_b {t_name t_case prod p_ver os alpha owner rid} {
+    if {[catch {set connection [sybconnect adhoc_dbo gamma1]}] != 0} {
+        puts "sybconnect failed, try again"
+    } else {
+#    set gfx_str [sh_cmd_out { hinv -c graphics; /bin/sh -c "if [ -x /usr/gfx/gfxinfo ]; then /usr/gfx/gfxinfo; fi" }]
+#    set gfx [exec /usr/people/sybase/adhoc/bin/gfx.pl << $gfx_str]
+#    set cpu_str [sh_cmd_out {hinv -c processor | grep -v MIPS}]
+#    set cpu [exec /usr/people/sybase/adhoc/bin/cpu.pl << $cpu_str]
+
+    set mach_str [sh_cmd_out { hinv -c graphics; echo "-----"; /bin/sh -c "if [ -x /usr/gfx/gfxinfo ]; then /usr/gfx/gfxinfo; fi"; echo "-----"; hinv -c processor | grep -v MIPS }]
+    set mach [exec /usr/people/sybase/adhoc/bin/mach.pl << $mach_str]
+#puts "MACHSTR: $mach_str :MACHSTR"
+    set gfx [string range $mach 0 [expr [string first "===" $mach] -1]]
+    set cpu [string range $mach [expr [string first "===" $mach] +3] end]
+
+    set date [exec date "+%R %D"]
+    set ipaddr [sh_cmd_out {nvram netaddr}]
+    set sybcmd "insert AH_Testresult_n values ($rid,'$t_name','$t_case',\
+	'$cpu','$gfx','$os',$alpha,'$prod','$p_ver',-1,-1,-1,'$ipaddr',\
+	NULL,'$owner','$date')"
+    if {[catch  {sybsql $connection $sybcmd} errmsg] != 0} {
+	puts "insert AH_Testresult_n : $errmsg"
+	puts "$sybcmd"
+    }
+    puts "DONE: $sybcmd"
+    sybclose $connection
+    }
+}
+
+# procedure to send mail in the completion of testing
+proc send_cmail {t_pass t_total t_val os descrip owner rid} {
+    set alpha [sh_cmd_out { versions -n eoe.sw.unix | fgrep eoe.sw.unix | nawk '{print $3;exit}' }]
+    set os [sh_cmd_out { uname -r | cut -f1 -d- }]
+    sh_root_cmd " echo ,,,,$t_pass,$t_total,$t_val,,,$os,$alpha,$owner,`date \"+%R %D\"`,`nvram netaddr`,,$rid > /tmp/iNsT.tMp "
+    sh_root_cmd { Mail -s "new-adhoc-testresult : inst" testec@tao.engr < /tmp/iNsT.tMp }
+}
+
+# procedure directly update AH_Testresult_n for completion of testing instead
+# of using send_cmail
+proc testr_c {t_pass t_total t_val os descrip owner rid} {
+    if {[catch {set connection [sybconnect adhoc_dbo gamma1]}] != 0} {
+	puts "sybconnect failed, try again"
+    } else {
+	set alpha [sh_cmd_out { versions -n eoe.sw.unix | fgrep eoe.sw.unix | nawk '{print $3;exit}' }]
+	set os [sh_cmd_out { uname -r | cut -f1 -d- }]
+	set date [exec date "+%R %D"]
+	set sybcmd "update AH_Testresult_n set test_pass=$t_pass,\
+	    test_total=$t_total,test_val=$t_val,date='$date',\
+	    descrip='$descrip',owner='$owner' where ID = $rid"
+	if {[catch  {sybsql $connection $sybcmd} errmsg] != 0} {
+	    puts "update AH_Testresult_n : $errmsg"
+	    puts "$sybcmd"
+	}
+	puts "DONE: $sybcmd"
+	sybclose $connection
+    }
+}
+
+
+trap {intr} 2

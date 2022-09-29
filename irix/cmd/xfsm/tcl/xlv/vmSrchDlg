@@ -1,0 +1,582 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	vmSrchDlg
+# Version:	$Revision: 1.9 $
+# Synopsis:	Encapsulates the dialog that allows the user to search for
+#		volumes/plexes/ves on a host.
+# Functions:	vmSrch:realize
+#		vmSrch:manage
+#		vmSrch:fill
+#		vmSrch:setData
+#		vmSrch:getHost
+#		vmSrch:getIp
+#		vmSrch:getHostList
+#		vmSrch:getObjList
+#		vmSrch:fitsProfile
+#		vmSrch:addObjects
+#		vmSrch:delObjects
+#		vmSrch:_create
+#		vmSrch:_formQuery
+#		vmSrch:_dialogCb
+#		vmSrch:_accept
+#		vmSrch:_cancel
+#		vmSrch:_typeCb
+#%COMMENT_END
+
+#########################################
+#		Public			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vmSrch:realize
+# Synopsis:	Initializes any class-wide data and creates an instance of the
+#		dialog.  If an instance of this dialog already exists for the
+#		given handle, no action is taken.
+# Arguments:	- handle	An identifier that is used as a key for storing
+#				(and later retrieving) the created widgets and
+#				any instance specific data.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc vmSrch:realize { handle parent panel } \
+{
+	global		_GW_srch _GD_srch
+
+	if {! [info exists _GW_srch($handle,dialog)]} {
+		set _GD_srch(class)	VOL
+		set _GD_srch(combos)	XFS_HOST
+		set _GD_srch(texts)	NAME
+		set _GD_srch(toggles)	{VOL PLEX VE}
+		set _GD_srch(buttons)	{accept apply cancel help}
+
+		set _GD_srch($handle,tb,VOL) true
+		set _GD_srch($handle,tb,PLEX) true
+		set _GD_srch($handle,tb,VE) true
+		set _GD_srch($handle,hip) " "
+		set _GD_srch($handle,hfn) " "
+		set _GD_srch($handle,search,hip) " "
+		set _GD_srch($handle,search,hfn) " "
+		set _GD_srch($handle,needsort) false
+		set _GD_srch($handle,FLUSH_CACHE) false
+
+		set _GW_srch($handle,dialog) [vmSrch:_create $handle $parent]
+
+		####    This must happen after the dialog is realized
+		$_GW_srch($handle,dialog) realizeWidget
+		$_GW_srch($handle,dialog) getValues -height height -width width
+		.$_GW_srch($handle,dialog) setValues \
+				-minWidth $width \
+				-minHeight $height \
+				-maxHeight $height
+
+		$_GW_srch($handle,buttons) getValues -height height
+		$_GW_srch($handle,buttons) setValues \
+				-paneMinimum $height \
+				-paneMaximum $height
+	}
+
+	set _GD_srch(iconpanel) $panel
+}
+
+#%COMMENT_BEGIN
+# Function:	vmSrch:manage
+# Synopsis:	Manages an instance of the dialog and sets the "Flush Cache"
+#		option to its default value of false.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vmSrch:manage { handle } \
+{
+	global	_GW_srch _GD_srch
+
+	if {[info exists _GW_srch($handle,dialog)]} {
+		$_GW_srch($handle,dialog) manageChild
+		$_GW_srch($handle,XFS_HOST) processTraversal current
+		$_GW_srch($handle,FLUSH_CACHE) setValues -set false
+		set _GD_srch($handle,FLUSH_CACHE) false
+	}
+}
+
+#########################################
+#	Public: Data In Routines	#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vmSrch:fill
+# Synopsis:	Sets the list of available hosts in the host combo-box.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- host		Specifies the host to use when getting the
+#				list of available host names.
+#%COMMENT_END
+proc vmSrch:fill { handle host } \
+{
+	global		_GW_srch _GD_srch _GD_resources
+
+	if {$host == ""} {
+		set host $_GD_srch($handle,hfn)
+	} elseif {[hu:getIpAddress $host hfn hpd hip $_GD_resources(hostsFile)]} {
+		set _GD_srch($handle,hip) $hip
+		set _GD_srch($handle,hfn) $hfn
+		set h $hip
+	} else {
+		set _GD_srch($handle,hip) ""
+		set _GD_srch($handle,hfn) $host
+		set h $hfn
+	}
+
+	set data [hu:getHosts $h etc $_GD_resources(hostsFile)]
+	vmSrch:setData $handle $_GD_srch($handle,hfn) $data
+	if {[cequal $data ""]} {
+		return 0
+	} else {
+		return 1
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	vmSrch:setData
+# Synopsis:	Set the combo-box items to the list of hostnames.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- host		The item to select in the list.
+#		- lst		The list of host names.
+#%COMMENT_END
+proc vmSrch:setData { handle host lst } \
+{
+	global		_GW_srch _GD_srch
+
+	set _GD_srch($handle,hostlist) $lst
+	combo:setItems $_GW_srch($handle,XFS_HOST) $lst
+	combo:selectItem $_GW_srch($handle,XFS_HOST) $host
+}
+
+#########################################
+#	Public: Data Out Routines	#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vmSrch:getHost
+# Synopsis:	Returns the currently selected host name.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vmSrch:getHost { handle } \
+{
+	global	_GD_srch; return $_GD_srch($handle,hfn)
+}
+
+#%COMMENT_BEGIN
+# Function:	vmSrch:getIp
+# Synopsis:	Returns the IP address for the currently selected host name.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vmSrch:getIp { handle } \
+{
+	global	_GD_srch; return $_GD_srch($handle,hip)
+}
+
+#%COMMENT_BEGIN
+# Function:	vmSrch:getHostList
+# Synopsis:	Returns list of hosts from the combo-box.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vmSrch:getHostList { handle } \
+{
+	global	_GD_srch; return $_GD_srch($handle,hostlist)
+}
+
+#%COMMENT_BEGIN
+# Function:	vmSrch:getObjList
+# Synopsis:	Returns list of objects found during the last search.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vmSrch:getObjList { handle } \
+{
+	global	_GD_srch; return $_GD_srch($handle,objects)
+}
+
+#########################################
+#	Public: Utility Routines	#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vmSrch:fitsProfile
+# Synopsis:	Determines whether or not an object fits the current search
+#		profile.  This is used when new objects are created.  If
+#		the object does not fit the search profile, then don't display
+#		an icon for it.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- obj		The object to compare against the profile.
+#%COMMENT_END
+proc vmSrch:fitsProfile { handle obj } \
+{
+	global		_GW_srch _GD_srch _GD_resources
+
+	obj:parse $obj o_class o_host o_nm o_type
+
+	if {$_GD_srch($handle,hip) != ""} {
+		if {! [hu:getIpAddress $o_host o_hfn o_hpd o_hip \
+				$_GD_resources(hostsFile)]} {
+			####	TODO
+			return 0
+		}
+		if {$o_hip != $_GD_srch($handle,hip)} {
+			return 0
+		}
+	} else {
+		if {$o_host != $_GD_srch($handle,hfn)} {
+			return 0
+		}
+	}
+
+	set pattern [string trim [$_GW_srch($handle,NAME) getString]]
+	if {$_GD_srch($handle,tb,$o_type) == "false"} {
+		return 0
+	} elseif {$pattern != "" && $pattern != "*"} {
+		if {! [string match $pattern $o_nm]} {
+			return 0
+		}
+	}
+
+	return 1
+}
+
+#%COMMENT_BEGIN
+# Function:	vmSrch:addObjects
+# Synopsis:	Adds a list of objects to the icon panel (if they fit
+#		the current search profile).
+# Arguments:	- handle	The identifier for the desired instance.
+#		- obj_list	A list of object signatures.
+#%COMMENT_END
+proc vmSrch:addObjects { handle obj_list } \
+{
+	global		_GD_srch
+
+	set _GD_srch($handle,needsort) true
+
+	foreach obj $obj_list {
+		####	Add to the list of objects
+		lappend _GD_srch($handle,objects) $obj
+
+		if {[vmSrch:fitsProfile $handle $obj]} {
+			####	Add to the icon panel
+			ip:fillPanel vm [list $obj]
+		}
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	vmSrch:delObjects
+# Synopsis:	Deletes a list of objects from the icon panel.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- obj_list	A list of object signatures.
+#%COMMENT_END
+proc vmSrch:delObjects { handle obj_list } \
+{
+	global		_GD_srch
+
+	foreach obj $obj_list {
+		####	Remove from the list of objects
+		set idx [lsearch -exact $_GD_srch($handle,objects) $obj]
+		if {$idx != -1} {
+			lvarpop _GD_srch($handle,objects) $idx
+		} else {
+			# puts "vmSrch:delObject idx = -1"
+			# puts "\t$obj"
+			# puts "\t$_GD_srch($handle,objects)"
+		}
+	}
+
+	####	Remove from the icon panel
+	ip:remove vm $obj_list
+}
+
+#########################################
+#		Private			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vmSrch:_create
+# Synopsis:	Creates an instance of the dialog.
+# Arguments:	- handle	The identifier for the new instance.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc vmSrch:_create { handle parent } \
+{
+	global		_GW_srch _GD_srch
+	set name	vmSrch
+
+	set dialog [xmFormDialog $parent.$name]
+	set pane [xmPanedWindow $dialog.$handle \
+			-sashWidth 1 \
+			-sashHeight 1 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none]
+	set grid [sgiGrid $pane.grid -numRows 7 -numColumns 2 \
+			-defaultSpacing 2]
+
+	set item XFS_HOST; set row 0
+	xmLabel $grid.$item-label managed -row $row -column 0
+	set _GW_srch($handle,$item) [dtDropDownComboBox $grid.$item managed \
+			-row 0 -column 1 \
+			-columns 28]
+
+	set item NAME; set row 1
+	xmLabel $grid.$item-label managed -row $row -column 0
+	set _GW_srch($handle,$item) [xmTextField $grid.$item managed \
+			-row 1 -column 1]
+	
+	set item TYPES; set row 2
+	xmLabel $grid.$item-label managed -row $row -column 0
+	foreach item $_GD_srch(toggles) {
+		set _GW_srch($handle,$item) [xmToggleButton $grid.$item \
+				 managed \
+				-row $row -column 1 \
+				-resizeHorizontal false \
+				-marginHeight 2 \
+				-set $_GD_srch($handle,tb,$item)]
+		$_GW_srch($handle,$item) valueChangedCallback \
+				"vmSrch:_typeCb $handle $item %set"
+		incr row
+	}
+
+	set item FLUSH_CACHE; set row 6
+	set _GW_srch($handle,$item) [xmToggleButton $grid.$item managed \
+			-row $row -column 1 \
+			-resizeHorizontal false]
+	$_GW_srch($handle,$item) valueChangedCallback \
+			"set _GD_srch($handle,$item) %set"
+			
+	
+	set _GW_srch($handle,buttons) \
+		[xfs:createDialogButtons $pane $_GD_srch(buttons) 15]
+	foreach i $_GD_srch(buttons) {
+		$_GW_srch($handle,buttons).$i activateCallback \
+				"vmSrch:_dialogCb $handle $i"
+	}
+
+	$grid columnResizable 0 false
+	$grid manageChild
+	$_GW_srch($handle,buttons) manageChild
+	$pane manageChild
+
+	$grid rowMargin 5 8
+
+	return $dialog
+}
+
+#%COMMENT_BEGIN
+# Function:	vmSrch:_formQuery
+# Synopsis:	Formulates a query to pass to the server to find the xlv
+#		objects on a host.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vmSrch:_formQuery { handle } \
+{
+	global	_GW_srch _GD_srch
+
+	lappend data "HOST_PATTERN:$_GD_srch($handle,hfn)"
+	lappend data "OBJ_TYPE:$_GD_srch(class)"
+	lappend data "OBJ_PATTERN:\*"
+
+	return $data
+}
+
+#########################################
+#	Dialog Callbacks		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vmSrch:_dialogCb
+# Synopsis:	The callback function defined on the dialog buttons.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- op		Indicates which button the user selected.
+#%COMMENT_END
+proc vmSrch:_dialogCb { handle op } \
+{
+	global		_GW_srch _GD_srch
+
+	switch $op {
+		accept	{ vmSrch:_accept $handle
+			  vmSrch:_cancel $handle
+			}
+		apply	{ vmSrch:_accept $handle }
+		cancel	{ vmSrch:_cancel $handle }
+		help	{ sgiHelpMsg $_GW_srch($handle,dialog) }
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	vmSrch:_typeCb
+# Synopsis:	The XmNvalueChangedCallback function defined for the xlv
+#		object type toggle buttons.  Stores the value for later use.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- op		Indicates which button the user selected.
+#%COMMENT_END
+proc vmSrch:_typeCb { handle type set } \
+{
+	global	_GW_srch _GD_srch
+
+	set _GD_srch($handle,tb,$type) $set
+	set sensitive "false"
+	foreach item $_GD_srch(toggles) {
+		$_GW_srch($handle,$item) getValues -set isSet
+		if {$isSet} {
+			set sensitive "true"
+		}
+	}
+
+	foreach item {accept} {
+		$_GW_srch($handle,buttons).$item setSensitive $sensitive
+	}
+}
+
+#########################################
+#	Callback Utilities		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vmSrch:_accept
+# Synopsis:	This is called when the user presses the "Accept" dialog
+#		button.  It gets the data from the dialog and then calls
+#		the server to get the objects from the given host.  The
+#		objects are then passed through filters so that only those
+#		that match the search criteria are displayed.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vmSrch:_accept { handle } \
+{
+	global		_GW_srch _GD_srch _GD_resources
+	set new_host	true
+
+	$_GW_srch($handle,dialog) defineCursor watch; . defineCursor watch
+	set host [combo:getValue $_GW_srch($handle,XFS_HOST)]
+
+	set sv_hip $_GD_srch($handle,hip)
+	set sv_hfn $_GD_srch($handle,hfn)
+	set sv_ship $_GD_srch($handle,search,hip)
+	set sv_shfn $_GD_srch($handle,search,hfn)
+
+	if {$host == $_GD_srch($handle,search,hfn)} {
+		set new_host false
+	} elseif {[hu:getIpAddress $host hfn hpd hip $_GD_resources(hostsFile)]} {
+		if {$hip == $_GD_srch($handle,search,hip)} {
+			set new_host false
+		}
+		set _GD_srch($handle,search,hip) $hip
+		set _GD_srch($handle,search,hfn) $hfn
+	} else {
+		if {$host != $_GD_srch($handle,search,hfn)} {
+			set _GD_srch($handle,search,hip) " "
+			set _GD_srch($handle,search,hfn) $host
+		} else {
+			set new_host false
+		}
+	}
+
+	if {$new_host == "true" || $_GD_srch($handle,FLUSH_CACHE) == "true"} {
+		set _GD_srch($handle,hip) $_GD_srch($handle,search,hip)
+		set _GD_srch($handle,hfn) $_GD_srch($handle,search,hfn)
+
+		####	Format the query and get the objects
+		set query [vmSrch:_formQuery $handle]
+		if {[catch {set objects [xfsObjects [join $query "\n"]]} err]} {
+			set _GD_srch($handle,hip) $sv_hip
+			set _GD_srch($handle,hfn) $sv_hfn
+			set _GD_srch($handle,search,hip) $sv_ship
+			set _GD_srch($handle,search,hfn) $sv_shfn
+
+			em:setMessageString $handle \
+				"Unable to perform search on $host."
+			regsub -all -- "\n" [string trim $err] "\n\t" nerr
+			em:storeMsg $handle error \
+				"Unable to get list of objects.\n\t$nerr"
+
+			$_GW_srch($handle,dialog) defineCursor ""
+			. defineCursor ""
+			return
+		}
+
+		####	Use the full host name so that it is consistent
+		####	with what is used throughout the Tcl/Tm code
+		set nobjs {}
+		foreach obj $objects {
+			lvarpop obj 0 $_GD_srch($handle,hfn)
+			lappend nobjs $obj
+		}
+		set _GD_srch($handle,objects) [lsort -command obj:sort $nobjs]
+
+	} elseif {$_GD_srch($handle,needsort)} {
+		####	Sort the objects
+		set _GD_srch($handle,objects) \
+			[lsort -command obj:sort $_GD_srch($handle,objects)]
+		set _GD_srch($handle,needsort) false
+	}
+
+	$_GD_srch(iconpanel) clear
+	vm:searchCompleted
+	ip:setHostName vm [hu:getHostPlusDom $_GD_srch($handle,hfn)]
+
+	if {$_GD_srch($handle,FLUSH_CACHE)} {
+		$_GW_srch($handle,FLUSH_CACHE) setValues -set false
+		set _GD_srch($handle,FLUSH_CACHE) false
+	}
+
+	if {[llength $_GD_srch($handle,objects)] == 0} {
+		$_GD_srch(iconpanel) render
+		$_GW_srch($handle,dialog) defineCursor ""; . defineCursor ""
+		return
+	}
+
+	####	Collect the filter data
+	set pattern [string trim [$_GW_srch($handle,NAME) getString]]
+	foreach item $_GD_srch(toggles) {
+		if {$_GD_srch($handle,tb,$item) == "false"} {
+			set check_type true
+		}
+	}
+
+	if {$pattern != "" && $pattern != "*"} {
+		####	Filter on Name and Type
+		foreach item $_GD_srch($handle,objects) {
+			obj:parse $item o_class o_host o_nm o_type
+			if {[string match $pattern $o_nm] && \
+			    $_GD_srch($handle,tb,$o_type) == "true"} {
+				lappend filtered $item
+			}
+		}
+	} elseif {[info exists check_type]} {
+		####	Filter on Type
+		foreach item $_GD_srch($handle,objects) {
+			obj:parse $item o_class o_host o_nm o_type
+			if {$_GD_srch($handle,tb,$o_type) == "true"} {
+				lappend filtered $item
+			}
+		}
+	} else {
+		set no_filter true
+	}
+
+	if {[info exists no_filter]} {
+		ip:fillPanel vm $_GD_srch($handle,objects)
+	} elseif {[info exists filtered]} {
+		ip:fillPanel vm $filtered
+	} else {
+		$_GD_srch(iconpanel) render
+	}
+
+	$_GW_srch($handle,dialog) defineCursor ""; . defineCursor ""
+}
+
+#%COMMENT_BEGIN
+# Function:	vmSrch:_cancel
+# Synopsis:	This is called when the user presses the "Cancel" dialog
+#		button.  It unmanages the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vmSrch:_cancel { handle } \
+{
+	global	_GW_srch; $_GW_srch($handle,dialog) unmanageChild
+}

@@ -1,0 +1,165 @@
+#ifndef _GBEDEFS_H_
+#define _GBEDEFS_H_
+
+#define GBE_SCREEN_WIDTH_MAX		1280
+#define GBE_SCREEN_HEIGHT_MAX		1024
+
+/*
+ * GBE Chip ID Mask (for ctrlstat)
+ */
+#define GBE_CHIPID_MASK                 0xF
+
+/*
+ * CMAP defines
+ */
+#define GBE_CMFIFO_MASK			0x3F
+#define GBE_CMAP_FIFO_FULL_OR_EMPTY     0x0
+#define ARSENIC_CMAP_FIFO_FULL          0x0
+#define ARSENIC_CMAP_FIFO_EMPTY         0x3F
+
+/*
+ * right hand side pixel defines
+ */
+#define GBE_RHS_PIX_8_MASK		0x1FF
+#define GBE_RHS_PIX_8_SHIFT		5
+#define GBE_RHS_PIX_16_MASK		0xFF
+#define GBE_RHS_PIX_16_SHIFT		4
+#define GBE_RHS_PIX_32_MASK		0x7F
+#define GBE_RHS_PIX_32_SHIFT		3
+
+/*
+ * tile width in pixel defines
+ */
+#define GBE_TWP_8		512
+#define GBE_TWP_8_MASK		0xFFFFFE00
+#define GBE_TWP_8_OFF_MASK	0x1FF
+#define GBE_TWP_8_SHIFT		9
+#define GBE_TWP_16		256
+#define GBE_TWP_16_MASK		0xFFFFFF00
+#define GBE_TWP_16_OFF_MASK	0xFF
+#define GBE_TWP_16_SHIFT	8
+#define GBE_TWP_32		128
+#define GBE_TWP_32_MASK		0xFFFFFF80
+#define GBE_TWP_32_OFF_MASK	0x7F
+#define GBE_TWP_32_SHIFT	7
+
+#define GBE_OVR_RHS_MASK		0x1F
+#define GBE_OVR_WIDTH_TILE_MASK		0x1FE0
+#define GBE_OVR_WIDTH_TILE_SHIFT	5
+
+#define GBE_OVR_TILE_PTR_MASK		0xFFFFFFE0
+#define GBE_OVR_DMA_ENABLE_MASK		0x1
+
+#define GBE_TILE_HEIGHT_PIX		128
+#define GBE_TILE_HEIGHT_PIX_MASK	0x7F
+#define GBE_TILE_HEIGHT_PIX_SHIFT	7
+
+#define GBE_FRM_RHS_MASK		0x1F
+#define GBE_FRM_WIDTH_TILE_MASK		0x1FE0
+#define GBE_FRM_WIDTH_TILE_SHIFT	5
+#define GBE_FRM_DEPTH_MASK		0x6000
+#define GBE_FRM_DEPTH_SHIFT		13
+
+#define GBE_FRM_DEPTH_8			0
+#define GBE_FRM_DEPTH_16		1
+#define GBE_FRM_DEPTH_32		2
+
+#define GBE_FRM_HEIGHT_PIX_MASK		0xFFFF0000
+#define GBE_FRM_HEIGHT_PIX_SHIFT	16
+
+#define GBE_FRM_TILE_PTR_MASK		0xFFFFFFE0
+#define GBE_FRM_DMA_ENABLE_MASK		0x1
+
+#define GBE_DID_BASE_MASK		0xFFFF
+#define GBE_DID_BASE_SHIFT		16
+#define GBE_DID_DMA_ENABLE_MASK		0x10000
+#define GBE_DID_DMA_ENABLE_SHIFT	16
+#define GBE_DID_BLOCK_SIZE_SHIFT	9
+
+/* frame table stuff */
+#define GBE_FTAB_BLOCK_MASK		0x3F80000
+#define GBE_FTAB_BLOCK_SHIFT		19
+#define GBE_FTAB_OFFSET_MASK		0x7F800
+#define GBE_FTAB_OFFSET_SHIFT		11
+#define GBE_FTAB_YEND_MASK		0x7FF
+
+/* line table stuff */
+#define GBE_LTAB_DID_MASK		0xF800
+#define GBE_LTAB_DID_SHIFT		11
+#define GBE_LTAB_XEND_MASK		0x7FF
+#define GBE_LTAB_XEND_TERMINAL		2047
+
+/* buffer mode */
+#define GBE_BMODE_BOTTOM		1
+#define GBE_BMODE_TOP			2
+#define GBE_BMODE_BOTH			3
+
+/* pixel color type */
+#define GBE_CMODE_I8			0
+#define GBE_CMODE_I12			1
+#define GBE_CMODE_RG3B2			2
+#define GBE_CMODE_RGB4			3
+#define GBE_CMODE_RGB5			4
+#define GBE_CMODE_RGB8			5
+
+/* mode register */
+#define GBE_NUM_WIDS			32
+#define GBE_WID_BUF_MASK		0x3
+#define GBE_WID_TYPE_MASK		0x1C
+#define GBE_WID_TYPE_SHIFT		2
+#define GBE_WID_CM_MASK			0x3E0
+#define GBE_WID_CM_SHIFT		5
+#define GBE_WID_GM_MASK			0x400
+#define GBE_WID_GM_SHIFT		10
+
+#define GBE_NUM_CMAP_ENTRY		4608
+#define GBE_OVR_CMAP_OFFSET		0x1100
+
+#define GBE_NUM_GMAP_ENTRY		256
+
+#define GBE_CRS_HEIGHT			32
+#define GBE_CRS_WIDTH			32
+
+#define GBE_CRS_POSX_MASK		0xFFF
+#define GBE_CRS_POSY_MASK		0xFFF0000
+#define GBE_CRS_POSY_SHIFT		16
+
+#define GBE_CRS_ENABLE_MASK		0x1
+#define GBE_CRS_CROSSHAIR_MASK		0x2
+
+#define GBE_NUM_CRS_COLOR		3
+
+#define GBE_CRS_GLYPH_MASK		0x3
+#define GBE_CRS_GLYPH_SHIFT		2
+
+#define GBE_VC_LEFT_MASK		0xFFF
+#define GBE_VC_LEFT_SHIFT		0
+#define GBE_VC_RIGHT_MASK		0xFFF000
+#define GBE_VC_RIGHT_SHIFT		12
+
+#define GBE_VC_TOP_MASK			0xFFF
+#define GBE_VC_TOP_SHIFT		0
+#define GBE_VC_BOTTOM_MASK		0xFFF000
+#define GBE_VC_BOTTOM_SHIFT		12
+
+#define GBE_VC_DMA_MASK			0x1
+#define GBE_VC_FLICK_MASK		0x2
+#define GBE_VC_FLICK_SHIFT		1
+#define GBE_VC_AUTOFIELD_MASK		0x4
+#define GBE_VC_AUTOFIELD_SHIFT		2
+#define GBE_VC_FULLSCREEN_MASK		0x8
+#define GBE_VC_FULLSCREEN_SHIFT		3
+#define GBE_VC_CSCBYPASS_MASK		0x10
+#define GBE_VC_CSCBYPASS_SHIFT		4
+
+#define GBE_VC_FIELD_MASK		0x1
+#define GBE_VC_DISCDMA_MASK		0x2
+#define GBE_VC_DISCDMA_SHIFT		1
+#define GBE_VC_FIELDCRUPT_MASK		0x4
+#define GBE_VC_FIELDCRUPT_SHIFT		2
+#define GBE_VC_EOF_MASK		0x8
+#define GBE_VC_EOF_SHIFT		3
+#define GBE_VC_ODDEVEN_MASK		0x10
+#define GBE_VC_ODDEVEN_SHIFT		4
+
+#endif /* _GBEDEFS_H_ */

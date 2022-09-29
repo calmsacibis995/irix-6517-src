@@ -1,0 +1,517 @@
+<!-- Produced by version 3.14 (11/22/96) of SGI Frame/SGML translator -->
+<APPENDIX LBL="A"><TITLE><XREFTARGET ID="15237">Sample Programs<XREFTARGET ID="23374"></TITLE><PARAGRAPH>A number of example programs are distributed with the REACT/Pro Frame Scheduler. This section describes them. Only one is reproduced here (see <INDEXTARGET ID="RPPG_ap0A1"><!-- POSTPROCESSDATA: RPPG_ap0A1|Frame Scheduler:example code --><XREF IDREF="31744" TYPE="TITLE">&ldquo;The simple_pt Pthreads Program&rdquo;</XREF>; the others are found on disk).</PARAGRAPH>
+<PARAGRAPH>The source for the example programs distributed with the Frame Scheduler are found in the directory <FILENAME>/usr/share/src/react/examples</FILENAME> and the executables are in <FILENAME>/usr/react/bin</FILENAME>. They are summarized in <XREF IDREF="86236" TYPE="TABLE">Table&nbsp;A-1</XREF> and are discussed in more detail in the topics that follow. </PARAGRAPH>
+<TABLE COLUMNS="2"><CAPTION LBL="A-1"><PREFIX>Table A-1 </PREFIX>&space;<EMPHASIS>(continued)        </EMPHASIS><XREFTARGET ID="86236">Summary of Frame Scheduler Example Programs</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="51"><PARAGRAPH>Directory</PARAGRAPH>
+</CELL>
+<CELL LEFT="60" WIDTH="337"><PARAGRAPH>Features of Example</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="51"><PARAGRAPH><FILENAME>simple&nbsp;&lbreak;
+simple_pt&nbsp;&lbreak;
+r4k_intr</FILENAME>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="60" WIDTH="337"><PARAGRAPH><FILENAME>simple</FILENAME> shows two processes and <FILENAME>simple_pt</FILENAME> shows two threads scheduled on a single 
+CPU 0 at a frame rate slow enough to permit use of <FUNCTION>printf()</FUNCTION> for debugging. The 
+examples differ in the time base used; and the <FILENAME>r4k_intr</FILENAME> code uses a barrier for 
+synchronization.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="51"><PARAGRAPH></PARAGRAPH>
+<PARAGRAPH></PARAGRAPH>
+</CELL>
+<CELL LEFT="60" WIDTH="337"><PARAGRAPH>Like <FILENAME>simple</FILENAME>, but the scheduled processes are independent programs.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="51"><PARAGRAPH><FILENAME>0"multi</FILENAME>&nbsp;&lbreak;<FILENAME>multi_pt&nbsp;&lbreak;
+ext_intr</FILENAME>&nbsp;&lbreak;<FILENAME>user_intr</FILENAME>&nbsp;&lbreak;<FILENAME>vsync_intr</FILENAME>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="60" WIDTH="337"><PARAGRAPH>Three synchronous Frame Schedulers running lightweight processes (or pthreads in 
+<FILENAME>multi_pt</FILENAME>) on three processors. These examples are much alike, differing mainly in the 
+source of the time base interrupt.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="51"><PARAGRAPH><FILENAME>complete</FILENAME>&nbsp;&lbreak;<FILENAME>stop_resume</FILENAME>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="60" WIDTH="337"><PARAGRAPH>Like <FILENAME>multi</FILENAME> in starting three Frame Schedulers. Information about the activity 
+processes is stored in arrays for convenient maintenance. The <FILENAME>stop_resume</FILENAME> code 
+demonstrates <FUNCTION>frs_stop()</FUNCTION> and <FUNCTION>frs_resume()</FUNCTION> calls.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="51"><PARAGRAPH><FILENAME>driver</FILENAME>&nbsp;&lbreak;<FILENAME>dintr</FILENAME>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="60" WIDTH="337"><PARAGRAPH><FILENAME>driver</FILENAME> contains a pseudo-device driver that demonstrates the Frame Scheduler 
+device driver interface. <FILENAME>dintr</FILENAME> contains a program based on <FILENAME>simple</FILENAME> that uses the 
+example driver as a time base.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="51"><PARAGRAPH><FILENAME>sixtyhz</FILENAME>&nbsp;&lbreak;<FILENAME>memlock</FILENAME>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="60" WIDTH="337"><PARAGRAPH>One process scheduled at a 60 Hz frame rate. The activity process in the <FILENAME>memlock</FILENAME> 
+example locks its address space into memory before it joins the scheduler.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="51"><PARAGRAPH><FILENAME>upreuse</FILENAME>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="60" WIDTH="337"><PARAGRAPH>Complex example that demonstrates the creation of a pool of reusable processes, and 
+how they can be dispatched as activity processes on a Frame Scheduler.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<SECTION1><SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="29372">Basic Example</TITLE><PARAGRAPH>The example in <FILENAME>/usr/react/src/examples/simple</FILENAME> shows how to create a simple application using the Frame Scheduler API. The code in <FILENAME>/usr/react/src/examples/r4kintr</FILENAME> is similar.</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE>Real-Time Application Specification</TITLE><PARAGRAPH>The application consists of two processes that have to periodically execute a specific sequence of code. The period for the first process, process A, is 600 milliseconds. The period for the other process, process B, is 2400 ms.</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>Such long periods are unrealistic for real-time applications. However, they allow the use of <FUNCTION>printf()</FUNCTION> calls within the &ldquo;real-time&rdquo; loops in this sample program.</NOTE>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Frame Scheduler Design</TITLE><PARAGRAPH>The two periods and their ratio determine the selection of the minor frame period&mdash;600&nbsp;ms&mdash;and the number of minor frames per major frame&mdash;4, for a total of 2400 ms.</PARAGRAPH>
+<PARAGRAPH>The discipline for process A is strict real-time (FRS_DISC_RT). Underrun and overrun errors should cause signals.</PARAGRAPH>
+<PARAGRAPH>Process B should run only once in 2400 ms, so it operates as Continuable over as many as 4 minor frames. For the first 3 frames, its discipline is Overrunnable and Continuable. For the last frame it is strict real-time. The Overrunnable discipline allows process B to run without yielding past the end of each minor frame. The Continuable discipline ensures that once process B does yield, it is not resumed until the fourth minor frame has passed. The combination allows process B to extend its execution to the allowable period of 2400 ms, and the strict real-time discipline at the end makes certain that it yields by the end of the major frame.</PARAGRAPH>
+<PARAGRAPH>There is a single Frame Scheduler so a single processor is used by both processes. Process A runs within a minor frame until yielding or until the expiration of the minor frame period. In the latter case the frame scheduler generates an overrun error signaling that process A is misbehaving. </PARAGRAPH>
+<PARAGRAPH>When process A yields, the frame scheduler immediately activates process B. It runs until yielding, or until the end of the minor frame at which point it is preempted. This is not an error since process B is Overrunable.</PARAGRAPH>
+<PARAGRAPH>Starting the next minor frame, the Frame Scheduler allows process A to execute again. After it yields, process B is allowed to resume running, if it has not yet yielded. Again in the third and fourth minor frame, A is started, followed by B if it has not yet yielded. At the interrupt that signals the end of the fourth frame (and the end of the major frame), process B must have yielded, or an overrun error is signalled.</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="83528">Example of Scheduling Separate Programs</TITLE><PARAGRAPH>The code in directory <FILENAME>/usr/react/src/examples/mprogs</FILENAME> does the same work as example <FILENAME>simple</FILENAME> (see <XREF IDREF="29372" TYPE="TITLE">&ldquo;Basic Example&rdquo;</XREF>). However, the activity processes A and B are physically loaded as separate commands. The main program establishes the single Frame Scheduler. The activity processes are started as separate programs. They communicate with the main program using SVR4-compatible interprocess communication messages (see the <REFPAGE>intro(2)</REFPAGE> and <REFPAGE>msgget(2)</REFPAGE> reference pages).</PARAGRAPH>
+<PARAGRAPH>There are three separate executables in the <FILENAME>mprogs</FILENAME> example. The master program, in <FILENAME>master.c</FILENAME>, is a command that has the following syntax:</PARAGRAPH>
+<EXAMPLE>
+master [-p <VARIABLE>cpu-number</VARIABLE>] [-s <VARIABLE>slave-count</VARIABLE>]
+</EXAMPLE>
+<PARAGRAPH>The <VARIABLE>cpu-number</VARIABLE> specifies which processor to use for the one Frame Scheduler this program creates. The default is processor 1. The <VARIABLE>slave-count</VARIABLE> tells the master how many subordinate programs will be enqueued to the Frame Scheduler. The default is two programs.</PARAGRAPH>
+<PARAGRAPH>The problems that need to be solved in this example are as follows:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>The FRS master program must enqueue the activity processes. However, since they are started as separate programs, the master has no direct way of knowing their process IDs, which are needed for <FUNCTION>frs_enqueue()</FUNCTION>.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The activity processes need to specify upon which minor frames they should be enqueued, and with what discipline.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The master needs to enqueue the activities in the proper order on their minor frames, so they will be dispatched in the proper sequence. Therefore the master has to distinguish the subordinates in some way; it cannot treat them as interchangeable.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The activity processes must join the Frame Scheduler, so they need the handle of the Frame Scheduler to use as an argument to <FUNCTION>frs_join()</FUNCTION>. However, this information is in the master's address space.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>If an error occurs when enqueueing, the master needs to tell the activity processes so they can terminate in an orderly way.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>There are many ways in which these objectives could be met (for example, the three programs could share a shared-memory arena). In this example, the master and subordinates communicate using a simple protocol of messages exchanged using <FUNCTION>msgget()</FUNCTION> and <FUNCTION>msgput()</FUNCTION> (see the <REFPAGE>msgget(2)</REFPAGE> and <REFPAGE>msgput(2)</REFPAGE> reference pages). The sequence of operations is as follows:</PARAGRAPH>
+<ORDEREDLIST><LIST><PARAGRAPH>The master program creates a Frame Scheduler.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>The master sends a message inviting the most important subordinate to reply. (All the message queue handling is in module <FILENAME>ipc.c</FILENAME>, which is linked by all three programs.)</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>The subordinate compiled from the file <FILENAME>processA.c</FILENAME> replies to this message, sending its process ID and requesting the FRS handle.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>The subordinate process A sends a series of messages, one for each minor queue on which it should enqueue. The master enqueues it as requested.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>The subordinate process A sends a &ldquo;ready&rdquo; message.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>The master sends a message inviting the next most important process to reply.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>The program compiled from <FILENAME>processB.c</FILENAME> will reply to this request, and steps 3-6 are repeated for as many slaves as the <VARIABLE>slave-count</VARIABLE> parameter to the master program. (Only two slaves are provided. However, you can easily create more using <FILENAME>processB.c</FILENAME> as a pattern.)</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>The master issues <FUNCTION>frs_start()</FUNCTION>, and waits for the termination signal.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>The subordinates independently issue <FUNCTION>frs_join()</FUNCTION> and the real-time dispatching begins.</PARAGRAPH>
+</LIST>
+</ORDEREDLIST>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="24688">Examples of Multiple Synchronized Schedulers</TITLE><PARAGRAPH>The example in <FILENAME>/usr/react/src/examples/multi</FILENAME> demonstrates the creation of three synchronized Frame Schedulers. The three use the cycle counter to establish a minor frame interval of 50&nbsp;ms. All three Frame Schedulers use 20 minor frames per major frame, for a major frame rate of 1 Hz.</PARAGRAPH>
+<PARAGRAPH>The following processes are scheduled in this example:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>Processes A and D require a frequency of 20 Hz</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Process B requires a frequency of 10 Hz and can consume up to 100 ms of execution time each time</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Process C requires a frequency of 5 Hz and can consume up to 200 ms of execution time each time</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Process E requires a frequency of 4 Hz and can consume up to 250 ms of execution time each time</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Process F requires a frequency of 2 Hz and can consume up to 500 ms of execution time each time</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Processes K1, K2 and K3 are background processes that should run as often as possible, when time is available.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>The processes are assigned to processors as follows:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>Scheduler 1 runs processes A (20 Hz) and K1 (background).</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Scheduler 2 runs processes B (10 Hz), C (5 Hz), and K2 (background).</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Scheduler 3 runs processes D (20Hz), E (4 Hz), F (2 Hz), and K3.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>In order to simplify the coding of the example, all real-time processes use the same function body, <FUNCTION>process_skeleton()</FUNCTION>, which is parameterized with the process name, the address of the Frame Scheduler it is to join, and the address of the &ldquo;real-time&rdquo; action it is to execute. In the sample code, all real-time actions are empty function bodies (feel free to load them down with code).</PARAGRAPH>
+<PARAGRAPH>The examples in <FILENAME>/usr/react/src/examples/ext_intr</FILENAME>, <FILENAME>user_intr</FILENAME>, and <FILENAME>vsync_intr</FILENAME> are all similar to multi, differing mainly in the time base used. The examples in <FILENAME>complete</FILENAME> and <FILENAME>stop_resume</FILENAME> are similar in operation, but more evolved and complex in the way they manage subprocesses.</PARAGRAPH>
+<TIP><PREFIX>Tip</PREFIX>It is helpful to use the <COMMAND>xdiff</COMMAND> program when comparing these similar programs&mdash;see the <REFPAGE>xdiff(1)</REFPAGE> reference page.</TIP>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Example of Device Driver</TITLE><PARAGRAPH>The code in <FILENAME>/usr/react/src/examples/driver</FILENAME> contains a skeletal test-bed for a kernel-level device driver that interacts with the Frame Scheduler. Most of the driver functions consist of minimal or empty stubs. However, the <FUNCTION>ioctl()</FUNCTION> entry point to the driver (see the ioctl(2) reference page) simulates a hardware interrupt and calls the Frame Scheduler entry point, <FUNCTION>frs_handle_driverintr()</FUNCTION> (see <XREF IDREF="38389" TYPE="TITLE">&ldquo;Generating Interrupts&rdquo;</XREF>). This allows you to test the driver. Calling its <FUNCTION>ioctl()</FUNCTION> entry is equivalent to using <FUNCTION>frs_usrintr()</FUNCTION> (see <XREF IDREF="95148" TYPE="TITLE">&ldquo;The Frame Scheduler API&rdquo;</XREF>).</PARAGRAPH>
+<PARAGRAPH>The code in <FILENAME>/usr/react/src/examples/dintr</FILENAME> contains a variant of the simple example that uses a device driver as the time base. The program <FILENAME>dintr/sendintr.c</FILENAME> opens the driver, calls <FUNCTION>ioctl()</FUNCTION> to send one time-base interrupt, and closes the driver. (It could easily be extended to send a specified number of interrupts, or to send an interrupt each time the return key is pressed.)</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Examples of a 60 Hz Frame Rate</TITLE><PARAGRAPH>The example in directory <FILENAME>/usr/react/src/examples/sixtyhz</FILENAME> demonstrates the ability to schedule a process at a frame rate of 60 Hz, a common rate in visual simulators. A single Frame Scheduler is created. It uses the cycle counter with an interval of 16,666 microseconds (16.66 ms, approximately 60 Hz). There is one minor frame per major frame.</PARAGRAPH>
+<PARAGRAPH>One real-time process is enqueued to the Frame Scheduler. By changing the compiler constant LOGLOOPS you can change the amount of work it attempts to do in each frame.</PARAGRAPH>
+<PARAGRAPH>This example also contains the code to query and to change the signal numbers used by the Frame Scheduler.</PARAGRAPH>
+<PARAGRAPH>The example in <FILENAME>/usr/react/src/examples/memlock</FILENAME> is similar to the sixtyhz example, but the activity process uses <FUNCTION>plock()</FUNCTION> to lock its address space. Also, it executes one major frame's worth of <FUNCTION>frs_yield()</FUNCTION> calls immediately after return from <FUNCTION>frs_join()</FUNCTION>. The purpose of this is to &ldquo;warm up&rdquo; the processor cache with copies of the process code and data. (An actual application process could access its major data structures prior to this yield in order to speed up the caching process.)</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Example of Managing Lightweight Processes</TITLE><PARAGRAPH>The code in <FILENAME>/usr/react/src/examples/upreuse</FILENAME> implements a simulated real-time application based on a pool of reusable processes. A reusable process is created with <FUNCTION>sproc()</FUNCTION> and described by a <VARIABLE>pdesc_t</VARIABLE> structure. Code in <FILENAME>pqueue.c</FILENAME> builds and maintains a pool of processes. Code in <FILENAME>pdesc.c</FILENAME> provides functions to get and release a process, and to dispatch one to execute a specific function.</PARAGRAPH>
+<PARAGRAPH>The code in <FILENAME>test_hello.c</FILENAME> creates a pool of processes and dispatches each one in turn to display a message. The code in <FILENAME>test_singlefrs.c</FILENAME> creates a pool of processes and causes them to join a Frame Scheduler.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="31744">The simple_pt Pthreads Program</TITLE><PARAGRAPH>This section is a variation of the <FILENAME>simple</FILENAME> program, implemented using the pthreads programming model.</PARAGRAPH>
+<CODE>
+#include &lt;math.h>
+#include &lt;stdio.h>
+#include &lt;signal.h>
+#include &lt;semaphore.h>
+#include &lt;pthread.h>
+#include &lt;sys/schedctl.h>
+#include &lt;sys/sysmp.h>
+#include &lt;sys/frs.h>
+/*
+&space;* frs_abort: If a pthread calls exit, then all pthreads within the process
+&space;*            will be terminated and the FRS will be destroyed.
+&space;*
+&space;*            For some failure conditions, this is the desired behavior.
+&space;*/
+#define frs_abort(x)    exit(x)
+sem_t sem_threads_enqueued;
+pthread_attr_t pthread_attributes;
+int cpu_number = 1;
+/*
+&space;* Some fixed real-time loop parameters
+&space;*/
+#define NLOOPS_A 20
+#define NLOOPS_B 15
+#define LOGLOOPS_A 150
+#define LOGLOOPS_B 30000
+void Thread_Master(void);
+void Thread_A(frs_t* frs);
+void Thread_B(frs_t* frs);
+void setup_signals(void);
+/*
+&space;* NOTE: The initial thread of a pthread application (i.e., the thread
+&space;*       executing main) cannot be an FRS controller or an FRS scheduled
+&space;*       activity thread.  This is because all FRS controller and activity
+&space;*       threads must be system scope threads.  The initial thread, however,
+&space;*       is process scope (see pthread_attr_setscope(3P)).
+&space;* 
+&space;*       In this example, the initial thread simply performs some set-up
+&space;*       tasks, launches the system scope Master Controller thread, and
+&space;*       exits.
+&space;*/
+main(int argc, char** argv)
+{
+&space;       pthread_t pthread_id_master;
+&space;       int ret;
+&space;       /*
+&space;        * Usage: simple [cpu_number]
+&space;        */
+&space;       if (argc == 2)
+&space;               cpu_number = atoi(argv[1]);
+&space;                       
+&space;       /*
+&space;        * Initialize semaphore
+&space;        */
+&space;       if (sem_init(&amp;sem_threads_enqueued, 1, 0)) {
+&space;               perror("Main: sem_init failed");
+&space;               frs_abort(1);
+&space;       }
+&space;       /*
+&space;        * Initialize signals to catch FRS termination
+&space;        * underrun, and overrun error signals
+&space;        */
+&space;       setup_signals();
+&space;       /*
+&space;        * Initialize system scope thread attributes
+&space;        */
+&space;       if (ret = pthread_attr_init(&amp;pthread_attributes)) {
+&space;               fprintf(stderr,
+&space;                       "Main: pthread_attr_init failed (%d)\n", ret);
+&space;               frs_abort(1);
+&space;       }
+&space;       ret = pthread_attr_setscope(&amp;pthread_attributes, PTHREAD_SCOPE_SYSTEM);
+&space;       if (ret) {
+&space;               fprintf(stderr,
+&space;                       "Main: pthread_attr_setscope failed (%d)\n", ret);
+&space;               frs_abort(1);
+&space;       }
+&space;       
+&space;       /*
+&space;        * Launch Master Controller Thread
+&space;        */
+&space;       ret = pthread_create(&amp;pthread_id_master,
+&space;                            &amp;pthread_attributes,
+&space;                            (void *(*)(void *)) Thread_Master,
+&space;                            NULL);
+&space;       if (ret) {
+&space;               fprintf(stderr,
+&space;                       "Main: pthread_create Thread Master failed (%d)\n", ret);
+&space;               frs_abort(1);
+&space;       }
+&space;       /*
+&space;        * Once the Master Controller is launched, there is no need for
+&space;        * us to hang around.  So we might as well free-up our stack by
+&space;        * exiting via pthread_exit().
+&space;        *
+&space;        * NOTE: Exiting via exit() would be fatal, terminating the
+&space;        *       entire process.
+&space;        */
+&space;       pthread_exit(0);
+}
+void
+Thread_Master(void)
+{       
+&space;       frs_t* frs;
+&space;       pthread_t pthread_id_a;
+&space;       pthread_t pthread_id_b;
+&space;       int minor;
+&space;       int disc;
+&space;       int ret;
+&space;       /*
+&space;        * Create the Frame Scheduler object:
+&space;        *
+&space;        *      cpu = cpu_number,
+&space;        *      interrupt source = CCTIMER
+&space;        *      number of minors = 4
+&space;        *      slave mask = 0, no slaves
+&space;        *      period = 600 [ms] == 600000 [microseconds]
+&space;        */
+&space;       frs = frs_create_master(cpu_number,
+&space;                               FRS_INTRSOURCE_CCTIMER,
+&space;                               600000,
+&space;                               4,
+&space;                               0);
+&space;       if (frs == NULL) {
+&space;               perror("Master: frs_create_master failed");
+&space;               pthread_exit(0);
+&space;       }
+&space;       /*
+&space;        * Thread A will be enqueued on all minor frame queues
+&space;        * with a strict RT discipline
+&space;        */
+&space;       ret = pthread_create(&amp;pthread_id_a,
+&space;                            &amp;pthread_attributes,
+&space;                            (void *(*)(void *)) Thread_A,
+&space;                            (void*) frs);
+&space;       if (ret) {
+&space;               fprintf(stderr,
+&space;                       "Master: pthread_create Thread A failed (%d)\n", ret);
+&space;               pthread_exit(0);
+&space;       }
+&space;       for (minor = 0; minor &lt; 4; minor++) {
+&space;               ret = frs_pthread_enqueue(frs,
+&space;                                         pthread_id_a,
+&space;                                         minor,
+&space;                                         FRS_DISC_RT);
+&space;               if (ret) {
+&space;                       perror("Master: frs_pthread_enqueue Thread A failed");
+&space;                       pthread_exit(0);
+&space;               }
+&space;       }
+&space;       /*
+&space;        * Thread B will be enqueued on all minor frames, but the
+&space;        * disciplines will differ. We need continuability for the first
+&space;        * 3 frames, and absolute real-time for the last frame.
+&space;        */
+&space;       ret = pthread_create(&amp;pthread_id_b,
+&space;                            &amp;pthread_attributes,
+&space;                            (void *(*)(void *)) Thread_B,
+&space;                            (void*) frs);
+&space;       if (ret) {
+&space;               fprintf(stderr,
+&space;                       "Master: pthread_create Thread B failed (%d)\n", ret);
+&space;               pthread_exit(0);
+&space;       }
+&space;       disc =  FRS_DISC_RT | FRS_DISC_UNDERRUNNABLE |
+&space;               FRS_DISC_OVERRUNNABLE | FRS_DISC_CONT;
+&space;       for (minor = 0; minor &lt; 3; minor++) {
+&space;               ret = frs_pthread_enqueue(frs,
+&space;                                         pthread_id_b,
+&space;                                         minor,
+&space;                                         disc);
+&space;               if (ret) {
+&space;                       perror("Master: frs_pthread_enqueue ThreadB failed");
+&space;                       pthread_exit(0);
+&space;               }
+&space;       }
+&space;       ret = frs_pthread_enqueue(frs,
+&space;                                 pthread_id_b,
+&space;                                 3,
+&space;                                 FRS_DISC_RT | FRS_DISC_UNDERRUNNABLE);
+&space;       if (ret) {
+&space;               perror("Master: frs_pthread_enqueue ThreadB failed");
+&space;               pthread_exit(0);
+&space;       }
+&space;       /*
+&space;        * Give all FRS threads the go-ahead to join
+&space;        */
+&space;       if (sem_post(&amp;sem_threads_enqueued)) {
+&space;               perror("Master: sem_post failed");
+&space;               pthread_exit(0);
+&space;       }
+&space;       if (sem_post(&amp;sem_threads_enqueued)) {
+&space;               perror("Master: sem_post failed");
+&space;               pthread_exit(0);
+&space;       }
+&space;       
+&space;       /*
+&space;        * Now we are ready to start the frame scheduler
+&space;        */
+&space;       printf("Running Frame Scheduler on Processor [%d]\n", cpu_number);
+&space;       if (frs_start(frs) &lt; 0) {
+&space;               perror("Master: frs_start failed");
+&space;               pthread_exit(0);
+&space;       }
+&space;       /*
+&space;        * Wait for FRS scheduled threads to complete
+&space;        */
+&space;       
+&space;       if (ret = pthread_join(pthread_id_a, 0)) {
+&space;               fprintf(stderr,
+&space;                       "Master: pthread_join thread A (%d)\n", ret);
+&space;               pthread_exit(0);
+&space;       }
+&space;       if (ret = pthread_join(pthread_id_b, 0)) {
+&space;               fprintf(stderr,
+&space;                       "Master: pthread_join thread B (%d)\n", ret);
+&space;               pthread_exit(0);
+&space;       }
+&space;       /*
+&space;        * Clean-up before exiting
+&space;        */
+&space;       (void) pthread_attr_destroy(&amp;pthread_attributes);
+&space;       (void) sem_destroy(&amp;sem_threads_enqueued);
+&space;       pthread_exit(0);
+}
+void
+Thread_A(frs_t* frs)
+{
+&space;       int counter;
+&space;       double res;
+&space;       int i;
+&space;       int previous_minor;
+&space;       pthread_t pthread_id = pthread_self();
+&space;       /*
+&space;        * Join to the frame scheduler once given the go-ahead
+&space;        */
+&space;       if (sem_wait(&amp;sem_threads_enqueued)) {
+&space;               perror("ThreadA: sem_wait failed");
+&space;               frs_abort(1);
+&space;       }
+&space;       
+&space;       if (frs_join(frs) &lt; 0) {
+&space;               perror("ThreadA: frs_join failed");
+&space;               frs_abort(1);
+&space;       }
+&space;   
+&space;       fprintf(stderr, "ThreadA (%x): Joined Frame Scheduler on cpu %d\n",
+&space;               pthread_id, frs->frs_info.cpu);
+&space;       counter = NLOOPS_A;
+&space;       res = 2;
+&space;       /*
+&space;        * This is the real-time loop. The first iteration
+&space;        * is done right after returning from the join
+&space;        */
+&space;   
+&space;       do {
+&space;               for (i = 0; i &lt; LOGLOOPS_A; i++) {
+&space;                       res = res * log(res) - res * sqrt(res);
+&space;               }
+&space;               /*
+&space;                * After we are done with our computations, we
+&space;                * yield the cpu. The yield call will not return until
+&space;                * it's our turn to execute again.
+&space;                */
+&space;               if ((previous_minor = frs_yield()) &lt; 0) {
+&space;                       perror("ThreadA: frs_yield failed");
+&space;                       frs_abort(1);
+&space;               }
+&space;               fprintf(stderr,
+&space;               "ThreadA (%x): Return from Yield; previous_minor: %d\n",
+&space;                       pthread_id, previous_minor);
+&space;       } while (counter--);
+&space;       fprintf(stderr, "ThreadA (%x): Exiting\n", pthread_id);
+&space;       pthread_exit(0);
+}
+&space;
+void
+Thread_B(frs_t* frs)
+{
+&space;       int counter;
+&space;       double res;
+&space;       int i;
+&space;       int previous_minor;
+&space;       pthread_t pthread_id = pthread_self();
+&space;       /*
+&space;        * Join to the frame scheduler once given the go-ahead
+&space;        */
+&space;       if (sem_wait(&amp;sem_threads_enqueued)) {
+&space;               perror("ThreadB: sem_wait failed");
+&space;               frs_abort(1);
+&space;       }
+&space;       
+&space;       if (frs_join(frs) &lt; 0) {
+&space;               perror("ThreadB: frs_join failed");
+&space;               frs_abort(1);
+&space;       }
+&space;   
+&space;       fprintf(stderr, "ThreadB (%x): Joined Frame Scheduler on cpu %d\n",
+&space;               pthread_id, frs->frs_info.cpu);
+&space;       counter = NLOOPS_B;
+&space;       res = 2;
+&space;       /*
+&space;        * This is the real-time loop. The first iteration
+&space;        * is done right after returning from the join
+&space;        */
+&space;   
+&space;       do {
+&space;               for (i = 0; i &lt; LOGLOOPS_B; i++) {
+&space;                       res = res * log(res) - res * sqrt(res);
+&space;               }
+&space;               /*
+&space;                * After we are done with our computations, we
+&space;                * yield the cpu. THe yield call will not return until
+&space;                * it's our turn to execute again.
+&space;                */
+&space;               if ((previous_minor = frs_yield()) &lt; 0) {
+&space;                       perror("ThreadB: frs_yield failed");
+&space;                       frs_abort(1);
+&space;               }
+&space;               fprintf(stderr,
+&space;               "ThreadB (%x): Return from Yield; previous_minor: %d\n",
+&space;                       pthread_id, previous_minor);
+&space;       } while (counter--);
+&space;       fprintf(stderr, "ThreadB (%x): Exiting\n", pthread_id);
+&space;       pthread_exit(0);
+}
+/*
+&space;* Error Signal handlers
+&space;*/
+void
+underrun_error()
+{
+&space;       if ((int)signal(SIGUSR1, underrun_error) == -1) {
+&space;               perror("[underrun_error]: Error while resetting signal");
+&space;               frs_abort(1);
+&space;       }
+&space;       fprintf(stderr, "[underrun_error], thread %x\n", pthread_self());
+&space;       frs_abort(2);
+}
+void
+overrun_error()
+{
+&space;       if ((int)signal(SIGUSR2, overrun_error) == -1) {
+&space;               perror("[overrun_error]: Error while resetting signal");
+&space;               frs_abort(1);
+&space;       }
+&space;       fprintf(stderr, "[overrun_error], thread %d\n", pthread_self());
+&space;       frs_abort(2);
+}
+void
+setup_signals()
+{
+&space;       if ((int)signal(SIGUSR1, underrun_error) == -1) {
+&space;               perror("[setup_signals]: Error setting underrun_error signal");
+&space;               frs_abort(1);
+&space;       }
+&space;       if ((int)signal(SIGUSR2, overrun_error) == -1) {
+&space;               perror("[setup_signals]: Error setting overrun_error signal");
+&space;               frs_abort(1);
+&space;       }
+}
+</CODE>
+<PARAGRAPH>&space;</PARAGRAPH>
+</SECTION2>
+</SECTION1>
+</APPENDIX>

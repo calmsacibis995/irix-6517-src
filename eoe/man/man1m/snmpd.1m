@@ -1,0 +1,231 @@
+.TH snmpd 1M local "Silicon Graphics, Inc."
+.SH NAME
+snmpd \- \&Simple Network Management Protocol daemon
+.SH SYNOPSIS
+.PD .2
+.PP
+\f3/usr/etc/snmpd\f1 [ \f3\-d\f1 debug ] [ \f3\-l\f1 loglevel ] 
+.PP
+               [\f3\-u\f1 namelist ] [\f3\-p\f1 alternatePort] [\f3\-t\f1 trapPort]
+.PD
+.fi
+.SH DESCRIPTION
+\f2snmpd\fP is a daemon for the Simple Network Management Protocol (SNMP)
+as specified in Internet RFC 1157, and supports MIB II, as specified in
+Internet RFC 1213.
+The daemon, called the SNMP agent,
+can be configured to run from the network star-tup script at boot time by the
+command \f2chkconfig snmpd on\fP or started from the command line.
+You must be superuser (root) to run \f2snmpd\fP.
+\f2snmpd\fP listens on a \f2udp\fP(7P) socket for the \f2snmp\fP
+service for SNMP queries.
+If no such service can be found,
+a default port of 161 is used.
+By default, \f2snmpd\fP logs its
+messages to \f2syslog\fP(3B).
+.P
+\f2snmpd\fP checks that each incoming request is authorized.
+The file
+\f2/etc/snmpd.auth\fP is used to specify sets of hosts and
+SNMP communities that have either \f3get\fP or \f3set\fP privileges.
+Entries in the file have the form
+.Ex
+accept	hostname:community/operation ...
+reject	hostname:community/operation ...
+.Ee
+where the wildcard character \f3*\fP can stand for all hosts or
+all communities.
+A comma can be used to list multiple hosts or
+communities.
+.P
+For example, suppose \f2snmpd\fP were to accept \f3get\fP and \f3set\fP
+requests from the host \f3iris1\fP or \f3iris2\fP with the community \f3sgi\fP
+and accept \f3get\fP requests from any host with the community \f3public\fP.
+The \f2/etc/snmpd.auth\fP entries would be
+.Ex
+accept	iris1:sgi
+accept	iris2:sgi
+accept	*:public/get
+.Ee
+.P
+or equivalently, on one line
+.Ex
+accept	iris1,iris2:sgi *:public/get
+.Ee
+.P
+.SS Supported Sets
+.P
+\f2snmpd\fP supports SNMP sets when authorized by the above mechanism.
+There are some caveats to using sets, however:
+.P
+The deprecated Address Translation table does not support sets.
+Use the IP Net-to-Media table instead.
+.P
+The IP forwarding flag, ipForwarding, cannot be set.
+.P
+The IP default time to live, ipDefaultTTL, cannot be set.
+.P
+Existing rows in the IP Route table, for which ipRouteType is not invalid,
+cannot be modified.
+A row may be removed by setting ipRouteType to invalid,
+as stated in RFC 1213.
+A row may be added by sets to the IP Route table with
+the new variables.
+Default values are added for variables that are not included.
+The row is committed and added to the kernel route table when the ipRouteType
+is set from invalid to any other state.
+.P
+Existing rows in the IP Net-to-Media table, for which ipNettoMediaType is not
+invalid, cannot be modified.
+A row may be removed by setting ipNettoMediaType
+to invalid as stated in RFC 1213.
+A row may be added by sets to IP
+Net-to-Media table with the new variables.
+Default values are added for
+variables that are not included.
+The row is committed and added to the kernel arp
+table when the ipNettoMediaType is set from invalid to any other state.
+.P
+The TCP connection state, tcpConnState, cannot be set.
+.P
+.SS Remote Subagents
+.P
+\f2snmpd\fP supports forwarding requests to \f2subagents\f1.
+These subagents manage proprietary parts of the MIB.
+They must be able to handle
+the \f2snmp\fP protocol, including the ASN1 encoding and decoding of packets.
+The subagents must not use the standard \f2snmp\fP port 161\f2udp\fP, which 
+is used
+by \f2snmpd\fP.
+.P
+At start-up \f2snmpd\fP reads the file \f2/etc/snmp.remote.conf\f1 to
+determine the existence of subagents, the parts of the MIB that they
+support, and the \f2udp\f port to use to communicate with them.
+The format
+of the file is
+.Ex
+mib-tree-identifier	IP-address	port	timeout	subagent-name
+.Ee
+.P
+The \f2subagent-name\f1 is optional.
+All other parts of the entry are
+required.
+The fields are separated by white-space (tab or space).
+.P
+An example of an entry is
+.Ex
+1.3.6.1.4.1.59.3	192.26.75.178	3333	3	sgi-experimental
+.Ee
+.P
+This entry says that the subagent supporting the mib tree rooted at
+1.3.6.1.4.1.59.3 is located at IP address 192.26.75.178.
+It uses \f2udp\fP port
+3333.
+\f2snmpd\fP-forwarded requests to the subagent should time out
+after 3 seconds.
+The name of the agent is the sgi-experimental agent.
+.P
+Because \f2snmpd\fP reads and processes lines in the file in order,
+multiple subagents can be configured that operate on nested parts of
+the mib.
+For all agents to be seen, the more deeply nested agents should
+come first in the file.
+For example
+.Ex
+1.3.6.1.4.1.59.3.26	192.26.75.1178	6666	4	sgi-exp-tv
+1.3.6.1.4.1.59.3	192.26.75.178	3333	3	sgi-experimental
+.Ee
+.P
+If the above two lines were reversed, \f2snmpd\fP would never
+forward requests to the sgi-exp-tv agent.
+.P
+.SS Traps
+.P
+\f2snmpd\f1 issues some standard SNMP traps.
+At start-up it reads the
+\f2/etc/snmpd.trap.conf\f1 file to determine which traps to send to
+which destinations and what community string to use when sending traps.
+There are two types of entries in the file, one for traps and
+destinations and one for the community string.
+The format of the trap lines is
+.Ex
+trap		destination-list
+.Ee
+.P
+The trap can be either a number or a string from RFC 1157 naming the
+trap.
+The destination list is a white space and/or comma-separated set
+of IP addresses and/or hostnames.
+For example
+.Ex
+1	192.26.75.178, bubba
+authenticationFailure	192.26.75.109
+.Ee
+.P
+The community string entry has the format:
+.Ex
+community	name
+.Ee
+.P
+The string in the name field is used for all traps.
+.P
+To determine whether it has cold started or warm 
+started, \f2snmpd\fP
+uses the file \f2/etc/snmpd.start\f1.
+.P
+.SS Options
+.TP 16
+\-d \f2debug\fP
+Set debugging modes of \f2snmpd\fP.
+Possible values for \f2debug\fP are
+\f2dump\fP, which will hex dump incoming and outgoing packets; \f2input\fP,
+which will display decoded incoming packets; \f2output\fP, which will display
+decoded outgoing packets; and \f2foreground\fP, which makes the daemon run
+in the foreground and log messages to the standard output.
+The \f2dump\fP,
+\f2input\fP, and \f2output\fP flags all imply the \f2foreground\fP flag.
+.TP 16
+\-l \f2loglevel\fP
+Control the level of messages produced by \f2snmpd\fP.
+The levels are those
+used by \f2syslog\fP(3B).
+The value of \f2loglevel\fP is the text string for
+that level.
+The default \f2loglevel\fP is \f2error\fP.
+To see warnings,
+the \f2loglevel\fP would be \f2warning\fP.
+The acceptable values for
+\f2loglevel\fP can be found in \f2/usr/include/sys/syslog.h\fP.
+.TP 16
+\-u \f2namelist\fP
+Specify a system namelist.
+The default is \f2/unix\fP.
+.TP 16
+\-p \f2alternatePort\fP
+Specify an alternate UDP port to listen for SNMP requests.  The default
+UDP port is 161.  Since only one SNMP Agent can listen on UDP/161, if there are multiple agents running on the system, using the \-p option, you can 
+specify an alternate UDP port for snmpd to listen for SNMP requests.
+.TP 16
+\-t \f2trapPort\fP
+By default, snmpd sends all trap messages to UDP port 162 on the SNMP Manager station(s).  By using this option, you can specify an alternate trap port on the Manager station(s), to which snmpd will send its trap messages.
+.SH CAVEATS
+Currently \f2snmpd\fP suports the following traps only:
+.Ex
+coldStart warmStart authenticationFailure
+.Ee
+.SH FILES
+.DT
+/usr/etc/snmpd
+.br
+/etc/snmpd.auth
+.br
+/etc/snmpd.data
+.br
+/etc/snmpd.trap.conf
+.br
+/etc/snmpd.remote.conf
+.br
+/etc/snmpd.start
+.SH "SEE ALSO"
+.PP
+RFC 1157, RFC 1213

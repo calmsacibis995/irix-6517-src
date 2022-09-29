@@ -1,0 +1,165 @@
+#!/bin/sh
+#
+# Copyright 1997, Silicon Graphics, Inc.
+# ALL RIGHTS RESERVED
+# 
+# UNPUBLISHED -- Rights reserved under the copyright laws of the United
+# States.   Use of a copyright notice is precautionary only and does not
+# imply publication or disclosure.
+# 
+# U.S. GOVERNMENT RESTRICTED RIGHTS LEGEND:
+# Use, duplication or disclosure by the Government is subject to restrictions
+# as set forth in FAR 52.227.19(c)(2) or subparagraph (c)(1)(ii) of the Rights
+# in Technical Data and Computer Software clause at DFARS 252.227-7013 and/or
+# in similar or successor clauses in the FAR, or the DOD or NASA FAR
+# Supplement.  Contractor/manufacturer is Silicon Graphics, Inc.,
+# 2011 N. Shoreline Blvd. Mountain View, CA 94039-7311.
+# 
+# THE CONTENT OF THIS WORK CONTAINS CONFIDENTIAL AND PROPRIETARY
+# INFORMATION OF SILICON GRAPHICS, INC. ANY DUPLICATION, MODIFICATION,
+# DISTRIBUTION, OR DISCLOSURE IN ANY FORM, IN WHOLE, OR IN PART, IS STRICTLY
+# PROHIBITED WITHOUT THE PRIOR EXPRESS WRITTEN PERMISSION OF SILICON
+# GRAPHICS, INC.
+#
+# Take a Namespace root file which contains metrics with the 'irix' prefix,
+# and remove the irix prefix.
+# This is to upgrade a namespace with irix names to one with no irix names.
+#
+# $Id: Xlate-irix-names,v 1.2 1999/05/11 00:28:03 kenmcd Exp $
+#
+tmp=/tmp/$$
+status=1
+trap "rm -f $tmp.*; exit \$status" 0 1 2 3 15
+
+prog=`basename $0`
+
+#
+# ...		------
+# root {	
+#       ...		extract to $tmp.A
+#       ...	------
+#	irix
+#	...	------
+#	...
+# }			extract to $tmp.Z
+# ...		------
+#
+_do_root()
+{
+    nawk '
+BEGIN					{ out = "'$tmp'.A" }
+step == 0 && $1 == "root" && $2 == "{"	{ step = 1 }
+step == 1 && $1 == "irix"		{ step = 2; out = "'$tmp'.Z"; next }
+step == 1 && $1 == "}"			{ step = 2; out = "'$tmp'.Z" }
+					{ print >out }'
+}
+
+#
+# 			extract to $tmp.C
+# ...		------
+# irix {
+#	...	------
+#	...		extract to $tmp.Y
+#	...	------
+# }
+# ...		------
+# 			extract to $tmp.E
+_do_irix()
+{
+    nawk '
+BEGIN					{ out = "'$tmp'.C" }
+step == 0 && $1 == "irix" && $2 == "{"	{ step = 1; out = "'$tmp'.Y"; next }
+step == 1 && $1 == "}"			{ step = 2; out = "'$tmp'.E"; next }
+step == 2 && $1 == "irix.resource"	{ step = 3 }
+step == 3 && $1 == "name_cache"		{ next }
+step == 3 && $1 == "buffer_cache"	{ next }
+step == 3 && $1 == "vnodes"		{ next }
+step == 3 && $1 == "efs"		{ next }
+step == 3 && $1 == "}"			{ step = 4 }
+					{ print >out }'
+}
+
+_filter_irix()
+{
+    sed \
+	-e 's/^[ 	]*irix\.numa/origin\.numa/g' \
+	-e 's/^[ 	]*irix\.node/origin\.node/g' \
+	-e 's/^[ 	]*irix\.//g' \
+	-e 's/^[ 	]*resource\.name_cache/name_cache/g' \
+	-e 's/^[ 	]*resource\.buffer_cache/buffer_cache/g' \
+	-e 's/^[ 	]*resource\.vnodes/vnodes/g' \
+	-e 's/^[ 	]*resource\.efs/efs/g'
+}
+
+if [ $# -ne 1 ]
+then
+    echo "Usage: $prog namespace" >&2
+    exit 
+fi
+
+if [ ! -f $1 ]
+then
+    echo "$prog: cannot find input file \"$1\"" >&2
+    exit
+fi
+
+_do_root <$1
+_do_irix <$tmp.Z
+
+    nawk <$tmp.Y >$tmp.B '
+$1 == "numa"	{ next }
+$1 == "node"	{ next }
+		{ print }'
+
+# diff $tmp.Y $tmp.B to see if origin metrics are required
+#
+if diff $tmp.Y $tmp.B > /dev/null 2>&1
+then
+    :
+else
+    cat <<End-of-File >$tmp.D
+
+origin {
+    numa
+    node
+}
+End-of-File
+
+    cat <<End-of-File >>$tmp.B
+    origin
+End-of-File
+
+fi
+
+if grep '^[ 	]*irix\.resource\.name_cache' $tmp.E > /dev/null 2>&1
+then
+    cat <<End-of-File >>$tmp.B
+    name_cache
+End-of-File
+fi
+
+if grep '^[ 	]*irix\.resource\.buffer_cache' $tmp.E > /dev/null 2>&1
+then
+    cat <<End-of-File >>$tmp.B
+    buffer_cache
+End-of-File
+fi
+
+if grep '^[ 	]*irix\.resource\.vnodes' $tmp.E > /dev/null 2>&1
+then
+    cat <<End-of-File >>$tmp.B
+    vnodes
+End-of-File
+fi
+
+if grep '^[ 	]*irix\.resource\.efs' $tmp.E > /dev/null 2>&1
+then
+    cat <<End-of-File >>$tmp.B
+    efs
+End-of-File
+fi
+
+cat $tmp.[ABCDE] | _filter_irix 
+
+status=0
+exit 

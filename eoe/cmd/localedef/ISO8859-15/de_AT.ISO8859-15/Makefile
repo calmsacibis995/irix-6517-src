@@ -1,0 +1,3 @@
+#!smake
+
+#include "../Makefile.locales"

@@ -1,0 +1,139 @@
+.TH MDPerf 2
+.SH NAME
+mdperf \- Hardware performance counters for the MD interface of the Hub
+.SH SYNOPSIS
+\f4#include <sys/syssgi.h>\f1
+.br
+\f4#include <sys/hwperftypes.h>\f1
+.br
+\f4#include <sys/hwperfmacros.h>\f1
+.TP 11
+\f4int syssgi(SGI_EVENTCTR, MDPERF_NODE_ENABLE, cnodeid_t node,
+\f4md_perf_control_t *ctrl);\f1
+.TP 11
+\f4int syssgi(SGI_EVENTCTR, MDPERF_NODE_DISABLE,
+\f4cnodeid_t node);\f1
+.TP 11
+\f4int syssgi(SGI_EVENTCTR, MDPERF_NODE_GET_CTRL, 
+\f4cnodeid_t node,md_perf_control_t *ctrl);\f1
+.TP 11
+\f4int syssgi(SGI_EVENTCTR, MDPERF_NODE_GET_COUNT,
+\f4cnodeid_t node,md_perf_values_t *val);\f1
+.SH DESCRIPTION
+The hub is equipped with six sets of performance counters in the MD
+interface. One set of counters may be enabled at any one time for one
+hub. Each set of counters contain 6 20-bit counters which peg at their
+maximum value.
+.PP
+Access to the counters is through the syssgi call. The first parameter
+informs the syssgi that we are accessing performance counters. The
+second parameter specifies which action to take on the counters (the command). 
+Subsequent parameters are command dependent. 
+.PP
+Current supported commands:
+.TP 4
+\f4MDPERF_NODE_ENABLE\f1
+
+\f4node\f1: The node to monitor performance of. Passing CNODEID_NONE will
+monitor the entire system at once. Invalid nodes result in the
+function returning -1.
+
+\f4ctrl\f1: There are 6 sets of performance counters. Each set can be
+enabled only one at a time. To support enabling multiple sets at once,
+the kernel multiplexes them.
+
+Each set is enabled for one clock tick, disabled, have their counters
+stored, and then another set is enabled (or if there is no other set
+that test is enabled again).
+
+The sets and the bit-masks corresponding to them are found in
+\f4<sys/hwperftypes.h>\f1. Currently the md_perf_control_t is just a
+wrapper around a 32-bit int.
+
+Enabling the counters also clears their values.
+
+RETURNS: The generation number (after incrementing it) on success and
+-1 on error.
+
+.TP 4
+\f4MDPERF_NODE_DISABLE\f1
+\f4node\f1: The same as above
+
+This command disables the counters. It will not discard the values
+recently collected. so the user may collect them after disabling if
+they wish.
+
+RETURNS: The generation number (that it has incremented again) on
+success or -1 on error.
+
+.TP 4
+\f4MDPERF_NODE_GET_CTRL\f1
+
+The command retrieves a copy of the md_perf_control_t used to enable
+the counter.
+
+\f4node\f1: The same as above.
+
+\f4ctrl\f1: Out-arg for the md_perf_control_t struct that the counters
+were enabled with.
+
+RETURNS: A generation number (but does not increment it) on success
+and -1 on error.
+
+.TP 4
+\f4MDPERF_NODE_GET_COUNT\f1
+
+The command to collect the performance data.
+
+\f4node\f1: The same as above.
+
+\f4counters\f1: The user must pass in a pointer to a pre-allocated
+md_perf_values_t. After the command this struct which will holds the
+current contents of the performance counters. 
+
+This will also return a generation number (but does not increment it).
+
+.SH \f4NOTES:\f1
+.PP
+1) \f4md_perf_values_t\f1 is defined in \f4<sys/hwperftypes.h>\f1
+and is composed of two data members:
+.TP 8
+\f4mpv_count\f1: 
+2-d array of md_perf_reg_t, it holds the actual counter values. There
+are currently 6 sets of 6 counters (Constants are MD_PERF_SETS and
+MD_PERF_COUNTERS). Each counter holds 63 bits for value (mpr_value)
+and another bit for overflow (mpr_overflow). The md counters are 20
+bit sticky counters. If any clock tick collection detects an overflow
+this bit will be set.
+
+.TP 8
+\f4mpv_timestamp\f1: a simple timestamp of the last moment of
+collection of each set of counts. When one is monitoring the
+entire system these are invalid since they are just clobbered for
+each node's collection. 
+.PP
+2) In \f4<sys/hwperftypes.h>\f1 there are a set of defines to allow the user
+to index the arrays by individual type of counter set or counter.
+.PP
+3) \f4Mutual Exclusion\f1:
+
+When the user enables monitoring for an individual node, it "locks"
+that node so no one else can monitor unless that node becomes disabled.
+
+This is doubly-true in the global case. When the system is monitoring
+globally no one else may monitor. And when one node is monitoring, no
+one may globally monitor.
+
+.PP
+4) \f4Generation Number\f1: 
+
+To insure that the data you collect is from the test set you enabled,
+there is a software counter for each hub, and another for the entire
+system. This is is the generation number. When you use the enable
+command you will receive a return value which states which generation
+the counters are in. Any commands to collect from the counters will
+return the same number unless the counters have been disabled and
+enabled again.
+
+.SH SEE ALSO
+syssgi(2),ioperf(2).

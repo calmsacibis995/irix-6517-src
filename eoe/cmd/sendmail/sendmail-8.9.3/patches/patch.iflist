@@ -1,0 +1,198 @@
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/BuildTools/OS/IRIX.6.5 sendmail-8.9.3.patch.iflist/BuildTools/OS/IRIX.6.5
+*** sendmail-8.9.3/BuildTools/OS/IRIX.6.5	Tue Dec 29 09:39:53 1998
+--- sendmail-8.9.3.patch.iflist/BuildTools/OS/IRIX.6.5	Wed Aug 18 18:10:54 1999
+***************
+*** 23,28 ****
+--- 23,32 ----
+  POPDIVERT
+  define(`confMAPDEF', `-DNDBM -DNIS -DMAP_REGEX')
+  define(`confENVDEF', `-DIRIX6 -DHASSNPRINTF=1 ${ABI} ')
++ 
++ sysmcd(`test -e ${ROOT}/usr/include/sys/sysctl.h')
++ define(`confENVDEF', confENVDEF ifelse(0, sysval, `-DIRIX_SYSCTRL'))
++ 
+  define(`confLDOPTS', `${ABI}')
+  define(`confMBINDIR', `/usr/lib')
+  define(`confSBINDIR', `/usr/etc')
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/BuildTools/OS/IRIX.6.x sendmail-8.9.3.patch.iflist/BuildTools/OS/IRIX.6.x
+*** sendmail-8.9.3/BuildTools/OS/IRIX.6.x	Tue Dec 29 09:39:48 1998
+--- sendmail-8.9.3.patch.iflist/BuildTools/OS/IRIX.6.x	Wed Aug 18 18:10:39 1999
+***************
+*** 19,28 ****
+--- 19,35 ----
+  #
+  #		Build -E ABI=-n32
+  #
++ # Define IRIX_SYSCTRL if the file /usr/include/sys/sysctrl exists
++ # should exist on patched 6.2 systems, and all 6.[345] systems.
++ #
+  ABI=	confABI
+  POPDIVERT
+  define(`confMAPDEF', `-DNDBM -DNIS -DMAP_REGEX')
+  define(`confENVDEF', `-DIRIX6 ${ABI} ')
++ 
++ sysmcd(`test -e ${ROOT}/usr/include/sys/sysctl.h')
++ define(`confENVDEF', confENVDEF ifelse(0, sysval, `-DIRIX_SYSCTRL'))
++ 
+  define(`confLDOPTS', `${ABI}')
+  define(`confMBINDIR', `/usr/lib')
+  define(`confSBINDIR', `/usr/etc')
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/BuildTools/OS/IRIX64.6.x sendmail-8.9.3.patch.iflist/BuildTools/OS/IRIX64.6.x
+*** sendmail-8.9.3/BuildTools/OS/IRIX64.6.x	Tue Dec 29 09:39:48 1998
+--- sendmail-8.9.3.patch.iflist/BuildTools/OS/IRIX64.6.x	Thu Apr 29 21:27:20 1999
+***************
+*** 19,24 ****
+--- 19,27 ----
+  #
+  #		Build -E ABI=-n32
+  #
++ # Define IRIX_SYSCTRL if the file /usr/include/sys/sysctrl exists
++ # should exist on patched 6.2 systems, and all 6.[345] systems.
++ #
+  ABI=	confABI
+  POPDIVERT
+  define(`confMAPDEF', `-DNDBM -DNIS -DMAP_REGEX')
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/src/conf.c sendmail-8.9.3.patch.iflist/src/conf.c
+*** sendmail-8.9.3/src/conf.c	Tue Jan 26 16:15:52 1999
+--- sendmail-8.9.3.patch.iflist/src/conf.c	Thu Apr 29 21:27:20 1999
+***************
+*** 4292,4303 ****
+--- 4292,4316 ----
+  add_hostnames(sa)
+  	SOCKADDR *sa;
+  {
++ 	char ip_addr[256];
+  	struct hostent *hp;
++ 	extern char *inet_ntoa();
+  
+  	/* lookup name with IP address */
+  	switch (sa->sa.sa_family)
+  	{
+  		case AF_INET:
++ 			/* save IP address in text from */
++ 			(void) snprintf(ip_addr, sizeof ip_addr, "[%.*s]",
++ 					sizeof ip_addr - 3,
++ 					inet_ntoa(sa->sin.sin_addr));
++ 			if (!wordinclass(ip_addr, 'w'))
++ 			{
++ 				setclass('w', ip_addr);
++ 				if (tTd(0, 4))
++ 					printf("\ta.k.a.: %s\n", ip_addr);
++ 			}
++ 
+  			hp = sm_gethostbyaddr((char *) &sa->sin.sin_addr,
+  				sizeof(sa->sin.sin_addr), sa->sa.sa_family);
+  			break;
+***************
+*** 4378,4383 ****
+--- 4391,4489 ----
+  # include <net/if.h>
+  #endif
+  
++ #ifdef IRIX_SYSCTRL
++ /*
++ ** This code walks the IRIX routing sockets and determines all addresses
++ ** for a interface.  
++ */
++ 
++ #define DEFINED_LOAD_IF_NAMES
++ #include <net/if.h>
++ #include <sys/sysctl.h>
++ #include <net/route.h>
++ 
++ void
++ load_if_names(void)
++ {
++ 	int loop;
++ 	size_t needed;
++ 	char *buf, *next, *lim, *cp;
++ 	struct if_msghdr *ifm;
++ 	int mib[6];
++ 	struct ifa_msghdr *ifam;
++ 	struct sockaddr_in *mask, *addr;
++ 	struct sockaddr *sa;
++ 
++ 	
++ 	mib[0] = CTL_NET;
++ 	mib[1] = PF_ROUTE;
++ 	mib[2] = 0;
++ 	mib[3] = 0;
++ 	mib[4] = NET_RT_IFLIST;
++ 	mib[5] = 0;
++ 
++ 	if (sysctl(mib, 6, NULL, &needed, NULL, 0) < 0) {
++ 		if (tTd(0, 4))
++ 			printf("failed first sysctl: %s\n", errstring(errno));
++ 		return;
++ 	}
++ 	buf = malloc(needed);
++ 	if (! buf) {
++ 		if (tTd(0,4))
++ 			printf("load_if_names: failed to malloc memory for sysctl\n");
++ 		return;
++ 	}
++ 	if (sysctl(mib, 6, buf, &needed, NULL, 0) < 0) {
++ 		if (tTd(0, 4))
++ 			printf("failed second sysctl: %s\n", errstring(errno));
++ 		return;
++ 	}
++ 
++ 	if (tTd(0,40)) 
++ 		printf("scanning interfaces via sysctl table\n");
++ 	
++ 	lim = buf + needed;
++ 	for (next = buf; next < lim; next += ifm->ifm_msglen) {
++ 		addr = mask = (struct sockaddr_in *)0;
++ 		loop = 0;
++ 		ifm = (struct if_msghdr *)next;
++ 
++ 		ifam = (struct ifa_msghdr *)ifm;
++ 		loop = (ifm->ifm_flags & IFF_LOOPBACK);
++ 
++ 		if (loop) 
++ 			continue;
++ 		  
++ 		if (ifam->ifam_addrs & RTA_NETMASK) {
++ 			mask = (struct sockaddr_in *)(ifam + 1);
++ 		}
++ 		if (ifam->ifam_addrs & RTA_IFA) {
++ #define ROUNDUP(a) ((a) > 0 ? (1 + (((a) - 1) | (sizeof(__uint64_t) - 1))) \
++ 	    : sizeof(__uint64_t))
++ #ifdef ADVANCE
++ #undef ADVANCE
++ #endif
++ #ifdef _HAVE_SA_LEN
++ #define ADVANCE(x, n) (x += ROUNDUP((n)->sa_len))
++ #else
++ #define ADVANCE(x, n) (x += ROUNDUP(_FAKE_SA_LEN_DST(n)))
++ #endif
++ 			cp = (char *)mask;
++ 			sa = (struct sockaddr *)mask;
++ 			ADVANCE(cp, sa);
++ 			addr = (struct sockaddr_in *)cp;
++ 		}
++ 		if (! addr)
++ 			continue;
++ 
++ 		(void) add_hostnames((SOCKADDR *)addr);
++ 	}
++ 	free(buf);
++ }
++ #endif /* IRIX_SYSCTRL */
++ 
++ #ifndef DEFINED_LOAD_IF_NAMES
++ 
+  void
+  load_if_names()
+  {
+***************
+*** 4494,4499 ****
+--- 4600,4607 ----
+  # undef IFRFREF
+  #endif
+  }
++ #endif /* DEFINED_LOAD_IF_NAMES */
++ 
+  /*
+  **  GET_NUM_PROCS_ONLINE -- return the number of processors currently online
+  **

@@ -1,0 +1,498 @@
+===============================================================================
+ * Copyright 1996, Silicon Graphics, Inc.
+ * ALL RIGHTS RESERVED
+ *
+ * UNPUBLISHED -- Rights reserved under the copyright laws of the United
+ * States.   Use of a copyright notice is precautionary only and does not
+ * imply publication or disclosure.
+ *
+ * U.S. GOVERNMENT RESTRICTED RIGHTS LEGEND:
+ * Use, duplication or disclosure by the Government is subject to restrictions
+ * as set forth in FAR 52.227.19(c)(2) or subparagraph (c)(1)(ii) of the Rights
+ * in Technical Data and Computer Software clause at DFARS 252.227-7013 and/or
+ * in similar or successor clauses in the FAR, or the DOD or NASA FAR
+ * Supplement.  Contractor/manufacturer is Silicon Graphics, Inc.,
+ * 2011 N. Shoreline Blvd. Mountain View, CA 94039-7311.
+ *
+ * Permission to use, copy, modify, distribute, and sell this software
+ * and its documentation for any purpose is hereby granted without
+ * fee, provided that (i) the above copyright notices and this
+ * permission notice appear in all copies of the software and related
+ * documentation, and (ii) the name of Silicon Graphics may not be
+ * used in any advertising or publicity relating to the software
+ * without the specific, prior written permission of Silicon Graphics.
+ *
+ * THE SOFTWARE IS PROVIDED "AS-IS" AND WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS, IMPLIED OR OTHERWISE, INCLUDING WITHOUT LIMITATION, ANY
+ * WARRANTY OF MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
+ *
+ * IN NO EVENT SHALL SILICON GRAPHICS BE LIABLE FOR ANY SPECIAL,
+ * INCIDENTAL, INDIRECT OR CONSEQUENTIAL DAMAGES OF ANY KIND, OR ANY
+ * DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
+ * WHETHER OR NOT ADVISED OF THE POSSIBILITY OF DAMAGE, AND ON ANY
+ * THEORY OF LIABILITY, ARISING OUT OF OR IN CONNECTION WITH THE USE
+ * OR PERFORMANCE OF THIS SOFTWARE.
+===============================================================================
+
+Libdmalloc is a debugging malloc library I wrote
+with ideas I stole from Conor P. Cahill's dbmalloc,
+Brandyn Webb's malloc-debug, Kipp Hickman's (?) "leaky",
+Purify, and sgi's old dbx source.
+It is not a finished product.  Currently the only
+environment in which it works is IRIX5 and IRIX6,
+and only for O32 and N32 object styles.
+I believe it is MP-safe.
+
+It's very useful for finding memory corruption quickly in
+many different programs, since it has little overhead and does
+not require programs to be compiled in any special way.
+
+Please send all questions and comments to me, Don Hatch (hatch@sgi.com).
+
+
+===============================================================================
+Recent changes:
+
+Wed Apr 30 15:50:26 PDT 1997
+    4/30/97
+	     Fix bogus complaint of corruption when freeing memory
+	     allocated with memalign.
+
+	     Now recognizes MALLOC_SIZE_OF_INTEREST environment variable.
+
+    10/25/96
+	     Fixed bug in histogram lookup where
+	     frees were recorded as mallocs when stack trace depth = 0
+
+    4/6/96   Fixed install problem where the N32 .a's were
+	     getting installed in /usr/lib instead of /usr/lib32,
+	     clobbering the O32 versions.
+
+    3/29/96  Now recognizes environment variables MALLOC_TRACE
+	     and MALLOC_TRACE_SIGNAL which can be used to set
+	     and toggle malloc call tracing.
+
+    2/9/96   Installable images now contain a real N32 library
+	     (the N64 version is still a stub).  Stack tracing
+	     is not attempted at all in the N32 version.
+
+    12/15/95
+	     Installed images now include cshrc.dmalloc,
+	     which is a file of example aliases to put in .cshrc
+	     for turning dmalloc on and off.
+
+	     Now recognizes environment variables MALLOC_RESET_SIGNAL,
+	     MALLOC_CHECK_SIGNAL, MALLOC_INFO_SIGNAL which
+	     can control a program's leak detection via signals;
+	     see below.
+
+    11/23/95 Installable images now include N32 and N64 stubs
+	     so that _RLD_LIST can include libdmalloc.so all the time.
+
+	     Removed overly verbose output when mallocblksize
+	     is called, to make inst and swmgr more friendly.
+
+	     Added a workaround for bus errors in IRIX 6.2
+	     that occur when accessing addresses near the end of the stack.
+
+    11/21/95 Now checks all amalloc arenas. (implements adelete as a no-op).
+
+	     Fixed to work on the R8000.
+
+    4/13/95  The environment variable MALLOC_STACKTRASH can be used
+	     to trash the stack on startup, to break programs that
+	     depend on it being 0's; see below.
+	     
+    9/20/94  Now checks the malloc chain during execve() by default.
+	     This option can be turned off or made more verbose
+	     by using the MALLOC_CHECK_ATEXEC environment variable;
+	     see below.
+===============================================================================
+
+WHAT LIBDMALLOC DOES
+
+    libdmalloc.a contains the following standard functions:
+        malloc
+        free
+        realloc
+        calloc
+        cfree
+	_execve
+    These are actually wrappers for the functions from libmalloc.a,
+    which are also included in libdmalloc, but with disguised names
+    mAlLoC, fReE, etc.
+    The wrapper functions maintain malloc statistics, and do the following other
+    good stuff:
+       -- Initialize newly malloced memory to 1's, to break
+          programs that depend on it being 0's
+       -- Fill freed memory with 2's, to break programs that
+          look at freed memory.
+       -- free() and realloc() do sanity checks to make sure
+	  the area immediately surrounding the memory has not
+	  been modified (8 bytes or so on either side).
+	  If corruption is detected, it attempts to print a current
+	  stacktrace and also a stacktrace of the original malloc if possible.
+       -- during exit() and execve(), all malloced memory is checked
+	  for corruption.
+
+===============================================================================
+
+LINKING A PROGRAM WITH LIBDMALLOC
+
+    There are two ways to link libdmalloc into your program.
+    The first is simply to tell rld to do it at runtime:
+        setenv _RLD_LIST /usr/tmp/libdmalloc.so:DEFAULT
+    Then any non-setuid dynamic executable you run (use the 'file' program
+    to determine whether an executable is dynamic or not) will use libdmalloc.
+    [[ Hint: if you will want to run dbx on a stripped executable, dbx will
+    work better (i.e. be able to make interactive calls) if your
+    _RLD_LIST also contains crt1.so.  You can make one of these as follows:
+        ld -shared /usr/lib/crt1.o -o /usr/tmp/crt1.so
+        setenv _RLD_LIST /usr/tmp/libdmalloc.so:/usr/tmp/crt1.so:DEFAULT ]]
+
+    The above runtime-linking method will give the full memory-corruption
+    detection power of libdmalloc, but the stack tracing routines
+    will not work (and may core dump).  So if you want to
+    use libdmalloc to detect leaks, or if you want libdmalloc
+    to give you a stack trace of the original call to malloc
+    when corruption is detected, you will have to link the program
+    with libdmalloc.a and its dependent libraries.
+    The arguments to give the linker are:
+         libdmalloc.a -lmpc -lexc -lmld -lmangle -init _malloc_init
+    (the -init part is not necessary, but it makes initialization
+    happen earlier, which can catch some bugs).
+    Try to link with .a's rather than .so's for the rest
+    of the libraries wherever possible; the stack tracing routines
+    really are not robust inside DSOs.
+
+===============================================================================
+
+MEMORY CORRUPTION DETECTION
+
+    CORE DUMPS THAT DON'T OCCUR WITH THE REGULAR MALLOC
+	If this happens, it probably means the program is using uninitialized
+        or freed memory; libdmalloc intentionally fills such regions
+        with a fill pattern to break such programs.
+
+        If you are running a debugger on a program linked with libdmalloc
+        and you see the value "^A^A^A^A^A..." or 0x1010101 or 16843009
+        it usually means you are looking at an uninitialized malloced area;
+        if you see "^B^B^B^B^B..." or 0x2020202 or 33686018,
+        it usually means you are looking at an area that has been
+        freed already.
+
+    UNDERFLOWS AND OVERFLOWS
+        When libdmalloc reports "overflow" corruption at a malloced address,
+        it means data has been illegally written past the end of the array.
+        Likewise "underflow" corruption means data has been illegally written
+        in the region immediately preceding the array.
+	libdmalloc checks at least the 8 bytes immediately
+        preceding and following the malloced array for
+        underflow and overflow corruption when the array is
+        free()d or realloc()ed, and all malloced arrays are checked
+	during exit().  When corruption is detected, error messages get
+	sent to stderr.
+
+        Error messages for overflows and underflows look something like this:
+                % oawk /./ /dev/null
+                oawk(24863): ERROR: underflow corruption detected during free
+                        at malloc block 0x100d8fb0
+
+        If you have compiled the program with libdmalloc.a
+        and the offending mallocs and frees aren't called
+        from within a DSO, you may be able to get libdmalloc to give you
+        stack traces of the free() and the original malloc():
+                % unsetenv _RLD_LIST
+                % setenv MALLOC_STACKTRACE_GET_DEPTH 10
+                % oawk /./ /dev/null
+                oawk(24879): ERROR: underflow corruption detected during free
+                        at malloc block 0x100d8fb0
+                   0 free() [dmalloc.c:892, 0x418000]
+                   1 freetr() [b.c:99, 0x40ccd0]
+                   2 freetr() [b.c:103, 0x40cd20]
+                   3 freetr() [b.c:108, 0x40cd5c]
+                   4 freetr() [b.c:103, 0x40cd20]
+                   5 makedfa() [b.c:65, 0x40cae8]
+                   6 yyparse() [awk.g.y:181, 0x40ac6c]
+                   7 main() [main.c:132, 0x40e984]
+                   8 __start() [crt1text.s:133, 0x409bb0]
+                This block may have been allocated here:
+                   0 add() [b.c:284, 0x40d598]
+                   1 cfoll() [b.c:167, 0x40d07c]
+                   2 cfoll() [b.c:173, 0x40d0d0]
+                   3 cfoll() [b.c:177, 0x40d0ec]
+                   4 cfoll() [b.c:173, 0x40d0d0]
+                   5 makedfa() [b.c:62, 0x40cab8]
+                   6 yyparse() [awk.g.y:181, 0x40ac6c]
+                   7 main() [main.c:132, 0x40e984]
+                   8 __start() [crt1text.s:133, 0x409bb0]
+
+        If not (e.g. if unshared libraries are not available,
+        or you don't want to recompile) you can probably
+        still track down the original malloc in the debugger.
+
+            -- To stop the program when corruption
+               is detected, set a breakpoint in malloc_bad().
+
+            -- To stop the program when malloc is about to fail (return 0),
+               set a breakpoint in malloc_failed().
+
+            -- To stop the program when malloc is about to return
+               a particular address (say 0x100d8fb0, as in the above example)
+                   setenv MALLOC_BLOCK_OF_INTEREST 0x100d8fb0
+               and set a breakpoint in malloc_of_interest().
+
+            -- If while running a program in the debugger
+               you want to know whether a given malloced array has overflowed
+               or underflowed yet, call malloc_isgoodblock(addr).
+               (See the above hint about using crt1.so to enable dbx to make
+               interactive calls if you are debugging a stripped program).
+               To check all malloced blocks at once, call malloc_check();
+               the returned value will be 0 for success,
+               or -1 (with error messages to stderr) if corruption is detected.
+	       malloc_check() is called automatically during exit().
+
+            [[ Hint: if you are using the _RLD_LIST variable and
+            the main program is stripped, dbx probably won't be able to find
+            symbols in libdmalloc.so until the program is actually running.
+            One way to do this is to set a breakpoint in getenv, run
+            the program until it stops in getenv (dbx will seg fault, but
+            don't worry, it's okay :-)), and then delete the breakpoint;
+            then the desired symbols should be visible. ]]
+
+    SUPPRESSING ERROR MESSAGES
+        Certain known malloc overflow bugs always appear at a constant
+        address in a program; the MALLOC_SUPPRESS environment variable
+        can be used to suppress error messages about such bugs.
+        For example, if you are tired of seeing the following messages:
+            strings(24675): ERROR: overflow corruption detected during exit
+                at malloc block 0x100010d0 (4 bytes)
+            CC(24678): ERROR: overflow corruption detected during exit
+                at malloc block 0x1001b9d8 (5 bytes)
+        you can do the following:
+            setenv MALLOC_SUPPRESS " \
+                    CC:0x1001b9d8 \
+                    /bin/CC:0x1001b9d8 \
+                    /usr/bin/CC:0x1001b9d8 \
+                    strings:0x100010d0 \
+                    /bin/strings:0x100010d0 \
+            "
+	Note that there is a separate entry for each likely value of argv[0].
+	Note also that libdmalloc may not be able to determine argv[0]
+	if main() has overwritten it, so suppression may not always work.
+
+===============================================================================
+
+LEAK DETECTION
+[[ XXX This section is slightly out-of-date; I haven't tried
+    this stuff in a while, and there may be better ways to do things now.
+    In particular, the new MALLOC_INFO_ATEXIT environment variable
+    is probably a good way to look for leaks during exit().
+    CaseVision probably does a better job of all this anyway.  ]]
+
+    libdmalloc also contains the additional functions and variables,
+    defined in "dmalloc.h":
+        void malloc_reset();
+                Sets all counts to zero.
+        void malloc_info(int nonleaks_too, int stacktrace_print_depth);
+                Prints out stacktraces of all leaks that have occurred
+                since the last call to malloc_reset() (actually
+                prints a histogram indexed by stack trace).
+                If nonleaks_too is nonzero, the stacktraces of all
+                mallocs and frees (not just leaks) will be printed.
+                The stacktrace_print_depth argument specifies how
+                much of each stacktrace you want to see; -1 means
+                the entire trace (which is limited by the
+                malloc_stacktrace_get_depth variable, see below).
+                If the environment variable MALLOC_INFO_ATEXIT
+                is set, then malloc_info(0,-1) will be called during exit().
+        void malloc_info_cleanup();
+                Frees all resources opened by malloc_info().
+                malloc_info() reads the symbol table of the executable
+                object file (and all shared objects on which the executable
+                depends) the first time it needs to look up
+                a function name, file name and line number from a pc address;
+                this is very time-consuming, so it leaves these
+                files and symbol tables open.
+                malloc_info_cleanup() attempts to close them and free the space.
+                NOTE: as of this writing, libmld leaks like a sieve
+                (see incident #176726) so malloc_info_cleanup may not
+                be very effective.
+        void malloc_failed();
+                This no-op function gets called whenever malloc fails
+                for any reason.  It exists solely for breakpoint debugging.
+        int malloc_stacktrace_get_depth;
+                This integer controls how deep a stacktrace to get and store
+                at each malloc and free.
+                Its initial value is 0, or the
+                value of the environment variable MALLOC_STACKTRACE_GET_DEPTH
+                if set.  Applications may change this value
+                at any time.  There is a hard-coded max depth of 10
+                (to change this, recompile this library with
+                -DMAX_STACKTRACE_DEPTH=20 or whatever).
+                Values less than 0 or greater than the max depth
+                are taken to mean the max depth.
+        int malloc_fillarea;
+                If nonzero, then newly malloced memory will be
+                initialized to 1's and newly freed memory will
+                be filled with 2's.
+                The initial value of this variable is nonzero.
+                I recommend not changing it.
+        void malloc_init_function();
+                This is a no-op function that gets called at the
+                beginning of the very first call to malloc().
+                It is designed to be overridden by applications
+                if they wish to do things before the first malloc
+                (putting code at the top of main() is not sufficient,
+                since malloc can get called by pre-main initialization
+                routines).
+                For example, libmallocGadget's version of this function
+                looks for the environment variables
+                MALLOC_GADGET_STACKTRACE_GET_DEPTH and MALLOC_GADGET_M_KEEP
+                and sets malloc_stacktrace_get_depth and mallopt()
+                appropriately.  Note that this overrides env
+                MALLOC_STACKTRACE_GET_DEPTH; (i.e. MALLOC_STACKTRACE_GET_DEPTH
+                has no effect when using the malloc gadget).
+
+===============================================================================
+
+EXAMPLE OF FINDING LEAKS USING LIBDMALLOC AND DBX:
+
+        Compile the program using the libraries specified above.
+        % dbx leaky_program
+        (dbx) when in main { assign malloc_stacktrace_get_depth = -1 }
+                                        (make sure stacktraces are gathered
+                                         on each malloc and free)
+        (dbx) stop at 10                (break prior to suspected leak)
+        (dbx) stop at 20                (break after suspected leak)
+        (dbx) run
+        Process 2916 (leaky_program) stopped at leaky_program.c:10
+        (dbx) ccall malloc_info(0,0)    (make sure symbol table is loaded
+                                         before reset, so it doesn't interfere
+                                         with the statistics)
+        (dbx) ccall malloc_reset()      (reset all counts to 0)
+        (dbx) cont
+        Process 2916 (leaky_program) stopped at leaky_program.c:20
+        (dbx) ccall malloc_info(0,0)    (print leaks since last reset)
+        (dbx) ccall malloc_info(0,-1)   (print leaks since last reset,
+                                         with full stacktraces)
+        (dbx) ccall malloc_info(1,0)    (print all mallocs & frees since last
+                                         reset)
+        (dbx) ccall malloc_info(1,3)    (print all mallocs & frees since last
+                                         reset, with stacktraces shown to
+                                         depth of 3)
+
+===============================================================================
+
+ENVIRONMENT VARIABLES LIBDMALLOC LOOKS AT
+
+    MALLOC_BAD_ASSERT (default unset)
+	If set, cause assert (cause a core dump) in the malloc_bad
+	function.  Useful  to find memory problems in long running code.
+    MALLOC_BLOCK_OF_INTEREST (default=0)
+        If set to an address, libdmalloc will call the no-op
+        function malloc_of_interest() during all mallocs which
+        return the given address.
+        This may be useful for finding the original
+        malloc of a corrupt block in a deterministic program;
+        simply setenv MALLOC_BLOCK_OF_INTEREST to be the address
+        given in the corruption error message, and use the debugger
+        to stop in malloc_of_interest().
+    MALLOC_CALL_OF_INTEREST (default=-1)
+        If set to a non-negative integer n, the n'th call
+        to malloc will call the no-op function malloc_of_interest().
+        This can be used if you wish to stop in the n'th call to malloc()
+        in the debugger.
+    MALLOC_SIZE_OF_INTEREST (default=-1)
+	If set to a non-negative integer n, all mallocs of size n
+	will call the no-op function malloc_of_interest().
+    MALLOC_CHECK_ATEXIT (default=1)
+        If this variable is nonzero (as it is by default),
+        all malloced blocks will be checked for overflow and
+        underflow corruption during exit().
+        If set to a value >= 2, a message will be printed to stderr
+        during this check, something like:
+            ls(24659): Checking malloc chain at exit...done.
+        This will keep you informed of which programs you are running
+        are actually using libdmalloc.
+        Keep in mind, however, that some programs
+        (e.g. p_finalize and inst) will abort if they detect
+        any stderr output from a child process.
+    MALLOC_CHECK_ATEXEC (default=1)
+	If this variable is nonzero (as it is by default),
+	all malloced blocks will be checked for overflow and underflow
+	corruption during execve().
+	If set to a value >=2, a message will be printed
+	to stderr saying the name of the program being exec'ed.
+	If >= 3, the args will be printed too.
+	If >= 4, the args will be quoted.
+    MALLOC_CHECK_SIGNAL
+	If set, sending the process a SIGUSR2 signal (by default)
+	will cause a call to malloc_check().
+	If set to a value, the value will be used instead of SIGUSR2.
+	See also MALLOC_INFO_SIGNAL, MALLOC_RESET_SIGNAL, MALLOC_TRACE_SIGNAL.
+    MALLOC_FILLAREA (default=1)
+        If nonzero (as it is by default), malloc() and realloc()
+        will fill all uninitialized
+        bytes with the value of this variable, and free() and realloc()
+        will fill all free'd bytes with 2's.
+    MALLOC_INFO_ATEXIT (default=0)
+	If this variable is set, malloc_info(0,-1) will
+	be called during exit().
+    MALLOC_INFO_SIGNAL
+	If set, sending the process a SIGUSR2 signal (by default)
+	will cause a call to malloc_check() and malloc_info(1,-1).
+	If set to a value, the value will be used instead of SIGUSR2.
+	See also MALLOC_CHECK_SIGNAL, MALLOC_RESET_SIGNAL, MALLOC_TRACE_SIGNAL.
+    MALLOC_PROMPT_ON_STARTUP
+        If set, during the first call to malloc(),
+        the following message will be sent to /dev/tty:
+            <commandname>(<process-id>): hit return to continue
+        and one character will be read from /dev/tty before continuing.
+        This may be useful for identifying "mystery programs" that
+        are being run from other programs.
+    MALLOC_RESET_SIGNAL
+	If set, sending the process a SIGUSR1 signal (by default)
+	will cause a call to malloc_check() and malloc_reset().
+	If set to a value, the value will be used instead of SIGUSR1.
+	See also MALLOC_CHECK_SIGNAL, MALLOC_INFO_SIGNAL, MALLOC_TRACE_SIGNAL.
+    MALLOC_STACKTRACE_GET_DEPTH (default=0)
+	Initializes the value of the malloc_stacktrace_get_depth
+	variable, which controls the depth of the stack trace
+	to store during each malloc.  See "malloc_stacktrace_get_depth"
+	above for more info.
+    MALLOC_STACKTRASH
+	If set, 4096 bytes (by default) of the stack will be set to 3's
+	(by default) to break programs that depend on it being 0's.
+	setenv MALLOC_STACKTRASH <n> will set <n> bytes to 3.
+	setenv MALLOC_STACKTRASH <n>,<v> will set <n> bytes to <v>.
+    MALLOC_SUPPRESS
+        Use this variable to suppress messages coming
+        from a particular program at a particular address.
+        See "SUPPRESSING ERROR MESSAGES" above for details.
+    MALLOC_TRACE (default=0)
+	If set, a message will be printed to stderr on every call to
+	malloc, free, realloc, amalloc, afree, and arealloc.
+	This can be changed at runtime; see MALLOC_TRACE_SIGNAL.
+    MALLOC_TRACE_SIGNAL
+	If set, sending the process a SIGUSR1 signal (by default)
+	will toggle the malloc_trace flag (see MALLOC_TRACE).
+	If set to a value, the value will be used instead of SIGUSR1.
+	See also MALLOC_RESET_SIGNAL, MALLOC_CHECK_SIGNAL, MALLOC_INFO_SIGNAL.
+    _MALLOC_TRY_TO_PRINT_STACKTRACES
+        If set, an attempt will be made to print stacktraces on error,
+        even if _RLD_LIST is set.  (Usually stack traces are not
+        attempted if _RLD_LIST is set, since _RLD_LIST usually
+        means libdmalloc.so is being used, which means stack tracing
+        will probably core dump).
+    _MALLOC_DONT_TRY_TO_PRINT_STACKTRACES
+        If set, no attempt will be made to print stacktraces on error,
+        even if _RLD_LIST is not set. (see _MALLOC_TRY_TO_PRINT_STACKTRACES).
+    _STACKTRACE_ARGV0
+        If set, the function stacktrace_get_argv0() will
+        return the value of this variable, rather than trying
+        to get the value of argv[0] from the stack.
+        This may be useful for programs whose main() overwrites
+        argv.
+
+

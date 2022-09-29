@@ -1,0 +1,224 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	info.tlib
+# Version:	$Revision: 1.1 $
+# Synopsis:	Functions that create and display data in a general-purpose
+#		information dialog.
+# Packages:	Info-Base
+#
+#
+#%COMMENT_END
+
+
+#%COMMENT_BEGIN
+# Package:	Info-Base
+# Functions:	iu:createDlg
+#		iu:createMatrix
+#		iu:getObjectInfo
+#		iu:setData
+#		iu:cookRawData
+#
+# Function:	iu:createDlg
+# Synopsis:	Creates a generic information dialog that contains an
+#		xbaeMatrixWidget.
+# Arguments:	- handle	An identifier used when storing the widget
+#				id's in "widgets_arr".
+#		- parent	The parent widget for this dialog.
+#		- name		The name of the dialog.
+#		- mdata_arr	A reference to an array variable which contains
+#				the data for creating the matrix.
+#		- wdata_arr	A referenct to an array variable in which
+#				to store the id's for the created widgets.
+#
+# Function:	iu:createMatrix
+# Synopsis:	Creates a generic information dialog that contains an
+#		xbaeMatrixWidget.  The matrix is made "uneditable".
+# Arguments:	- parent	The parent widget for the matrix widget.
+#		- name		The name to be used for the matrix widget.
+#		- columns	The number of columns for the matrix widget.
+#		- cwidths	A list of comma separated numbers defining
+#				the initial width of each column.
+#
+# Function:	iu:getObjectInfo
+# Synopsis:	Returns a list of lists.  Each sublist contains the information
+#		for the corresponding item in the given object list.
+# Arguments:	- objects	The list of objects for which information
+#				is desired.
+#
+# Function:	iu:setData
+# Synopsis:	Fills in a matrix widget with the data provided.  It first
+#		loops through all the data to determine the column widths
+#		required to display the data.
+# Arguments:	- name		Reserved for future use.
+#		- matrix	The widget id for the matrix to be filled.
+#		- cwidths	A comma separated list of the original widths
+#				for each column in the matrix.
+#		- data		A list of lists containing the data to be
+#				displayed.  Each sublist represents a row
+#				in the matrix.
+#
+# Function:	iu:cookRawData
+# Synopsis:	Takes the raw data (one of the sublists returned by
+#		iu:getObjectInfo) and formats it so that it can be
+#		displayed in a matrix widget.
+# Arguments:	- name		This is used in conjunction with "mdata_arr"
+#				to access the keys for each column in the
+#				matrix.
+#		- data		The raw data.
+#		- mdata_arr	A reference to an array variable which contains
+#				the information describing which pieces of
+#				information go in which column.
+#%COMMENT_END
+
+#@package: Info-Base	\
+	iu:createDlg \
+	iu:createMatrix \
+	iu:getObjectInfo \
+	iu:setData \
+	iu:cookRawData
+
+proc iu:createDlg { handle parent name mdata_arr wdata_arr} \
+{
+	upvar	$mdata_arr mdata
+	upvar	$wdata_arr widgets
+
+	set dialog [xmFormDialog .$name]
+	set pane [xmPanedWindow $dialog.pane managed \
+			-sashWidth 1 \
+			-sashHeight 1 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form]
+
+	set widgets($handle,matrix) [iu:createMatrix $pane matrix \
+			[llength $mdata($name,columns)] \
+			[join $mdata($name,cwidths) ","]]
+	$widgets($handle,matrix) setValues -allowResize true 
+	$widgets($handle,matrix) manageChild
+
+	set widgets($handle,buttons) \
+			[xfs:createDialogButtons $pane $mdata($name,buttons)]
+	$widgets($handle,buttons) manageChild
+
+
+	$dialog realizeWidget
+
+	####	This must happen after the dialog is realized
+	$widgets($handle,buttons) getValues -height height
+	$widgets($handle,buttons) setValues \
+			-paneMinimum $height \
+			-paneMaximum $height
+
+	$dialog unmanageChild
+
+	return $dialog
+}
+
+proc iu:createMatrix { parent name columns cwidths } \
+{
+	set matrix [xbaeMatrix $parent.$name \
+			-columns $columns \
+			-columnWidths $cwidths \
+			-rows 1 \
+			-visibleRows 2 \
+			-cellShadowThickness 2 \
+			-cellHighlightThickness 0 \
+			-gridType grid_shadow_out]
+
+	####	This makes the matrix "uneditable"
+	$matrix enterCellCallback { matrix:ignoreEnterCb %doit }
+
+	return $matrix
+}
+
+proc iu:getObjectInfo { objects } \
+{
+	set data ""
+	foreach obj $objects {
+	    if {[catch {set info [xfsInfo $obj]} error]} {
+		em:storeMsg iu error \
+		"Unable to get information for [obj:getName $obj].\n\t$error"
+	    } else {
+		lappend data $info
+	    }
+	}
+
+	return $data
+}
+
+proc iu:setData { name matrix cwidths data } \
+{
+	set rows [llength $data]
+	set cols [llength $cwidths]
+
+	####	Calculate the column widths
+	loop j 0 $cols 1 {
+		set col {}
+		loop i 0 $rows 1 {
+			lappend col [lindex [lindex $data $i] $j]
+		}
+
+		set cw [lu:getMaxLen $col]
+		set min [lindex $cwidths $j]
+
+		if { $cw < $min } {
+			set cw $min
+		}
+		lappend new_cwidths $cw
+	}
+
+	####	Try to ensure that a reasonable amount of the data is visible
+	$matrix getValues -visibleRows vrows
+	if { $rows > 8 } {
+		set desire_rows 8
+	} else {
+		set desire_rows $rows
+	}
+
+	$matrix setValues \
+			-rows $rows \
+			-columnWidths [join $new_cwidths ,] \
+			-visibleRows $desire_rows
+	$matrix setValues -cells $data
+}
+
+proc iu:cookRawData { name data mdata_arr } \
+{
+	upvar $mdata_arr mdata
+
+	foreach item $data {
+		set lst [split $item \n]
+		foreach i $mdata($name,columns) {
+			set index [lsearch -glob $lst $i:*]
+			if {$index == -1} {
+				set value	" - "
+			} else {
+				set pair [split [lindex $lst $index] ":"]
+				set value [lindex $pair 1]
+			}
+
+			lappend steamed $value
+		}
+		if {[info exists steamed]} {
+			lappend cooked [concat $steamed]
+			unset steamed
+		}
+	}
+
+	if {! [info exists cooked]} { set cooked "" }
+
+	return $cooked
+}
+#@packend

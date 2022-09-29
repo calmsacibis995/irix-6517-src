@@ -1,0 +1,184 @@
+'\"macro stdmacro
+'\" @(#)sprofil.2 1.1 (SGI) 9/90
+.\" Copyright 1990 SGI
+.if n .pH man2.sprofil @(#)sprofil
+.TH SPROFIL 2
+.SH NAME
+sprofil \- execution time profile for disjoint text spaces
+.SH SYNOPSIS
+.nf
+.B \#include <sys/time.h>
+.br
+.B \#include <sys/profil.h>
+.sp .5
+.ft 3
+int sprofil(struct prof \(**profp, int profcnt,
+.br
+            struct timeval \(**tvp, unsigned int flags);
+.fi
+.SH DESCRIPTION
+.B sprofil
+provides CPU-use statistics by profiling the amount of
+CPU
+time expended by a program in disjoint text spaces.
+This is useful if you need to profile programs using shared libraries or 
+profile an address space using different granularities for 
+different sections of text.
+.B sprofil
+generates the
+statistics by creating an execution histogram for a current process.
+The histogram is defined for a list of regions of program code 
+to be profiled
+specified by members of the 
+.I profp
+array: profp[0], profp[1], ...,
+profp[profcnt-1].
+.PP
+The 
+.I prof
+structure is defined as
+.nf
+.in 5
+struct prof {
+        void     \(**pr_base;	/* buffer base */
+        unsigned pr_size;	/* buffer size */
+        __psunsigned_t pr_off;	/* pc offset */
+        unsigned pr_scale;	/* pc scaling */
+};
+.in -5
+.fi
+.PP
+Each
+.I prof
+entry specifies a region of text space that needs to
+be profiled, and the fields of the structure take on the same meaning
+as the arguments of the 
+.B profil(2)
+system call.
+.PP
+.I pr_base
+is a buffer of 
+.I pr_size
+bytes in which the histogram
+counts are stored.
+.PP
+.I pr_off
+, 
+.I pr_scale
+, and 
+.I pr_size
+specify the region to be profiled.
+.PP
+.I pr_off
+is effectively the start address of the region to be profiled.
+.PP
+If non-NULL, \f2tvp\fP points to a \f2struct timeval\fP which on return will
+contain the time value corresponding to one clock tick.
+.PP
+Valid \f2flags\fP values include \f3PROF_USHORT\fP and \f3PROF_UINT\fP,
+which result in the \f2pr_base\fP field of
+each \f2prof\fP entry being treated as a pointer to an array of \f2unsigned
+short\fP or \f2unsigned int\fP, respectively.
+You achieve a 1-1 mapping of instructions to counters for \f3PROF_USHORT\fP
+and a \f2pr_scale\fP of 0x8000,
+or \f3PROF_UINT\fP and a \f2pr_scale\fP of 0x10000.
+Note that a 1-1 mapping of \f3PROF_UINT\fP counters consumes twice as much
+space as for \f3PROF_USHORT\fP counters, and should only be used in those
+cases where you expect a 16-bit counter to overflow.
+.PP
+Callers may also specify \f3PROF_FAST\fP in the \f2flags\fP field. This value
+will provide more accurate profiling by forcing the system to take samples
+once every millisecond. Fast profiling requests can reduce system performance
+noticably. The tuneable system parameter \f3restrict_fastprof\fP can be used
+to disable this feature.
+.PP
+If overlapping text regions are specified, then the 
+.I pr_base
+associated with the largest offset less than the value of the program
+counter(PC) gets incremented.
+If more than one text region has the same offset, the first one is chosen.
+.PP
+A text region with the 
+.I pr_off
+of 0 and 
+.I pr_scale
+of 0x0002 will
+act as an overflow bin. Any PC value not previously matched or outside the
+regions of text space specified is considered to match this text region and
+the first counter of the specified 
+.I pr_base
+is incremented. If specified,
+such an overflow bin should always be last in the list of specified regions.
+.PP
+.B sprofil
+can fail with:
+.TP 13
+.SM
+\%[E2BIG]
+.I profcnt
+was less than or equal to 0, or greater than 
+.B PROFIL_MAX.
+.TP 13
+.SM
+\%[EFAULT]
+Either
+.I profp
+or
+.I tvp
+points to an illegal address.
+.TP 13
+.SM
+\%[EINVAL]
+The overflow bin is not last in the list of specified regions,
+or \f2flags\fP does not contain one of the values
+(\f3PROF_USHORT\fP or \f3PROF_UINT\fP).
+.TP 13
+.SM
+\%[EACCES]
+The \f2flags\fP field specified \f3PROF_FAST\fP but the feature
+has been disabled using the \f3restrict_fastprof\fP tuneable system
+parameter or the hardware does not support fast clock ticks.
+.SH "RETURN VALUE"
+If successful, 
+.B sprofil
+returns 0. Otherwise, a -1 is returned and the
+global variable
+.B errno
+is set to indicate the error.
+.SH "SEE ALSO"
+profil(2), prof(1), times(2), monitor(3X),
+intro(2).
+.SH NOTES
+Each call to 
+.B sprofil
+will disable any profiling enabled by previous
+.B sprofil
+calls.
+Profiling is not enabled for a given text region if the value for
+.I pr_scale
+is 0 or 1,
+and is rendered
+ineffective by giving a
+.I bufsiz
+of 0.
+Profiling is turned off for the specified region of text space if a
+.I pr_base
+update would cause a memory fault.
+.PP
+Profiling is turned off when an
+.B exec(2)
+is executed, but remains on in both child and parent 
+processes after a
+.B fork(2)
+or a 
+.B sproc(2).
+A call to 
+.B profil(2)
+has the same effect as calling 
+.B sprofil
+with just one member in the 
+.I profp
+array with the fields \f2profcnt\fP, \f2tvp\fP and \f2flags\fP
+taking on the values of 1, NULL and PROF_USHORT respectively.
+.\"	@(#)sprofil.2	1.1 of 9/19/90
+.Ee

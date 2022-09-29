@@ -1,0 +1,156 @@
+.TH NIS 7P
+.SH NAME
+nis, yp, ypbind \- Network Information Services Protocol (Client)
+.SH SYNOPSIS
+/var/ns/lib/libns_nis.so
+.SH DESCRIPTION
+.PP
+The Network Information Services Protocol (NIS) is a simple Sun RPC
+based protocol to fetch keyed data from a remote host.  It is typically
+used to distribute name service information in medium sized
+organizations.  The data is maintained on a single host (designated the
+NIS master), and is pushed occasionally to a list of slave servers.
+Client systems dynamically locate a server and request data given a
+domain name, map name and key.  In Irix the daemon \fBnsd(1M)\fP acts
+as both the server and client side proxy for the protocol.  The server
+side is implemented in the nsd extension library \fBnisserv(7P)\fP
+while the client side and binding server are implemented in the nsd
+extension library \fBnis(7P)\fP.  This manual page documents the
+behavior of the client side protocol library for the nsd daemon.
+Applications which wish to make direct requests can still use the NIS
+API routines documented in \fBypclnt(3Y)\fP.
+.PP
+The library \fB/var/ns/lib/libns_nis.so\fP is opened by the \fBnsd(1M)\fP
+daemon when \fBnis\fP is listed as the protocol for some map in a
+\fBnsswitch.conf\fP file.  On first open the library initialization procedure
+sets up a port to handle YPBIND RPC requests, determines the domain of
+the local system (\fBdomainname(1)\fP), and attempts to locate the servers
+for the domain.
+.PP
+The library contains code to fetch data from a remote NIS server and present
+it as lines from the configuration file from which it came.  The nsd daemon
+then presents that data in the filesystem mounted under /ns.
+.PP
+Extended attributes in the \fBnsswitch.conf\fP file can be used to control
+the behavior of the NIS protocol.  Extended attributes are simply lists of
+key/value pairs attached to each object in the nsd filesystem.  The
+attributes supported in this library are:
+.TP
+.B domain
+This is the domainname given as a parameter to the remote name server.  This
+attribute is typically inherited from the daemon depending on the nsswitch.conf
+file that is being read.  Given the configuration file
+\fB/var/ns/domains/DOMAINNAME/nsswitch.conf\fP the attribute "domain" is set
+to DOMAINNAME.  For the default domain, represented by the file
+\fB/etc/nsswitch.conf\fP, the domain attribute is the same as the current
+system-wide domain as set by the \fBdomainname(1)\fP command.  Typically
+the script \fB/etc/init.d/network\fP sets it using the value saved in
+\fB/var/yp/ypdomain\fP on system startup.  A client system can be a member
+of multiple domains by including multiple instances of the \fBnis\fP
+keyword in the nsswitch.conf file like:
+.nf
+.in +.5i
+hosts: nis(domain=engr) nis(domain=corp)
+.in -.5i
+.fi
+.TP
+.B table
+The \fBtable\fP attribute is typically inherited from the daemon based on
+the line from which this entry occurs in the nsswitch.conf file.  In the
+above example the \fBtable\fP attribute would be set to \fBhosts.byname\fP
+or \fBhosts.byaddr\fP depending on the context of the request.  Because the
+NIS protocol implementations historically did not contain all the tables
+that are considered standard in UNS this implementation will fake the
+tables: \fBservices.byport\fP, \fBrpc.byname\fP, and \fBgroup.bymember\fP.
+It will first try to fetch data from these tables, and if returned the
+error YP_NOMAP it will walk through the opposite map looking for the
+specific key. The attempted lookup of \fBservices.byport\fP,
+\fBrpc.byname\fP, and \fBgroup.bymember\fP can be skiped by the
+\fBno_pseudo_maps\fP attribute.  It will also swap \fBservices.byname\fP with
+\fBservices.byport\fP since the NIS map which was called services.byname in
+old implementation was really indexed by port/protocol.
+.TP
+.B key
+The \fBkey\fP attribute is set by the daemon on each request, and is passed
+directly on to the remote NIS server without change.
+.TP
+.B nis_multicast
+The \fBnis_multicast\fP attribute is an integer hop count for the maximum
+number of hops for multicast bind requests.  By default this is 32.  Setting
+the \fBnis_multicast\fP attribute to 0 will result in no multicast binding 
+requests being sent.  This attribute must be set using the -a command line
+option.  
+.TP
+.B nis_retries
+The \fBnis_retries\fP attribute is an integer counter which controls how
+many times a request is sent and how long the request waits for binding to
+occur before returning an error.  The default is 5.
+.TP
+.B nis_timeout
+The \fBnis_timeout\fP attribute is an integer that determines the amount of
+time that a nis request can take before rebinding.   The default is 1 second.
+The total time that a nis request can take is (nis_retries * nis_binding).
+.TP
+.B nis_secure
+The \fBnis_secure\fP attribute is a boolean which specifies that
+requests for this map should originate on a privileged port, thus
+allowing secure maps to be served (see \fBnisserv(7P)\fP).
+
+As with other nsd methods, the query results are made available
+through the /ns filesystem and will by default be readable by anyone.
+Therefore, if the data in the served map is sensitive (such as for the
+shadow map), this attribute should be combined with the \fBmode\fP
+attribute in order to restrict the visibilty of the files in the /ns
+filesystem.
+.TP
+.B nis_security
+the \fBnis_security\fP attribute determines if ypbind
+requests should be honored.  This attribute should be set to one of
+\fBnone\fR, \fBlocal\fR, or \fBany\fR.  
+This attribute must be set using the -a command line option.
+.TP
+.B nis_servers
+The nis_servers attribute is a space separated list of IP addresses, or locally
+resolvable host names for the systems which act as servers for this domain.
+If the \fBnis_servers\fP attribute is given then the daemon will not send out
+a broadcast or multicast request for a server, but will instead unicast
+binding requests to the listed servers.  This may also be set by creating
+the file \fB/var/yp/binding/DOMAINNAME/ypservers\fP for the domain you wish
+to control.  This file is made up of a space separated list of addresses,
+or locally resolvable names.  See \fBypservers(4)\fP for more detailed
+information.
+.TP
+.B null_extend_key
+The \fBnull_extend_key\fP attribute specifies that the null character which
+terminates the key is really part of the key.  Some applications (such as
+sendmail) have historically included the null in the key so this attribute
+provides backward compatibility with the old behavior.
+.TP 
+.B nis_enumerate_key
+The \fBnis_enumerate_key\fP attribute is a boolean value that controls
+the inclusion of keys in table enumeration data.  Specifying this
+attribute is equivalent to the \fB-k\fP option to \fBypcat(1)\fP.  If
+the \fBnull_extend_key\fP attribute is set, the null in the key will
+be excluded from the enumeration result.
+.TP
+.B no_pseudo_maps
+The \fBno_pseudo_maps\fP attribute specifies that the initial lookup
+of \fBservices.byport\fP, \fBrpc.byname\fP, and \fBgroup.bymember\fP
+should be skipped and that NSD should always attempt the workaround for
+these potentially non-existent maps.
+.SH ENABLING
+The NIS functionality of \fBnsd\fP must be enabled via the
+\fBchkconfig yp\fP command.
+.SH NOTE
+The daemon \fBnsd(1M)\fP uses this library to replace the \fBypbind\fP 
+daemon from previous IRIX releases.  Similarly, nsd uses the
+\fBnisserv(7P)\fP library to replace the \fBypserv\fP daemon from
+previous releases.
+.SH FILES
+/var/yp/binding/DOMAINNAME/ypservers
+.SH SEE ALSO
+chkconfig(1M), nsd(1M), nsswitch.conf(4), nisserv(7P), ypservers(4)
+.br
+\fBIRIX Admin: Networking and Mail\fP
+.br
+\fBIRIX NIS Administration Guide\fP

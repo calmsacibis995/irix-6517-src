@@ -1,0 +1,69 @@
+#!/bin/sh
+#
+# Generate a source signature
+#
+# $Revision: 1.1 $
+#
+
+if [ ! -f census ]
+then
+    echo "No census?"
+    exit 1
+fi
+
+if [ -z "$WORKAREA" ]
+then
+    echo '$WORKAREA not set?'
+    exit
+fi
+
+if [ ! -f $WORKAREA/.workarea ]
+then
+    echo "No $WORKAREA/.workarea file?"
+    exit 1
+fi
+
+DEPOT=`sed -e 's/ //g' -e '/[^/]$/s/$/\//' <$WORKAREA/.workarea \
+| nawk -F: '
+/^#/			{ next }
+$1 ~ /sm_location/	{ print $2; exit }'`
+if [ -z "$DEPOT" ]
+then
+    echo "Cannot get DEPOT from sm_location in $WORKAREA/.workarea?"
+    exit ?
+fi
+
+# Note: skip FOMRAT and PCP_[A-Z]* lines
+#
+sed <census \
+    -e '/^FORMAT/d' \
+    -e '/PCP_[A-Z]/d' \
+    -e "s;$DEPOT;;" \
+    -e 's/|.*//' \
+    -e 's/%.*%/ /' \
+| while read file vers
+do
+    # ignore the rcs ident strings, they are often wrong!
+    # dodge non-ascii files as special case bullets
+    case $file
+    in
+	*.a|*.so|*.o|*Makedepend)
+	    ;;
+	*.rgb|*.gif|*.jpg|*.sc|*.0|*.index|*.meta|*.pag|*.dir)
+	    echo $file $vers `sum <$file`
+	    ;;
+	*)
+	    if [ `(cat $file;echo "") | wc -c | sed -e 's/ //g'` = `(cat $file;echo "") | sed -n p | wc -c | sed -e 's/ //g'` ]
+	    then 
+		echo $file $vers `(cat $file;echo "") \
+		| sed \
+		    -e '/\$Id/d' \
+		    -e '/\$Header/d' \
+		    -e '/\$Revision/d' \
+		| sum`
+	    else
+		echo $file $vers `sum <$file`
+	    fi
+	    ;;
+	esac
+    done

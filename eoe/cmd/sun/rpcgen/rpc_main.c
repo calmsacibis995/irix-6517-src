@@ -1,0 +1,561 @@
+#if 0
+static char sccsid[] = 	"@(#)rpc_main.c	1.3 90/07/25 4.1NFSSRC Copyr 1990 Sun Micro";
+#endif
+
+/* 
+ * Copyright (c) 1988 by Sun Microsystems, Inc.
+ * @(#) from SUN 1.11
+ */
+
+/*
+ * rpc_main.c, Top level of the RPC protocol compiler. 
+ */
+
+#include <stdio.h>
+#include <limits.h>
+#include <strings.h>
+#include <paths.h>
+#include <sys/param.h>
+#include <sys/stat.h>
+#include "rpc_parse.h"
+#include "rpc_scan.h"
+#include "rpc_util.h"
+
+#define EXTEND	1		/* alias for TRUE */
+
+char *cmdname;
+static char *svcclosetime = "120";
+static char *cppcmd = "/lib/cpp";
+static char *allv[] = {
+	"rpcgen", "-s", "udp", "-s", "tcp",
+};
+static int allc = sizeof(allv)/sizeof(allv[0]);
+
+/*
+ * machinations for handling expanding argument list
+ */
+static void addarg();		/* add another argument to the list */
+static void checkfiles();	/* check if out file already exists */
+
+static char arglist[ARG_MAX];
+
+int nonfatalerrors;	/* errors */
+int inetdflag;		/* Support for inetd */
+int logflag;		/* Use syslog instead of fprintf for errors */
+int tblflag;		/* Support for dispatch table file */
+int indefinitewait;	/* If started by port monitors, hang till it wants */
+int exitnow;		/* If started by port monitors, exit after the call */
+int timerflag;		/* TRUE if !indefinite && !exitnow */
+int do_prototypes;	/* Emit prototyped definitions & declarations */
+
+
+main(argc, argv)
+	int argc;
+	char *argv[];
+{
+	char *infile = NULL;
+	char *outfile = NULL;
+	int cflag = 0, hflag = 0, lflag = 0, mflag = 0, sflag = 0, tflag = 0;
+	int nflags;
+	int opt;
+	extern char *optarg;
+	extern int optind;
+
+	cmdname = argv[0];
+	if (argc < 2) {
+		usage();
+		/*NOTREACHED*/
+	}
+
+	while ((opt = getopt(argc, argv, "C:D:IK:LPTchlmo:s:t")) != EOF) {
+		switch (opt) {
+		  case 'C':
+			cppcmd = optarg;
+			break;
+		  case 'D':
+			(void) addarg(optarg);
+			break;
+		  case 'I':
+			inetdflag = 1;
+			break;
+		  case 'K':
+			svcclosetime = optarg;
+			break;
+		  case 'L':
+			logflag = 1;
+			break;
+		  case 'P':
+			do_prototypes = 1;
+			break;
+		  case 'T':
+			tblflag = 1;
+			break;
+		  case 'c':
+			cflag = 1;
+			break;
+		  case 'h':
+			hflag = 1;
+			break;
+		  case 'l':
+			lflag = 1;
+			break;
+		  case 'm':
+			mflag = 1;
+			break;
+		  case 'o':
+			outfile = optarg;
+			break;
+		  case 's':
+			sflag = 1;
+			if (!streq(optarg, "tcp")
+			    && !streq(optarg, "udp"))
+				usage();
+			break;
+		  case 't':
+			tflag = 1;
+			break;
+		  default:
+			usage();
+		}
+	}
+	if (optind < argc - 1)
+		usage();
+	if (optind == argc - 1)
+		infile = argv[optind];
+	nflags = cflag + hflag + lflag + mflag + sflag + tflag;
+	if (nflags > 1) {
+		usage();
+	}
+	if (nflags == 0) {
+		if (outfile != NULL || infile == NULL) {
+			usage();
+		}
+	}
+	if (cflag || hflag || lflag || tflag || sflag || mflag) {
+		checkfiles(infile, outfile);
+	}
+	if (cflag) {
+		c_output(infile, "-DRPC_XDR", !EXTEND, outfile);
+	} else if (hflag) {
+		h_output(infile, "-DRPC_HDR", !EXTEND, outfile);
+	} else if (lflag) {
+		l_output(infile, "-DRPC_CLNT", !EXTEND, outfile);
+	} else if (sflag || mflag) {
+		s_output(argc, argv, infile, "-DRPC_SVC", !EXTEND, 
+			 outfile, mflag);
+	} else if (tflag) {
+		t_output(infile, "-DRPC_TBL", !EXTEND, outfile);
+	} else {
+		/* the rescans are required, since cpp may effect input */
+		c_output(infile, "-DRPC_XDR", EXTEND, "_xdr.c");
+		reinitialize();
+		h_output(infile, "-DRPC_HDR", EXTEND, ".h");
+		reinitialize();
+		l_output(infile, "-DRPC_CLNT", EXTEND, "_clnt.c");
+		reinitialize();
+		s_output(allc, allv, infile, "-DRPC_SVC", EXTEND, 
+			 "_svc.c", mflag);
+		if (tblflag) {
+			reinitialize();
+			t_output(infile, "-DRPC_TBL", EXTEND, "_tbl.i");
+		}
+	}
+	exit(nonfatalerrors);
+	/*NOTREACHED*/
+}
+
+/*
+ * add extension to filename 
+ */
+static char *
+extendfile(file, ext)
+	char *file;
+	char *ext;
+{
+	char *res;
+	char *p;
+
+	res = alloc(strlen(file) + strlen(ext) + 1);
+	if (res == NULL) {
+		abort();
+	}
+	p = rindex(file, '.');
+	if (p == NULL) {
+		p = file + strlen(file);
+	}
+	(void) strcpy(res, file);
+	(void) strcpy(res + (p - file), ext);
+	return (res);
+}
+
+/*
+ * Open output file with given extension 
+ */
+static
+open_output(infile, outfile)
+	char *infile;
+	char *outfile;
+{
+	if (outfile == NULL) {
+		fout = stdout;
+		add_warning();
+		return;
+	}
+	if (infile != NULL
+	    && (streq(outfile, infile) || inoeq(outfile, infile))) {
+		f_print(stderr, "%s: output would overwrite %s\n", cmdname,
+			infile);
+		crash();
+	}
+	fout = fopen(outfile, "w");
+	if (fout == NULL) {
+		perrorf("unable to open %s", outfile);
+		crash();
+	}
+	record_open(outfile);
+	add_warning();
+}
+
+static int
+inoeq(file1, file2)
+	char *file1;
+	char *file2;
+{
+	struct stat sb1, sb2;
+
+	if (stat(file1, &sb1) < 0 || stat(file2, &sb2) < 0)
+		return 0;
+	return sb1.st_dev == sb2.st_dev && sb1.st_ino == sb2.st_ino;
+}
+
+static
+add_warning()
+{
+	f_print(fout, "/*\n");
+	f_print(fout, " * Please do not edit this file.\n");
+	f_print(fout, " * It was generated using rpcgen.\n");
+	f_print(fout, " */\n\n");
+}
+
+/*
+ * Open input file with given define for C-preprocessor 
+ */
+static void
+open_input(infile, define)
+	char *infile;
+	char *define;
+{
+	char cmdbuf[ARG_MAX];
+
+	infilename = (infile == NULL) ? "<stdin>" : infile;
+	(void) sprintf(cmdbuf, "%s %s %s %s",
+		cppcmd, define, arglist, infilename);
+	fin = popen(cmdbuf, "r");
+	if (fin == NULL) {
+		perrorf(infilename);
+		crash();
+	}
+}
+
+static void
+close_input(void)
+{
+	if (pclose(fin) != 0)
+		crash();
+}
+
+/*
+ * Compile into an XDR routine output file
+ */
+static
+c_output(infile, define, extend, outfile)
+	char *infile;
+	char *define;
+	int extend;
+	char *outfile;
+{
+	definition *def;
+	char *include;
+	char *outfilename;
+	long tell;
+
+	open_input(infile, define);	
+	outfilename = extend ? extendfile(infile, outfile) : outfile;
+	open_output(infile, outfilename);
+	f_print(fout, "#include <rpc/rpc.h>\n");
+	if (infile && (include = extendfile(infile, ".h"))) {
+		f_print(fout, "#include \"%s\"\n", include);
+		free(include);
+	}
+	tell = ftell(fout);
+	while (def = get_definition()) {
+		emit(def);
+	}
+	close_input();
+	if (extend && tell == ftell(fout)) {
+		(void) unlink(outfilename);
+	}
+}
+
+char rpcgen_table_dcl[] = "struct rpcgen_table {\n\
+    void	*(*proc)();\n\
+    xdrproc_t	xdr_arg;\n\
+    unsigned	len_arg;\n\
+    xdrproc_t	xdr_res;\n\
+    unsigned	len_res;\n\
+};\n";
+
+/*
+ * Compile into an XDR header file
+ */
+static
+h_output(infile, define, extend, outfile)
+	char *infile;
+	char *define;
+	int extend;
+	char *outfile;
+{
+	definition *def;
+	char *outfilename;
+	long tell;
+
+	open_input(infile, define);
+	outfilename =  extend ? extendfile(infile, outfile) : outfile;
+	open_output(infile, outfilename);
+	tell = ftell(fout);
+	f_print(fout, "#include <rpc/types.h>\n\n");
+	while (def = get_definition()) {
+		print_datadef(def);
+	}
+	close_input();
+	if (extend && tell == ftell(fout)) {
+		(void) unlink(outfilename);
+	} else if (tblflag) {
+		f_print(fout, rpcgen_table_dcl);
+	}
+}
+
+/*
+ * Compile into an RPC service
+ */
+static
+s_output(argc, argv, infile, define, extend, outfile, nomain)
+	int argc;
+	char *argv[];
+	char *infile;
+	char *define;
+	int extend;
+	char *outfile;
+	int nomain;
+{
+	char *include;
+	definition *def;
+	int foundprogram = 0;
+	char *outfilename;
+
+	open_input(infile, define);
+	outfilename = extend ? extendfile(infile, outfile) : outfile;
+	open_output(infile, outfilename);
+#ifdef sgi
+        f_print(fout, "#include <bstring.h>\n");
+        f_print(fout, "#include <sys/types.h>\n");
+        f_print(fout, "#include <sys/socket.h>\n");
+#endif
+	f_print(fout, "#include <stdio.h>\n");
+	f_print(fout, "#include <rpc/rpc.h>\n");
+#ifdef sgi
+        f_print(fout, "#include <rpc/pmap_clnt.h>\n");
+#endif
+	if (strcmp(svcclosetime, "-1") == 0)
+		indefinitewait = 1;
+	else if (strcmp(svcclosetime, "0") == 0)
+		exitnow = 1;
+	else if (inetdflag) {
+		f_print(fout, "#include <signal.h>\n");
+		timerflag = 1;
+	}
+	if (inetdflag) {
+		f_print(fout, "#include <sys/socket.h>\n");
+	}
+	if (logflag || inetdflag)
+		f_print(fout, "#include <syslog.h>\n");
+	if (infile && (include = extendfile(infile, ".h"))) {
+		if (do_prototypes) {
+			f_print(fout, "#define %s\n", SVC_DEF);
+		}
+		f_print(fout, "#include \"%s\"\n", include);
+		free(include);
+	}
+
+	if (inetdflag) {
+		f_print(fout, "\n#ifdef DEBUG\n#define RPC_SVC_FG\n#endif\n");
+		if (timerflag)
+			f_print(fout, "#define _RPCSVC_CLOSEDOWN %s\n",
+				svcclosetime);
+	}
+	while (def = get_definition()) {
+		foundprogram |= (def->def_kind == DEF_PROGRAM);
+	}
+	close_input();
+	if (extend && !foundprogram) {
+		(void) unlink(outfilename);
+		return;
+	}
+	if (nomain) {
+		if (inetdflag) {
+			f_print(fout, "\nextern int _rpcpmstart;");
+			f_print(fout, "\t\t/* Started by a port monitor ? */\n");
+			f_print(fout, "extern int _rpcfdtype;");
+			f_print(fout, "\t\t/* Whether Stream or Datagram ? */\n");
+			if (timerflag) {
+				f_print(fout, "static int _rpcsvcdirty;");
+				f_print(fout, "\t/* Still serving ? */\n");
+			}
+		}
+		write_programs((char *)NULL);
+	} else {
+		write_most(infile);
+		do_registers(argc, argv);
+		write_rest();
+		write_programs("static");
+	}
+	if (inetdflag)
+		write_svc_aux();
+}
+
+/*
+ * generate client side stubs
+ */
+static
+l_output(infile, define, extend, outfile)
+	char *infile;
+	char *define;
+	int extend;
+	char *outfile;
+{
+	char *include;
+	definition *def;
+	int foundprogram = 0;
+	char *outfilename;
+
+	open_input(infile, define);
+	outfilename = extend ? extendfile(infile, outfile) : outfile;
+	open_output(infile, outfilename);
+#ifdef sgi
+        f_print(fout, "#include <bstring.h>\n");
+        f_print(fout, "#include <sys/types.h>\n");
+        f_print(fout, "#include <sys/socket.h>\n");
+#endif
+	f_print(fout, "#include <rpc/rpc.h>\n");
+	f_print(fout, "#include <sys/time.h>\n");
+	if (infile && (include = extendfile(infile, ".h"))) {
+		if (do_prototypes) {
+			f_print(fout, "#define %s\n", CLNT_DEF);
+		}
+		f_print(fout, "#include \"%s\"\n", include);
+		free(include);
+	}
+	while (def = get_definition()) {
+		foundprogram |= (def->def_kind == DEF_PROGRAM);
+	}
+	close_input();
+	if (extend && !foundprogram) {
+		(void) unlink(outfilename);
+		return;
+	}
+	write_stubs();
+}
+
+/*
+ * generate the dispatch table
+ */
+static
+t_output(infile, define, extend, outfile)
+	char *infile;
+	char *define;
+	int extend;
+	char *outfile;
+{
+	definition *def;
+	int foundprogram = 0;
+	char *outfilename;
+
+	open_input(infile, define);
+	outfilename = extend ? extendfile(infile, outfile) : outfile;
+	open_output(infile, outfilename);
+	while (def = get_definition()) {
+		foundprogram |= (def->def_kind == DEF_PROGRAM);
+	}
+	close_input();
+	if (extend && !foundprogram) {
+		(void) unlink(outfilename);
+		return;
+	}
+	write_tables();
+}
+
+/*
+ * Perform registrations for service output 
+ */
+static
+do_registers(argc, argv)
+	int argc;
+	char *argv[];
+{
+	int i;
+
+	for (i = 1; i < argc; i++) {
+		if (streq(argv[i], "-s")) {
+			write_register(argv[i + 1]);
+			i++;
+		}
+	}
+}
+
+/*
+ * Add another argument to the arg list
+ * XXX check for arglist overflow
+ */
+static void
+addarg(cp)
+	char *cp;
+{
+	strcat(arglist, " -D");
+	strcat(arglist, cp);
+}
+
+/*
+ * if input file is stdin and an output file is specified then complain
+ * if the file already exists. Otherwise the file may get overwritten
+ */
+
+static void
+checkfiles(infile, outfile) 
+char *infile;
+char *outfile;
+{
+	struct stat buf;
+
+	if (!infile && outfile) {
+		if (stat(outfile, &buf) < 0) 
+			return;		/* file does not exist */
+		else {
+			fprintf(stderr, 
+			  "file '%s' already exists and may be overwritten\n",
+				outfile);
+			crash();
+		}
+	}
+}
+
+static
+usage()
+{
+	f_print(stderr, "usage: %s [-P] [-C cppcmd] infile\n", cmdname);
+	f_print(stderr, "\t%s [-P] [-Dname[=value]] [-I [-K seconds]] [-L] [-T] infile\n",
+			cmdname);
+	f_print(stderr, "\t%s [-P] [-c | -h | -l | -m | -t] [-C cppcmd] [-o outfile] [infile]\n",
+			cmdname);
+	f_print(stderr, "\t%s [-P] [-s tcp/udp]* [-C cppcmd] [-o outfile] [infile]\n", cmdname);
+	exit(1);
+}

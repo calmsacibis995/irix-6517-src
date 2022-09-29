@@ -1,0 +1,96 @@
+#! /sbin/sh
+#Tag 0x00000f00
+
+# Clean up temporary files.
+# "$Revision: 1.35 $"
+
+set `/sbin/who -r`
+if test $9 != "S"; then
+	exit 1
+fi
+
+# If no reasonable /tmp exists (!?!?!) create one.
+if test ! -d /tmp -a ! -L /tmp; then
+	/sbin/suattr -m -c "rm -f /tmp"
+	mkdir /tmp
+	if test "`sysconf MAC`" -eq 1; then
+	    chlabel -m /tmp
+	fi
+fi
+
+# Preserve any editor scratch files.  If we moved /tmp to /.oldtmp earlier
+# on, scratch files may be in /.oldtmp.  To be really thorough, run through
+# both /tmp and any /.oldtmp.
+
+# Note that if we moved /tmp to /.oldtmp earlier on, it means we are both
+# allowed and expected to delete the entire old /tmp contents.  Since this
+# is true, we can delete /.oldtmp when we are done with it.
+
+if test -x /usr/lib/expreserve; then
+	if test -d /.oldtmp; then
+		/usr/lib/expreserve -d /.oldtmp
+		/sbin/suattr -m -C CAP_DAC_WRITE,CAP_DAC_READ_SEARCH,CAP_MAC_WRITE,CAP_MAC_READ,CAP_FOWNER+ipe -c "rm -rf /.oldtmp"
+	fi
+	if test "`sysconf MAC`" -eq 1; then
+		for dir in `/sbin/suattr -m -C CAP_MAC_READ+ipe -c "echo /tmp/[A-Z]-[a-z]"`;do
+			label=`/sbin/suattr -m -C CAP_MAC_READ+ipe -c "ls -1Md ${dir}" | awk '{print $2}' | sed -e 's!\[!!' -e 's!\]!!'`
+			/sbin/suattr -M $label -c "/usr/lib/expreserve -d /tmp"
+		done
+
+	else
+		/usr/lib/expreserve -d /tmp
+	fi
+fi
+
+# make /var/tmp exist
+if test ! -d /var/tmp -a ! -L /var/tmp; then
+	/sbin/suattr -m -c "rm -f /var/tmp"
+	mkdir /var/tmp
+	if test "`sysconf MAC`" -eq 1; then
+	    chlabel -m /var/tmp
+	fi
+fi
+if ls -ld /usr/tmp 2>/dev/null | grep "^d" > /dev/null 2>&1 ; then
+	/sbin/suattr -m -c "rm -rf /usr/TMPOLD > /dev/null 2>&1"
+	/sbin/suattr -m -c "mv /usr/tmp /usr/TMPOLD > /dev/null 2>&1"
+	/sbin/suattr -m -c "rm -rf /usr/tmp > /dev/null 2>&1"
+	/sbin/suattr -m -c "ln -s ../var/tmp /usr/tmp"
+fi
+
+if chkconfig nostickytmp; then 
+	/sbin/suattr -m -C CAP_FOWNER+ipe -c "chmod 777 /tmp /var/tmp"
+else
+	/sbin/suattr -m -C CAP_FOWNER+ipe -c "chmod 1777 /tmp /var/tmp"
+fi
+/sbin/suattr -m -C CAP_FOWNER+ipe -c "chown sys.sys /tmp /var/tmp"
+
+# clean directories from /usr/tmp_rex or make sure it doesn't exist.
+#	Do not delete it recursively in case rexd is already running.
+# XXX This should be removed along with rexd.
+# XXX This is too late, since inetd is already running, which means
+# XXX	rexd might already be using its directory.
+if test -d /var/tmp_rex; then
+	rmdir /var/tmp_rex/* 2> /dev/null
+else
+	rm -f /var/tmp_rex
+	mkdir /var/tmp_rex
+fi
+# Don't make the symlink if the rm fails.  In order to do this, we
+# need to remove the -f flag to rm; otherwise, it won't exit with a
+# non-zero value when rm fails.  If /usr/tmp_rex is already a symlink,
+# we may just be making a symlink the thing it already points at.
+# On diskless systems, /usr is mounted read-only.  Therefore, the rm
+# of /usr/tmp_rex will fail.  Checking to see if /usr/tmp_rex is the
+# correct symlink requires using something like awk which isn't in
+# /sbin.  This is a good comprimise.
+if test -d /usr/tmp_rex; then
+	rm -r /usr/tmp_rex 2> /dev/null
+	if [ $? = 0 ]; then
+		ln -s ../var/tmp_rex /usr/tmp_rex 2> /dev/null
+	fi
+fi
+/sbin/suattr -C CAP_FOWNER+ipe -c "chmod 775 /var/tmp_rex"
+/sbin/suattr -C CAP_FOWNER+ipe -c "chown sys.sys /var/tmp_rex"
+
+# prime the ps command data file, /tmp/.ps_data
+/sbin/nice ps -e < /dev/null > /dev/null 2>&1 &

@@ -1,0 +1,56 @@
+DIAGDEPTH= ../../../..
+include ${DIAGDEPTH}/Makedefs
+
+LINCLUDES = -I../include  -I../../../include -D_MODERN_C -D_SVR4_SOURCE -Dbug_cc1
+
+
+#LLCOPTS= 315 -DSINGLEWIDE -DDMAC17
+
+#if $(CPUBOARD) == "IP22" || $(CPUBOARD) == "IP28"
+VCDEFS = -DKEEP_DMRBCOMPAT
+#endif
+
+CFILES= cosmo2_cgi1_pio.c        \
+  		cosmo2_fifo_flag.c       \
+		cosmo2_mcu_patrn.c       \
+        cosmo2_cgi1_rdwr.c       \
+		cosmo2_fifo_loops.c	     \
+	    cosmo2_mcu_reg_def.c     \
+		cosmo2_cgi1_rst.c        \
+	    cosmo2_fifo_rw.c         \
+	    cosmo2_probeslot.c       \
+        cosmo2_cgi1_ver.c        \
+	    cosmo2_genesis_patrn.c   \
+	    cosmo2_sram_patrn.c      \
+        cosmo2__cgi1_init.c      \
+        cosmo2_globals.c         \
+        cosmo2_reset_errors.c    \
+        cosmo2_const_enable.c         \
+        cosmo2_huffman_tbl.c        \
+        cosmo2_cc1_patrn.c     \
+		cosmo2_comp_m2m.c		\
+        cosmo2_decomp_m2m.c   \
+        cosmo2_mcu_PeekPoke.c \
+        cosmo2_cgi1_patrn.c \
+        cosmo2_dma.c   \
+        cosmo2_mcu_commands.c \
+        cosmo2_tbl_pass.c \
+        cosmo2_dwl_fbc.c \
+        cosmo2_cbar_globals.c   \
+		cosmo2_fbcbuf_scaler.c \
+        cosmo2_fbc2upc2.c \
+		cosmo2_iic.c\
+		cosmo2_mode9.c \
+        cosmo2_flush.c\
+        cosmo2_dma_call.c  \
+		cosmo2_comp_slave.c \
+		cosmo2_decomp_m2m_slave.c \
+		cosmo2_vid12.c
+
+ASFILES= cosmo2_asm.s
+
+COMMONPREF = MGRAS
+_lib ${COMMONTARGS}: ${COMMONPREF}$$@
+
+include ${DIAGDEPTH}/Makerules
+

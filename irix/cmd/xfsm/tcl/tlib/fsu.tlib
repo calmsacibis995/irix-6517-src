@@ -1,0 +1,213 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	fsu.tlib
+# Version:	$Revision: 1.1 $
+# Synopsis:	General file system utilities.
+# Packages:	FS-Base
+#		FS-Util
+#		FS-Meta
+#
+#
+#%COMMENT_END
+
+
+#%COMMENT_BEGIN
+# Package:	FS-Base
+# Functions:	fsu:getLocalObjs
+#		fsu:getExportObjs
+#
+# Function:	fsu:getLocalObjs
+# Synopsis:	Gets the current list of local file systems on a given host.
+#		Local file systems are any file systems that are not NFS
+#		mounted.
+# Arguments:	- host		The host from which to retrieve the list
+#				of local file systems.
+#		- state		An optional argument that defines what state
+#				the returned file systems should be in.  This
+#				may be one of: any, mounted, unmounted.
+#				The default is any.
+#
+# Function:	fsu:getExportObjs
+# Synopsis:	Gets the current list of of exported _file systems_ on a
+#		given host.  Note that this only finds the file systems
+#		that are exported.  It does not find any directories that
+#		are exported.
+# Arguments:	- host		The host from which to retrieve the list
+#				of exported file systems.
+#		- state		An optional argument that defines what state
+#				the returned file systems should be in.  This
+#				may be one of: any, mounted, unmounted.
+#				The default is any.
+#
+#%COMMENT_END
+
+#@package: FS-Base	fsu:getLocalObjs fsu:getExportObjs
+
+proc fsu:getLocalObjs { host {state any} } \
+{
+	if {$state == "mounted"} {
+		set qstr "QUERY_DEFN:{FS_TYPE_INFO:STRCMP:efs:OR}{FS_TYPE_INFO:STRCMP:xfs:AND}{FS_MOUNTED_STATE:TRUE:0:EOQ}"
+	} elseif {$state == "unmounted"} {
+		set qstr "QUERY_DEFN:{FS_TYPE_INFO:STRCMP:efs:OR}{FS_TYPE_INFO:STRCMP:xfs:AND}{FS_MOUNTED_STATE:FALSE:0:EOQ}"
+	} else {
+		set qstr "QUERY_DEFN:{FS_TYPE_INFO:STRCMP:efs:OR}{FS_TYPE_INFO:STRCMP:xfs:EOQ}"
+	}
+	lappend data "HOST_PATTERN:$host"
+	lappend data "OBJ_TYPE:FS"
+	lappend data $qstr
+
+	if {[catch {set objects [xfsObjects [join $data "\n"]]} error]} {
+		em:storeMsg fsu error \
+			"Unable to get local filesystems for $host.\n\t$error"
+		set objects ""
+	}
+
+	return $objects
+}
+
+proc fsu:getExportObjs { host {state any} } \
+{
+	lappend data "HOST_PATTERN:$host"
+	lappend data "OBJ_TYPE:FS"
+	lappend data "QUERY_DEFN:{FS_EXPORTED_STATE:TRUE:0:EOQ}"
+
+	if {[catch {set objects [xfsObjects [join $data "\n"]]} error]} {
+		em:storeMsg fsu error \
+		"Unable to get exported filesystems from $host.\n\t$error"
+		set objects ""
+	}
+	return $objects
+}
+#@packend
+
+#%COMMENT_BEGIN
+# Package:	FS-Util
+# Functions:	fsu:isMounted
+#		fsu:objsToMountPt
+#
+# Function:	fsu:isMounted
+# Synopsis:	Determines whether or not the file system represented by the
+#		given object signature is mounted.
+# Arguments:	- object	The object signature representing the file
+#				system to be queried.
+#		- mount_pt	A reference to a variable in which the mount
+#				point for the given object is to be stored.
+#
+# Function:	fsu:objsToMountPt
+# Synopsis:	Given a list of object signatures, return a corresponding
+#		list of mount points.
+# Arguments:	- objects	A list of object signatures representing the
+#				file system to be queried.
+#		- state		Reserved for future use.
+#
+#%COMMENT_END
+
+#@package: FS-Util	fsu:isMounted fsu:objsToMountPt
+
+proc fsu:isMounted { object mount_pt } \
+{
+	upvar $mount_pt	mntpt
+
+	if {! [catch {set info [xfsInfo $object]} error]} {
+
+		set data [lmatch [split $info \n] MNT_DIR:*]
+
+		if {! [cequal $data ""]} {
+			set aux [lassign [split $data :] key]
+			set mntpt [join $aux :]
+			return 1
+		}
+	}
+
+	return 0
+}
+
+proc fsu:objsToMountPt { objects {state any} } \
+{
+	set mntpt ""
+	foreach item $objects {
+		set info [xfsInfo $item]
+		set info [split $info "\n"]
+		set idx [lsearch $info MNT_DIR:*]
+		if {$idx == -1} {
+			set idx [lsearch $info FS_DIR:*]
+		}
+		if {$idx != -1} {
+			set val [lindex [split [lindex $info $idx] ":"] 1]
+			if {$val != ""} {
+				lappend mntpt $val
+			}
+		}
+	}
+
+	return [lsort $mntpt]
+}
+#@packend
+
+#%COMMENT_BEGIN
+# Package:	FS-Meta
+# Functions:	fsu:makeMetaObjs
+#		fsu:sortMetaObjs
+#
+# Function:	fsu:makeMetaObjs
+# Synopsis:	Given a list of object signatures, return a list containing
+#		the object signatures and their mount points.
+# Arguments:	- objects	The object signature representing the file
+#				system to be queried.
+#
+# Function:	fsu:sortMetaObjs
+# Synopsis:	A sorting routine that can be used as an argument to
+#		the "lsort" command.
+# Arguments:	- x		A meta-object.
+#		- y		A meta-object.
+#
+#%COMMENT_END
+
+#@package: FS-Meta	fsu:makeMetaObjs fsu:sortMetaObjs
+
+proc fsu:makeMetaObjs { objects } \
+{
+	foreach item $objects {
+		set mnt_pt ""
+		set idx -1
+		if {! [catch {set info [xfsInfo $item]} error]} {
+			set info [split $info "\n"]
+			set idx [lsearch $info MNT_DIR*]
+			if {$idx != -1} {
+				set x [split [lindex $info $idx] ":"]
+				set mnt_pt [string trim [lindex $x 1]]
+			}
+		}
+
+		if {$mnt_pt == ""} {
+			set mnt_pt "-"
+		}
+
+		lappend mobjects [list $mnt_pt $item]
+	}
+
+	return $mobjects
+}
+
+proc fsu:sortMetaObjs { x y } \
+{
+	if {[lindex $x 0] < [lindex $y 0]} {
+		return -1
+	} elseif {[lindex $x 0] > [lindex $y 0]} {
+		return 1
+	} else {
+		return 0
+	}
+}
+#@packend

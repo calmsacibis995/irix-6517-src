@@ -1,0 +1,174 @@
+.TH pciio_error D3
+.SH NAME
+pciio_error: pciio_error_register \- PCI error handling function
+.\" note that the name above has to match the filename
+.\" hence change from pciio_error_register
+.SH SYNOPSIS
+.nf
+.ft 3
+#include <sys/PCI/pciio.h>
+#include <sys/ioerror.h>
+.sp .8v
+int
+pciio_error_register(
+	vertex_hdl_t \f2vhdl\fP,
+	error_handler_f *\f2func\fP,
+	error_handler_arg_t \f2arg\fP)\f1
+.ft 1
+.fi
+.SS Arguments
+.IP "\f2vhdl\f1" 8n
+The connection point of the PCI device, as passed to the driver's
+.IR attach ()
+entry point.
+.IP "\f2func\f1" 8n
+Address of a function to be called when
+an error is diagnosed on a PIO to
+or a DMA from this PCI device.
+.IP "\f2arg\f1" 8n
+A parameter to pass
+as the first argument
+to
+.IR func ().
+.SH DESCRIPTION
+Some devices may, from time to time, either
+trigger a PIO error or encounter a DMA error
+that is anticipated by the driver.
+.IR pciio_error_register ()
+provides a mechanism whereby the driver can
+be informed that such an error has occurred,
+and gives the driver the ability to either recover
+from the error, or to do a more precise diagnosis
+of the problem than is possible in the generic
+error handling code.
+.P
+There is no explicit unregistration function;
+to stop receiving error reports, call
+.IR pciio_error_register ()
+with NULL values for
+.I func
+and
+.IR arg .
+.P
+The error handler for a device is typically registered at the same
+time as an interrupt handler (as described in
+.IR pciio_intr (D3)).
+.P
+The error handler must be unregistered when a loadable
+driver is unloaded.
+If this is not done, an error could cause the kernel
+to call an error handler that no longer actually
+existed at the given address.
+.P
+Although some drivers may connect and disconnect interrupt
+handlers in their
+.IR open ()
+and
+.IR close ()
+entry points (see
+.IR pciio_intr (D3)),
+there is no benefit to doing this with an error handler.
+An error handler is normally registered when the device
+is attached and unregistered when the device is detached.
+.SS "Handler Actions"
+The prototype of the error handling function is declared in
+.I sys/ioerror.h
+along with the types of data that can be passed to the function.
+These error codes, return codes, and
+fields within the ioerror structure may
+be expanded from time to time.
+.P
+The handler's first argument is supplied as
+.IR arg .
+This is normally a driver data structure unique to the device,
+containing the PIO maps, DMA maps, and other global data
+needed to control the device.
+.P
+The error handler has responsibilities in two directions:
+to the kernel, to handle the error in such a way as to
+have the least impact on other devices and on system performance;
+and to the rest of the device driver, to properly terminate
+pending operations so that driver threads do not sleep indefinitely,
+memory is not leaked, and so that a reasonable error code is
+returned for a pending user-process read or write.
+Drivers that support the
+.IR poll ()
+entry point must also consider whether to call
+.IR pollwakeup ()
+on an error; for example, a nonrecoverable error is a POLLERR event.
+.P
+The error handler reports its success to the kernel in its return code:
+.IP IOERROR_HANDLED 12n
+The handler has noticed, logged, and dealt with the error.
+No further system log entries or console messages are wanted.
+If the error was detected on a synchronous operation
+(for example a bus error on a PIO load or store)
+the operation will be reexecuted.
+It is still possible that an intermediate
+layer could declare the error to be
+fatal; for instance, if a PCI device
+initiated a DMA and subsequently reported
+a recoverable error, but the root
+cause was an unrecoverable error elsewhere
+in the system.
+.IP IOERROR_UNHANDLED 12n
+The handler did not do anything,
+possibly because the error did not
+really relate to the given driver,
+or because default error handling is
+sufficient -- most error handlers
+really exist only to notice errors
+that their devices can recover from.
+The calling infrastructure will continue
+processing just as if the error handler
+did not exist.
+.IP IOERROR_PANIC 12n
+The handler has done the primary
+diagnosis of the problem, and printed
+out some descriptive information.
+As the error handling substructure
+unwinds back toward the hardware
+that reported the error, various
+portions of the system state relating
+to the error will be reported, and
+upon return to the outermost layer,
+the system will panic.
+.SH EXAMPLES
+Here is an example of how a driver might
+set up an error handler.
+.Ex
+pcifoo_attach(vertex_hdl_t pconn_vhdl)
+{
+	...
+	pciio_error_register(pconn_vhdl
+		pcifoo_error_handler,
+		pcifoo_soft);
+	...
+}
+static int
+pcifoo_error_handler(error_handler_arg_t einfo,
+		int error_code,
+		ioerror_mode_t mode,
+		ioerror_t *ioe)
+{
+	...
+	if (recoverable) {
+		recover the error;
+		return IOERROR_HANDLED;
+	}
+	diagnose the error into the console log;
+	return IOERROR_PANIC;
+}
+.Ee
+.\" .SH NOTES
+.\" .SH FILES
+.\" .br
+.\" sample_pciio.c
+.SH "SEE ALSO"
+pciio(D3),
+pciio_config(D3),
+pciio_dma(D3),
+pciio_get(D3),
+pciio_intr(D3),
+pciio_pio(D3).
+.\" .SH DIAGNOSTICS

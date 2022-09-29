@@ -1,0 +1,337 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	vmMkVePnl
+# Version:	$Revision: 1.6 $
+# Synopsis:	Encapsulates the panel that allows the user to create a
+#		a stand-alone ve.
+# Functions:	mkVePnl:realize
+#		mkVePnl:manage
+#		mkVePnl:clear
+#		mkVePnl:setData
+#		mkVePnl:setVeParts
+#		mkVePnl:setHost
+#		mkVePnl:setName
+#		mkVePnl:getHost
+#		mkVePnl:getName
+#		mkVePnl:getData
+#		mkVePnl:chkData
+#		mkVePnl:_create
+#		mkVePnl:_optCb
+#		mkVePnl:_nameChangedCb
+#		mkVePnl:_newHostName
+#%COMMENT_END
+
+#########################################
+#		Public			#
+#########################################
+proc mkVePnl:realize { handle parent } \
+{
+	global		_GW_mkVePnl _GD_mkVePnl
+
+	if {! [info exists _GW_mkVePnl($handle,panel)]} {
+		set _GD_mkVePnl(texts)		{XLV_OBJ_NAME XLV_VE_SUNITS
+						 XLV_VE_START}
+		set _GD_mkVePnl(labels)		{XFS_HOST}
+		set _GD_mkVePnl(options)	{XLV_VE_TYPE}
+		set _GD_mkVePnl(XLV_VE_TYPE,opts)	{VE_STRIPE VE_CONCAT}
+
+		####	Create the widget(s)
+		set _GW_mkVePnl($handle,panel) [mkVePnl:_create $handle $parent]
+
+		mkVePnl:_optCb $handle [lindex $_GD_mkVePnl(XLV_VE_TYPE,opts) 0]
+
+		mkVePnl:_nameChangedCb $handle $_GW_mkVePnl($handle,XLV_OBJ_NAME)
+	}
+	
+	return $_GW_mkVePnl($handle,panel)
+}
+
+proc mkVePnl:manage { handle } \
+{
+	global		_GW_mkVePnl
+
+	if {[info exists _GW_mkVePnl($handle,panel)]} {
+		$_GW_mkVePnl($handle,panel) manageChild
+	}
+}
+
+#########################################
+#	Public: Data In Routines	#
+#########################################
+proc mkVePnl:clear { handle } \
+{
+	global		_GW_mkVePnl
+
+	ptPnl:setChosenListParts $handle ""
+	$_GW_mkVePnl($handle,VE_PART_SIZE) setValues -labelString "0.00 MBytes"
+}
+
+proc mkVePnl:setData { handle objdata } \
+{
+	global		_GW_mkVePnl _GD_mkVePnl
+
+	if {! [xlv:parseData template $objdata dout]} {
+		return
+	}
+
+	if {$dout(ve,ve_type) == "S"} {
+		set val VE_STRIPE
+	} else {
+		set val VE_CONCAT
+	}
+	$_GW_mkVePnl($handle,XLV_VE_TYPE-om) setValues \
+			-menuHistory $_GW_mkVePnl($handle,$val)
+	mkVePnl:_optCb $handle $val
+
+	if {$dout(ve,ve_sunit) != "{}"} {
+		set val $dout(ve,ve_sunit)
+	} else {
+		set val ""
+	}
+	$_GW_mkVePnl($handle,XLV_VE_SUNITS) setString $val
+
+	if {$dout(ve,ve_start) != "{}"} {
+		set val $dout(ve,ve_start)
+	} else {
+		set val ""
+	}
+	$_GW_mkVePnl($handle,XLV_VE_START) setString $val
+}
+
+proc mkVePnl:setVeParts { handle names sizes } \
+{
+	global		_GW_mkVePnl _GD_mkVePnl
+	
+	set nparts [llength $sizes]
+	if {$nparts == 0} {
+		set sum_parts 0
+	} else {
+		set sum_parts [expr [join $sizes "+"]]
+	}
+	$_GW_mkVePnl($handle,VE_PART_SIZE) setValues \
+			-labelString [format "%.2f Mbytes" $sum_parts]
+}
+
+proc mkVePnl:setHost { handle host } \
+{
+	global		_GW_mkVePnl _GD_mkVePnl
+
+	mkVePnl:_newHostName $handle $host
+	set _GD_mkVePnl($handle,XFS_HOST) $host
+	$_GW_mkVePnl($handle,XFS_HOST) setValues \
+			-labelString [hu:getHostPlusDom $host]
+}
+
+proc mkVePnl:setName { handle name } \
+{
+	global _GW_mkVePnl; $_GW_mkVePnl($handle,XLV_OBJ_NAME) setString $name
+}
+
+#########################################
+#	Public: Data Out Routines	#
+#########################################
+proc mkVePnl:getHost { handle } \
+{
+	global		_GD_mkVePnl
+
+	return $_GD_mkVePnl($handle,XFS_HOST)
+}
+
+proc mkVePnl:getName { handle } \
+{
+	global		_GW_mkVePnl
+
+	return [$_GW_mkVePnl($handle,XLV_OBJ_NAME) getString]
+}
+
+proc mkVePnl:getData { handle dat } \
+{
+	global		_GW_mkVePnl _GD_mkVePnl
+	upvar $dat	data
+
+	set item XLV_OBJ_NAME
+	set val [$_GW_mkVePnl($handle,$item) getString]
+	if {[cequal $val ""]} { set val . }
+	lappend data "ve $val"
+
+	set item XLV_VE_START
+	set val [string trim [$_GW_mkVePnl($handle,$item) getString]]
+	if {[clength $val]} {
+		lappend data "-start $val"
+	}
+
+	set item XLV_VE_TYPE
+	$_GW_mkVePnl($handle,$item-om) getValues -menuHistory mh
+	set val [string trimleft [file extension $mh] "."]
+	if {$val == "VE_STRIPE"} {
+		lappend data "-stripe"
+	}
+
+	set item XLV_VE_SUNITS
+	if {[$_GW_mkVePnl($handle,$item) isSensitive]} {
+		set val [string trim [$_GW_mkVePnl($handle,$item) getString]]
+		if {[clength $val]} {
+		    set nval [int [cvt:unitsToBytes $val cvt_size cvt_unit b]]
+		    ####    set nval [int [xfs:convertUnitsToBytes $val bytes]]
+		    if {! [cequal $nval $val]} {
+			set nval [int [expr $nval / 512]]
+		    }
+		    lappend data "-stripe_unit $nval"
+		}
+	}
+}
+
+proc mkVePnl:chkData { handle } \
+{
+	global		_GW_mkVePnl _GD_mkVePnl
+	set rval        1
+
+	set item XLV_OBJ_NAME
+	if {! [clength [$_GW_mkVePnl($handle,$item) getString]]} {
+		$_GW_mkVePnl($handle,$item)-label getValues -labelString val
+		em:storeMsg $handle error "\"$val\" is a required field."
+		set rval 0
+	}
+
+	return $rval
+}
+
+#########################################
+#		Private			#
+#########################################
+proc mkVePnl:_create { handle parent } \
+{
+	global		_GW_mkVePnl _GD_mkVePnl
+	set name	mkVePnl
+
+	set grid [sgiGrid $parent.$name -numRows 7 -numColumns 2 \
+			-defaultSpacing 3 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none]
+
+	set row 0
+	foreach item "XFS_HOST XLV_OBJ_NAME XLV_VE_TYPE \
+		      XLV_VE_SUNITS XLV_VE_START VE_PART_SIZE" {
+		xmLabel $grid.$item-label managed -row $row -column 0
+		incr row
+	}
+
+	####	Host
+	set item XFS_HOST
+	set _GW_mkVePnl($handle,$item) [xmLabel $grid.$item managed \
+			-row 0 -column 1]
+
+	####	Name
+	set item XLV_OBJ_NAME
+	set _GW_mkVePnl($handle,$item) [xmTextField $grid.$item managed \
+			-row 1 -column 1 \
+			-columns 24 \
+			-maxLength 32]
+	$_GW_mkVePnl($handle,$item) activateCallback \
+				"mkVePnl:_nameChangedCb $handle %w"
+	$_GW_mkVePnl($handle,$item) losingFocusCallback \
+				"mkVePnl:_nameChangedCb $handle %w"
+	$_GW_mkVePnl($handle,$item) modifyVerifyCallback \
+				"xlv:validNameCb %doit %ptr %length"
+
+	####	Type
+	set item XLV_VE_TYPE
+	set _GW_mkVePnl($handle,$item-pd) [xmPulldownMenu $grid.$item-pd]
+	foreach opt $_GD_mkVePnl($item,opts) {
+		set _GW_mkVePnl($handle,$opt) \
+			[xmPushButton $_GW_mkVePnl($handle,$item-pd).$opt \
+				 managed \
+				-marginWidth 0 \
+				-marginHeight 0]
+		$_GW_mkVePnl($handle,$opt) activateCallback \
+				"mkVePnl:_optCb $handle $opt"
+	}
+	set _GW_mkVePnl($handle,$item-om) [xmOptionMenu $grid.$item-om \
+			 managed \
+			-row 2 -column 1 \
+			-spacing 0 \
+			-marginWidth 0 \
+			-marginHeight 0 \
+			-subMenuId $_GW_mkVePnl($handle,$item-pd)]
+
+	####	Stripe Units
+	set item XLV_VE_SUNITS
+	set _GW_mkVePnl($handle,$item) [xmTextField $grid.$item managed \
+			-row 3 -column 1 \
+			-resizeHorizontal false \
+			-value "128" \
+			-columns 10 \
+			-maxLength 6]
+	$_GW_mkVePnl($handle,$item) modifyVerifyCallback \
+			"tfu:onlyIntsCb %w %ptr %length %startPos %endPos %doit"
+
+	####	Start
+	set item XLV_VE_START
+	set _GW_mkVePnl($handle,$item) [xmTextField $grid.$item managed \
+			-row 4 -column 1 \
+			-resizeHorizontal false \
+			-columns 10 \
+			-maxLength 10]
+	$_GW_mkVePnl($handle,$item) modifyVerifyCallback \
+			"tfu:onlyIntsCb %w %ptr %length %startPos %endPos %doit"
+
+	####	Size
+	set item VE_PART_SIZE
+	set _GW_mkVePnl($handle,$item) [xmLabel $grid.$item managed \
+			-row 5 -column 1]
+
+	$grid columnResizable 0 false
+	$grid rowMargin 5 20
+
+	return $grid
+}
+
+#################################
+#	Callbacks		#
+#################################
+proc mkVePnl:_optCb { handle opt } \
+{
+	global		_GW_mkVePnl _GD_mkVePnl
+
+	if {$opt == "VE_STRIPE"} {
+		set sensitive true
+	} else {
+		set sensitive false
+	}
+
+	set item XLV_VE_SUNITS
+	$_GW_mkVePnl($handle,$item) setSensitive $sensitive
+	$_GW_mkVePnl($handle,$item)-label setSensitive $sensitive
+}
+
+proc mkVePnl:_nameChangedCb { handle w } \
+{
+	set val [$w getString]
+	if {! [clength $val]} {
+		set val "<No Name>"
+	}
+	ptPnl:setChosenListLabel $handle "" "" $val
+}
+
+#########################################
+#		Utilities		#
+#########################################
+proc mkVePnl:_newHostName { handle host } \
+{
+	if {$host != ""} {
+		ptPnl:newPartList $handle $host
+	}
+}

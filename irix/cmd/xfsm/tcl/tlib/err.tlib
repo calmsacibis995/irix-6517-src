@@ -1,0 +1,303 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	err.tlib
+# Version:	$Revision: 1.4 $
+# Synopsis:	Functions used to display error messages.
+# Packages:	ErrorMessage-Base
+#
+#
+#%COMMENT_END
+
+
+#%COMMENT_BEGIN
+# Package:	ErrorMessage-Base
+# Functions:	em:getSeverity
+#		em:outstandingMsgs
+#		em:setMessageString
+#		em:storeMsg
+#		em:simpleMsg
+#		em:cannotConnectDialog
+#		em:_displayMsg
+#		em:_manageSimpleDialog
+#
+# Function:	em:getSeverity
+# Synopsis:	Returns the current severity level.
+# Arguments:	- handle	Reserved for future use.
+#
+# Function:	em:outstandingMsgs
+# Synopsis:	This function is used to see if there are any outstanding
+#		messages to be posted.
+# Arguments:	- handle	Reserved for future use.
+#
+# Function:	em:setMessageString
+# Synopsis:	Stores the string that will used to set the XmNmessageString
+#		resource of the error dialog.
+# Arguments:	- handle	Reserved for future use.
+#		- msg		The value to which XmNmessageString will be set.
+#
+# Function:	em:storeMsg
+# Synopsis:	This is used when the application wants to be able to display
+#		a variable length message for later display.  A timer is
+#		set so that the message dialog is popped up when control is
+#		returned to the event processing procedure.  It can be called
+#		any number of times with any size message.  The messages are
+#		eventually concatenated and displayed in a scrolled text area.
+# Arguments:	- handle	Reserved for future use.
+#		- severity	Used to determine the value of XmNdialogType.
+#		- msg		This string is stored for when the dialog is
+#				displayed.
+#
+# Function:	em:simpleMsg
+# Synopsis:	Immediately creates a XmMessageBox dialog (if necessary),
+#		sets the XmNdialogType and XmNmessageString resources, and
+#		manages the dialog.
+# Arguments:	- handle	Reserved for future use.
+#		- severity	Used to determine the value of XmNdialogType.
+#		- msg		The value to which XmNmessageString is set.
+#		- parent	The parent of the dialog.  This is an optional
+#				parameter.  If it is not provided the parent
+#				will be the top-level shell (.)
+#
+# Function:	em:cannotConnectDialog
+# Synopsis:	Displays a dialog informing the user that the application can't
+#		connect to the RPC server.  The callback for the dialog exits
+#		the program.
+#		sets the XmNdialogType and XmNmessageString resources, and
+#		manages the dialog.
+# Arguments:	- reason	A string explaining why the connection cannot
+#				be made.  This is probably the result from a
+#				call to rpcinfo(1).
+#
+# Function:	em:_manageSimpleDialog
+# Synopsis:	This is a private function.  It is called indirectly when the
+#		timer set by em:simpleMsg expires.  The dialog is managed and
+#		raised via a timer so that it will be at the top of the
+#		stacking order.
+# Arguments:	None
+#
+# Function:	em:_displayMsg
+# Synopsis:	This is a private function.  It is called indirectly when the
+#		timer set by em:storeMsg expires.  It concatenates all messages
+#		stored by calls to em:storeMsg since the last time the dialog
+#		was managed.  The message is prefixed with a date/time stamp
+#		and the most recent value stored by em:setMessageString.  The
+#		scrolled text area is positioned such that the top of the
+#		message is visible.
+# Arguments:	None
+#%COMMENT_END
+
+#@package: ErrorMessage-Base        \
+	em:getSeverity \
+	em:outstandingMsgs \
+	em:setMessageString \
+	em:simpleMsg \
+	em:storeMsg \
+	em:cannotConnectDialog
+
+
+#########################################
+#	Initialization			#
+#########################################
+global	_GD_em
+set	_GD_em(severity)	information
+
+#########################################
+#	Local Resources			#
+#########################################
+. getAppResources {
+	{ msgDlgDoneString \
+	  MsgDlgDoneString \
+	  "Done" \
+	  _GD_em(done,string) }
+	{ msgDlgClearString \
+	  MsgDlgClearString \
+	  "Clear" \
+	  _GD_em(clear,string) }
+	{ msgDlgInfoString \
+	  MsgDlgInfoString \
+	  "Notice" \
+	  _GD_em(information,string) }
+	{ msgDlgWarnString \
+	  MsgDlgWarnString \
+	  "Warning" \
+	  _GD_em(warning,string) }
+	{ msgDlgErrorString \
+	  MsgDlgErrorString \
+	  "An error has occured." \
+	  _GD_em(error,string) }
+}
+
+#########################################
+#		Public			#
+#########################################
+proc em:getSeverity { handle } \
+{
+	global	_GD_em; return $_GD_em(severity)
+}
+
+proc em:outstandingMsgs { handle } \
+{
+	global	_GD_em
+
+	if {[info exists _GD_em(simple,msg)] ||
+	    [info exists _GD_em(messages)]} {
+		return 1
+	}
+	return 0
+}
+
+proc em:setMessageString { handle str } \
+{
+	global	_GD_em; set _GD_em(messageString) $str
+}
+
+proc em:storeMsg { handle severity msg } \
+{
+	global	_GD_em
+
+	####	If this is the first message, set a timer to display
+	####	the dialog when we return to XtAppMainLoop()
+	if {! [info exists _GD_em(messages)]} {
+		set _GD_em(timer_id) [. addTimer 100 em:_displayMsg]
+	}
+
+	####	Add to the messages to be displayed
+	lappend _GD_em(messages) $msg
+
+	####	Record the highest level of severity
+	if {$severity == "error" ||
+	   ($severity == "warning" && $_GD_em(severity) != "error")} {
+		set _GD_em(severity) $severity
+	}
+}
+
+proc em:simpleMsg { handle severity msg {parent ""}} \
+{
+	global	_GW_em _GD_em
+
+	if {! [info exists _GW_em(simple,dialog)]} {
+		set _GW_em(simple,dialog) [xmMessageDialog $parent.emsDlg \
+			-noResize true \
+			-okLabelString $_GD_em(done,string) \
+			-messageString $_GD_em(information,string)]
+		$_GW_em(simple,dialog).Cancel unmanageChild
+	}
+
+	$_GW_em(simple,dialog) setValues \
+			-dialogType dialog_$severity \
+			-messageString $msg
+
+	if {! [info exists _GD_em(simple,msg)]} {
+		. addTimer 100 em:_manageSimpleDialog
+		set _GD_em(simple,msg) true
+	}
+}
+
+proc em:cannotConnectDialog { reason } \
+{
+	global	_GD_em argv0
+
+	set prog [file tail $argv0]
+
+	lappend msg "$prog is unable to connect to the server at this time."
+	lappend msg "Please check to make sure that /usr/etc/xfsmd is running."
+	lappend msg ""
+	lappend msg "Results from rpcinfo:"
+	lappend msg ""
+	regsub -all -- "\n" [string trim $reason] " @n \\\ \\\ \\\ \\\ " nerr
+	lappend msg "\\\ \\\ \\\ \\\ $nerr"
+	
+	set dialog [xmMessageBox .emDlg managed \
+			-noResize true \
+			-dialogType dialog_error \
+			-okLabelString $_GD_em(done,string) \
+			-messageString [join $msg " @n "]]
+	$dialog.Cancel unmanageChild
+	$dialog.Help unmanageChild
+	$dialog okCallback {exit 1}
+}
+
+#########################################
+#		Private			#
+#########################################
+proc em:_manageSimpleDialog { } \
+{
+	global	_GW_em _GD_em
+
+	$_GW_em(simple,dialog) manageChild
+	.$_GW_em(simple,dialog) raise
+
+	unset _GD_em(simple,msg)
+}
+
+proc em:_displayMsg { } \
+{
+	global	_GW_em _GD_em
+
+	####	Check to make sure that there's something to display
+	if {! [info exists _GD_em(messages)]} {
+		return
+	}
+
+	####	Create the dialog, if necessary
+	if {! [info exists _GW_em(dialog)]} {
+		set _GW_em(dialog) [xmMessageDialog .emDlg \
+			-autoUnmanage false \
+			-okLabelString $_GD_em(done,string) \
+			-cancelLabelString $_GD_em(clear,string) \
+			-messageString $_GD_em(information,string)]
+		set _GW_em(text) [xmScrolledText $_GW_em(dialog).text managed \
+			-editMode multi_line_edit \
+			-editable false \
+			-cursorPositionVisible false \
+			-columns 60 \
+			-rows 8]
+		$_GW_em(dialog) cancelCallback {$_GW_em(text) setString ""}
+		$_GW_em(dialog) okCallback {$_GW_em(dialog) unmanageChild}
+	}
+
+	####	Want to append to the end of the text
+	set lp [$_GW_em(text) getLastPosition]
+
+	####	Stamp it, adding a newline if it's not the first message
+	if {$lp == 0} {
+		set ts "**** [fmtclock [getclock] "%D %T"] ****"
+	} else {
+		set ts "\n**** [fmtclock [getclock] "%D %T"] ****"
+	}
+
+	####	Set the pixmap and prepend the messageString (if not default)
+	if {[info exists _GD_em(messageString)]} {
+		set ms $_GD_em(messageString)
+		lvarpush _GD_em(messages) $ms
+		unset _GD_em(messageString)
+	} else {
+		set ms $_GD_em($_GD_em(severity),string)
+	}
+
+	####	Add the text and make the top of the message visible
+	$_GW_em(text) insert $lp "$ts\n[join $_GD_em(messages) "\n"]\n"
+	$_GW_em(text) showPosition $lp
+
+	$_GW_em(dialog) setValues \
+			-dialogType dialog_$_GD_em(severity) \
+			-messageString $ms
+	$_GW_em(dialog) manageChild
+	.$_GW_em(dialog) raise
+
+	####	Clean up to prepare for the next message
+	unset _GD_em(messages)
+	set _GD_em(severity) information
+}
+#@packend

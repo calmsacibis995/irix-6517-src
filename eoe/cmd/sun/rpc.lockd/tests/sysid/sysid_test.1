@@ -1,0 +1,97 @@
+.TH SYSID_TEST 1 "" "Lockd Testing"
+.SH NAME
+sysid_test \- Test case for \fIlockd(1M)\fP sysid management
+.SH SYNOPSIS
+.B sysid_test
+[-v] [-r count] [-d dir] [-f file] [-p phase]
+.SH DESCRIPTION
+.B sysid_test
+is an application to test system ID management in the NFS file and record
+locking daemon \fIlockd(1M)\fP.
+.P
+It was observed that if one application acquires a lock in a file and never
+releases it,
+none of the system IDs for remote applications which might at some time
+have locked a portion of the same file are ever released.
+.P
+The cause of this behavior is the way in which system IDs and the file
+descriptor table are managed in \fIlockd(1M)\fP.  System ID release was
+linked to
+file descriptor release.  File descriptor release was linked to
+there being no locks held in the file, either through the
+underlying local file system or from NFS mounts.
+.P
+The solution within \fIlockd(1M)\fP was to decouple system ID and file
+descriptor release by keeping track of how
+many active locks a system ID has.  An active lock is one for which
+no corresponding unlock request has been received.
+.P
+The problem may be easily demonstrated as follows:
+.TP 4
+1.
+construct a file with two regions to be locked
+.TP 4
+2.
+one process acquires a read lock on one region
+.TP 4
+3.
+repeatedly fork a process to lock and unlock the other region, continuing
+until the forked process exits with a non-zero status
+.P
+.B sysid_test
+tests system ID maintenance by following the above steps.  Two additional
+test phases were added:
+.TP 4
+1.
+A phase in which each child process acquires a lock then
+waits to a signal.  The parent process will send SIGTERM to each child
+process.
+.TP 4
+2.
+A phase in which the child only tests regions of the file using the F_GETLK
+.I fcntl(2)
+command.
+.P
+It was observed later that the original fix was too simplistic in that it
+used a simple reference count for each sysid.  This reference count was
+incremented for each lock request and decremented for each unlock.  This
+assumes a one-to-one relationship between locks and unlocks.  This is not
+a valid assumption.  This prompted the addition of two more phases to test
+this.
+.SH OPTIONS
+.B sysid_test
+accepts the following options.
+.TP 10
+\fB-p\fP \fI phase\fP
+This indicates to
+.B sysid_test
+that only the test phase indicated by \fIphase\fP is to be executed.  By
+default, all phases are executed.  The value given for the phase may be 1,
+2, or 3.
+.TP 10
+.B -v
+This causes
+.B sysid_test
+and all of its child processes to report each lock and unlock operation.
+.TP 10
+\fB-r\fP \fIcount\fP
+This sets the repeat count for the test to \fIcount\fP.  Giving a value of
+-1 for
+.I count
+causes the test to continue until a signal is received.  SIGINT will cause
+.B sysid_test
+to exit gracefully.  The default repeat count is 2000.  Note that this
+value is important to the testing in that it must be greater than the
+size of the system ID table in \fIlockd(1M)\fP.
+.TP 10
+\fB-d\fP \fIdir\fP
+This indicates to
+.B sysid_test
+that the testing should be conducted in the directory \fIdir\fP.  The default
+is the current directory.
+.TP 10
+\fB-f\fP \fIfile\fP
+This indicates to
+.B sysid_test
+that the name of the test file should be \fIfile\fP.  The default test file
+name is \fIsysid.testfile\fP.

@@ -1,0 +1,475 @@
+Install=${1-install}
+Inc=${Inc-/usr/include}
+echo "
+#ifndef _sh_config_
+#define	_sh_config_	1
+/*
+ * This has been generated from install/config
+ * The information is based on the compile time environment.
+ * It may be necessary to change values of some parameters for cross
+ *  development environments.
+ */
+
+#include	<sys/types.h>
+"
+: default CC to /bin/cc on sun, cc otherwise
+if	test -f /bin/sun && /bin/sun
+then	CC=${CC-/bin/cc}
+else	CC=${CC-cc}
+fi
+CPP="$CC -E"
+rm -f /tmp/junk$$
+echo "#include \"/tmp/junk$$\"" > dummy.c
+: see whether cc -E gives error for bad includes
+if	$CPP dummy.c > /dev/null 2>&1
+then	if	 test -r /lib/cpp
+	then CPP=/lib/cpp
+	elif	test -r /usr/lib/cpp
+	then CPP=/usr/lib/cpp
+	else	CPP=true
+	fi
+	if	$CPP dummy.c > /dev/null 2>&1
+	then	echo "could not autoconfigure cc -E gives wrong exit status" >&2
+		exit 2
+	fi
+fi
+rm -f /tmp/junk$$
+LIB="-lsun -lbsd"
+ENV=
+: make sure all the files are here
+for i in bcopy data fastfork ftime getgroups getppid getrlimit int16 ispipe \
+	hz killpg lstat nfile opendir path pgroup rand select setjmp sigrelse\
+	sigrestart setreuid strchr token wait3 vlimit void yellowp \
+	lock socket poll
+do	if	test ! -r $Install/$i.c
+	then	echo "$Install/$i.c: file missing or not readable" >&2
+		exit 1
+	fi
+done
+for i in acct bsdtty dirent execargs fcntl file filio ioctl \
+	jioctl locale mnttab nttyio ptem stream sgtty \
+	times termio termios wait unistd universe utsname
+do	echo "#include <$i.h>" > dummy.c
+	if	$CPP dummy.c > /dev/null 2>&1
+	then	echo "#define _${i}_ 1"
+	fi
+	echo "#include <sys/$i.h>" > dummy.c
+	if	$CPP dummy.c > /dev/null 2>&1
+	then	echo "#define _sys_${i}_	1"
+	fi
+done
+: Note, should use -x, but not all tests have it
+if	test -d /usr/ucb
+then	echo "#define _usr_ucb_	1"
+fi
+if	test -f /bin/grep
+then	echo "#define _bin_grep_	1"
+fi
+if	test -f /usr/bin/lpr
+then	echo "#define _usr_bin_lpr_	1"
+fi
+if	test -f /usr/bin/lp
+then	echo "#define _usr_bin_lp_	1"
+fi
+if	test -f /usr/bin/vi
+then	echo "#define _usr_bin_vi_	1"
+fi
+if	test -f /bin/newgrp
+then	echo "#define _bin_newgrp_	1"
+fi
+echo "#include <sys/resource.h>" > dummy.c
+if	$CPP dummy.c > /dev/null 2>&1
+then	SYS_RESOURCE=1
+fi
+echo "#include <sys/vlimit.h>" > dummy.c
+if	$CPP dummy.c > /dev/null 2>&1
+then	SYS_VLIMIT=1
+fi
+if	test  "$SYS_RESOURCE" || test  "$SYS_VLIMIT"
+then	if	test  "$SYS_RESOURCE" && 
+			$CC $Install/getrlimit.c $LIB > /dev/null 2>&1  &&
+			./a.out 2> /dev/null
+	then	echo "#define _sys_resource_	1"
+	elif	$CC $Install/vlimit.c $LIB > /dev/null 2>&1
+	then	./a.out 2> /dev/null
+	fi
+fi
+: some systems have termio but it does not work
+echo "#include <termio.h>" > dummy.c
+if	$CPP dummy.c > /dev/null 2>&1
+then	_TERMIO=1
+fi
+echo "#include <sys/ioctl.h>" > dummy.c
+if	$CPP dummy.c > /dev/null 2>&1
+then	SYS_IOCTL=1
+fi
+if	test  "$_TERMIO" && test  "$SYS_IOCTL"
+then	if	$CC $Install/ioctl.c $LIB > /dev/null 2>&1
+	then	./a.out 2> /dev/null
+	fi
+fi
+: check for the poll system call
+if	$CC $Install/poll.c > /dev/null 2>&1
+then	./a.out 2> /dev/null
+fi
+: compile and run a program that uses const
+if	$CC $Install/data.c $LIB > /dev/null 2>&1 && ./a.out 1
+then	./a.out > /dev/null 2>&1 && echo "#define const /* empty */"
+else	echo "#define const /* empty */"
+fi
+echo "#include <signal.h>" > dummy.c
+if	$CPP dummy.c > dummy.out 2>&1 && grep -c void dummy.out >/dev/null 2>&1
+then	echo "#define VOID	void"
+else	echo "#define VOID	int"
+fi	
+if	$CC $Install/ftime.c $LIB > /dev/null 2>&1
+then	./a.out 2> /dev/null
+fi
+DIRLIB=
+if	test -r /usr/lib/dir.a
+then	DIRLIB=/usr/lib/dir.a
+elif	test -r /usr/lib/libdir.a
+then	DIRLIB=/usr/lib/libdir.a
+elif	test -r /usr/lib/ndir.a
+then	DIRLIB=/usr/lib/ndir.a
+elif	test -r /usr/lib/libndir.a
+then	DIRLIB=/usr/lib/libndir.a
+fi
+: make sure that there is an a.out file before running $Install/opendir.c
+rm a.out
+touch a.out
+#> a.out
+for i in dirent ndir
+do	if	$CC -D_${i}_ $Install/opendir.c $LIB > /dev/null 2>&1 && 
+		  ./a.out 2> /dev/null
+	then	break
+	elif	test "$DIRLIB" &&
+		  $CC -D_${i}_ $Install/opendir.c $DIRLIB $LIB > /dev/null 2>&1 && 
+		  ./a.out 2> /dev/null
+	then	echo "		/* requires
+		  $DIRLIB
+		*/"
+		break
+	else	echo "#undef _${i}_"
+	fi
+done
+cat > dummy.c <<!
+#include <sys/file.h>
+#ifdef LOCK_EX
+"$$LOCK_EX$$"
+#else
+#   ifdef O_CREAT
+	"$$O_CREAT$$"
+#   endif
+#endif
+!
+if	$CC -E dummy.c > dummy.out 2>&1
+then	if	grep -c "$$LOCK_EX$$" dummy.out > /dev/null 2>&1  ||
+		grep -c "$$O_CREAT$$" dummy.out > /dev/null 2>&1 
+	then	:
+	else	echo "#undef _sys_file_"
+	fi
+fi
+if	test -r /lib/libjobs.a
+then	LIB="/lib/libjobs.a $LIB"
+elif	test -r /usr/lib/libjobs.a
+then	LIB="/usr/lib/libjobs.a $LIB"
+fi
+if	$CC -Dsignal=sigset $Install/sigrestart.c $LIB > /dev/null 2>&1 &&
+		./a.out 2> /dev/null
+then	echo "#define signal	sigset"
+#	echo "extern VOID (*sigset())();"
+	sigdef=sigset
+elif	$CC $Install/sigrestart.c $LIB > /dev/null 2>&1 &&
+		./a.out 2> /dev/null
+then	:
+else	echo "/*** Warning SIG_NORESTART may have to be set ***/"
+	echo "*** Warning SIG_NORESTART may have to be set ***" >&2
+	warn=1
+fi
+if      $CC -Dsigrelse=' ' ${sigdef+-Dsignal=sigset} $Install/sigrelse.c $LIB > /dev/null 2>&1  && ./a.out 2> /dev/null
+then	:
+elif        $CC -DSIGBLOCK ${sigdef+-Dsignal=sigset} $Install/sigrelse.c $LIB > /dev/null 2>&1 && ./a.out 2> /dev/null
+then    :
+elif      $CC ${sigdef+-Dsignal=sigset} $Install/sigrelse.c $LIB > /dev/null 2>&1  && ./a.out 2> /dev/null
+then	:
+else	echo "#define sigrelease(s)"
+	echo "#define sig_begin()"
+fi
+if	$CC -Dwaitpid $Install/wait3.c $LIB > /dev/null 2>&1 && ./a.out 2> /dev/null
+then	:
+elif	$CC $Install/wait3.c $LIB > /dev/null 2>&1 && ./a.out 2> /dev/null
+then	echo "#define waitpid(a,b,c)	wait3(b,c,0)"
+else	echo "#define waitpid(a,b,c)	wait(b)"
+	echo "#define WAIT1ARG	1"
+fi
+if [ /bin/4d ]
+then
+echo "#define setpgid(a,b)	BSDsetpgrp(a,b)"
+echo "#define getpgid(a)	BSDgetpgrp(a)"
+elif	$CC -Dsetpgrp=setpgid -Dgetpgid $Install/pgroup.c $LIB > /dev/null 2>&1 && ./a.out 2> /dev/null
+then	:	
+elif	$CC -Dgetpgrp=getpgrp2 -Dsetpgrp=setpgrp2 $Install/pgroup.c $LIB > /dev/null 2>&1 && ./a.out 2> /dev/null
+then	echo "#define setpgid(a,b)	setpgrp2(a,b)"
+	echo "#define getpgid(a)	getpgrp2(a)"
+elif	$CC -Dgetpgrp=BSDgetpgrp -Dsetpgrp=BSDsetpgrp $Install/pgroup.c $LIB > /dev/null 2>&1 && ./a.out 2> /dev/null
+then	echo "#define setpgid(a,b)	BSDsetpgrp(a,b)"
+	echo "#define getpgid(a)	BSDgetpgrp(a)"
+elif	$CC $Install/pgroup.c $LIB > /dev/null 2>&1
+then	./a.out
+else	echo "/*** Warning setpgrp and getpgrp not found ***/"
+	echo "*** Warning setpgrp and getpgrp not found ***" >&2
+fi
+if	$CC $Install/killpg.c $LIB > /dev/null 2>&1 && ./a.out 2> /dev/null
+then	:
+else	echo "#define killpg(a,b)	kill(-(a),b)"
+fi
+if	$CC $Install/nfile.c $LIB > /dev/null 2>&1
+then	./a.out 2> /dev/null
+fi
+if	$CC $Install/int16.c $LIB > /dev/null 2>&1
+then	./a.out
+else	echo "/*** Warning INT16 may have to be set ***/"
+	echo "*** Warning INT16 may have to be set ***" >&2
+	warn=1
+fi
+if	$CC $Install/rand.c $LIB > /dev/null 2>&1
+then	./a.out
+else	echo "/*** Warning need to redefine random number function ***/"
+	echo "*** Warning need to redefine random number function ***" >&2
+	echo "#define sh_rand()"
+	warn=1
+fi
+if	$CC $Install/ispipe.c $LIB > /dev/null 2>&1
+then	./a.out
+else	echo "/*** Warning PIPE_ERR not set ***/"
+	echo "*** Warning PIPE_ERR not set ***" >&2
+	warn=1
+fi
+if	$CC $Install/void.c $LIB > /dev/null 2>&1 && ./a.out 2> /dev/null
+then 	if	$CC $Install/proto.c $LIB > /dev/null 2>&1 && ./a.out 2> /dev/null
+	then	echo "#define PROTO	1"
+	fi
+else	echo "#define void	int"
+fi
+if	$CC $Install/setjmp.c $LIB > /dev/null 2>&1
+then	./a.out 2> /dev/null
+fi
+: check for sockets
+if	$CC $Install/socket.c $LIB > /dev/null 2>&1
+then	./a.out 2> /dev/null
+fi
+: check for yellow pages service
+if	$CC $Install/yellowp.c $LIB > /dev/null 2>&1
+then	./a.out 2> /dev/null
+fi
+if	$CC $Install/getgroups.c $LIB > /dev/null 2>&1 && ./a.out 2> /dev/null
+then	if	$CC -D_parm_ $Install/getgroups.c $LIB > /dev/null 2>&1 ||
+		$CC -D_sysparm_ $Install/getgroups.c $LIB > /dev/null 2>&1
+	then	./a.out 2> /dev/null || echo "#define MULTIGROUPS	16"
+	else	echo "#define MULTIGROUPS	16"
+	fi
+fi
+if	$Install/shellmagic > /dev/null
+then	echo "#define SHELLMAGIC	1"
+fi
+echo "#include <fcntl.h>" > dummy.c
+if	$CC -E dummy.c > /dev/null 2>&1
+then	d=-D_fcntl_
+else	d=
+fi
+if	$CC $d $Install/fcntl.c $LIB > /dev/null 2>&1
+then	./a.out 2> /dev/null
+else	echo "#define NOFCNTL	1"
+fi
+if	$CC -DLIM $Install/path.c $LIB > /dev/null 2>&1 && ./a.out
+then	:
+elif	$CC  $Install/path.c $LIB > /dev/null 2>&1 && ./a.out
+then	:
+else	echo '#define PATH_MAX	1024'
+fi
+$CC  $Install/hz.c $LIB > /dev/null 2>&1 && ./a.out
+if	$CC $Install/lock.c $LIB > /dev/null 2>&1 && ./a.out a.out 2> /dev/null
+then	echo "#define _FLOCK	1"
+fi
+if	$CC $Install/token.c $LIB > /dev/null 2>&1 && ./a.out /dev/null 2> /dev/null
+then	if ./a.out ./a.out | grep _sibuf > /dev/null 2>&1
+	then	:
+	else echo "#define NOBUF	1"
+	fi
+else	echo "/*** Warning NOBUF may have to be set ***/"
+	echo "*** Warning NOBUF may have to be set ***" >&2
+fi
+if	$CC $Install/setreuid.c $LIB > /dev/null 2>&1 && ./a.out 2> /dev/null
+then	echo "#define SETREUID	1"
+fi
+if	$CC $Install/getppid.c $LIB > /dev/null 2>&1 && ./a.out 2> /dev/null
+then	: 'The function getppid() is in the library'
+else	echo "#define getppid()	1"
+fi
+if	$CC $Install/lstat.c $LIB > /dev/null 2>&1 && ./a.out 2> /dev/null
+then	echo "#define LSTAT	1"
+fi
+if	$CC $Install/syscall.c $LIB > /dev/null 2>&1
+then	(./a.out||exit 1) 2> /dev/null
+fi
+if	$CC $Install/strchr.c $LIB > /dev/null 2>&1 && ./a.out 2>/dev/null
+then	:
+else	if	$CC -Dstrchr=index $Install/strchr.c $LIB > /dev/null 2>&1 && 
+		./a.out 2>/dev/null
+	then	echo "#define strchr	index"
+		echo "#define strrchr	rindex"
+	else	echo "/*** Warning strchr and strrchr may have to be set ***/"
+		echo "*** Warning strchr and strrchr may have to be set ***" >&2
+	fi
+fi
+: create types for uid_t, gid_t, pid_t if they do not already exist
+for i in uid_t gid_t pid_t
+do      echo "#include <sys/types.h>" > dummy.c
+	echo "struct { ${i} foo;};" >> dummy.c
+	$CC -c dummy.c > /dev/null 2>&1 || echo "typedef int ${i};"
+done
+: create types for time_t and off_t if they do not already exist
+for i in time_t off_t
+do      echo "#include <sys/types.h>" > dummy.c
+	echo "struct { ${i} foo;};" >> dummy.c
+	$CC -c dummy.c > /dev/null 2>&1 || echo "typedef long ${i};"
+done
+: create type for clock_t unless in sys/time.h or sys/types.h
+_SYSTIME=
+echo "#include <sys/time.h>" > dummy.c
+if	$CC -E dummy.c > /dev/null 2>&1
+then	_SYSTIME=1
+	echo "struct { clock_t foo;};" >> dummy.c
+	if	$CC -c dummy.c > /dev/null 2>&1
+	then	echo "#include 	<sys/time.h>"
+		echo "#define included_sys_time_"
+	else	echo "#include <sys/types.h>" > dummy.c
+		echo "struct { clock_t foo;};" >> dummy.c
+		$CC -c dummy.c > /dev/null 2>&1 || echo "typedef long clock_t;"
+		echo "#define _sys_Time_"
+	fi
+else	echo "#include <sys/types.h>" > dummy.c
+	echo "struct { clock_t foo;};" >> dummy.c
+	$CC -c dummy.c > /dev/null 2>&1 || echo "typedef long clock_t;"
+fi
+if	test -d /dev/fd
+then	echo "#define DEVFD	1"
+fi
+: Check for VPIX
+if	test -f /usr/bin/vpix
+then	echo "#define VPIX	1"
+fi
+: Check for file needed for RDS
+if	test -r /etc/mnttab
+then	echo "#define MNTTAB	\"/etc/mnttab\""
+fi
+: Check behavior of /bin/echo
+if	test -f /bin/echo
+then	if	test X"`/bin/echo -n`" = X
+	then	echo "#define ECHO_N	1"
+	fi
+	if	test X"`/bin/echo '\c'`" = X'\c'
+	then	echo "#define ECHO_RAW	1"
+	else	if	test X"`/bin/echo -`" = X
+		then	echo "#define ECHOPRINT	1"
+		fi
+	fi
+fi
+if	test -f /bin/universe && /bin/universe > /dev/null 2>&1
+then    echo "#define UNIVERSE  1"
+	univ=`/bin/universe`
+	if	test "$SYS_IOCTL" && test ucb = "$univ"
+	then	echo "#undef _termio_"
+		echo "#undef _sys_termio_"
+	fi
+fi
+if	$CC -DMEMCPY $Install/bcopy.c $LIB > /dev/null 2>&1 && ./a.out 2> /dev/null
+then	: 'The function memcpy is in the library'
+else	echo "#define NOMEMCPY	1"
+	CC $Install/bcopy.c $LIB > /dev/null 2>&1 && ./a.out 2> /dev/null ||
+		echo "#define NOBCOPY	1"
+fi
+if	$CC $Install/fastfork.c $LIB > /dev/null 2>&1 && ./a.out 2> /dev/null
+then	echo "#define VFORK	1"
+fi
+: See whether signal.h contains SIGCLD or SIGCHLD
+cat > dummy.c <<!
+#include <signal.h>
+#ifdef SIGCLD
+"$$SIGCHLD$$"
+#endif
+#ifdef SIGCHLD
+"$$SIGCHLD$$"
+#endif
+!
+if	$CC -E dummy.c > dummy.out 2>&1 && 
+		grep -c "$$SIGCHLD$$" dummy.out > /dev/null 2>&1
+then	echo "#define JOBS	1"
+fi	
+if	grep 'struct[ 	]*winsize'  $Inc/sys/termio.h >/dev/null 2>&1 ||
+	grep 'struct[ 	]*winsize'  $Inc/sys/ioctl.h >/dev/null 2>&1 ||
+	grep 'struct[ 	]*winsize'  $Inc/termios.h >/dev/null 2>&1 ||
+	grep 'struct[ 	]*winsize'  $Inc/sys/termios.h >/dev/null 2>&1 ||
+	grep 'struct[ 	]*winsize'  $Inc/sys/ptem.h >/dev/null 2>&1 ||
+	grep 'struct[ 	]*winsize'  $Inc/sys/stream.h >/dev/null 2>&1 ||
+	grep 'struct[ 	]*winsize'  $Inc/sys/sgtty.h >/dev/null 2>&1
+then	echo "#define WINSIZE	1"
+fi
+if	test -f /usr/lib/dic/euc.dic
+then	echo "#define MULTIBYTE	1"
+fi
+: enable FS_3D by default on systems with dynamic loading
+#if	ldd /bin/grep > /dev/null 2>&1 && ldd /bin/grep | grep libc > /dev/null
+#then	echo "#define FS_3D	1"
+#fi
+if	test "$_SYSTIME" && $CC $Install/select.c > /dev/null 2>&1
+then	./a.out 2> /dev/null
+elif	test "$_SYSTIME" && $CC -S4 $Install/select.c > /dev/null 2>&1
+then	./a.out 2> /dev/null
+fi
+. ./OPTIONS
+for i in ACCT BRACEPAT ECHOPRINT ESH ESHPLUS FLOAT FS_3D IODELAY JOBS \
+	MULTIBYTE NEWTEST OLDTERMIO OLDTEST P_UID PDU POSIX RDS RAWONLY \
+	SEVENBIT SUID_EXEC TIMEOUT VSH LDYNAMIC
+do	: This could be done with eval, but eval broken in some shells
+	j=0
+	case $i in
+	ACCT)		j=$ACCT;;
+	BRACEPAT)	j=$BRACEPAT;;
+	ECHOPRINT)	j=$ECHOPRINT;;
+	ESH)		j=$ESH;;
+	ESHPLUS)	j=$ESHPLUS;;
+	FLOAT)		j=$FLOAT;;
+	FS_3D)		j=$FS_3D;;
+	IODELAY)	j=$IODELAY;;
+	JOBS)		j=$JOBS;;
+	LDYNAMIC)	j=$LDYNAMIC;;
+	MULTIBYTE)	j=$MULTIBYTE;;
+	NEWTEST)	j=$NEWTEST;;
+	OLDTERMIO)	echo "#include <sys/termios.h>" > dummy.c
+			echo "#include <sys/termio.h>" >> dummy.c
+			if	$CC -E dummy.c > /dev/null 2>&1
+			then	j=$OLDTERMIO
+			fi ;;
+	OLDTEST)	j=$OLDTEST;;
+	P_UID)		j=$P_UID;;
+	PDU)		j=$PDU
+			if	test 0 -ne "$j" -a -f /usr/pdu/bin/pwd
+			then	echo "#define PDUBIN	1"
+			fi;;
+	POSIX)		j=$POSIX;;
+	RAWONLY)	j=$RAWONLY;;
+	RDS)		j=$RDS;;
+	SEVENBIT)	j=$SEVENBIT;;
+	SUID_EXEC)	j=$SUID_EXEC;;
+	TIMEOUT)	j=$TIMEOUT;;
+	VSH)		j=$VSH;;
+	esac
+	case $j in
+	0|"")	;;
+	*)	echo "#define $i	$j" ;;
+	esac
+done
+rm -f dummy.c dummy.out
+echo '#endif'

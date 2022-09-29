@@ -1,0 +1,180 @@
+.if n .pH ddi.rm/d2/gen/chpoll @(#)chpoll	43.12 of 12/7/92
+.\" Copyright 1992, 1991 UNIX System Laboratories, Inc.
+.TH poll D2
+.IX "\f4poll\fP(D2)
+.SH NAME
+\f4poll\fP \- poll entry point for a non-STREAMS character driver
+.SH SYNOPSIS
+.nf
+.na
+.ft 4
+#include <sys/poll.h>
+#include <sys/ddi.h>
+.sp 0.4
+int \f2prefix\fPpoll(dev_t \f2dev\fP, short \f2events\fP, int \f2anyyet\fP, short *\f2reventsp\fP,
+	struct pollhead **\f2phpp\fP, unsigned int *\f2genp\fP);
+.ft 1
+.ad
+.fi
+.SS Arguments
+.RS 0
+.IP "\f2dev\fP" 10n
+The device number for the device to be polled.
+.IP "\f2events\fP" 10n
+Mask (bit-wise \f4OR\fP) indicating the events being polled.
+.IP "\f2anyyet\fP" 10n
+A flag that indicates whether the driver should
+return a pointer to its \f4pollhead\fP structure and the value of the
+pollhead's generation number to the caller.
+.IP "\f2reventsp\fP" 10n
+A pointer to a bitmask of the returned events satisfied.
+.IP "\f2phpp\fP" 10n
+A pointer to a pointer to a \f4pollhead\fP structure
+(defined in \f4sys/poll.h\fP).
+.IP "\f2genp\fP" 10n
+A pointer to an unsigned integer that is used by the driver to store the
+current value of the pollhead's generation number at the time of the poll.
+.RE
+.SH DESCRIPTION
+The \f4poll\fP entry point indicates whether certain I/O events have occurred
+on a given device.
+It must be provided by any non-STREAMS character device driver
+that wishes to support polling [see \f4poll\fP(2)].
+.SS "Return Values"
+The \f4poll\fP routine should return 0 for success, or the
+appropriate error number.
+.SH USAGE
+This entry point is optional,
+and is valid for character device drivers only.
+.P
+Valid values for \f2events\fP are:
+.RS
+.TP 14n
+\f4POLLIN\fP
+Data is available to be read (either normal or out-of-band).
+.TP
+\f4POLLOUT\fP
+Data may be written without blocking.
+.TP
+\f4POLLPRI\fP
+High priority data are available to be read.
+.TP
+\f4POLLHUP\fP
+A device hangup.
+.TP
+\f4POLLERR\fP
+A device error.
+.TP
+\f4POLLRDNORM\fP
+Normal data is available to be read.
+.TP
+\f4POLLWRNORM\fP
+Normal data may be written without blocking (same as \f4POLLOUT\fP).
+.TP
+\f4POLLRDBAND\fP
+Out-of-band data is available to be read.
+.TP
+\f4POLLWRBAND\fP
+Out-of-band data may be written without blocking.
+.RE
+.P
+A driver that supports polling must provide a \f4pollhead\fP structure
+for each minor device supported by the driver.
+On systems where they are available,
+the driver should use the \f4phalloc\fP(D3) function
+to allocate the \f4pollhead\fP structure,
+and use the \f4phfree\fP(D3) function
+to free the \f4pollhead\fP structure,
+if necessary.
+.P
+The \f4pollhead\fP structure must be initialized
+to zeros prior to its first use
+(when \f4phalloc\fP is used to allocate the structure,
+this is done automatically).
+.P
+The definition of the \f4pollhead\fP structure
+is not included in the DDI/DKI, and can change across releases.
+It should be treated as a ``black box'' by the driver;
+none of its fields may be referenced.
+Although the size of the \f4pollhead\fP structure
+is guaranteed to remain the same across releases,
+it is good practice for drivers not to depend
+on the size of the structure.
+.P
+The driver must implement the polling discipline itself.
+Each time the driver detects a pollable event, it should call
+\f4pollwakeup\fP(D3), passing to it the event that occurred and
+the address of the \f4pollhead\fP structure associated with the device.
+Note that \f4pollwakeup\fP should be called with only one event at a time.
+.P
+When the driver's \f4poll\fP entry point is called, the driver should check
+if any of the events requested in \f2events\fP have occurred.
+The driver should store the mask, consisting of the
+subset of \f4events\fP that are pending, in the \f4short\fP pointed to by \f2reventsp\fP.
+Note that this mask may be 0 if none of the events are pending.
+In this case, the driver should check the \f2anyyet\fP flag and, if it is zero,
+store the address
+of the device's \f4pollhead\fP structure in the pointer pointed at by \f2phpp\fP
+and also store the value of the \f4pollhead\fP's generation
+number at the time of the poll in the unsigned integer pointed
+to by \f2genp\fP.
+.P
+The pollhead's generation value must be sampled either while a state lock is
+held that will hold off any call to \f4pollwakeup\fP(D3) on the
+\f4pollhead\fP by the lower portion of the driver, or it must be taken
+\fIbefore\fP the check is made for any pending events; \f4pollwakeup\fP(D3)
+increments the \f4pollhead\fP's generation number each time it is called.
+The generation number is used to solve the race condition that exists for
+the caller of the poll() routine between the time that the driver's poll()
+routine is called and when the caller adds itself to the \f4pollhead\fP's
+waiter queue.  When the poll() routine is called, there may be no events of
+interest pending and the \f4pollhead\fP is returned by the driver poll()
+routine in order that the caller can queue itself onto the \f4pollhead\fP to
+wait for such events.  If the lower layer of the driver signals such an
+event via a call to \f4pollwakeup\fP(D3) before the caller can queue up, the
+caller may block forever or wait unnecessarily for the next such event
+before being woken up.  The snapshot of the \f4pollhead\fP's generation
+number at the time of the poll allows the caller to check the generation
+number of the \f4pollhead\fP as it is about to queue itself up.  If the
+snapshot value returned by the driver and the current generation number
+match, the caller can safely queue itself up.  If they don't match, the
+caller knows that it must retry the poll() operation since at least one call
+to \f4pollwakeup\fP(D3) must have occurred on the \f4pollhead\fP.
+.P
+The canonical \f4poll\fP() algorithm is:
+.sp 0.4
+.nf
+.ft 4
+/* snapshot pollhead generation number before checking events */
+unsigned int gen = POLLGEN(my_local_pollhead_pointer);
+if (events_are_satisfied_now) {
+	*\f2reventsp\fP = events & mask_of_satisfied_events;
+} else {
+	*\f2reventsp\fP = 0;
+	if (!\f2anyyet\fP) {
+		*\f2phpp\fP = my_local_pollhead_pointer;
+		*\f2genp\fP = gen;
+	}
+}
+return (0);
+.ft 1
+.fi
+.sp 0.4
+.SS "Synchronization Constraints"
+On uniprocessor systems,
+user context is available in the \f4poll\fP routine,
+but if the driver sleeps,
+it must do so such that signals do not cause the
+sleep to longjump [see \f4sleep\fP(D3)].
+.P
+On multiprocessor systems,
+the \f4poll\fP routine may not call any function that sleeps.
+.SH REFERENCES
+.na
+\f4bzero\fP(D3),
+\f4phalloc\fP(D3),
+\f4phfree\fP(D3),
+\f4poll\fP(2),
+\f4pollwakeup\fP(D3),
+\f4select\fP(2)
+.ad

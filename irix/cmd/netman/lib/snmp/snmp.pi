@@ -1,0 +1,274 @@
+/*
+ * Copyright 1991, Silicon Graphics, Inc.
+ * All Rights Reserved.
+ *
+ * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Silicon Graphics, Inc.;
+ * the contents of this file may not be disclosed to third parties, copied or
+ * duplicated in any form, in whole or in part, without the prior written
+ * permission of Silicon Graphics, Inc.
+ *
+ * RESTRICTED RIGHTS LEGEND:
+ * Use, duplication or disclosure by the Government is subject to restrictions
+ * as set forth in subdivision (c)(1)(ii) of the Rights in Technical Data
+ * and Computer Software clause at DFARS 252.227-7013, and/or in similar or
+ * successor clauses in the FAR, DOD or NASA FAR Supplement. Unpublished -
+ * rights reserved under the Copyright Laws of the United States.
+ *
+ * $Revision: 1.7 $
+ */
+
+
+/*
+ * Simple Network Management Protocol (SNMP)
+ */
+
+import udp;
+
+protocol snmp "Simple Network Management Protocol" : udp(161), udp(162)
+{
+    /*
+     * ASN.1 and SNMP Type Codes
+     */
+    enum tag {
+	Integer = 0x02,
+	OctetString = 0x04,
+	Null = 0x05,
+	ObjectIdentifier = 0x06,
+	Sequence = 0x30,
+	IpAddress = 0x40,
+	Counter = 0x41,
+	Gauge = 0x42,
+	TimeTicks = 0x43,
+	Opaque = 0x44,
+	GetRequest = 0xA0,
+	GetNextRequest = 0xA1,
+	GetResponse = 0xA2,
+	SetRequest = 0xA3,
+	Trap = 0xA4
+    };
+
+    /*
+     * SNMP Error Codes
+     */
+    enum errorcode {
+	noError,
+	tooBig,
+	noSuchName,
+	badValue,
+	readOnly,
+	genErr
+    };
+
+    /*
+     * SNMP Trap Codes
+     */
+    enum trapcode {
+	coldStart,
+	warmStart,
+	linkDown,
+	linkUp,
+	authenticationFailure,
+	egpNeighborLoss,
+	enterpriseSpecific
+    };
+
+    /*
+     * Variable binding of object identifier and value
+     */
+    struct varseq {
+	tag vbtype "Variable Binding Type" : 8 -vv;
+	u_char vblb "Variable Binding Long Length Bit" : 1 -vv;
+	if (vblb == 0)
+	    u_long vblen "Variable Binding Length" : 7 -vv;
+	else {
+	    u_long vblnglen "Variable Binding Length Length" : 7 -vv;
+	    switch (vblnglen) {
+		case 1:
+		    u_long vblen : 8 -vv;
+		case 2:
+		    u_long vblen : 16;
+		case 3:
+		    u_long vblen : 24;
+		default:
+		    u_long vblen;
+	    }
+	}
+
+	tag objtype "Object ID Type" : 8 -vv;
+	u_char objlen "Object ID Length" -vv;
+	u_char obj "Object ID" [objlen] -v;
+
+	tag valtype "Object Value Type" : 8 -v;
+	u_char vallen "Object Value Length" -vv;
+	switch (valtype) {
+	    case OctetString:
+		if (vallen > 0) {
+		    if (sval[0] > 32 && sval[0] < 127)
+			char sval "String Value" [vallen] -v;
+		    else
+			u_char val "Object Value" [vallen] -v;
+		}
+	    case Integer:
+	    case Gauge:
+	    case Counter:
+		switch (vallen) {
+		    case 1:
+			u_long ival "Integer Value" : 8 -v;
+		    case 2:
+			u_long ival : 16;
+		    case 3:
+			u_long ival : 24;
+		    case 4:
+			u_long ival;
+		    case 5:
+			u_char LeadZero "Leading Zero" -vv;
+			u_long ival;
+		    default:
+			u_char val "Object Value" [vallen] -v;
+		}
+
+	    default:
+		u_char val "Object Value" [vallen] -v;
+	}
+    };
+
+	
+    /* Opening sequence */
+    tag msg "Message" : 8 -vv;
+    u_char msglb "Message Long Length Bit" : 1 -vv;
+    if (msglb == 0)
+	u_long msglen "Message Length" : 7 -v;
+    else {
+	u_long msgllen "Message Length Length" : 7 -v;
+	switch (msgllen) {
+	    case 1:
+		u_long msglen : 8 -v;
+	    case 2:
+		u_long msglen : 16;
+	    case 3:
+		u_long msglen : 24;
+	    default:
+		u_long msglen;
+	}
+    }
+
+    /* Version */
+    tag vtype "Version Type" : 8 -vv;
+    u_char vlen "Version Length" -vv;
+    switch (vlen) {
+	case 1:
+	    u_long v "Version" : 8 -v;
+	case 2:
+	    u_long v : 16;
+	case 3:
+	    u_long v : 24;
+	default:
+	    u_long v;
+    }
+
+    /* Community */
+    tag comtype "Community Type" : 8 -vv;
+    u_char comlen "Community Length" -vv;
+    char com "Community" [comlen];
+
+    /* PDU */
+    tag pdutype "Protocol Data Unit Type" : 8;
+    u_char pdulb "PDU Long Length Bit" : 1 -vv;
+    if (pdulb == 0)
+	u_long pdulen "PDU Length" : 7 -vv;
+    else {
+	u_long pdullen "PDU Length Length" : 7 -vv;
+	switch (pdullen) {
+	    case 1:
+		u_long pdulen : 8 -vv;
+	    case 2:
+		u_long pdulen : 16;
+	    case 3:
+		u_long pdulen : 24;
+	    default:
+		u_long pdulen;
+	}
+    }
+
+    if (pdutype == Trap) {
+	/* Enterprise OID */
+	tag oidtype "Enterprise Object ID Type" : 8 -vv;
+	u_char oidlen "Object ID Length" -vv;
+	u_char oid "Enterprise Object ID" [oidlen];
+
+	/* Agent Address */
+	tag addrtype "Agent Address Type" : 8 -vv;
+	u_char addrlen "Agent Address Length" -vv;
+	u_char addr "Agent Address" [addrlen];
+
+	/* Generic Trap */
+	tag gttype "Generic Trap Type" : 8 -vv;
+	u_char gtlen "Trap Type Length" -vv;
+	trapcode gt "Trap" : 8;
+
+	/* Specific Trap */
+	tag stype "Specific Trap Type" -vv;
+	u_char stlen "Specific Trap Type Length" -vv;
+	u_char st "Specific Trap" [stlen];
+
+	/* Time Tick */
+	tag timetype "Time Tick Type" -vv;
+	u_char timelen "Time Stamp Length" -vv;
+	u_char time "Time Stamp" [timelen];
+    } else {
+	/* Request ID */
+	tag ridtype "Request ID Type" : 8 -vv;
+	u_char ridlen "Request ID Length" -vv;
+	switch (ridlen) {
+	    case 1:
+		u_long rid "Request ID" : 8;
+	    case 2:
+		u_long rid : 16;
+	    case 3:
+		u_long rid : 24;
+	    default:
+		u_long rid;
+	}
+
+	/* Error Status */
+	tag errstattype "Error Status Type" : 8 -vv;
+	u_char errstatlen "Error Status Length" -vv;
+	errorcode errstat "Error Status" : 8;
+
+	/* Error Index */
+	tag errindtype "Error Index Type" : 8 -vv;
+	u_char errindlen "Error Index Length" -vv;
+	switch (errindlen) {
+	    case 1:
+		u_long errind "Error Index" : 8;
+	    case 2:
+		u_long errind : 16;
+	    case 3:
+		u_long errind : 24;
+	    default:
+		u_long errind;
+	}
+    }
+
+    /* Sequence of variable bindings */
+    tag vbltype "Variable Binding List Type" : 8 -vv;
+    u_char vbllb "VBL Long Length Bit" : 1 -vv;
+    if (vbllb == 0)
+	u_long vbllen "Variable Binding List Length" : 7 -vv;
+    else {
+	u_long vblllen "VBL Length Length" : 7 -vv;
+	switch (vblllen) {
+	    case 1:
+		u_long vbllen : 8 -vv;
+	    case 2:
+		u_long vbllen : 16;
+	    case 3:
+		u_long vbllen : 24;
+	    default:
+		u_long vbllen;
+	}
+    }
+
+    /* Variable List */
+    varseq vlist "List of Variable Bindings" [] -v;
+}

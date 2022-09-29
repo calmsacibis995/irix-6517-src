@@ -1,0 +1,179 @@
+#! /bin/csh -f
+
+echo "\n*************************************************************"
+echo "*                       if_craylink test                    *"
+echo "*       ifcl_test loops level numpttn name [name ...]       *"
+echo "*************************************************************\n"
+
+#	ifcl_test 1 1 1 192.0.2.2 -> For example, does 1 loop of the
+#	tests across 1 partition, whose address is 192.0.2.2
+
+set loops = $argv[1]
+set level = $argv[2]
+set np = $argv[3]
+
+set numcpus = `hinv | awk '/IP27 Processors/ {print $1}'`
+set myhost = ifcl_test-`hostname`
+
+echo "******** Starting ifcl_test with $numcpus CPUs $np pttns $loops loops ********\n"
+
+cat /unix /unix /unix /unix /unix >! /usr/tmp/unix.big
+
+set loopcnt = $loops
+@ loopcnt -= 1
+set ncnt = 0
+testloop:
+
+	@ ncnt += 1
+
+#                   rcp test
+#
+
+	echo "******** Starting rcp test loop $ncnt of $loops ********"
+	echo "******** Forking off $numcpus processes on $numcpus CPUs ********"
+
+	set cpucnt = $numcpus
+	@ cpucnt -= 1
+	while ($cpucnt >= 0)
+		set pcnt = $np
+		while ($pcnt > 0)
+			set pttn = 3
+			@ pttn += $pcnt
+			set lvlcnt = $level
+			while ($lvlcnt > 0)
+				(runon $cpucnt rcp /usr/tmp/unix.big root@${argv[${pttn}]}:/usr/tmp/unix.big.${cpucnt}) &
+				@ lvlcnt -= 1
+			end
+			@ pcnt -= 1
+		end
+		@ cpucnt -= 1
+	end
+
+#                   Check result for rcp test
+#
+
+	echo "******** Waiting for processes to complete ********"
+	wait
+
+	echo "******** rcp test loop $ncnt checking result ********"
+
+	set cpucnt = $numcpus
+	@ cpucnt -= 1
+	while ($cpucnt >= 0)
+		set pcnt = $np
+		while ($pcnt > 0)
+			set pttn = 3
+			@ pttn += $pcnt
+				echo "******** rcp test loop $ncnt checking CPU $cpucnt ********"
+				runon $cpucnt rcp root@${argv[${pttn}]}:/usr/tmp/unix.big.${cpucnt} /usr/tmp/unix.big.remote
+				rsh root@${argv[${pttn}]} "rm -rf /usr/tmp/unix.big.${cpucnt}" >& /dev/null
+				cmp /usr/tmp/unix.big /usr/tmp/unix.big.remote >& /dev/null
+				if ($status != 0) then
+					echo "######## UNIX.BIG IS DIFFERENT ON REMOTE MACHINE\! ########"
+					echo "######## RCP TEST LOOP $ncnt FAILED\! ########"
+					exit 1
+				endif
+			@ pcnt -= 1
+		end
+		@ cpucnt -= 1
+	end
+
+	echo "\n******** RCP TEST LOOP $ncnt PASSED\! ********\n"
+
+#		mount test
+#
+
+	echo "******** Starting mount test loop $ncnt of $loops ********"
+
+        umount /usr/tmp/cl* >& /dev/null
+	rm -rf /usr/tmp/cl* >& /dev/null
+
+	set pcnt = $np
+	while ($pcnt > 0)
+		set pttn = 3
+		@ pttn += $pcnt
+		mkdir /usr/tmp/cl-${argv[${pttn}]}
+		rsh root@${argv[${pttn}]} "umount /usr/tmp/cl-${myhost}" >& /dev/null
+		rsh root@${argv[${pttn}]} "rm -rf /usr/tmp/cl-${myhost}" >& /dev/null
+		rsh root@${argv[${pttn}]} "mkdir /usr/tmp/cl-${myhost}"
+		rsh root@${argv[${pttn}]} "chmod 777 /usr/tmp/cl-${myhost}"
+		mount -t nfs ${argv[${pttn}]}:/usr/tmp/cl-${myhost} /usr/tmp/cl-${argv[${pttn}]}
+		if ($status != 0) then
+			echo "######## Error mounting ${argv[${pttn}]}:/usr/tmp/cl-${myhost} on /usr/tmp/cl-${argv[${pttn}]} ########"
+			exit 1
+		endif
+		@ pcnt -= 1
+	end
+
+	echo "******** Successfully mounted across NFS ********"
+	echo "******** Forking off $numcpus processes on $numcpus CPUs ********"
+
+	set cpucnt = $numcpus
+	@ cpucnt -= 1
+	while ($cpucnt >= 0)
+		set pcnt = $np
+		while ($pcnt > 0)
+			set pttn = 3
+			@ pttn += $pcnt
+			set lvlcnt = $level
+			while ($lvlcnt > 0)
+				(runon $cpucnt cp /usr/tmp/unix.big /usr/tmp/cl-${argv[${pttn}]}/unix.big.${cpucnt}; sync) &
+				@ lvlcnt -= 1
+			end
+			@ pcnt -= 1
+		end
+		@ cpucnt -= 1
+	end
+
+	echo "******** Waiting for processes to complete ********"
+	wait
+	sync
+
+	echo "******** mount test loop $ncnt checking result ********"
+
+	set cpucnt = $numcpus
+	@ cpucnt -= 1
+	while ($cpucnt >= 0)
+		set pcnt = $np
+		while ($pcnt > 0)
+			set pttn = 3
+			@ pttn += $pcnt
+				echo "******** mount test loop $ncnt checking CPU $cpucnt ********"
+				runon $cpucnt cp /usr/tmp/cl-${argv[${pttn}]}/unix.big.${cpucnt} /usr/tmp/unix.big.remote
+				sync
+				cmp /usr/tmp/unix.big /usr/tmp/unix.big.remote >& /dev/null
+				if ($status != 0) then
+					echo "######## UNIX.BIG IS DIFFERENT ON REMOTE MACHINE\! ########"
+					echo "######## MOUNT TEST LOOP $ncnt FAILED\! ########"
+					exit 1
+				endif
+			@ pcnt -= 1
+		end
+		@ cpucnt -= 1
+	end
+
+	set pcnt = $np
+	while ($pcnt > 0)
+		set pttn = 3
+		@ pttn += $pcnt
+		umount /usr/tmp/cl-${argv[${pttn}]}
+		rsh root@${argv[${pttn}]} "rm -rf /usr/tmp/cl-${myhost}" >& /dev/null
+		if ($status != 0) then
+			echo "######## ERROR UMOUNTING /usr/tmp/cl-${argv[${pttn}]} ########"
+			exit 1
+		endif
+		@ pcnt -= 1
+	end
+	
+	echo "\n******** MOUNT TEST LOOP $ncnt PASSED\! ********\n"
+
+if ($loopcnt > 0) then
+	@ loopcnt -= 1
+	goto testloop
+else if ($loopcnt < 0) then
+	goto testloop
+endif
+
+rm -rf /usr/tmp/unix.big* >& /dev/null
+
+exit 0

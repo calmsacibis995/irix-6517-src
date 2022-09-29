@@ -1,0 +1,419 @@
+#!/bin/sh
+
+# "$Revision: 1.19 $"
+
+
+USAGE="$0: [-vt] [-b board] [-p prefix] [-m master] [-u muser] [-c cmd]"
+
+FIXER="Marty Castilla at ext 1479 or pager 694-8973"
+
+PREFIX='8:0:69'
+MASTER=bonnie.engr.sgi.com
+MUSER=fddimac
+MCMD="allocmac2"
+DBM="fddimacs"
+RCDS=/tmp/gotmacs
+
+BINDIR=/usr/bin
+SETMADDR=$BINDIR/setmaddr
+EPFIRM=/usr/etc/epfirm
+GETMAC=$BINDIR/getmac
+
+ARGS="$*"
+
+# get a yes or no answer
+getyes() {
+    while true; do
+	echo "$1 \c"
+	if read yesno; then
+	    case "$yesno" in
+	    [yY]*)
+		return 0
+		;;
+	    [nN]*)
+		return 1
+		;;
+	    esac
+	else
+	    echo
+	    exit 1
+	fi
+	echo '\tPlease answer "yes" or "no".'
+    done
+}
+
+
+# get a string of minimum size
+getname() {
+    while true; do
+	echo "$2 \c"
+	if read ans; then
+	    anslen=`echo "$ans" | wc -c`
+	    if test $3 -le $anslen -a \( $4 -eq 0 -o $4 -ge $anslen \); then
+		eval "$1='$ans'"
+		return 0
+	    fi
+	else
+	    echo
+	    exit 1
+	fi
+	echo "\t$5"
+    done
+}
+
+# get a serial number
+#   $1=variable to set, $2=mesage,  $3=min significant digits,  $4=max digits
+#   $5=error message
+getnum() {
+    while true; do
+	echo "$2 \c"
+	if read ans; then
+	    ans=`echo "$ans" | tr '[a-z]' '[A-Z]'`
+	    # anslen=totlen length
+	    anslen=`echo "$ans" | wc -c`
+	    # ansblen=number of non-alphanumerics
+	    ansblen=`echo "$ans" | tr -d '[A-Z][0-9]' | wc -c`
+	    # ansdlen=number of digits
+	    ansdlen=`echo "$ans" | tr -d '[A-Z]' | wc -c`
+	    # require minimuml length, not too many characters, no extra
+	    # strange characters (including LF from echo),
+	    # and at least one digit
+	    if test $3 -le $anslen -a $4 -ge $anslen \
+		    -a $ansblen = 1 -a $ansdlen -gt 1; then
+		eval "$1='$ans'"
+		return 0
+	    fi
+	else
+	    echo
+	    exit 1
+	fi
+	echo "\t$5"
+    done
+}
+
+
+# get MAC addresses from board
+getomacs() {
+    if test "$TYP" = ep; then
+	ans=`$EPFIRM -vv $BD \
+	    | sed -n -e 's/^ep[0-9]\{1,\}: *\([0-9a-fA-F:]\{11,\}\).*$/\1/p'`
+	if test -z "$ans"; then
+	    echo "please contact $FIXER.\n"
+	    exit 1
+	fi
+	set $ans
+	OMAC=$1
+	OMAC1=$2
+	OMAC2=$3
+	OMAC3=$4
+	OMAC4=$5
+	OMAC5=$6
+	OMAC6=$7
+	OMAC7=$8
+    else
+	OMAC=`$SETMADDR $BD`
+	if test -n "$BD1"; then
+	    OMAC1=`$SETMADDR $BD1`
+	fi
+    fi
+}
+
+
+
+while getopts "vtb:p:m:u:cf" c; do
+    case $c in
+    v) if test -n "$verbose"; then
+	    verbose="$verbose"v
+	else
+	    verbose=-v
+	fi
+	if test x"$verbose" = "x-vv"; then
+	    set -x
+	fi
+	;;
+    t) TMODE=1;;
+    b) BD="$OPTARG";;
+    p) PREFIX="$OPTARG";;
+    m) MASTER="$OPTARG";;
+    u) MUSER="$OPTARG";;
+    c) MCMD="$OPTARG";;
+    f) REPAIR="yes";;
+    \?) echo $USAGE; exit 1;;
+    esac
+done
+shift `expr $OPTIND - 1`
+if test "$#" != 0; then
+    echo $USAGE
+    exit 1
+fi
+
+# we must be root
+set `id`
+if test "$1" != "uid=0(root)" ; then
+    echo "You must be running as root.  Use the su command."
+    exit 1
+fi
+
+trap 'echo "\ninterrupted--No harm done.\n"; exit 1' 1 2 15
+
+
+# get a new copy of the script daily, unless in test mode
+if test -z "$TMODE" -a \
+	-z "`find $GETMAC -mtime -1 -print 2> /dev/null`"; then
+    rm -f /tmp/getmac
+    rcp guest@$MASTER:~$MUSER/bin/getmac /tmp
+    if test ! -s /tmp/getmac; then
+	echo "failed to rcp a new copy of getmac from $MASTER"
+	exit 1
+    fi
+    if cmp -s $GETMAC /tmp/getmac; then
+	touch $GETMAC $SETMADDR
+    else
+	mv /tmp/getmac $GETMAC
+	echo "installing a new copy of getmac from $MASTER"
+	exec $GETMAC $ARGS
+    fi
+fi
+
+#get newer version of setmaddr
+if test -x $SETMADDR; then
+    rm -f `find $SETMADDR ! -newer $GETMAC -print`
+fi
+if test ! -x $SETMADDR; then
+    echo "copying setmaddr from $MASTER"
+    rm -f $SETMADDR
+    if test `uname -r` = '5.3'; then
+	rcp guest@$MASTER:~$MUSER/bin/setmaddr.coff $SETMADDR
+    else
+	rcp guest@$MASTER:~$MUSER/bin/setmaddr $SETMADDR
+    fi
+fi
+
+if test ! -x $BINDIR/test.fddi; then
+    echo "copying test.fddi from $MASTER"
+    rm -f $BINDIR/test.fddi
+    rcp guest@$MASTER:~$MUSER/bin/test.fddi $BINDIR
+fi
+
+# default the board if not specified
+if test -z "$BD"; then
+    if `/usr/etc/ifconfig xpi0 > /dev/null 2>&1`; then
+	BD=xpi0
+    elif `/usr/etc/ifconfig ep0 > /dev/null 2>&1`; then
+	BD=ep0
+    else
+	BD=ipg0
+    fi
+fi
+
+case "$BD" in
+    ipg[0-3])
+	TYP=ipg
+	MINSN=5
+	NBD=1
+	;;
+
+    xpi*)
+	TYP=xpi
+	MINSN=1
+	if test 1 -lt `hinv -c processor | sed -n -e '1s/ .*//p'`; then
+	    #deal with both units on the board, making the first
+	    #one the even unit
+	    BD="xpi`expr $BD : 'xpi\(.\)' / 2 '*' 2`"
+	    BD1="xpi`expr $BD : 'xpi\(.\)' / 2 '*' 2 + 1`"
+	    NBD=2
+	else
+	    NBD=1
+	fi
+	;;
+
+    ep*)
+	TYP=ep
+	MINSN=1
+	NBD=8
+	#start with the first unit on a board
+	BD="ep`expr $BD : 'ep\(.\)' / 10 '*' 10`"
+	BD1="ep`expr $BD : 'ep\(.\)' / 10 '*' 10 + 1`"
+	BD2="ep`expr $BD : 'ep\(.\)' / 10 '*' 10 + 2`"
+	BD3="ep`expr $BD : 'ep\(.\)' / 10 '*' 10 + 3`"
+	BD4="ep`expr $BD : 'ep\(.\)' / 10 '*' 10 + 4`"
+	BD5="ep`expr $BD : 'ep\(.\)' / 10 '*' 10 + 5`"
+	BD6="ep`expr $BD : 'ep\(.\)' / 10 '*' 10 + 6`"
+	BD7="ep`expr $BD : 'ep\(.\)' / 10 '*' 10 + 7`"
+	;;
+
+    *)
+	echo "$BD" is an unknown board
+	exit 1
+	;;
+esac
+
+
+
+# get the current MAC addresses
+getomacs
+if test -n "$verbose"; then
+    if test -n "$BD1"; then
+	SPACE="Old addresses"
+	BDNUM=0
+	for nm in $OMAC $OMAC1 $OMAC2 $OMAC3 $OMAC4 $OMAC5 $OMAC6 $OMAC7; do
+	    if test "$BDNUM" = 3; then
+		SPACE=",\n    "
+		BDNUM=0
+	    fi
+	    echo "$SPACE $nm\c"
+	    SPACE=","
+	    BDNUM=`expr ${BDNUM:-0} + 1`
+	done
+	echo
+    else
+	echo "Old address $OMAC"
+    fi
+fi
+
+BNUMS=`echo " $OMAC $OMAC1 $OMAC2 $OMAC3 $OMAC4 $OMAC5 $OMAC6 $OMAC7"  \
+	| sed -e "s/ $PREFIX"'[0-9a-fA-F:]*/G/g' -e 's/GG*/G/'`
+if test "$BNUMS" = G; then
+    echo "The board already has a valid MAC address."
+    if getyes "Do you want to continue?"; then :
+    else
+	echo "\nOk, no changes made.\n"
+	exit 1
+    fi
+fi
+
+if test "$REPAIR" != "yes"; then
+    getname UNAME "Who are you?" 3 0 "Please supply a more interesting name"
+fi
+
+getnum SNUM "What is the $BD board serial number?" $MINSN 10 \
+	    "That does not seem like a serial number."
+
+# set RCD# to old address from the database
+rsh guest@$MASTER -n egrep -i "'^[^# ]*=$TYP *$SNUM(-[0-9])?	'" \
+	~$MUSER/$DBM >$RCDS
+if test -s $RCDS; then
+    eval `sed -e 's/^\([^# ]*\)='"$TYP *$SNUM"'-*\([0-9]*\).*/RCD\2=\1/' \
+		-e 's/^RCD0=/RCD=/'   $RCDS`
+fi
+
+# only repair returned boards
+if test "$REPAIR" = yes; then
+    if test -s $RCDS; then
+	echo "\nThere is no record of a $TYP board with serial number $SNUM."
+	echo "Nothing changed."
+	exit 1
+    fi
+
+elif test -s $RCDS; then
+    echo "\nA board with serial $SNUM already has the following record(s) in the database:"
+    cat $RCDS
+    echo "\nIf this board is not the same as the other board with serial number $SNUM,"
+    echo "please contact $FIXER.\n"
+
+    if getyes "Is this the same board and it only needs repairing"?; then
+	REPAIR=yes
+    elif getyes "Do you really want to allocate a new MAC address?"; then :
+	RCD=
+    else
+	echo "\nOk.  It must be the same board.  Rewrite its address.\n"
+	REPAIR=yes
+    fi
+fi
+
+
+echo
+if test "$REPAIR" != yes; then
+    if getyes "Are you $UNAME and are you setting the $BD board with serial number $SNUM?";
+    then :
+    else
+	echo "\nOk.  No harm done.\n"
+	exit 1
+    fi
+
+    #disable interrupts when we are committed
+    trap "" 1 2 15
+
+    rsh $MUSER@$MASTER -n $MCMD -t $TYP -d $DBM -c $NBD \
+	    -u "$UNAME" -s $SNUM  >$RCDS 2>&1
+    if test `egrep -v -c "^[^# ]*=$TYP *$SNUM(-[0-9])?	" $RCDS` != 0; then
+	echo "\nThe address allocator on $MASTER failed saying\n"
+	cat $RCDS
+	echo "\nCall $FIXER."
+	exit 1
+    fi
+    eval `sed -e 's/^\([^# ]*\)='"$TYP *$SNUM"'-*\([0-9]*\).*/RCD\2=\1/' \
+		-e 's/^RCD0=/RCD=/'   $RCDS`
+fi
+
+if test $NBD != `echo $RCD $RCD1 $RCD2 $RCD3 $RCD4 $RCD5 $RCD6 $RCD7 | wc -w`\
+	    -o $NBD != `wc -l <$RCDS`; then
+    echo "\nThere are insufficient records for serial number $SNUM:"
+    cat $RCDS
+    echo "\nNothing changed."
+    echo "Call $FIXER."
+    exit 1
+fi
+
+echo
+
+# disable interrupts when we are committed
+trap "" 1 2 15
+
+
+# program the board
+if test "$TYP" = ep; then
+    if test ! -x $EPFIRM; then
+	echo "epfirm must be installed."
+	echo "Call $FIXER."
+	exit 1
+    fi
+    $EPFIRM -v $verbose -w "$RCD,$RCD1,$RCD2,$RCD3,$RCD4,$RCD5,$RCD6,$RCD7" $BD
+else
+    #keep SMTD from turning the board back on
+    killall smtd
+    $SETMADDR $verbose -w "$RCD" $BD
+    if test $? != 0; then
+	echo "\nThe board refused to accept the address."
+	echo "Call $FIXER."
+	exit 1
+    fi
+    if test -n "$BD1"; then
+	$SETMADDR $verbose -w "$RCD1" $BD1
+	if test $? != 0; then
+	    echo "\nThe board refused to accept the second address."
+	    echo "Call $FIXER."
+	    exit 1
+	fi
+    fi
+fi
+
+
+#try to ensure that everyone knows about the new address
+trap "" 1 2 15
+if test -z "$TMODE"; then
+    killall smtd smtstat fddivis
+    /etc/init.d/network stop
+    /etc/init.d/network start
+fi
+
+
+getomacs
+if test -z "$BD1"; then
+    echo "\nThe board now has address $OMAC.\n"
+else
+    SPACE="\nThe board now has addresses"
+    BDNUM=1
+    for nm in $OMAC $OMAC1 $OMAC2 $OMAC3 $OMAC4 $OMAC5 $OMAC6 $OMAC7; do
+	if test "$BDNUM" = 3; then
+	    SPACE=",\n    "
+	    BDNUM=0
+	fi
+	echo "$SPACE $nm\c"
+	SPACE=","
+	BDNUM=`expr ${BDNUM:-0} + 1`
+    done
+    echo "\n"
+fi
+
+exit 0

@@ -1,0 +1,387 @@
+\.nr X
+.if \nX=0 .ds x} inittab 4 "" "\&"
+.TH \*(x}
+.SH NAME
+inittab \- script for the init process
+.SH DESCRIPTION
+The
+.I /etc/inittab
+file supplies the script to
+.IR init 's
+role as a general process dispatcher.
+The process
+that constitutes the majority of
+.IR init 's
+process dispatching activities is the line process
+.I /etc/getty
+that initiates individual terminal lines.
+Other processes typically dispatched by
+.I init
+are daemons and the
+shell.
+.PP
+The \f2inittab\fP file is composed of entries that are position dependent and
+have the following format:
+.PP
+.RS
+id:rstate:action:process
+.RE
+.PP
+Each entry is started with a character other than \f3#\f1
+and ended by a newline.
+Lines starting with \f3#\f1 are ignored.
+A backslash (\f3\\\f1) preceding a newline indicates
+a continuation of the entry.
+Up to 512 characters per entry
+are permitted.
+Comments can be inserted
+in the
+.I process
+field using the
+.IR sh (1)
+convention for comments.
+Comments in the
+.I process
+field of lines that spawn
+.IR getty s
+are displayed by the
+.IR who (1)
+command.
+Such
+.I process
+field comments can contain information about the line such as its location.
+There are no
+limits (other than maximum entry size) imposed on the number of entries
+within the
+.I inittab
+file.
+The entry fields are:
+.TP \w'process\ \ \ 'u
+.I id
+This field, of up to four characters, is
+used to uniquely identify an entry.
+.TP
+.I rstate
+This defines the
+run-level
+in which this entry is to be
+processed.
+Run-levels
+effectively correspond to a configuration of processes
+in the system.
+That is, each process spawned by
+.I init
+is assigned a run-level or run-levels in which it is allowed
+to exist.
+.IP
+The
+run-levels
+are represented by the letter
+.B s
+(or
+.BR S ),
+or a number ranging from
+.B 0
+through
+.BR 6 .
+As an example, if
+the system
+is in
+run-level
+.BR 1 ,
+only those entries having a
+.B 1
+in the
+.I rstate
+field are processed.
+.IP
+When
+.I init
+is requested to change
+run-levels,
+all processes
+that do not have
+an entry in the
+.I rstate
+field for the target
+run-level
+are sent the warning signal
+.RB ( SIGTERM )
+and allowed a grace period (see
+.IR init (1M)
+for the length of this grace period), before being forcibly terminated
+by a kill signal
+.RB ( SIGKILL ).
+.IP
+The
+.I rstate
+field can define multiple
+run-levels
+for a process
+by selecting
+more than one run-level in any combination
+from \f30\-6\fP, \f3s\fP, and \f3S\fP.
+If no
+run-level
+is specified,
+the process is assumed to be valid at
+all
+run-levels.
+.IP
+There are three other values,
+.BR a ,
+.BR b ,
+and
+.BR c ,
+that can appear in the
+.I rstate
+field,
+even though they are not true
+run-levels.
+Entries that have these characters in the
+.I rstate
+field are processed only when the
+.I telinit
+(see
+.IR init (1M))
+process requests them to be run (regardless of the
+current
+run-level
+of the system).
+They differ from
+run-levels
+in that
+.I init
+can never enter
+run-level
+.BR a ,
+.BR b ,
+or
+.BR c .
+Also, a request for the execution of any of these processes
+does not change the current
+run-level.
+Furthermore, a process started by an
+.BR a ,
+.BR b ,
+or
+.B c
+command is not killed when
+.I init
+changes levels.
+They are only killed if their line in
+.I /etc/inittab
+is marked \f3off\fP in the
+.I action
+field, their line is deleted entirely from
+.IR /etc/inittab ,
+or
+.I init
+goes into the
+SINGLE USER
+state.
+.TP
+.I action
+Key words in this field tell
+.I init
+how to treat the process specified in the
+.I process
+field.
+The
+.IR action s
+recognized by
+.I init
+are
+as follows:
+.RS
+.TP 13
+.B respawn
+If the process does not exist then start the
+process.
+Do not wait for its termination (continue
+scanning the
+.I inittab
+file) and when it dies restart the process.
+If the process currently exists then do nothing and continue scanning the
+.I inittab
+file.
+.TP
+.B wait
+Upon
+.IR init 's
+entering the run-level that matches the entry's
+.IR rstate ,
+start the process and wait for its termination.
+All subsequent reads of the
+.I inittab
+file while
+.I init
+is in the same run-level causes
+.I init
+to ignore this entry.
+.TP
+.B once
+Upon
+.IR init 's
+entering a run-level that matches the entry's
+.IR rstate ,
+start the process, do not wait
+for its termination.
+When it dies, do not restart the process.
+If upon entering a new run-level,
+the process is still running from a
+previous run-level change, the program is not restarted.
+.TP
+.B boot
+The entry is to be processed only at
+.IR init 's
+boot-time read of the
+.I inittab
+file.
+.I init
+is to start the process and not wait for its termination.
+When it dies,
+.I init
+does not restart the process.
+In order for
+this instruction to be meaningful, the
+.I rstate
+should be the default or it must
+match
+.IR init 's
+run-level at boot time.
+This action is useful for an initialization function following
+a hardware reboot of the system.
+.TP
+.B bootwait
+The entry is to be processed the first time
+.I init
+goes from single-user to multi-user state after the system is booted.
+(If \f3initdefault\f1 is set to \f32\f1,
+the process runs right after the boot.)
+.I init
+starts the process, waits for its termination and,
+when it dies, does not restart the process.
+.TP
+.B powerfail
+Execute the process associated with this entry only when
+.I init
+receives a
+power fail signal
+.RB ( SIGPWR,
+see
+.IR signal (2)).
+.TP
+.B powerwait
+Execute the process associated with this entry only when
+.I init
+receives a
+power fail signal
+.RB ( SIGPWR )
+and wait until it
+terminates before continuing any processing of
+.IR inittab .
+.TP
+.B off
+If the process associated with this entry is currently
+running, send the warning signal
+.RB ( SIGTERM )
+and wait 20 seconds before forcibly terminating the process via the kill
+signal
+.RB ( SIGKILL ).
+If the process
+is nonexistent, ignore the entry.
+.TP
+.B ondemand
+This instruction is really a synonym for the
+.B respawn
+action.
+It is functionally identical to
+.B respawn
+but is given a different keyword in
+order to divorce its association
+with run-levels.
+This is used only with the
+.BR a ,
+.B b
+or
+.B c
+values
+described in the
+.I rstate
+field.
+.TP
+.B initdefault
+An entry with this
+.I action
+is only scanned when
+.I init
+initially invoked.
+.I init
+uses this entry, if it exists, to determine which
+run-level
+to enter initially.
+It does this by taking the highest
+run-level specified in the
+.I rstate
+field and using that as its initial state.
+If the
+.I rstate
+field is empty, this is interpreted as
+.B 0123456
+and so
+.I init
+enters
+run-level
+.BR 6 .
+Additionally, if
+.I init
+does not find an
+.B initdefault
+entry in
+.IR /etc/inittab ,
+it requests an initial
+run-level
+from the user at reboot time.
+.TP
+.B sysinit
+Entries of this type are executed before
+.I init
+tries to access the console (before the \f3Console Login:\f1 prompt).
+It is expected that this entry will be used only
+to initialize devices on which
+.I init
+might try to ask the run-level question.
+These entries are executed and waited for before continuing.
+.RE
+.TP \w'process\ \ \ 'u
+.I process
+This is a
+.I sh
+command to be executed.
+The entire
+.B process
+field is prefixed with
+.I exec
+and passed to a forked
+.I sh
+as
+.BI "sh \-c \(fmexec" " command" \(fm\f1.\fP
+For this reason, any legal
+.I sh
+syntax can appear in the
+.I process
+field.
+Comments can be inserted with the
+.BI ";\ #" comment
+syntax.
+.SH FILES
+/etc/inittab
+.SH "SEE ALSO"
+getty(1M),
+init(1M),
+sh(1),
+who(1),
+exec(2),
+open(2),
+signal(2).

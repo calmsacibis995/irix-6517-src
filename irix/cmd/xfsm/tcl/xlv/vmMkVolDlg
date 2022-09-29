@@ -1,0 +1,1095 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	vmMkVolDlg
+# Version:	$Revision: 1.9 $
+# Synopsis:	Encapsulates the dialog that allows the user to create a volume.
+# Functions:	vmMkVol:realize
+#		vmMkVol:manage
+#		vmMkVol:fill
+#		vmMkVol:_infoFill
+#		vmMkVol:clear
+#		vmMkVol:setData
+#		vmMkVol:setHost
+#		vmMkVol:getData
+#		vmMkVol:chkData
+#		vmMkVol:_create
+#		vmMkVol:_createWorkArea
+#		vmMkVol:_dialogCb
+#		vmMkVol:_popdownCb
+#		vmMkVol:_accept
+#		vmMkVol:_doAccept
+#		vmMkVol:_cancel
+#		vmMkVol:_save
+#		vmMkVol:_newHostName
+#		vmMkVol:_changePlexCountCb
+#		vmMkVol:_changePlexCount
+#		vmMkVol:_subvCb
+#		vmMkVol:_veNumChangeAction
+#		vmMkVol:_vePartChangeAction
+#		vmMkVol:_rowSelectAction
+#		vmMkVol:_startChangeAction
+#		vmMkVol:_updateVolSum
+#		vmMkVol:_partChangeAction
+#		vmMkVol:_nextPrevAction
+#		vmMkVol:_updateNextPrev
+#		vmMkVol:_setPlexOnlyValue
+#		vmMkVol:_setPlexAndVeValue
+#		vmMkVol:_updatePlexGraph
+#		vmMkVol:_startDrop
+#		vmMkVol:_doTransfer
+#%COMMENT_END
+
+global	G_data
+if {! [info exists G_data(source,vmPtPnl)]} {
+	source $G_data(sourcedir)/vmPtPnl
+	set G_data(source,vmPtPnl) true
+}
+if {! [info exists G_data(source,vmPlxTblPnl)]} {
+	source $G_data(sourcedir)/vmPlxTblPnl
+	set G_data(source,vmPlxTblPnl) true
+}
+if {! [info exists G_data(source,vmPlxGraphPnl)]} {
+	source $G_data(sourcedir)/vmPlxGraphPnl
+	set G_data(source,vmPlxGraphPnl) true
+}
+if {! [info exists G_data(source,vmVolSumPnl)]} {
+	source $G_data(sourcedir)/vmVolSumPnl
+	set G_data(source,vmVolSumPnl) true
+}
+
+#########################################
+#		Public			#
+#########################################
+proc vmMkVol:realize { handle parent {mode create} } \
+{
+	global		_GW_mkvol _GD_mkvol
+
+	####	One time initialization
+	if {! [info exists _GD_mkvol(initialized)]} {
+		####	Make sure we don't go through this again
+		set _GD_mkvol(initialized) true
+
+		set _GD_mkvol(subvs)	{data log rt}
+		set _GD_mkvol(texts)	{XLV_OBJ_NAME}
+		set _GD_mkvol(labels)	{XFS_HOST}
+
+		set _GD_mkvol(PLEX,opts)	{0 1 2 3 4}
+		set _GD_mkvol(data,opts)	{1 2 3 4}
+		set _GD_mkvol(log,opts)		{0 1 2 3 4}
+		set _GD_mkvol(rt,opts)		{0 1 2 3 4}
+
+		set _GD_mkvol(data,plexes,def)	1
+		set _GD_mkvol(log,plexes,def)	1
+		set _GD_mkvol(rt,plexes,def)	0
+	}
+
+	####	Per instance initialization / creation
+	if {! [info exists _GW_mkvol($handle,dialog)]} {
+
+		set _GD_mkvol($handle,mode)	$mode
+		set _GD_mkvol($handle,type)	[lindex $_GD_mkvol(subvs) 0]
+		if {$mode == "info"} {
+			set _GD_mkvol($handle,buttons) {cancel help}
+		} else {
+			set _GD_mkvol($handle,buttons) {accept apply save
+							cancel help}
+		}
+
+		set _GD_mkvol($handle,confirm)	false
+		trace variable _GD_mkvol($handle,confirm) w vmMkVol:_doAccept
+
+		set _GD_mkvol($handle,data,plexes) $_GD_mkvol(data,plexes,def)
+		set _GD_mkvol($handle,log,plexes) $_GD_mkvol(log,plexes,def)
+		set _GD_mkvol($handle,rt,plexes) $_GD_mkvol(rt,plexes,def)
+
+		####	Create the world
+		set _GW_mkvol($handle,dialog) [vmMkVol:_create $handle $parent]
+		vmMkVol:_rowSelectAction $handle $_GD_mkvol($handle,type) 0 sel
+
+		####    This must happen after the dialog is realized
+		$_GW_mkvol($handle,dialog) realizeWidget
+
+		####	Dialog
+		$_GW_mkvol($handle,dialog) getValues -height height -width width
+		set gw(current) [plxGrph:getWidth $handle current]
+		set gw(desired) [plxGrph:getWidth $handle desired]
+		plxGrph:setWidth $handle $gw(desired)
+		set width [expr $width + ($gw(desired) - $gw(current))]
+
+		.$_GW_mkvol($handle,dialog) setValues \
+				-minHeight [expr $height + 40] \
+				-minWidth $width
+
+		####	Panes
+		$_GW_mkvol($handle,buttons) getValues -height height
+		$_GW_mkvol($handle,buttons) setValues \
+				-paneMinimum $height \
+				-paneMaximum $height
+		$_GW_mkvol($handle,pane,plex) getValues -height height
+		$_GW_mkvol($handle,pane,plex) setValues \
+				-height [expr $height + 40] \
+				-paneMinimum $height
+		if {$_GD_mkvol($handle,mode) != "info"} {
+			$_GW_mkvol($handle,pane,part) getValues -height height
+			$_GW_mkvol($handle,pane,part) setValues \
+					-paneMinimum $height
+		}
+
+		####    Register for Drag and Drop
+		$_GW_mkvol($handle,dialog) dropSiteRegister -dropProc \
+				"vmMkVol:_startDrop $handle %dragContext \
+						$_GW_mkvol($handle,dialog)" \
+				-numImportTargets 1 \
+				-importTargets "COMPOUND_TEXT"
+	}
+}
+
+proc vmMkVol:manage { handle } \
+{
+	global	_GW_mkvol _GD_mkvol
+
+	if {[info exists _GW_mkvol($handle,dialog)]} {
+		$_GW_mkvol($handle,dialog) manageChild
+		set _GD_mkvol($handle,accept) false
+	}
+}
+
+#########################################
+#	Public: Data In Routines	#
+#########################################
+proc vmMkVol:fill { handle obj_list } \
+{
+	global	_GW_mkvol _GD_mkvol
+
+	if {! [info exists _GW_mkvol($handle,dialog)]} {
+		return 1
+	}
+
+	if {$obj_list != ""} {
+		set obj [lindex $obj_list 0]
+
+		obj:parse $obj o_class o_host o_nm o_type
+
+		if {$o_class != "VOL" || [string toupper $o_type] != "VOL"} {
+			if {$_GD_mkvol($handle,mode) == "create"} {
+				set op "create"
+			} elseif {$_GD_mkvol($handle,mode) == "edit"} {
+				set op "edit"
+			} else {
+				set op "information"
+			}
+			em:simpleMsg vol error \
+			"Only volumes are valid for the $op operation."
+			return 0
+		} elseif {$o_host == "_TEMPLATE_"} {
+			if {[tu:read $o_class $o_nm data]} {
+				vmMkVol:setData $handle [split $data \n]
+			}
+		} elseif {$_GD_mkvol($handle,mode) != "create"} {
+				if {! [vmMkVol:_infoFill $handle $obj]} {
+					return 0
+				}
+		} else {
+			####	TODO
+			####	What happens during create?
+		}
+	}
+
+	return 1
+}
+
+proc vmMkVol:_infoFill { handle obj } \
+{
+	global		_GW_mkvol _GD_mkvol
+
+	if {[catch {set objdata [xlvCmd objInfo $obj]} error]} {
+		regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		em:storeMsg $handle warning \
+		"Could not get volume data for [obj:getName $obj].\n\t$nerror"
+		return 0
+	}
+	if {[catch {set synopsis [xlvCmd synopsis $obj]} error]} {
+		regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		em:storeMsg $handle warning \
+		"Could not get volume data for [obj:getName $obj].\n\t$nerror"
+		return 0
+	}
+	if {[llength $synopsis] == 1} {
+		set synopsis [lindex $synopsis 0]
+	}
+
+	foreach subv $_GD_mkvol(subvs) {
+		plxTbl:clear $handle-$subv
+	}
+
+	obj:parse $obj o_class o_host o_nm o_type
+	$_GW_mkvol($handle,XLV_OBJ_NAME) setValues -labelString $o_nm
+	$_GW_mkvol($handle,XFS_HOST) setValues \
+			-labelString [hu:getHostPlusDom $o_host]
+	set _GD_mkvol($handle,XFS_HOST) $o_host
+
+	if {! [xlv:parseData object [split $objdata \n] data_out]} {
+		return 0
+	}
+	set v_plexes [lassign $synopsis v_name v_type]
+
+	foreach subv $_GD_mkvol(subvs) {
+		if {[lsearch -exact $data_out(subvolumes) $subv] == -1} {
+			vmMkVol:_changePlexCount $handle $subv 0
+			continue
+		}
+		set num_plexes [llength $data_out($subv,ve_num)]
+		vmMkVol:_changePlexCount $handle $subv $num_plexes
+		set idx [lsearch $v_plexes "$subv *"]
+		set s_plexes [lassign [lvarpop v_plexes $idx] \
+					p_name p_size p_num]
+
+		set rnum 0; set cells($subv) {}
+		loop i 0 $num_plexes 1 {
+			set ve_num [lvarpop data_out($subv,ve_num)]
+			set xxy [lvarpop s_plexes 0]
+
+			plxTbl:_setTblVeCount $handle-$subv $i $ve_num
+			loop j 0 $ve_num 1 {
+				lassign [lvarpop xxy] idx start end
+				set size [expr ($end - $start) / 2048.0]
+				lappend cells($subv) [list $ve_num \
+				    [lindex $data_out($subv,ve_type) $rnum] \
+				    [lindex $data_out($subv,ve_sunit) $rnum] \
+				    [lindex $data_out($subv,ve_start) $rnum] \
+				    [format %.2f $size] \
+				    [lindex $data_out($subv,nparts) $rnum] \
+				    [lindex $data_out($subv,parts) $rnum]]
+
+				set ve_num ""
+				incr rnum
+			}
+		}
+
+		plxTbl:setData $handle-$subv $cells($subv)
+	}
+
+	vmMkVol:_subvCb $handle $_GD_mkvol($handle,type) true
+	volSum:setData $handle $synopsis [split $objdata \n]
+
+	return 1
+}
+
+
+proc vmMkVol:clear { handle } \
+{
+	global		_GD_mkvol
+
+	set _GD_mkvol($handle,type)	[lindex $_GD_mkvol(subvs) 0]
+
+	volSum:clear $handle
+	plxGrph:clear $handle
+
+	foreach item $_GD_mkvol(subvs) {
+		plxTbl:clear $handle-$item
+
+		set _GD_mkvol($handle,$item,plexes) $_GD_mkvol($item,plexes,def)
+
+		volSum:setItemLabel $handle $item plexes \
+				$_GD_mkvol($handle,$item,plexes)
+		volSum:setItemLabel $handle $item ves \
+				$_GD_mkvol($handle,$item,plexes)
+		vmMkVol:_changePlexCount $handle $item \
+				$_GD_mkvol($handle,$item,plexes)
+	}
+	vmMkVol:_subvCb $handle $_GD_mkvol($handle,type) true
+}
+
+proc vmMkVol:setData { handle objdata } \
+{
+	global	_GW_mkvol _GD_mkvol
+
+	if {! [xlv:parseData template $objdata dout]} {
+		return
+	}
+
+	foreach subv $_GD_mkvol(subvs) {
+		ptPnl:markPartsAvail $handle [plxTbl:getParts $handle-$subv]
+		plxTbl:clear $handle-$subv
+
+		if {[lsearch -exact $dout(subvolumes) $subv] == -1} {
+			vmMkVol:_changePlexCount $handle $subv 0
+			continue
+		}
+		set num_plexes [llength $dout($subv,ve_num)]
+		vmMkVol:_changePlexCount $handle $subv $num_plexes
+
+		set rnum 0; set cells($subv) {}
+		loop i 0 $num_plexes 1 {
+			set ve_num [lindex $dout($subv,ve_num) $i]
+			plxTbl:_setTblVeCount $handle-$subv $i $ve_num
+			loop j 0 $ve_num 1 {
+				lappend cells($subv) [list $ve_num \
+				    [lindex $dout($subv,ve_type) $rnum] \
+				    [lindex $dout($subv,ve_sunit) $rnum] \
+				    [lindex $dout($subv,ve_start) $rnum] \
+				    [format %.2f 0.0] \
+				    0 \
+				    ""]
+
+				set ve_num ""
+				incr rnum
+			}
+		}
+		plxTbl:setData $handle-$subv $cells($subv)
+	}
+
+	vmMkVol:_subvCb $handle $_GD_mkvol($handle,type) true
+	foreach subv $_GD_mkvol(subvs) {
+		set sumdata ""
+		plxTbl:getSummaryData $handle-$subv sumdata
+		volSum:setSubvData $handle $subv $sumdata
+	}
+}
+
+proc vmMkVol:setHost { handle host } \
+{
+	global		_GW_mkvol _GD_mkvol
+
+	if {$_GD_mkvol($handle,mode) != "info"} {
+		$_GW_mkvol($handle,dialog) defineCursor watch
+		vmMkVol:_newHostName $handle $host
+		set _GD_mkvol($handle,XFS_HOST) $host
+		$_GW_mkvol($handle,XFS_HOST) setValues \
+				-labelString [hu:getHostPlusDom $host]
+		$_GW_mkvol($handle,dialog) defineCursor ""
+	}
+}
+
+#########################################
+#	Public: Data Out Routines	#
+#########################################
+proc vmMkVol:getData { handle dat {check true} } \
+{
+	global		_GW_mkvol _GD_mkvol
+	upvar $dat	data
+
+	set val [string trim [$_GW_mkvol($handle,XLV_OBJ_NAME) getString]]
+	if {[cequal $val ""]} { set val . }
+	lappend data "vol $val"
+
+	foreach item $_GD_mkvol(subvs) {
+		if {! $_GD_mkvol($handle,$item,plexes)} {
+			continue
+		}
+		lappend data $item
+		if {! [plxTbl:getData $handle-$item data]} {
+			####	TODO:	Deal with error
+		}
+	}
+
+	lappend data end
+	lappend data exit
+
+	return 1
+}
+
+proc vmMkVol:chkData { handle } \
+{
+	global		_GW_mkvol _GD_mkvol
+	set rval	1
+
+	set item XLV_OBJ_NAME
+	if {[string trim [$_GW_mkvol($handle,$item) getString]] == ""} {
+		$_GW_mkvol($handle,$item)-label getValues -labelString val
+		em:storeMsg $handle error "\"$val\" is a required field."
+		set rval 0
+	}
+
+	foreach item $_GD_mkvol(subvs) {
+		if {! $_GD_mkvol($handle,$item,plexes)} {
+			continue
+		}
+		if {! [plxTbl:chkData $handle-$item $item]} {
+			set rval 0
+		}
+	}
+
+	if {! $rval} {
+		em:setMessageString $handle "Unable to create volume."
+	}
+
+	return $rval
+}
+
+#########################################
+#		Private			#
+#########################################
+proc vmMkVol:_create { handle parent } \
+{
+	global		_GW_mkvol _GD_mkvol
+	set name	vmMkVol
+
+        set dialog [xmFormDialog $parent.$handle]
+	.$dialog popdownCallback "vmMkVol:_popdownCb $handle"
+	set pane [xmPanedWindow $dialog.$name \
+			-sashWidth 1 \
+			-sashHeight 1 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form]
+
+	set pw [xmPanedWindow $pane.pane managed]
+	set form_upper [xmForm $pw.subvols]
+	set wa [vmMkVol:_createWorkArea $handle $form_upper]
+
+	set plx_area [xmForm $form_upper.plexes]
+
+	foreach item $_GD_mkvol(subvs) {
+		set _GW_mkvol($handle,plex,$item) \
+				[plxTbl:realize $handle-$item $plx_area $item \
+						$_GD_mkvol($handle,mode)]
+		$_GW_mkvol($handle,plex,$item) setValues \
+				-topAttachment attach_form \
+				-leftAttachment attach_form \
+				-rightAttachment attach_form \
+				-bottomAttachment attach_form
+		plxTbl:registerRowSelectAction $handle-$item \
+				vmMkVol:_rowSelectAction
+		plxTbl:registerVeNumChangeAction $handle-$item \
+				vmMkVol:_veNumChangeAction
+		plxTbl:registerVePartChangeAction $handle-$item \
+				vmMkVol:_vePartChangeAction
+		plxTbl:registerStartChangeAction $handle-$item \
+				vmMkVol:_startChangeAction
+	}
+
+	set _GW_mkvol($handle,plex) \
+			$_GW_mkvol($handle,plex,$_GD_mkvol($handle,type))
+
+	plxTbl:manage $handle-$_GD_mkvol($handle,type)
+
+	if {$_GD_mkvol($handle,mode) != "info"} {
+		set form_lower [xmForm $pw.form_lower -skipAdjust true]
+		set plx_grph [plxGrph:realize $handle $form_lower]
+		set pt_pnl [ptPnl:realize $handle $form_lower]
+
+		ptPnl:registerPartChangeAction $handle vmMkVol:_partChangeAction
+		ptPnl:registerNextPrevAction $handle vmMkVol:_nextPrevAction
+		ptPnl:manage $handle
+
+		$wa setValues		-topAttachment attach_form \
+					-leftAttachment attach_form \
+					-rightAttachment attach_none \
+					-bottomAttachment attach_none
+		$plx_area setValues	-topAttachment attach_widget \
+					-leftAttachment attach_form \
+					-rightAttachment attach_form \
+					-bottomAttachment attach_form \
+					-topWidget $wa \
+					-topOffset 10 \
+					-bottomOffset 5
+
+		$plx_grph setValues	-topAttachment attach_form \
+					-leftAttachment attach_none \
+					-rightAttachment attach_none \
+					-bottomAttachment attach_form \
+					-bottomOffset 5
+		$pt_pnl setValues	-topAttachment attach_form \
+					-leftAttachment attach_widget \
+					-rightAttachment attach_form \
+					-bottomAttachment attach_form \
+					-bottomOffset 5 \
+					-leftWidget $plx_grph \
+					-leftOffset 10
+
+		$form_lower manageChild
+		set _GW_mkvol($handle,pane,part) $form_lower
+	} else {
+		set plx_grph [plxGrph:realize $handle $form_upper]
+		$plx_grph setValues	-topAttachment attach_form \
+					-leftAttachment attach_none \
+					-rightAttachment attach_form \
+					-bottomAttachment attach_form \
+					-bottomOffset 5
+		$plx_area setValues	-topAttachment attach_widget \
+					-leftAttachment attach_form \
+					-rightAttachment attach_widget \
+					-bottomAttachment attach_form \
+					-topWidget $wa \
+					-topOffset 10 \
+					-rightWidget $plx_grph \
+					-rightOffset 5 \
+					-bottomOffset 5
+		$wa setValues		-topAttachment attach_form \
+					-leftAttachment attach_form \
+					-rightAttachment attach_widget \
+					-bottomAttachment attach_none \
+					-rightWidget $plx_grph \
+					-rightOffset 10
+	}
+
+	set _GW_mkvol($handle,buttons) \
+		 [xfs:createDialogButtons $pane $_GD_mkvol($handle,buttons)]
+	foreach i $_GD_mkvol($handle,buttons) {
+		$_GW_mkvol($handle,buttons).$i \
+				activateCallback "vmMkVol:_dialogCb $handle $i"
+	}
+
+	plxGrph:registerPlexAction $handle vmMkVol:_setPlexOnlyValue
+	plxGrph:registerVeAction $handle vmMkVol:_setPlexAndVeValue
+
+	$plx_grph manageChild
+	$wa manageChild
+	$plx_area manageChild
+	$form_upper manageChild
+	$pw manageChild
+	$_GW_mkvol($handle,buttons) manageChild
+	$pane manageChild
+
+	set _GW_mkvol($handle,pane,plex) $form_upper
+
+	return $dialog
+}
+
+proc vmMkVol:_createWorkArea { handle parent } \
+{
+	global		_GW_mkvol _GD_mkvol
+
+	set form [xmForm $parent.wa]
+	set grid [sgiGrid $form.grid -numColumns 3 -numRows 3 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_none \
+			-bottomAttachment attach_none]
+
+	####	Host
+	set item XFS_HOST
+	xmLabel $grid.$item-label managed -row 0 -column 0
+	set _GW_mkvol($handle,$item) [xmLabel $grid.$item managed \
+				-row 0 -column 2]
+
+	####	Name
+	set item XLV_OBJ_NAME
+	xmLabel $grid.$item-label managed -row 1 -column 0
+	if {$_GD_mkvol($handle,mode) == "create"} {
+		set _GW_mkvol($handle,$item) [xmText $grid.$item managed \
+				-row 1 -column 2 \
+				-columns 26 \
+				-maxLength 32]
+		$_GW_mkvol($handle,$item) modifyVerifyCallback \
+				"xlv:validNameCb %doit %ptr %length"
+	} else {
+		set _GW_mkvol($handle,$item) [xmLabel $grid.$item managed \
+				-row 1 -column 2]
+	}
+
+	set sumpnl [volSum:realize $handle $form]
+	$sumpnl setValues \
+			-topAttachment attach_form \
+			-leftAttachment attach_widget \
+			-rightAttachment attach_none \
+			-bottomAttachment attach_none \
+			-leftWidget $grid \
+			-leftOffset 30
+	$sumpnl manageChild
+	foreach item $_GD_mkvol(subvs) {
+		volSum:addSubvTbCallback $handle $item vmMkVol:_subvCb
+	}
+
+	if {$_GD_mkvol($handle,mode) != "info"} {
+		set item PLEX
+		set xform [xmForm $grid.xform managed -row 2 -column 2]
+
+		set _GW_mkvol($handle,$item-label) [xmLabel $xform.$item-label \
+				 managed \
+				-topAttachment attach_form \
+				-leftAttachment attach_form \
+				-rightAttachment attach_none \
+				-bottomAttachment attach_form]
+		set _GW_mkvol($handle,$item-pd) [xmPulldownMenu $xform.$item-pd]
+		foreach opt $_GD_mkvol($item,opts) {
+			set pb [xmPushButton \
+					 $_GW_mkvol($handle,$item-pd).$opt \
+					 managed \
+					-marginWidth 0 \
+					-marginHeight 0]
+			$pb activateCallback \
+					"vmMkVol:_changePlexCountCb $handle $opt"
+		}
+		set _GW_mkvol($handle,$item-om) [xmOptionMenu $xform.$item-om \
+				 managed \
+				-spacing 0 \
+				-marginWidth 0 \
+				-marginHeight 0 \
+				-subMenuId $_GW_mkvol($handle,$item-pd) \
+				-topAttachment attach_form \
+				-leftAttachment attach_widget \
+				-rightAttachment attach_form \
+				-bottomAttachment attach_form \
+				-leftWidget $_GW_mkvol($handle,$item-label)]
+	}
+
+	if {$_GD_mkvol($handle,mode) == "create"} {
+		$grid columnMargin 1 0
+	} else {
+		$grid columnMargin 1 8
+	}
+	$grid columnResizable 0 false
+	$grid columnResizable 1 false
+	$grid manageChild
+
+	return $form
+}
+
+#########################################
+#	Dialog Callbacks		#
+#########################################
+proc vmMkVol:_dialogCb { handle op } \
+{
+        global  	_GW_mkvol _GD_mkvol
+
+	switch $op {
+		accept { set _GD_mkvol($handle,unmanage) true
+			 vmMkVol:_accept $handle }
+		apply  { set _GD_mkvol($handle,unmanage) false
+			 vmMkVol:_accept $handle }
+		save {
+			svTmpl:realize vm ""
+			svTmpl:fill vm VOL vmMkVol:_save $handle
+			svTmpl:manage vm
+		}
+		cancel { vmMkVol:_cancel $handle }
+		help   { sgiHelpMsg $_GW_mkvol($handle,dialog) }
+	}
+}
+
+proc vmMkVol:_popdownCb { handle } \
+{
+	global	_GD_mkvol
+
+	ptSrch:unmanage $handle
+
+	if {$_GD_mkvol($handle,mode) == "create"} {
+	    if {$_GD_mkvol($handle,accept) == "false"} {
+		####	Mark partitions as available
+		foreach subv $_GD_mkvol(subvs) {
+		    ptPnl:markPartsAvail $handle [plxTbl:getParts $handle-$subv]
+		}
+	    }
+	}
+}
+
+#########################################
+#	Callback Utilities		#
+#########################################
+proc vmMkVol:_accept { handle } \
+{
+        global  	_GW_mkvol _GD_mkvol _GD_vmmCfrm
+
+	if {! [vmMkVol:chkData $handle]} {
+		return
+	}
+	set data ""
+	if {! [vmMkVol:getData $handle data]} {
+		return
+	}
+	set nm [string trim [$_GW_mkvol($handle,XLV_OBJ_NAME) getString]]
+	set host $_GD_mkvol($handle,XFS_HOST)
+
+	set _GD_mkvol(confirm,handle) $handle
+	set _GD_mkvol(confirm,data) $data
+	set _GD_mkvol(confirm,obj) "$host VOL $nm VOL"
+
+	if {! [info exists _GW_mkvol($handle,confirm)]} {
+		set _GW_mkvol($handle,confirm) [xmQuestionDialog \
+				$_GW_mkvol($handle,dialog).confirm \
+				-messageAlignment alignment_center \
+				-okLabelString Yes \
+				-cancelLabelString No \
+				-dialogStyle dialog_full_application_modal \
+				-noResize true]
+		$_GW_mkvol($handle,confirm) okCallback \
+			"set _GD_mkvol($handle,confirm) true"
+		$_GW_mkvol($handle,confirm) cancelCallback \
+			"set _GD_mkvol($handle,confirm) false"
+	}
+
+	$_GW_mkvol($handle,confirm) setValues -messageString \
+		[format $_GD_vmmCfrm(vmMkVol,msg) [hu:getHostPlusDom $host]]
+	$_GW_mkvol($handle,confirm) manageChild
+}
+
+proc vmMkVol:_doAccept { vname element op} \
+{
+	global          _GW_mkvol _GD_mkvol
+
+	if {$element != ""} {
+		set vname ${vname}($element)
+	}
+	upvar $vname x
+
+	if {$x} {
+	    set handle	$_GD_mkvol(confirm,handle)
+	    set data	$_GD_mkvol(confirm,data)
+	    set obj	$_GD_mkvol(confirm,obj)
+
+	    $_GW_mkvol($handle,dialog) defineCursor watch
+	    $_GW_mkvol($handle,confirm) defineCursor watch
+
+	    if {[catch {set ec [xlvCmd create $obj [join $data \n]]} error]} {
+		regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		em:storeMsg $handle error \
+		"Unable to create volume [obj:getName $obj].\n\t$nerror"
+	    } else {
+		####	Signal success
+		set _GD_mkvol($handle,accept) true
+
+		####	Mark partitions as used
+		foreach subv $_GD_mkvol(subvs) {
+			ptPnl:markPartsInUse $handle \
+				[plxTbl:getParts $handle-$subv] used
+		}
+
+		####	Reload the list of available partitions
+		vmMkVol:_newHostName $handle $_GD_mkvol($handle,XFS_HOST)
+
+		####	Get ready for the next one to create
+		vmMkVol:clear $handle
+
+		####	Set the name to the next one in the series
+		$_GW_mkvol($handle,XLV_OBJ_NAME) setString \
+				[xfs:nextName [obj:getName $obj]]
+
+		####	Add the object to the icon panel
+		vmSrch:addObjects vm [list $obj]
+
+		if {$_GD_mkvol($handle,unmanage)} {
+			####	Unmanage the dialog
+			$_GW_mkvol($handle,dialog) unmanageChild
+		}
+	    }
+
+	    $_GW_mkvol($handle,confirm) defineCursor ""
+	    $_GW_mkvol($handle,dialog) defineCursor ""
+	}
+}
+
+proc vmMkVol:_cancel { handle } \
+{
+        global  	_GW_mkvol
+        $_GW_mkvol($handle,dialog) unmanageChild
+}
+
+proc vmMkVol:_save { handle nm unique } \
+{
+	set rval	1
+
+	set data ""
+	vmMkVol:getData $handle data
+	if {$data != ""} {
+		set obj [list [list _TEMPLATE_ VOL $nm VOL]]
+
+		if {[tu:write VOL $nm $obj [join $data \n]]} {
+			if {$unique} {
+				ip:fillPanel vm $obj
+			}
+		} else {
+			set rval 0
+		}
+	}
+
+	return $rval
+}
+
+#########################################
+#	ComboBox Callbacks		#
+#########################################
+proc vmMkVol:_newHostName { handle host } \
+{
+	if {$host != ""} {
+		ptPnl:newPartList $handle $host
+	}
+}
+
+#########################################
+#	Miscellaneous Callbacks		#
+#########################################
+proc vmMkVol:_changePlexCountCb { handle count } \
+{
+	global	_GD_mkvol
+
+	set type $_GD_mkvol($handle,type)
+	if {$count != $_GD_mkvol($handle,$type,plexes)} {
+		vmMkVol:_changePlexCount $handle $type $count
+	}
+}
+
+proc vmMkVol:_changePlexCount { handle type count } \
+{
+	global		_GW_mkvol _GD_mkvol
+
+	####	TODO:	Get a public interface to
+	####		plxTbl:_setTblPlexCount
+	plxTbl:_setTblPlexCount $handle-$type $count
+	set _GD_mkvol($handle,$type,plexes) $count
+
+	####	Enable/disable the partition selection panel
+	if {$count != 0} {
+		ptPnl:enable $handle true
+	} else {
+		ptPnl:enable $handle false
+	}
+
+	vmMkVol:_updateVolSum $handle $type
+	vmMkVol:_updatePlexGraph $handle $type
+	vmMkVol:_updateNextPrev $handle $type
+}
+
+proc vmMkVol:_subvCb { handle type set {w ""} } \
+{
+	global          _GW_mkvol _GD_mkvol _GD_resources
+
+	if {$set == "false"} {
+		return
+	}
+
+	####	Unmanage the current matrix and then manage
+	####	the one corresponding to this toggle button
+	plxTbl:unmanage $handle-$_GD_mkvol($handle,type)
+	plxTbl:manage $handle-$type
+	set _GW_mkvol($handle,plex) $_GW_mkvol($handle,plex,$type)
+
+	####	Set the option menu to reflect the number of plexes
+	####	Fix the option menu so that it shows only valid options
+	if {$_GD_mkvol($handle,mode) != "info"} {
+	    set item PLEX
+	    $_GW_mkvol($handle,$item-om) setValues -menuHistory \
+		$_GW_mkvol($handle,$item-pd).$_GD_mkvol($handle,$type,plexes)
+
+	    ####	Modify the option menu to reflect this subvolume
+	    foreach option $_GD_mkvol($item,opts) {
+		if {[lsearch -exact $_GD_mkvol($type,opts) $option] != -1} {
+		    $_GW_mkvol($handle,$item-pd).$option manageChild
+		} else {
+		    $_GW_mkvol($handle,$item-pd).$option unmanageChild
+		}
+	    }
+
+	    ####	Set the label for the option menu
+	    if {$_GD_mkvol($handle,mode) != "info"} {
+		set label "Set number of $_GD_resources($type,string) plexes to"
+		$_GW_mkvol($handle,PLEX-label) setValues -labelString $label
+	    }
+
+	    ####	Enable/disable the partition selection panel
+	    if {$_GD_mkvol($handle,$type,plexes) != 0} {
+		ptPnl:enable $handle true
+	    } else {
+		ptPnl:enable $handle false
+	    }
+	}
+
+	####	Set the partition list
+	vmMkVol:_rowSelectAction $handle $type \
+			[plxTbl:getCurrentRow $handle-$type] sel
+
+	####	Redisplay the plex graphic
+	vmMkVol:_updatePlexGraph $handle $type
+
+	####	Store the current type for future reference
+	set _GD_mkvol($handle,type) $type
+}
+
+####	The default args are necessary since this
+####	is also called from vmPlxTblPnl
+proc vmMkVol:_veNumChangeAction { handle type {row 0} {count 1} } \
+{
+	regsub -- "-$type" $handle "" handle
+	vmMkVol:_updateVolSum $handle $type
+	vmMkVol:_updatePlexGraph $handle $type
+	vmMkVol:_updateNextPrev $handle $type
+}
+
+####	The default args are necessary since this
+####	is also called from vmPlxTblPnl
+proc vmMkVol:_vePartChangeAction { handle type {row 0} {parts ""} } \
+{
+	regsub -- "-$type" $handle "" handle
+	ptPnl:markPartsAvail $handle $parts
+	ptPnl:setChosenListParts $handle ""
+	vmMkVol:_updateVolSum $handle $type
+	vmMkVol:_updatePlexGraph $handle $type
+}
+
+proc vmMkVol:_rowSelectAction { handle type row state } \
+{
+	global		_GD_mkvol _GD_resources
+
+	if {$state == "sel"} {
+		regsub -- "-$type" $handle "" handle
+		set parts [plxTbl:getPartsByRow $handle-$type $row]
+		plxTbl:getRowLabel $handle-$type $row long plex ve
+
+		if {$_GD_mkvol($handle,mode) != "info"} {
+			ptPnl:setChosenListParts $handle [split $parts]
+			ptPnl:setChosenListLabel $handle \
+				$_GD_resources($type,string) $plex $ve
+
+			vmMkVol:_updateNextPrev $handle $type
+		}
+
+		plxGrph:selectVe $handle $plex $ve
+	}
+}
+
+proc vmMkVol:_startChangeAction { handle type row value } \
+{
+	regsub -- "-$type" $handle "" handle
+	vmMkVol:_updatePlexGraph $handle $type
+}
+
+proc vmMkVol:_updateVolSum { handle type } \
+{
+	global		_GD_mkvol
+
+	volSum:setItemLabel $handle $type plexes \
+			$_GD_mkvol($handle,$type,plexes)
+	volSum:setItemLabel $handle $type ves \
+			[plxTbl:getVeCount $handle-$type]
+	volSum:setItemLabel $handle $type parts \
+			[plxTbl:getPartCount $handle-$type]
+	volSum:setItemLabel $handle $type size \
+			[format "%.2f" [plxTbl:getSize $handle-$type]]
+}
+
+#########################################
+#	Partition Panel Actions		#
+#########################################
+proc vmMkVol:_partChangeAction { handle names sizes } \
+{
+	global		_GD_mkvol
+
+	plxTbl:setVeParts $handle-$_GD_mkvol($handle,type) $names $sizes
+	vmMkVol:_updatePlexGraph $handle $_GD_mkvol($handle,type)
+	vmMkVol:_updateVolSum $handle $_GD_mkvol($handle,type)
+}
+
+proc vmMkVol:_nextPrevAction { handle op } \
+{
+	global		_GD_mkvol
+
+	set type $_GD_mkvol($handle,type)
+	set row [plxTbl:getCurrentRow $handle-$type]
+	if {$op == "next"} {
+		incr row
+	} else {
+		incr row -1
+	}
+	plxTbl:selectRow $handle-$type $row
+}
+
+proc vmMkVol:_updateNextPrev { handle type } \
+{
+	global	_GD_mkvol
+
+	if {$_GD_mkvol($handle,mode) != "info"} {
+		set rows [expr [plxTbl:getNumRows $handle-$type] - 1]
+		set row [plxTbl:getCurrentRow $handle-$type]
+
+		if {$row == $rows} {
+			set next false
+		} else {
+			set next true
+		}
+		if {$row == 0} {
+			set prev false
+		} else {
+			set prev true
+		}
+		ptPnl:validNextPrev $handle $next $prev
+	}
+}
+
+#########################################
+#	Plex Graph Panel Actions	#
+#########################################
+proc vmMkVol:_setPlexOnlyValue { handle plex } \
+{
+	global          _GD_mkvol
+
+	plxTbl:selectCurrentPlexVe $handle-$_GD_mkvol($handle,type) $plex 0
+}
+
+proc vmMkVol:_setPlexAndVeValue { handle plex ve } \
+{
+	global          _GD_mkvol
+
+	plxTbl:selectCurrentPlexVe $handle-$_GD_mkvol($handle,type) $plex $ve
+}
+
+proc vmMkVol:_updatePlexGraph { handle type } \
+{
+	plxTbl:getGraphData $handle-$type data
+	if {[info exists data]} {
+		plxTbl:getRowLabel $handle-$type \
+			[plxTbl:getCurrentRow $handle-$type] short plex ve
+		plxGrph:fillPlexes $handle $data
+		plxGrph:selectVe $handle $plex $ve
+	} else {
+		plxGrph:clear $handle
+	}
+}
+
+
+#########################################
+#	Drag and Drop			#
+#########################################
+proc vmMkVol:_startDrop { handle dragContext w } \
+{
+	$dragContext dropTransferStart \
+		-dropTransfers {{COMPOUND_TEXT .vmMkVol}} \
+		-numDropTransfers 1 \
+		-transferProc "vmMkVol:_doTransfer $handle %closure {%value}"
+}
+
+proc vmMkVol:_doTransfer { handle destination value } \
+{
+	global	_GD_mkvol
+
+	if {[ip:uniqueToObject [lindex $value 0] obj] && $obj != ""} {
+		if {[llength $value] == 1} {
+			if {($_GD_mkvol($handle,mode) == "info" && \
+			     [obj:isXfsmObject [lindex $obj 0] VOL VOL]) || \
+			    ($_GD_mkvol($handle,mode) == "create" && \
+			     [obj:isXfsmTemplate [lindex $obj 0] VOL VOL])} {
+				set no_msg 1
+				set rval [vmMkVol:fill $handle $obj]
+			}
+		} else {
+			set multiple 1
+		}
+	}
+
+	if {! [info exists no_msg]} {
+	    set rval 0
+	    if {! [info exists multiple]} {
+		lappend m "An Illegal icon was dropped on this dialog."
+	    }
+	    if {$_GD_mkvol($handle,mode) == "info"} {
+		lappend m "Only one volume icon may be dropped on this dialog."
+	    } else {
+		lappend m "Only one volume template icon may be dropped on this dialog."
+	    }
+	    em:simpleMsg $handle error [join $m " @n @n "]
+	}
+
+	return $rval
+}

@@ -1,0 +1,118 @@
+# Tests of Netware "raw" mode (SAP 0x00ff)
+
+# Test:
+#	1) DL_BADADDR
+#	     Attempt to bind an LLC2 stream to NetWare mode
+#	     Attempt to send data on a non-NetWare mode stream (length 6)
+#	     Attempt to send data on a non-NetWare mode stream (length 7,
+#	     SAP 0xff)
+#	     Attempt to send data with address length = 7
+#	     Attempt to send data, but don't have 0xff in first two bytes
+#	2) Normal transmission
+#	3) Padding:
+#          padding occurs when packet size odd - no padding occurs when
+#          packet size even, or if packet length < ETHERMIN
+
+
+###### Test case #1 ######
+open 1
+attach $1 43
+
+# Attempt to bind an LLC2 stream to SAP 0xff
+bind $1 ff 2 0 0 0			dl_error_ack dl_badaddr
+
+bind $1 40 1 0 0 0
+
+# Attempt to send data on non-NetWare-mode stream to SAP 0xff, 6 byte len
+send_udata $1 0:0:0:0:0:0 '0 1 2'
+
+recv_udata $1				dl_uderror_ind dl_badaddr
+
+# Attempt to send data on non-NetWare-mode stream to SAP 0xff
+send_udata $1 0:0:0:0:0:0,ff '0 1 2'
+
+recv_udata $1				dl_uderror_ind dl_badaddr
+
+unbind $1
+
+bind $1 ff 1 0 0 0
+
+# Attempt to send data on NetWare-mode stream, with 7 byte address
+send_udata $1 0:0:0:0:0:0,40 '0 1 2'
+
+recv_udata $1				dl_uderror_ind dl_badaddr
+
+# Send data on NetWare-mode stream,  but without first two
+# bytes set to 0xff
+send_udata $1 0:0:0:0:0:0 '0 1 2 3 4'
+
+recv_udata $1				dl_uderror_ind dl_badaddr
+
+send_udata $1 0:0:0:0:0:0 'ff 0 1 2 3'
+
+recv_udata $1				dl_uderror_ind dl_badaddr
+
+send_udata $1 0:0:0:0:0:0 '0 ff 1 2 3'
+
+recv_udata $1				dl_uderror_ind dl_badaddr
+
+
+###### Test case #2 ######
+# Normal transmission
+send_udata $1 0:0:0:0:0:0 'ff ff 0 1 2 3 4 5 6'
+
+recv_udata $1 'ff ff 0 1 2 3 4 5 6'
+
+# Try to send NetWare style packet to another machine -- should get no response
+send_udata $1 8:0:20:a:a9:63 'ff ff 0 1 2 3 4 5 6'
+
+sleep 2
+poll $1 $1 0
+
+
+###### Test case #3 ######
+# No padding should occur if packet length is odd but < ETHERMIN - 14 = 46
+# Send 45 bytes of data -- should receive 45 bytes.
+send_udata $1 0:0:0:0:0:0 'ff ff 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 aa bb cc'
+
+recv_udata $1 'ff ff 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 aa bb cc'
+
+# Send to NetWare on another machine (can use a monitor on other machine to
+# verify that data being sent across the wire correctly)
+send_udata $1 8:0:20:a:a9:63 'ff ff 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 aa bb cc'
+
+sleep 2
+poll $1 $1 0
+
+# Send 46 bytes of data -- should receive 46 bytes
+send_udata $1 0:0:0:0:0:0 'ff ff 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 aa bb cc dd'
+
+recv_udata $1 'ff ff 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 aa bb cc dd'
+
+send_udata $1 8:0:20:a:a9:63 'ff ff 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 aa bb cc dd'
+
+sleep 2
+poll $1 $1 0
+
+# Send 47 bytes of data -- should receive 48 bytes (packet length is odd
+# and greater than 46, so padding occurs)
+send_udata $1 0:0:0:0:0:0 'ff ff 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 aa bb cc dd ee'
+
+recv_udata $1 'ff ff 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 aa bb cc dd ee 0'
+
+send_udata $1 8:0:20:a:a9:63 'ff ff 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 aa bb cc dd ee'
+
+sleep 2
+poll $1 $1 0
+
+# Send 48 bytes of data -- should receive 48 bytes
+send_udata $1 0:0:0:0:0:0 'ff ff 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 aa bb cc dd ee ff'
+
+recv_udata $1 'ff ff 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 aa bb cc dd ee ff'
+
+send_udata $1 8:0:20:a:a9:63 'ff ff 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 aa bb cc dd ee ff'
+
+sleep 2
+poll $1 $1 0
+
+close $1

@@ -1,0 +1,428 @@
+'\"macro stdmacro
+'\"!eqn|mmdoc
+'\"!tbl|mmdoc
+.TH DLPI 7
+.UC 4
+.SH NAME
+dlpi \-  data link provider interface
+.UC 4
+.SH DESCRIPTION
+The DLPI is a kernel level interface, based on the 
+STREAMS development environment.
+The DLPI interface is accessed from STREAMS protocol modules
+via STREAMS messages or directly from user programs via the putmsg(2) and
+getmsg(2) system calls.
+
+The Data Link Service (DLS) provider is configured as a STREAMS driver
+and the DLS user accesses the provider using \f2open\fP(2) /dev/llc2 
+(\f2llc2\fP(7)) to establish a stream to the DLS provider.
+The stream acts as a communication endpoint between a DLS user 
+and the DLS provider.
+The current implementation is a style 2 provider (a different 
+minor device for each DLS user) and is based on the DLPI Specification,
+Revision 2.0.0.
+
+Protocol stacks register themselves with DLPI which indicates the
+types of packets which the stack will process.
+The DLPI directs incoming packets to the appropriate protocol stack.
+
+Outbound packets are directed to DLPI which sends them to the appropriate
+MAC layer drivers i.e Ethernet, FDDI or Token Ring.
+
+.SH CONFIGURATION
+.PP
+.nf
+A.) Snif master file and interfaces
+
+	The DLPI includes three master files: /var/sysgen/master.d/llc2,
+	/var/sysgen/master.d/xtimer, and /var/sysgen/master.d/snif. You 
+	should not need to change the llc2 master file and the xtimer
+	master file. However, the snif master file provides a mapping 
+	between the minor number of an interface and its name. The snif
+	master file shipped with the DLPI subsystem has three interfaces 
+	pre-defined: one Token Ring interface, one Ethernet interface, 
+	and one FDDI interface. The name of the interface should match to 
+	the name as seen by \f2netstat -ia\fP(1) command. The sequence of 
+	the interfaces defined in the iftab[] table of the snif master 
+	file determines the minor number of an interface (the major number 
+	is always 117.)
+	
+	Upon installation the DLPI creates (\f2mknod\fP(1M)) three devices 
+	with minor numbers corresponding to the pre-defined interfaces
+	of the snif master file. If you must modify the snif master file, 
+	be sure your interface name is a valid interface (can be seen by 
+	the \f2netstat -ia\fP command) and each interface in the iftab[] 
+	table has its corresponding device defined. Please note that the 
+	loopback interface, 'lo0' is not a valid interface for DLPI. 
+	For example, to create a fv1 interface update the snif master 
+	file iftab[] table with an entry for the fv1 device and issue the 
+	command:
+
+	    # mknod /dev/fv1 c 117 3
+
+	In this example the minor number is 3 and the fv1 device would be
+	the fourth device listed in the iftab[] table (the device with the
+	minor device 0 is the first device listed in the iftab[] table.)
+
+	After the installation of the DLPI software or after the snif 
+	master file has been modified, you must \f2autoconfig\fP(1M) to 
+	create a new kernel and \f2reboot\fP(1M) your kernel:
+
+	    # autoconfig -f
+	    # reboot
+
+
+B.) Snetd daemon and its config file
+
+	Upon system startup, if the state of the DLPI daemon \f2snetd\fP(1M)
+	is \f2on\fP, the daemon is started by /etc/init.d/network. You may use
+	\f2chkconfig\fP(1M) to check the state of the daemon, and use \f2ifconfig\fP
+	(1M) to change its state.
+
+	When the \f2snetd\fP(1M) is started, it reads a configuration from 
+	the /var/config/snetd.options file. Shipped with the software is a 
+	sample snetd.options file that includes the sample configuration 
+	lines for the three interfaces pre-defined in the snif master
+	file. As 'sample' configuration lines, the configuration lines are
+	commented out with an '#' sign at column one. To activate a
+	particular interface, the '#' signs must be removed. For example,
+	if your sample snetd.options is as below (Please note that the line 
+	numbers will not be in the shipped file but they are put in here 
+	for reference purposes):
+
+/*line1*/ #fv0    d       /dev/fv0
+/*line2*/ #ec0    d       /dev/ec0
+/*line3*/ #ipg0   d       /dev/ipg0
+/*line4*/ llc2    dc      /dev/llc2
+/*line5*/
+/*line6*/ %%
+/*line7*/
+/*line8*/ #llc2   fv0     LL_SET_SNID=A   \\
+/*line9*/ #      SHELL="lltune -P -p llc2 -s A -d /dev/llc2 def.tokenring"
+/*line10*/#llc2   ec0     LL_SET_SNID=B   \\
+/*line11*/#      SHELL="lltune -P -p llc2 -s B -d /dev/llc2 def.ether"
+/*line12*/#llc2   ipg0    LL_SET_SNID=C   \\
+/*line13*/#      SHELL="lltune -P -p llc2 -s C -d /dev/llc2 def.fddi"
+
+	To activate the ethernet interface ec0, you need only take out 
+	the '#' sign at the beginning of the line #2, #10, and #11.
+
+	Please also note that the LL_SET_SNID parameter is equivalent to
+	the Point of Physical Attachment (PPA) as referenced in the
+	DLPI Specification. The value 'B' is used in the DL_ATTACH_REQ
+	primitive, or in the case of 4DDN product, this value will be
+	used in the file '/var/opt/dn/dn_config' for the 'DPPA' parameter.
+
+	If you add a new interface to the snif master file, you need to
+	create the configuration lines for the new interface as well. For
+	example, if you add fv1 as shown in the example of the "Snif master 
+	file and interfaces" section, insert the following line between
+	line3 and line4:
+
+	    fv1    d       /dev/fv1
+
+	and the next two lines after line13:
+
+	    llc2   fv1     LL_SET_SNID=D   \\
+	          SHELL="lltune -P -p llc2 -s D -d /dev/llc2 def.tokenring"
+
+	Please refer to the manual page \f2snetd\fP(1M) for more information 
+	on the configuration format. X.25 users should refer to its release 
+	notes for a configuration utility that writes more X.25 related 
+	configuration information into this snetd.options file.
+
+.SH PRIMITIVES
+The DLPI supports three modes of communication service: connection 
+(circuit-oriented), connectionless (message-oriented) and acknowledged 
+connectionless.  IRIX supports both  connection (DL_CODLS) service and 
+connectionless (DL_CLDLS) service.
+.PP
+The following primitives are provided and are divided into the following 
+phases. More details may be found in <sys/dlpi.h> and the DLPI Specification.
+
+.PP
+.nf
+A.) Local Management
+
+    1. Information Reporting Primitives
+	DL_INFO_REQ
+	DL_INFO_ACK
+	DL_ERROR_ACK
+
+    2. Attach Primitives
+	DL_ATTACH_REQ
+	DL_DL_DETACH_REQ
+	DL_OK_ACK
+	DL_ERROR_ACK
+
+    3. Bind Primitives
+	DL_BIND_REQ
+	DL_BIND_ACK
+	DL_SUBS_BIND_REQ
+	DL_SUBS_BIND_ACK
+	DL_UNBIND_REQ
+	DL_SUBS_UNBIND_REQ
+	DL_OK_ACK
+	DL_ERROR_ACK
+
+    4. Other Primitives
+	DL_ENABMULTI_REQ
+	DL_DISABMULTI_REQ
+	DL_OK_ACK
+	DL_ERROR_ACK
+	DL_PHYS_ADDR_REQ
+	DL_PHYS_ADDR_ACK
+	DL_SET_PHYS_ADDR_REQ
+
+B.) Connection Establishment
+
+    1. Connection Establishment Primitives
+	DL_CONNECT_REQ
+	DL_CONNECT_IND
+	DL_CONNECT_RES
+	DL_CONNECT_CON
+	DL_DISCONNECT_REQ
+	DL_DISCONNECT_IND
+	DL_TOKEN_REQ
+	DL_TOKEN_ACK
+	DL_OK_ACK
+	DL_ERROR_ACK
+
+C.) Connection-mode Data Transfer
+
+    1. Data Transfer
+	To send an connection-mode data frame, a message consisting of one
+	or more M_DATA message blocks needs to be sent to the DLS
+	provider. This will cause an I-frame to be sent over the network,
+	containing the data passed in the M_DATA message blocks.
+	Incoming connection-mode data will be passed upstream in
+	messages consisting of one or more M_DATA message blocks.
+
+    2. Reset Primitives
+	DL_RESET_REQ
+	DL_RESET_IND
+	DL_RESET_RES
+	DL_RESET_CON
+	DL_OK_ACK
+	DL_ERROR_ACK
+
+D.) Connection Release
+
+    1. Connection Release Primitives
+	DL_DISCONNECT_REQ
+	DL_DISCONNECT_IND
+	DL_OK_ACK
+	DL_ERROR_ACK
+
+E.) Connectionless-mode Data Transfer
+
+    1. Data Transfer Primitives
+	DL_UNITDATA_REQ
+	DL_UNITDATA_IND
+
+    2. Error Reporting Primitives
+	DL_UDERROR_IND
+
+F.) XID and TEST Services
+
+    1. XID Primitives
+	DL_XID_REQ
+	DL_XID_IND
+	DL_XID_RES
+	DL_XID_CON
+
+    2. TEST Primitives
+	DL_TEST_REQ
+	DL_TEST_IND
+	DL_TEST_RES
+	DL_TEST_CON
+
+.SH DLSAP ADDRESS FORMATS
+A DLS user's identity is established by associating it with a DLS access
+point (DLSAP), which is the point through wich the user will communicate
+with the DLS provider. A DLSAP is identified by a DLSAP address.
+A DLSAP address contains the hardware address (usually 6 bytes in length) 
+followed by SAP information. Only the SAP information is needed to build a 
+DL_BIND_REQ primitive. The full DLSAP address is then
+returned to the DLS users in the DL_BIND_ACK primitive and should be
+used where a DLSAP address is required to construct a DLPI primitive
+as specified in the DLPI Specification.
+.PP
+802.2 LLC has two modes of operation to support the various types of 
+SAP that a DLS user may request. The mode of operation of a DLS user
+is determined by the contents of the SAP information provided in the
+DL_BIND_REQ primitive.
+The modes of operation should not be confused with the three modes of 802.2 
+LLC communication service; namely, connection service mode, connectionless 
+service mode and acknowledge connectionless service mode.
+.PP
+.nf
+A.) Normal Mode
+
+	The Normal mode of operation is when a bind is performed
+	with the value of the SAP information being in range 0x02
+	to 0xFE (a one-byte, even value). This is the SAP as
+	specified under 802.2 LLC, and is the only mode of operation 
+	for the connection (i.e. LLC2) service mode. The 
+	Sub-Network Access Protocol (SNAP) also uses this mode of
+	operation.
+
+	The DLSAP addresses for Normal mode have the following format:
+
+	struct llc_dlsap {
+	   u_char  dl_mac[6];     /* hardware address */
+	   u_char  dl_sap;        /* LLC SAP          */
+	};
+
+	The DLSAP address may be modified through DL_SUBS_BIND_REQ 
+	primitive when the SNAP is used to extend the LLC header. 
+	The extended SNAP DLSAP addresses have the following format:
+
+	struct llc_snap_dlsap {
+	   u_char  dl_mac[6];     /* hardware address */
+	   u_char  dl_sap;        /* SNAP sap: 0xAA   */
+	   u_char  dl_oui[3];     /* OUI information  */
+	   u_char  dl_proto[2];   /* protocol ID      */
+	};
+
+	DLS users should use llc_dlsap format in constructing the 
+	DL_UNITDATA_REQ primitive and it is DLS users' responsibility
+	to put the OUI information and protocol ID in front of their
+	data. Upon receipt of DL_UNITDATA_IND, the DLSAP addresses
+	are also of llc_dlsap format. It is DLS users' responsibility
+	to skip the OUI information and protocol ID for users' data.
+
+	The DLSAP address may also be modified if source routing is 
+	used for Token Ring networks through TEST and/or XID 
+	primitives. The source routing information field (rif) is 
+	appened to the end of the llc_dlsap format. The DL_CONNECT_* 
+	primitives should also use this llc_sri_dlsap format when
+	source routing information is present. The extended SRI
+	DLSAP addresses have the following format:
+
+	struct llc_sri_dlsap {
+	   u_char  dl_mac[6];     /* hardware address */
+	   u_char  dl_sap;        /* LLC SAP          */
+	   u_char  dl_rif;        /* start of rif     */
+	};
+
+B.) Ethernet Mode
+
+	The Ethernet mode of operation occurs when a bind is performed
+	for two bytes (the high byte being non-zero). When this occurs
+	the binding driver will be sent packets for the Ethernet types
+	registerd for.
+
+	The DLSAP addresses for Ethernet mode have the following format:
+
+	struct llc_eth_dlsap {
+	   u_char  dl_mac[6];     /* hardware address */
+	   u_short dl_sap;        /* Ethernet SAP     */
+	};
+
+.SH EXAMPLE
+The example program below will format an DL_INFO_REQ message
+and send it to the provider opened via the open(2) system call.
+It will then check for a valid response; if one is found, it
+will print the DLPI provider style to the console.
+
+.nf
+#include <stdio.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <sys/stream.h>
+#include <sys/stropts.h>
+#include <sys/dlpi.h>
+
+#define DLPIDEV		"/dev/llc2"
+
+int
+main(int argc, char **argv)
+{
+	int 	fd;
+
+	if ((fd = open(DLPIDEV, O_RDWR)) < 0 ) {
+		perror ("open");
+		exit(0);
+	}
+	
+	if (info(fd) < 0) {
+		perror ("info");
+		exit (0);
+	}
+
+	close(fd);
+}
+
+
+int
+print_info(dl_info_ack_t *info)
+{
+	printf("DLPI Provider Style %d\\n",
+		(info->dl_provider_style == DL_STYLE1) ? 1 : 2);
+}
+
+int
+info(int fd)
+{
+	dl_info_req_t	info_req;
+	dl_info_ack_t	*info_ack;
+	dl_error_ack_t	*error_ack;
+	struct strbuf	ctlbuf;
+	int		flags;
+	char		buffer[BUFSIZ];
+	char		*cp = buffer;
+	int		len;
+
+	/* Build info_req primitive */
+	info_req.dl_primitive = DL_INFO_REQ;
+
+	ctlbuf.len = DL_INFO_REQ_SIZE;
+	ctlbuf.buf = (char *)&info_req;
+	flags = RS_HIPRI;
+
+	if (putmsg(fd, &ctlbuf, NULL, flags ) < 0 )
+		return(-1);
+
+	/*
+	 * Now wait for the reply, this should be
+	 * dl_info_ack or dl_error_ack
+	 */
+	ctlbuf.maxlen = sizeof(buffer);
+	ctlbuf.len = 0;
+	ctlbuf.buf = buffer;
+	flags = RS_HIPRI;
+
+	if (getmsg(fd, &ctlbuf, NULL, &flags) < 0)
+		return(-1);
+
+	/* Is what we got sensible? */
+	if (ctlbuf.len < sizeof(long)) {
+		errno = EPROTO;
+		return(-1);
+	}
+
+	/* Switch on type */
+	switch (*(unsigned long *)cp){
+	default:
+		errno = EPROTO;
+		return(-1);
+	case DL_INFO_ACK:
+		info_ack = (dl_info_ack_t *)cp;
+		print_info(info_ack);
+		return(fd);
+	case DL_ERROR_ACK:
+		if (ctlbuf.len < DL_ERROR_ACK_SIZE) {
+			errno = EPROTO;
+			return(-1);
+		}
+		error_ack = (dl_error_ack_t *)cp;
+		errno = error_ack->dl_unix_errno;
+		return(-1);
+	}
+}
+.fi
+.SH FILES
+<sys/dlpi.h>,
+.SH SEE ALSO
+snetd(1M), chkconfig(1M), ifconfig(1M), llc2(7)

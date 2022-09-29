@@ -1,0 +1,1248 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	vmPlxTblPnl
+# Version:	$Revision: 1.7 $
+# Synopsis:	Encapsulates the panel that displays all the ve's in a plex.
+# Functions:	plxTbl:realize
+#		plxTbl:manage
+#		plxTbl:unmanage
+#		plxTbl:fill
+#		plxTbl:clear
+#		plxTbl:setData
+#		plxTbl:setVeParts
+#		plxTbl:selectRow
+#		plxTbl:selectCurrentPlexVe
+#		plxTbl:setMode
+#		plxTbl:getMatrix
+#		plxTbl:getData
+#		plxTbl:getGraphData
+#		plxTbl:getSummaryData
+#		plxTbl:chkData
+#		plxTbl:getNumRows
+#		plxTbl:getCurrentRow
+#		plxTbl:getPartsByRow
+#		plxTbl:getParts
+#		plxTbl:getRowLabel
+#		plxTbl:getVeCount
+#		plxTbl:getPartCount
+#		plxTbl:getSize
+#		plxTbl:registerRowSelectAction
+#		plxTbl:registerVeNumChangeAction
+#		plxTbl:registerVePartChangeAction
+#		plxTbl:registerStartChangeAction
+#		plxTbl:activate
+#		plxTbl:deactivate
+#		plxTbl:_create
+#		plxTbl:_traverseCellCb
+#		plxTbl:_enterCellCb
+#		plxTbl:_leaveCellCb
+#		plxTbl:_modifyVerifyCb
+#		plxTbl:_fireVsaction
+#		plxTbl:_popupCb
+#		plxTbl:_setTblPlexCount
+#		plxTbl:_setTblVeCount
+#		plxTbl:_getPlexVeFromRow
+#		plxTbl:_selectRow
+#		plxTbl:_makeRowLabels
+#		plxTbl:_makeRowLabel
+#		plxTbl:_initRowValues
+#		plxTbl:_setRowCellColors
+#%COMMENT_END
+
+#########################################
+#		Public			#
+#########################################
+proc plxTbl:realize { handle parent type {mode create} } \
+{
+	global		_GW_plxTbl _GD_plxTbl _GD_resources
+
+	####	One time initialization
+	if {! [info exists _GD_plxTbl(initialized)]} {
+		####	Make sure we don't go through this again
+		set _GD_plxTbl(initialized) true
+
+		####	Pixel initialization
+		set _GD_plxTbl(pix,edit) [matrix:getBackground bg]
+		set _GD_plxTbl(pix,sedit) [matrix:getBackground ts]
+		set _GD_plxTbl(pix,noedit) [matrix:getBackground bs]
+		set _GD_plxTbl(pix,snoedit) [matrix:getBackground bs,ts]
+		set bg $_GD_plxTbl(pix,edit)
+		set bgs $_GD_plxTbl(pix,sedit)
+		set bgn $_GD_plxTbl(pix,noedit)
+		set bgsn $_GD_plxTbl(pix,snoedit)
+
+		####	Popup Menu Initialization
+		set _GD_plxTbl(popups)	{cur_popup all_popup}
+		set _GD_plxTbl(cur_popup) {
+			stripe concat clear_units clear_start clear_parts }
+		set _GD_plxTbl(all_popup) {
+			stripe concat clear_units clear_start clear_parts }
+
+		####	Matrix Initialization
+		set _GD_plxTbl(columns)	\
+			"ve_num ve_type ve_sunit ve_start size nparts parts"
+		set _GD_plxTbl(ncolumns)	[llength $_GD_plxTbl(columns)]
+		set _GD_plxTbl(columns,noedit,0) "size nparts parts"
+		set _GD_plxTbl(columns,noedit,n) "ve_num size nparts parts"
+
+		set cw(size)     10
+		set cw(nparts)    5
+		set cw(ve_num)    3
+		set cw(ve_type)   4
+		set cw(ve_sunit)  6
+		set cw(ve_start) 10
+		set cw(parts)    30
+
+		set vd1(size)      0
+		set vd1(nparts)    0
+		set vd1(ve_num)    1
+		set vd1(ve_type)   $_GD_resources(default,ve_type)
+		set vd1(ve_sunit)  {}
+		set vd1(ve_start)  {}
+		set vd1(parts)     {}
+
+		set vdn(size)      0
+		set vdn(nparts)    0
+		set vdn(ve_num)    {}
+		set vdn(ve_type)   $_GD_resources(default,ve_type)
+		set vdn(ve_sunit)  {}
+		set vdn(ve_start)  {}
+		set vdn(parts)     {}
+
+                set i 0
+                foreach col $_GD_plxTbl(columns) {
+                        set _GD_plxTbl(colpos,$col) $i
+			lappend _GD_plxTbl(cwidths) $cw($col)
+			lappend _GD_plxTbl(rowcells,0) $vd1($col)
+			lappend _GD_plxTbl(rowcells,n) $vdn($col)
+
+			if {[lsearch -exact $_GD_plxTbl(columns,noedit,0) $col] \
+							== -1} {
+				lappend _GD_plxTbl(pix,def,0) $bg
+				lappend _GD_plxTbl(pix,sel,0) $bgs
+			} else {
+				lappend _GD_plxTbl(pix,def,0) $bgn
+				lappend _GD_plxTbl(pix,sel,0) $bgsn
+			}
+			if {[lsearch -exact $_GD_plxTbl(columns,noedit,n) $col] \
+							== -1} {
+				lappend _GD_plxTbl(pix,def,n) $bg
+				lappend _GD_plxTbl(pix,sel,n) $bgs
+			} else {
+				lappend _GD_plxTbl(pix,def,n) $bgn
+				lappend _GD_plxTbl(pix,sel,n) $bgsn
+			}
+
+                        incr i
+                }
+		set _GD_plxTbl(cwidths) [join $_GD_plxTbl(cwidths) ,]
+
+		#	Dummy labels is so that the matrix will be created
+		#	large enough to handle having the labels and
+		#	the scroll bars.
+		set _GD_plxTbl(dummylabels)	{{Plex     0-127}}
+	}
+
+	####	Per instance initialization / creation
+	if {! [info exists _GW_plxTbl($handle,panel)]} {
+		set _GD_plxTbl($handle,mode) $mode
+		set _GD_plxTbl($handle,type) $type
+		set _GD_plxTbl($handle,numrows) 1
+		set _GD_plxTbl($handle,plexes) 1
+		set _GD_plxTbl($handle,curr_row) 0
+		set _GD_plxTbl($handle,curr_col) 0
+		foreach plex "0 1 2 3" {
+			set _GD_plxTbl($handle,$plex,ves) 1
+		}
+		set _GD_plxTbl($handle,rsaction) ""
+		set _GD_plxTbl($handle,vnaction) ""
+		set _GD_plxTbl($handle,vpaction) ""
+		set _GD_plxTbl($handle,vsaction) ""
+
+		####	Create the widget(s)
+		set _GW_plxTbl($handle,panel) [plxTbl:_create $handle $parent]
+
+		####	Initialize the contents of the matrix
+		plxTbl:_initRowValues $handle 0
+		plxTbl:selectRow $handle 0
+	}
+	
+	return $_GW_plxTbl($handle,panel)
+}
+
+proc plxTbl:manage { handle } \
+{
+	global		_GW_plxTbl
+
+	if {[info exists _GW_plxTbl($handle,panel)]} {
+		$_GW_plxTbl($handle,panel) manageChild
+	}
+}
+
+proc plxTbl:unmanage { handle } \
+{
+	global		_GW_plxTbl
+
+	if {[info exists _GW_plxTbl($handle,panel)]} {
+		$_GW_plxTbl($handle,panel) unmanageChild
+	}
+}
+
+#########################################
+#	Public: Data In Routines	#
+#########################################
+proc plxTbl:fill { handle object } \
+{
+	global		_GW_plxTbl
+
+	if {[info exists _GW_plxTbl($handle,panel)]} {
+		$_GW_plxTbl($handle,matrix) editCell 0 0
+	}
+}
+
+proc plxTbl:clear { handle } \
+{
+	global		_GW_plxTbl _GD_plxTbl
+
+	$_GW_plxTbl($handle,matrix) getValues -rows rows
+	incr rows -1
+	if {$rows > 0} { $_GW_plxTbl($handle,matrix) deleteRows 1 $rows }
+	
+	####	Initialize the contents of the matrix
+	plxTbl:_initRowValues $handle 0
+	plxTbl:_selectRow $handle sel 0
+	set _GD_plxTbl($handle,curr_row) 0
+	set _GD_plxTbl($handle,0,ves) 1
+	set _GD_plxTbl($handle,1,ves) 1
+	set _GD_plxTbl($handle,2,ves) 1
+	set _GD_plxTbl($handle,3,ves) 1
+	set _GD_plxTbl($handle,plexes) 1
+}
+
+proc plxTbl:setData { handle data } \
+{
+	global	_GW_plxTbl _GD_plxTbl
+
+	$_GW_plxTbl($handle,matrix) setValues -cells $data
+	$_GW_plxTbl($handle,matrix) setColumnColors 0 $_GD_plxTbl(pix,def,n)
+	$_GW_plxTbl($handle,matrix) getValues \
+			-columnWidths col_widths \
+			-rows rows
+	set parts_pos $_GD_plxTbl(colpos,parts)
+	set col_widths [split $col_widths ,]
+	set curr_len [lindex $col_widths $parts_pos]
+	set base_len [lindex [split $_GD_plxTbl(cwidths) ,] $parts_pos]
+	set maxlen $base_len
+	loop i 0 $rows 1 {
+		set maxlen [max $maxlen [clength [lindex [lindex $data $i] $parts_pos]]]
+	}
+	if {$maxlen != $curr_len} {
+		lvarpop col_widths $parts_pos $maxlen
+		$_GW_plxTbl($handle,matrix) setValues \
+				-columnWidths [join $col_widths ,]
+	}
+
+	set row 0
+	loop i 0 $_GD_plxTbl($handle,plexes) {
+		$_GW_plxTbl($handle,matrix) setCellColor \
+				$row 0 $_GD_plxTbl(pix,def,0)
+		set row [expr $row + $_GD_plxTbl($handle,$i,ves)]
+	}
+	plxTbl:selectRow $handle 0
+}
+
+proc plxTbl:setVeParts { handle names sizes } \
+{
+	global		_GW_plxTbl _GD_plxTbl
+
+	if {[$_GW_plxTbl($handle,matrix) isSensitive]} {
+		set curr_row $_GD_plxTbl($handle,curr_row)
+		set parts_pos $_GD_plxTbl(colpos,parts)
+
+		set nparts [llength $names]
+		set names [join $names]
+		if {$nparts == 0} {
+			set sum_parts 0
+		} else {
+			set sum_parts [format "%.2f" [expr [join $sizes +]]]
+		}
+
+		$_GW_plxTbl($handle,matrix) getValues -columnWidths col_widths
+		set col_widths [split $col_widths ,]
+		set curr_len [string trim [lindex $col_widths $parts_pos]]
+		set new_len [string length $names]
+
+		$_GW_plxTbl($handle,matrix) getValues -rows rows
+		set maxlen [max $new_len 30]
+		loop i 0 $rows 1 {
+			if {$i == $curr_row} {
+				continue
+			}
+			set str [$_GW_plxTbl($handle,matrix) \
+				getCell $i $parts_pos]
+			set maxlen [max $maxlen [string length $str]]
+		}
+		if {$maxlen != $curr_len} {
+			lvarpop col_widths $parts_pos $maxlen
+			$_GW_plxTbl($handle,matrix) setValues \
+				-columnWidths [join $col_widths ,]
+		}
+
+		$_GW_plxTbl($handle,matrix) setCell \
+			$curr_row $_GD_plxTbl(colpos,size) $sum_parts
+		$_GW_plxTbl($handle,matrix) setCell \
+			$curr_row $_GD_plxTbl(colpos,nparts) $nparts
+		$_GW_plxTbl($handle,matrix) setCell \
+			$curr_row $parts_pos $names
+	}
+}
+
+proc plxTbl:selectRow { handle rnum } \
+{
+	global	_GD_plxTbl
+
+	plxTbl:_selectRow $handle def $_GD_plxTbl($handle,curr_row)
+	set _GD_plxTbl($handle,curr_row) $rnum
+	plxTbl:_selectRow $handle sel $rnum
+}
+
+proc plxTbl:selectCurrentPlexVe { handle plex ve} \
+{
+	global	_GW_plxTbl _GD_plxTbl
+
+	set rnum 0
+
+	$_GW_plxTbl($handle,matrix) commitEdit
+	loop i 0 $plex 1 {
+		set n [$_GW_plxTbl($handle,matrix) getCell \
+				$rnum $_GD_plxTbl(colpos,ve_num)]
+		set rnum [expr $rnum + $n]
+	}
+
+	set rnum [expr $rnum + $ve]
+	plxTbl:_selectRow $handle def $_GD_plxTbl($handle,curr_row)
+	set _GD_plxTbl($handle,curr_row) $rnum
+	plxTbl:selectRow $handle $rnum
+}
+
+proc plxTbl:setMode { handle mode } \
+{
+	global	_GD_plxTbl; set _GD_plxTbl($handle,mode) $mode
+}
+
+#########################################
+#	Public: Data Out Routines	#
+#########################################
+proc plxTbl:getMatrix { handle } \
+{
+	global	_GW_plxTbl; return $_GW_plxTbl($handle,matrix)
+}
+
+proc plxTbl:getData { handle dat {check true} } \
+{
+	global		_GW_plxTbl _GD_plxTbl
+	upvar $dat	data
+
+	$_GW_plxTbl($handle,matrix) commitEdit
+	$_GW_plxTbl($handle,matrix) getValues -cells cells
+
+	foreach row $cells {
+		foreach x {ve_num ve_type ve_sunit ve_start parts} {
+			set $x [lindex $row $_GD_plxTbl(colpos,$x)]
+		}
+
+		if {$ve_num != "" && $_GD_plxTbl($handle,type) != "plex"} {
+			lappend data plex
+		}
+		set line ve
+		if {$ve_type == "S"} {
+			lappend line -stripe
+			if {$ve_sunit != ""} {
+				lappend line "-stripe_unit $ve_sunit"
+			}
+		} else {
+			lappend line -concat
+		}
+		if {[clength $ve_start]} { lappend line "-start $ve_start" }
+		lappend line $parts
+		lappend data [join $line]
+	}
+	return 1
+}
+
+proc plxTbl:getGraphData { handle dat } \
+{
+	global		_GW_plxTbl _GD_plxTbl
+	upvar $dat	data
+
+	$_GW_plxTbl($handle,matrix) commitEdit
+	$_GW_plxTbl($handle,matrix) getValues -cells cells
+
+	loop plex 0 $_GD_plxTbl($handle,plexes) 1 {
+	    set start 0; set end 0; set plx_data ""
+	    loop ve 0 $_GD_plxTbl($handle,$plex,ves) 1 {
+		set row [lvarpop cells 0]
+		set ve_size [lindex $row $_GD_plxTbl(colpos,size)]
+		if {$ve_size == 0} {
+			continue
+		}
+		set ve_start [lindex $row $_GD_plxTbl(colpos,ve_start)]
+		if {[clength $ve_start]} {
+			####	TODO:	(1024 * 2) assumes 512 byte blocks
+			####	Necessary since sizes=MB while start=blocks
+			set start [int [expr $ve_start.0 / (1024 * 2)]]
+		}
+
+		set end [expr $start + $ve_size]
+		lappend plx_data "$ve $start $end"
+		set start $end
+	    }
+	    lappend data $plx_data
+	}
+	lvarpush data $_GD_plxTbl($handle,plexes)
+
+	####	TODO:	DEBUG
+	lvarpush data 1000
+	####	TODO:	DEBUG
+
+	lvarpush data $_GD_plxTbl($handle,type)
+}
+
+proc plxTbl:getSummaryData { handle dat } \
+{
+	global		_GW_plxTbl _GD_plxTbl
+	upvar $dat	data
+
+	$_GW_plxTbl($handle,matrix) commitEdit
+	$_GW_plxTbl($handle,matrix) getValues -cells cells -rows rows
+
+	set row 0; set parts 0; set size 0
+	loop plex 0 $_GD_plxTbl($handle,plexes) 1 {
+	    loop ve 0 $_GD_plxTbl($handle,$plex,ves) 1 {
+		lappend size [lindex [lindex $cells $row] \
+				$_GD_plxTbl(colpos,size)]
+		lappend parts [llength [lindex [lindex $cells $row] \
+				$_GD_plxTbl(colpos,parts)]]
+		incr row
+	    }
+	}
+
+	lappend data $_GD_plxTbl($handle,plexes)
+	lappend data $row
+	lappend data [expr [join $parts +]]
+	lappend data [format "%.2f" [expr [join $size +]]]
+}
+
+proc plxTbl:chkData { handle type } \
+{
+	global		_GW_plxTbl _GD_plxTbl _GD_resources
+	set rval	1
+
+	$_GW_plxTbl($handle,matrix) commitEdit
+	$_GW_plxTbl($handle,matrix) getValues \
+			-rows rows \
+			-cells cells \
+			-rowLabels rlabels
+	set rlabels [split $rlabels ,]
+
+	####
+	####	Check that all ve's have at least one partition
+	####
+	set rnum 0
+	foreach row $cells {
+		foreach x "ve_type parts" {
+		    set $x [lindex $row $_GD_plxTbl(colpos,$x)]
+		}
+		set lbl [string trim [lindex $rlabels $rnum]]
+		if {[string index $lbl 0] != "P"} {
+			plxTbl:_getPlexVeFromRow $handle $rnum plex ve
+			set lbl "Plex:$plex $lbl"
+		}
+		if {[cequal $ve_type "S"]} {
+			if {[llength $parts] < 2} {
+				lappend bad_stripes $lbl
+			}
+		} elseif {[cequal $parts ""]} {
+		    lappend bad_ves $lbl
+		}
+		incr rnum
+	}
+	if {[info exists bad_stripes]} {
+		em:storeMsg $handle error \
+		"The following striped \"$_GD_resources($type,string)\" ve's have less than 2 partitions:"
+		em:storeMsg $handle error "\t[join $bad_stripes \n\t]"
+		set rval 0
+	}
+	if {[info exists bad_ves]} {
+		em:storeMsg $handle error \
+		"The following \"$_GD_resources($type,string)\" ve's have no partitions:"
+		em:storeMsg $handle error "\t[join $bad_ves \n\t]"
+		set rval 0
+	}
+
+	####	TODO
+	####	Check that for each plex, corresponding ve's are the same size
+
+	if {! $rval} {
+		em:setMessageString $handle "Unable to create volume."
+	}
+
+	return $rval
+
+}
+
+proc plxTbl:getNumRows { handle } \
+{
+	global	_GW_plxTbl
+
+	$_GW_plxTbl($handle,matrix) getValues -rows rows
+	return $rows
+}
+
+proc plxTbl:getCurrentRow { handle } \
+{
+	global	_GD_plxTbl; return $_GD_plxTbl($handle,curr_row)
+}
+
+proc plxTbl:getPartsByRow { handle rnum } \
+{
+	global	_GW_plxTbl _GD_plxTbl
+
+	return [$_GW_plxTbl($handle,matrix) getCell \
+			$rnum $_GD_plxTbl(colpos,parts)]
+}
+
+proc plxTbl:getParts { handle } \
+{
+	global	_GW_plxTbl _GD_plxTbl
+
+	$_GW_plxTbl($handle,matrix) getValues -rows rows
+
+	set parts ""
+	set j $_GD_plxTbl(colpos,parts)
+	loop i 0 $rows 1 {
+		set n [$_GW_plxTbl($handle,matrix) getCell $i $j]
+		if {$n != ""} {
+			foreach item $n { lappend parts $item }
+		}
+	}
+
+	return $parts
+}
+
+proc plxTbl:getRowLabel { handle rnum form plex_var ve_var} \
+{
+	global		_GW_plxTbl _GD_plxTbl
+	upvar $plex_var	plex
+	upvar $ve_var	ve
+
+	plxTbl:_getPlexVeFromRow $handle $rnum plex ve
+
+	if {$form == "short"} {
+		return [lindex $_GD_plxTbl($handle,labels) $rnum]
+	} else {
+		set lbl [string trim [lindex $_GD_plxTbl($handle,labels) $rnum]]
+		if {[string index $lbl 0] != "P"} { set lbl "Plex:$plex $lbl" }
+		return $lbl
+	}
+}
+
+proc plxTbl:getVeCount { handle } \
+{
+	global		_GD_plxTbl
+
+	set ves 0
+	loop plex 0 $_GD_plxTbl($handle,plexes) 1 {
+		lappend ves $_GD_plxTbl($handle,$plex,ves)
+	}
+	return [expr [join $ves +]]
+}
+
+proc plxTbl:getPartCount { handle } \
+{
+	global		_GW_plxTbl _GD_plxTbl
+
+	$_GW_plxTbl($handle,matrix) getValues -rows rows
+
+	set j $_GD_plxTbl(colpos,nparts)
+	set parts 0
+	loop i 0 $rows 1 {
+		set n [$_GW_plxTbl($handle,matrix) getCell $i $j]
+		if {$n != ""} { lappend parts $n }
+	}
+	return [expr [join $parts +]]
+}
+
+proc plxTbl:getSize { handle {unit mb} } \
+{
+	global		_GW_plxTbl _GD_plxTbl
+
+	$_GW_plxTbl($handle,matrix) getValues -rows rows
+
+	set j $_GD_plxTbl(colpos,size)
+	set size 0
+	loop i 0 $rows 1 {
+		set n [$_GW_plxTbl($handle,matrix) getCell $i $j]
+		if {$n != ""} { lappend size $n }
+	}
+	return [expr [join $size +]]
+}
+
+#########################################
+#	Public: Register for Actions	#
+#########################################
+####	Calls $action with the following parameters:
+####
+####		$handle $type $row $state
+proc plxTbl:registerRowSelectAction { handle action {state sel} } \
+{
+	global		_GD_plxTbl
+
+	lappend _GD_plxTbl($handle,$state,rsaction) $action
+}
+
+####	Calls $action with the following parameters:
+####
+####		$handle $type $row $count
+proc plxTbl:registerVeNumChangeAction { handle action } \
+{
+	global	_GD_plxTbl; lappend _GD_plxTbl($handle,vnaction) $action
+}
+
+####	Calls $action with the following parameters:
+####
+####		$handle $type $row $parts
+proc plxTbl:registerVePartChangeAction { handle action } \
+{
+	global	_GD_plxTbl; lappend _GD_plxTbl($handle,vpaction) $action
+}
+
+####	Calls $action with the following parameters:
+####
+####		$handle $type $row $start
+proc plxTbl:registerStartChangeAction { handle action } \
+{
+	global	_GD_plxTbl; lappend _GD_plxTbl($handle,vsaction) $action
+}
+
+proc plxTbl:activate { handle } \
+{
+	global		_GW_plxTbl _GD_plxTbl
+
+	$_GW_plxTbl($handle,matrix) setValues -sensitive true
+	foreach item $_GD_plxTbl(popups) {
+		if {[info exists _GW_plxTbl($handle,$item)]} {
+			$_GW_plxTbl($handle,$item) setSensitive true
+		}
+	}
+	plxTbl:_selectRow $handle sel 0
+	plxTbl:_initRowValues $handle 0
+}
+
+proc plxTbl:deactivate { handle } \
+{
+	global		_GW_plxTbl _GD_plxTbl
+
+	set _GD_plxTbl($handle,curr_row) 0
+	$_GW_plxTbl($handle,matrix) setValues -topRow 0
+	plxTbl:_setTblVeCount $handle 0 1
+	loop i 0 $_GD_plxTbl(ncolumns) 1 {
+		$_GW_plxTbl($handle,matrix) setCell 0 $i ""
+	}
+
+	$_GW_plxTbl($handle,matrix) setValues \
+			-columnWidths $_GD_plxTbl(cwidths) \
+			-sensitive false
+	foreach item $_GD_plxTbl(popups) {
+		if {[info exists _GW_plxTbl($handle,$item)]} {
+			$_GW_plxTbl($handle,$item) setSensitive false
+		}
+	}
+	if {! [info exists _GD_plxTbl(pix,inactive)]} {
+		$_GW_plxTbl($handle,matrix) getValues \
+				-background _GD_plxTbl(pix,inactive)
+	}
+	$_GW_plxTbl($handle,matrix) setRowColors 0 $_GD_plxTbl(pix,inactive)
+}
+
+#########################################
+#		Private			#
+#########################################
+proc plxTbl:_create { handle parent } \
+{
+	global		_GW_plxTbl _GD_plxTbl
+
+	if {$_GD_plxTbl($handle,mode) != "info"} {
+	    set _GW_plxTbl($handle,cur_popup) $parent.$handle.cur_popup
+	    set _GW_plxTbl($handle,all_popup) $parent.$handle.all_popup
+	    set form [xmForm $parent.$handle -translations "#augment \
+		Shift<Btn3Down>: action(xfs:popupMenu %event \
+				$_GW_plxTbl($handle,all_popup))
+		<Btn3Down>: action(xfs:popupMenu %event \
+				$_GW_plxTbl($handle,cur_popup))"]
+
+	    foreach item $_GD_plxTbl(popups) {
+		xmPopupMenu $_GW_plxTbl($handle,$item)
+		xmLabel $_GW_plxTbl($handle,$item).title managed
+		xmSeparator $_GW_plxTbl($handle,$item).sep managed \
+					-separatorType double_line
+		foreach i $_GD_plxTbl($item) {
+			xmPushButton $_GW_plxTbl($handle,$item).$i managed
+			$_GW_plxTbl($handle,$item).$i activateCallback \
+					"plxTbl:_popupCb $handle $item $i"
+		}
+
+		set idx [lsearch $_GD_plxTbl($item) "clear*"]
+		xmSeparator $_GW_plxTbl($handle,$item).sep2 managed \
+				-positionIndex [expr $idx + 2]
+	    }
+	} else {
+	    set form [xmForm $parent.$handle]
+	}
+
+	set _GW_plxTbl($handle,matrix) \
+			[xbaeMatrix $form.plx_matrix \
+			 managed \
+			-rows $_GD_plxTbl($handle,numrows) \
+			-rowLabels $_GD_plxTbl(dummylabels) \
+			-columns $_GD_plxTbl(ncolumns) \
+			-visibleColumns $_GD_plxTbl(ncolumns) \
+			-visibleRows $_GD_plxTbl($handle,numrows) \
+			-columnWidths $_GD_plxTbl(cwidths) \
+			-cellShadowThickness 2 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form]
+
+	$_GW_plxTbl($handle,matrix) setColumnColors 0 $_GD_plxTbl(pix,def,0)
+	plxTbl:_makeRowLabels $handle _GD_plxTbl($handle,labels)
+	$_GW_plxTbl($handle,matrix) setValues \
+			-rowLabels [join $_GD_plxTbl($handle,labels) ,]
+
+	$_GW_plxTbl($handle,matrix) traverseCellCallback \
+			"plxTbl:_traverseCellCb \
+			$handle %w %row %column %next_row %next_column"
+	$_GW_plxTbl($handle,matrix) enterCellCallback "plxTbl:_enterCellCb \
+			$handle %w %row %column %doit"
+	$_GW_plxTbl($handle,matrix) leaveCellCallback "plxTbl:_leaveCellCb \
+			$handle %w %row %column %value %doit"
+	$_GW_plxTbl($handle,matrix) modifyVerifyCallback \
+			"plxTbl:_modifyVerifyCb \
+			$handle %w %row %column %ptr %length %doit"
+
+	return $form
+}
+
+#########################################
+#	Matrix Callbacks		#
+#########################################
+proc plxTbl:_traverseCellCb { handle w row col next_row next_col } \
+{
+	global		_GD_plxTbl
+	upvar $next_row nrow
+	upvar $next_col ncol
+
+#	if {$_GD_plxTbl($handle,mode) == "info"} { return }
+
+	####	TODO
+	####	Revisit this so that when tabbing through the cells, you
+	####	can tab to the next row.
+
+	set val [$w getCell $nrow $_GD_plxTbl(colpos,ve_num)]
+	if {$val != ""} {
+		set idx 0
+		set proto_ncol $_GD_plxTbl(colpos,ve_num)
+	} else {
+		set idx n
+		set proto_ncol $_GD_plxTbl(colpos,ve_type)
+	}
+	set color [lindex $_GD_plxTbl(pix,def,$idx) $ncol]
+	if {$color == $_GD_plxTbl(pix,noedit)} {
+		set ncol $proto_ncol
+	}
+}
+
+proc plxTbl:_enterCellCb { handle w row col doit } \
+{
+	global		_GD_plxTbl
+	upvar $doit	do
+
+	if {[info exists _GD_plxTbl($handle,inSelectRow)]} { return }
+	if {$_GD_plxTbl($handle,mode) == "info"} { set do false }
+
+	if {[$w getCell $row $_GD_plxTbl(colpos,ve_num)] != ""} {
+		set i 0
+	} else {
+		set i n
+	}
+	if {[lindex $_GD_plxTbl(pix,def,$i) $col] == $_GD_plxTbl(pix,noedit)} {
+		set do false
+		return
+	}
+
+	if {$row != $_GD_plxTbl($handle,curr_row)} {
+		plxTbl:_selectRow $handle def $_GD_plxTbl($handle,curr_row)
+		set _GD_plxTbl($handle,curr_row) $row
+		plxTbl:_selectRow $handle sel $row
+	}
+	set _GD_plxTbl($handle,curr_col) $col
+}
+
+proc plxTbl:_leaveCellCb { handle w row col value doit} \
+{
+	global		_GD_plxTbl
+	upvar $value	val
+	upvar $doit	do
+
+#	if {$_GD_plxTbl($handle,mode) == "info"} { return }
+
+	if {$_GD_plxTbl(colpos,ve_num) == $col} {
+	    if {[$w getCell $row $col] != ""} {
+		set i 0
+	    } else {
+		set i n
+	    }
+	    if {[lindex $_GD_plxTbl(pix,def,$i) $col] == $_GD_plxTbl(pix,noedit)} {
+		return
+	    }
+	    plxTbl:_getPlexVeFromRow $handle $row plex ve
+	    if {[cequal $val ""] || $val < 1 || $val > 128} {
+		set val $_GD_plxTbl($handle,$plex,ves)
+#		set do 0
+	    } else {
+		if {$val != $_GD_plxTbl($handle,$plex,ves)} {
+		    plxTbl:_setTblVeCount $handle $plex $val
+		    if {[info exists _GD_plxTbl($handle,vnaction)]} {
+			foreach item $_GD_plxTbl($handle,vnaction) {
+			    $item $handle $_GD_plxTbl($handle,type) $row $val
+			}
+		    }
+		}
+	    }
+	} elseif {$_GD_plxTbl(colpos,ve_type) == $col} {
+	    set val [string toupper $val]
+	    if {$val != "S" && $val != "C" && $val != ""} { set do 0 }
+	} elseif {$_GD_plxTbl(colpos,ve_start) == $col} {
+	    ####	We have to set a timer, otherwise we get into
+	    ####	an infinite loop.  What happens is that calling
+	    ####	the registered actions may result in a call to
+	    ####	commitEdit() for the matrix.  Somehow this results
+	    ####	in the callback for leaveCell to be called and
+	    ####	we're off to the races!!!
+	    if {! [cequal [$w getCell $row $col] $val]} {
+	    	if {[info exists _GD_plxTbl($handle,vsaction)]} {
+		    . addTimer 50 "plxTbl:_fireVsaction $handle $row $val"
+		}
+	    }
+	}
+}
+
+proc plxTbl:_modifyVerifyCb { handle w row col pointer length doit } \
+{
+	global		_GD_plxTbl
+	upvar $pointer	ptr
+	upvar $length	len
+	upvar $doit	do
+
+#	if {$_GD_plxTbl($handle,mode) == "info"} { return }
+
+	if {$_GD_plxTbl(colpos,ve_type) == $col} {
+		if {$len > 1} {
+			set do 0
+		} elseif {$len != 0} {
+			set ch [string toupper $ptr]
+			if {$ch != "S" && $ch != "C"} { set do 0 }
+		}
+	} else {
+		loop n 0 $len 1 {
+			set ch [string index $ptr $n]
+			if {! [ctype digit $ch]} { set do 0 }
+		}
+	}
+}
+
+proc plxTbl:_fireVsaction { handle row {val ""} } \
+{
+	global		_GD_plxTbl
+
+	foreach item $_GD_plxTbl($handle,vsaction) {
+	    $item $handle $_GD_plxTbl($handle,type) \
+			$row $val
+	}
+}
+
+#########################################
+#	Other Callbacks			#
+#########################################
+proc plxTbl:_popupCb { handle menu op } \
+{
+	global          _GW_plxTbl _GD_plxTbl
+	set curr_row	$_GD_plxTbl($handle,curr_row)
+
+	switch $op {
+	    stripe	{ set val S;  set col $_GD_plxTbl(colpos,ve_type) }
+	    concat	{ set val C;  set col $_GD_plxTbl(colpos,ve_type) }
+	    clear_units	{ set val ""; set col $_GD_plxTbl(colpos,ve_sunit) }
+	    clear_start {
+		set val ""
+		set col $_GD_plxTbl(colpos,ve_start)
+		if {[info exists _GD_plxTbl($handle,vsaction)]} {
+		    . addTimer 50 "plxTbl:_fireVsaction $handle $curr_row $val"
+		}
+	    }
+	    clear_parts {
+		set val ""
+		set col $_GD_plxTbl(colpos,parts)
+		set col1 $_GD_plxTbl(colpos,size)
+		set col2 $_GD_plxTbl(colpos,nparts)
+	    }
+	}
+
+	switch $menu {
+	    cur_popup {
+		if {$op == "clear_parts"} {
+			set sv_val [$_GW_plxTbl($handle,matrix) getCell \
+						$curr_row $col]
+			$_GW_plxTbl($handle,matrix) setCell $curr_row $col $val
+			$_GW_plxTbl($handle,matrix) setCell $curr_row $col1 0
+			$_GW_plxTbl($handle,matrix) setCell $curr_row $col2 0
+		    if {[info exists _GD_plxTbl($handle,vpaction)]} {
+			foreach item $_GD_plxTbl($handle,vpaction) {
+			    $item $handle $_GD_plxTbl($handle,type) \
+						$curr_row $sv_val
+			}
+		    }
+		} else {
+		    $_GW_plxTbl($handle,matrix) setCell $curr_row $col $val
+		}
+		$_GW_plxTbl($handle,matrix) commitEdit
+	    }
+	    all_popup {
+		$_GW_plxTbl($handle,matrix) getValues -rows nrows
+		if {$op == "clear_parts"} {
+		    set sv_val [plxTbl:getParts $handle]
+		    loop row 0 $nrows 1 {
+			$_GW_plxTbl($handle,matrix) setCell $row $col $val
+			$_GW_plxTbl($handle,matrix) setCell $row $col1 0
+			$_GW_plxTbl($handle,matrix) setCell $row $col2 0
+		    }
+		    if {[info exists _GD_plxTbl($handle,vpaction)]} {
+			foreach item $_GD_plxTbl($handle,vpaction) {
+			    $item $handle $_GD_plxTbl($handle,type) 0 $sv_val
+			}
+		    }
+		} else {
+		    loop row 0 $nrows 1 {
+			$_GW_plxTbl($handle,matrix) setCell $row $col $val
+		    }
+		}
+	    }
+	}
+}
+
+#################################
+#	General Utilities	#
+#################################
+
+####	Dependencies:	_GD_plxTbl($handle,plexes)
+####		 	_GD_plxTbl($handle,$plex,ves)
+####
+proc plxTbl:_setTblPlexCount { handle count } \
+{
+	global          _GW_plxTbl _GD_plxTbl
+
+	####	Make sure we don't lose anything
+	set w $_GW_plxTbl($handle,matrix)
+	$w commitEdit
+
+	$w getValues -rows rows -topRow topRow
+	set parts ""
+
+	set to_count $count; set from_count $_GD_plxTbl($handle,plexes)
+	if {$count == 0} {
+		loop i 0 $rows 1 {
+			lvarcat parts [$w getCell $i $_GD_plxTbl(colpos,parts)]
+		}
+
+		####	deactivate the matrix
+		plxTbl:deactivate $handle
+		$w getValues -rows rows
+		set to_count 1
+	} else {
+		if {$_GD_plxTbl($handle,plexes) == 0} {
+			####	activate the matrix
+			plxTbl:activate $handle
+			set from_count 1
+		} else {
+			$_GW_plxTbl($handle,matrix) setValues -sensitive true
+			foreach item $_GD_plxTbl(popups) {
+			    if {[info exists _GW_plxTbl($handle,$item)]} {
+				$_GW_plxTbl($handle,$item) setSensitive true
+			    }
+			}
+		}
+	}
+
+	if {$to_count < $from_count} {
+		####	Deleting plexes
+		set begin 0; set drows 0
+		loop i 0 $to_count 1 {
+		    set begin [expr $begin + $_GD_plxTbl($handle,$i,ves)]
+		}
+		loop i $to_count $from_count 1 {
+			set _GD_plxTbl($handle,$i,ves) 1
+		}
+		set drows [expr $rows - $begin]
+		loop i $begin $rows {
+			lvarcat parts [$w getCell $i $_GD_plxTbl(colpos,parts)]
+		}
+		if {$topRow > $begin} {
+			$w setValues -topRow [expr $begin - 1]
+		}
+		$w deleteRows $begin $drows
+
+		####	If we have deleted the selected row, set the
+		####	current row to the bottom row.
+		if {$begin <= $_GD_plxTbl($handle,curr_row)} {
+			set ncurr_row [expr $begin - 1]
+			set _GD_plxTbl($handle,curr_row) $ncurr_row
+		}
+		set end 0
+	} else {
+		####	Adding plexes
+		set begin $rows
+		set arows [expr $to_count - $from_count]
+		$w addRows $begin $arows
+		set end [expr $begin + $arows]
+	}
+
+	set _GD_plxTbl($handle,plexes) $count
+	plxTbl:_makeRowLabels $handle _GD_plxTbl($handle,labels)
+	$w setValues -rowLabelWidth 0 \
+			-rowLabels [join $_GD_plxTbl($handle,labels) ,]
+
+	loop i $begin $end 1 {
+		plxTbl:_initRowValues $handle $i
+		plxTbl:_setRowCellColors $handle $i def
+	}
+
+	if {$parts != "" && [info exists _GD_plxTbl($handle,vpaction)]} {
+	    foreach item $_GD_plxTbl($handle,vpaction) {
+		$item $handle $_GD_plxTbl($handle,type) $begin $parts
+	    }
+	}
+
+	####	Select the current row
+	plxTbl:_selectRow $handle sel $_GD_plxTbl($handle,curr_row)
+}
+
+####	Dependencies:	_GD_plxTbl($handle,curr_row)
+####		 	_GD_plxTbl($handle,$plex,ves)
+####
+proc plxTbl:_setTblVeCount { handle plex count } \
+{
+	global          _GW_plxTbl _GD_plxTbl
+
+	set rownum $_GD_plxTbl($handle,curr_row)
+	set curr_count $_GD_plxTbl($handle,$plex,ves)
+	set w $_GW_plxTbl($handle,matrix)
+	set parts ""
+
+	####	Create the data for the matrix
+	if {$count < $curr_count} {
+		set rownum [expr $rownum + $count]
+		set drows [expr $curr_count - $count]
+		loop i $rownum [expr $rownum + $drows] {
+			lvarcat parts [$w getCell $i $_GD_plxTbl(colpos,parts)]
+		}
+		$w getValues -rows rows
+		if {$rows != 1} {
+			$w deleteRows $rownum $drows
+		}
+		set end 0
+	} else {
+		set rownum [expr $rownum + $curr_count]
+		set arows [expr $count - $curr_count]
+		$w addRows $rownum $arows
+		set end [expr $rownum + $arows]
+	}
+
+	set _GD_plxTbl($handle,$plex,ves) $count
+
+	plxTbl:_makeRowLabels $handle _GD_plxTbl($handle,labels)
+	$w setValues -rowLabelWidth 0 \
+			-rowLabels [join $_GD_plxTbl($handle,labels) ,]
+
+	loop i $rownum $end 1 {
+		plxTbl:_initRowValues $handle $i
+		plxTbl:_setRowCellColors $handle $i def
+	}
+
+	if {$parts != "" && [info exists _GD_plxTbl($handle,vpaction)]} {
+	    foreach item $_GD_plxTbl($handle,vpaction) {
+		$item $handle $_GD_plxTbl($handle,type) $rownum $parts
+	    }
+	}
+
+	set nparts [$w getCell $_GD_plxTbl($handle,curr_row) \
+				$_GD_plxTbl(colpos,parts)]
+	if {[llength $nparts]} {
+		set x [split $handle "-"]
+		set nhandle [lindex $x 0]
+		ptPnl:setChosenListParts $nhandle $nparts
+	}
+}
+
+proc plxTbl:_getPlexVeFromRow { handle rnum plex_var ve_var } \
+{
+	global		_GD_plxTbl
+	upvar $plex_var	plex
+	upvar $ve_var	ve
+	
+	set row 0
+	loop plex 0 $_GD_plxTbl($handle,plexes) 1 {
+		set nrow [expr $row + $_GD_plxTbl($handle,$plex,ves)]
+		if {$rnum < $nrow} {
+			break
+		}
+		set row $nrow
+	}
+	set ve [expr $rnum - $row]
+
+	return 1
+}
+
+####	Dependencies:	_GD_plxTbl(pix,def,0)
+####		 	_GD_plxTbl(pix,def,n)
+####		 	_GD_plxTbl(pix,sel,0)
+####		 	_GD_plxTbl(pix,sel,n)
+####
+proc plxTbl:_selectRow { handle state row {col ""} } \
+{
+	global          _GW_plxTbl _GD_plxTbl
+
+	set _GD_plxTbl($handle,inSelectRow) true
+	plxTbl:_setRowCellColors $handle $row $state
+
+	if {$state == "sel" && $_GD_plxTbl($handle,mode) != "info"} {
+	    if {[regexp -- {.* 0$} [lindex $_GD_plxTbl($handle,labels) $row]]} {
+		set pix $_GD_plxTbl(pix,$state,0)
+	    } else {
+		set pix $_GD_plxTbl(pix,$state,n)
+	    }
+	    if {$col == ""} {
+		loop i $_GD_plxTbl($handle,curr_col) $_GD_plxTbl(ncolumns) 1 {
+		    if {[lindex $pix $i] == $_GD_plxTbl(pix,sedit)} {
+			set curr_col $i
+			break
+		    }
+		}
+		if {! [info exists curr_col]} {
+		    loop i 0 $_GD_plxTbl($handle,curr_col) 1 {
+			if {[lindex $pix $i] == $_GD_plxTbl(pix,sedit)} {
+			    set curr_col $i
+			    break
+			}
+		    }
+		}
+	    } else {
+		set curr_col $col
+	    }
+
+	    $_GW_plxTbl($handle,matrix) editCell $row $curr_col
+	    set _GD_plxTbl($handle,curr_col) $curr_col
+	}
+
+	if {[info exists _GD_plxTbl($handle,$state,rsaction)]} {
+		foreach item $_GD_plxTbl($handle,$state,rsaction) {
+			$item $handle $_GD_plxTbl($handle,type) $row $state
+		}
+	}
+
+	unset _GD_plxTbl($handle,inSelectRow)
+}
+
+####	Dependencies:	_GD_plxTbl($handle,plexes)
+####		 	_GD_plxTbl($handle,$plex,ves)
+####
+proc plxTbl:_makeRowLabels { handle rlabels } \
+{
+	global		_GW_plxTbl _GD_plxTbl
+	upvar $rlabels	row_lbls
+
+	set row 0; set row_lbls ""
+	loop i 0 $_GD_plxTbl($handle,plexes) 1 {
+		set num_ves $_GD_plxTbl($handle,$i,ves)
+
+		lappend row_lbls [plxTbl:_makeRowLabel $handle $i 0]
+		loop j 1 $num_ves 1 {
+			lappend row_lbls [plxTbl:_makeRowLabel $handle $i $j]
+			incr row
+		}
+	}
+
+	if {$row_lbls == ""} {
+		lappend row_lbls [plxTbl:_makeRowLabel $handle 0 0]
+	}
+}
+
+proc plxTbl:_makeRowLabel { handle plex ve {long false}} \
+{
+	if {$ve == 0 || $long == "true"} {
+		return [format "Plex:$plex Ve:%2d" $ve]
+	} else {
+		return [format "Ve:%2d" $ve]
+	}
+}
+
+proc plxTbl:_initRowValues { handle row } \
+{
+	global		_GW_plxTbl _GD_plxTbl
+
+	if {[regexp -- {.* 0$} [lindex $_GD_plxTbl($handle,labels) $row]]} {
+	    set values $_GD_plxTbl(rowcells,0)
+	} else {
+	    set values $_GD_plxTbl(rowcells,n)
+	}
+
+	loop i 0 $_GD_plxTbl(ncolumns) 1 {
+	    $_GW_plxTbl($handle,matrix) setCell $row $i [lindex $values $i]
+	}
+}
+
+proc plxTbl:_setRowCellColors { handle row {state def} } \
+{
+	global		_GW_plxTbl _GD_plxTbl
+
+	if {$_GD_plxTbl($handle,mode) == "info"} {
+	    if {$state == "def"} {
+		$_GW_plxTbl($handle,matrix) setRowColors \
+				$row $_GD_plxTbl(pix,edit)
+	    } else {
+		$_GW_plxTbl($handle,matrix) setRowColors \
+				$row $_GD_plxTbl(pix,sedit)
+	    }
+	} else {
+	    if {[regexp -- {.* 0$} [lindex $_GD_plxTbl($handle,labels) $row]]} {
+		set pix $_GD_plxTbl(pix,$state,0)
+	    } else {
+		set pix $_GD_plxTbl(pix,$state,n)
+	    }
+
+	    loop i 0 $_GD_plxTbl(ncolumns) 1 {
+		$_GW_plxTbl($handle,matrix) setCellColor $row $i [lindex $pix $i]
+	    }
+	}
+}

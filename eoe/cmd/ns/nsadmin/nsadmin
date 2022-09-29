@@ -1,0 +1,546 @@
+#! /usr/bin/perl5
+eval 'exec perl5 -S $0 "$@"'
+	if 0;
+
+use POSIX;
+
+# The errno EBADFD is not defied in POSIX.
+# This is modified from the entry is sys/errno.ph 
+eval 'sub EBADFD {81;}' unless eval{&EBADFD};
+
+$program=(reverse(split('/',$0)))[0];
+$cursor = "$program> ";
+$domain = ".local";
+$TIOCGWINSZ = 0x40087468;  # should be able to include .ph, but. . .
+
+sub mdbm_require {
+	my $name = pop;
+
+	defined &MDBM_File::invalidate and return 1;
+	eval "use Fcntl";
+	eval 'use MDBM_File "/usr/share/lib/perl5/sgi_lib"';
+	defined &MDBM_File::invalidate and return 1;
+	$name and warn
+    "$0:$name requires IRIX package eoe.sw.gifts_perl_lib to be installed.\n";
+	return 0;
+}
+
+sub globall {   # 
+	local $dir = shift (@_);
+	map {glob("$dir/" . $_)} @_;
+}
+
+sub ismdbmfile {
+	local(@mdbms,$header);
+
+	for $file (@_) {
+		if (-f $file ) {
+			if (open (FP, "$file")) {
+				if (read(FP,$header, 4)) {
+					if ($header eq "mdbm") {
+						push(@mdbms, $file);
+					}
+				}
+				close(FP);
+			}
+		}
+	}
+	return(@mdbms);
+}
+
+#
+# The column_print routine prints out arguments in formatted columns
+#
+sub column_print {
+	@names = sort @_;
+	get_winsize();
+	grep($max = ($max > length($_)) ? $max : length($_), @names);
+	$wcols = int(($max > $cols) ? 1 : ($cols)/($max + 1));
+	$width = int($cols/$wcols);
+	while (@names) {
+		for ($i = 0; ($i < $wcols) && @names; $i++) {
+			printf("%-${width}s", shift(@names));
+		}
+		print "\n";
+	}
+}
+
+#
+# The caches command will list all maps
+#
+$help{"caches"} = 
+    "caches\n\t- list all cache files\n";
+$procs{"caches"} = sub {
+	column_print(map {(reverse(split('/',$_)))[0]} 
+		     ismdbmfile(globall("/var/ns/cache","*")));
+};
+
+#
+# The cat command is similar to a ypcat.  It just opens the ".all" file for
+# each requested map, and prints it out.
+#
+$help{"cat"} =
+    "cat map ...\n\t- prints all lines in each of the requested maps\n";
+$procs{"cat"} = sub {
+	my $map;
+	my @maps;
+
+	if ($#_ < 0) {
+		warn $help{"cat"};
+		return &EINVAL;
+	}
+	@maps = globall("/ns/$domain", @_);
+	if ($#maps < 0) {
+		warn "no matching maps: ", join(' ', @_), "\n";
+		return &ENOENT;
+	}
+	foreach $map (@maps) {
+		warn "no such map $map\n" if (! -d $map);
+		open(IN, "<$map/.all") or warn "failed to open map $map\n";
+		print <IN>;
+		close(<IN>);
+	}
+};
+
+#
+# The clean command will remove expired entries from a cache file.
+# it (currently) does not remove entries that are invlalid to file file mods.
+#
+$help{"clean"} = 
+    "clean\n\t- clean out expired entries from a cache file\n";
+$procs{"clean"} = sub {
+	my $map;
+	my @maps;
+	my $pushedStar=0;
+
+	if ($#_ < 0) {
+		push(@_,  "*");
+		$pushedStar=1;
+	}
+	mdbm_require("clean") or return &ELIBACC;
+	$now = time();
+	@maps = ismdbmfile(globall("/var/ns/cache", @_));
+	if ($#maps < 0) {
+		if (! $pushedStar) {
+			warn "no matching mdbm files: ", join(' ', @_), "\n";
+		}
+		return &ENOENT;
+	}
+	foreach $map (@maps) {
+		$shortmap = (reverse(split("/", $map)))[0];
+		if (tie(%db, MDBM_File, "$map", O_RDWR, 0)) {
+			foreach $key (keys %db) {
+				($time, $mtime, $status, $value) =
+				    unpack("IICa*", $db{$key});
+				if ($time < $now) {
+					if (delete($db{$key})) {
+				warn "Failed to delete $key from $shortmap\n";
+					}
+				}
+			}
+			untie(%db);
+		} else {
+			warn "Failed to mdbm_open $map for write\n";
+		}
+	}
+	return 0;
+};
+
+#
+# The clear command removes single keys from the cache.
+#
+$help{"clear"} =
+    "clear map key ...\n\t- removes single keys from the given cache file\n";
+$procs{"clear"} = sub {
+	my $key;
+	my $map;
+
+	if ($#_ < 1) {
+		warn $help{"clear"};
+		return &EINVAL;
+	}
+	$map = shift;
+	foreach $key (@_) {
+	    chomp($key);
+	    if (! unlink("/ns/$domain/$map/$key")) {
+		warn "cannot clear $key: $!\n";
+	    }
+	}
+	return 0;
+};
+
+#
+# The domain command just sets the domain that we are working on.
+#
+$help{"domain"} =
+    "domain domainname\n\t- sets current domain for flush and clear commands\n";
+$interactive{"domain"} = 1;
+$procs{"domain"} = sub {
+	if ($#_ < 0) {
+		warn $help{"domain"};
+		return &EINVAL;
+	}
+	$domain = $_[0];
+	print "Domain: $domain\n";
+	return 0;
+};
+
+#
+# The dump command prints out a formatted report of the data in a cache.
+#
+@names = qw(SUCCESS, NOTFOUND, UNAVAIL, TRYAGAIN, BADREQ, FATAL);
+$help{"dump"} =
+    "dump map [key] ...\n\t- prints a formatted report of the given cache file\n";
+$procs{"dump"} = sub {
+	my $map;
+	my @maps;
+
+	$~ = "DUMP";
+	if ($#_ < 0) {
+	    warn $help{"dump"};
+	    return &EINVAL;
+	}
+	mdbm_require("dump") or return &ELIBACC;
+	@maps = ismdbmfile(globall("/var/ns/cache", $_[0]));
+	if ($#maps < 0) {
+		warn "no matching mdbm file: ", join(' ', @_), "\n";
+		return &ENOENT;
+	}
+	shift ;
+	if ($#_ >= 0) {
+	    $regexp = join('|',map {$_ = "^".$_."\$"} @_);
+	}
+	foreach $map (@maps) {
+	        $mapname = $map;
+		$mapname =~ s/^.*\///g;
+		next unless
+		    tie(%db, MDBM_File, "$map", O_RDONLY, 0);
+		foreach $key (keys %db) {
+			if (!$regexp || ($regexp && $key =~ /$regexp/)) {
+				($time, $mtime, $status, $value) =
+				    unpack("IICa*", $db{$key});
+				$state = ($status < 6) ? $names[$status] 
+				                       : "UNKNOWN";
+				$timeout = localtime($time);
+				$create = localtime($mtime);
+				write;
+			}
+		}
+		untie(%db);
+	}
+	return 0;
+};
+
+format DUMP =
+key: @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+$key
+	status: @<<<<<<<<<<<<<<<<<<<<<<<<< map: @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+	$state				   $mapname
+	created: @<<<<<<<<<<<<<<<<<<<<<<<< timeout: @<<<<<<<<<<<<<<<<<<<<<<<<<
+	$create 			   $timeout
+	value: @*
+	$value
+.
+
+#
+# The match command is like ypmatch.  It simply looks up a list of keys
+# in a map.
+#
+$help{"grep"} =
+    "grep map expression ...\n\t- regular expression search of map\n";
+$procs{"grep"} = sub {
+        my $error = 0;
+	if ($#_ < 1) {
+		warn $help{"grep"};
+		return &EINVAL;
+	}
+	$map = shift;
+	if (! -d "/ns/.local/$map") {
+		warn "no such map $map\n";
+		return &ENOENT;
+	}
+	foreach $expression (@_) {
+		if (! open(IN, "</ns/.local/$map/.all")) {
+			$error = $?;
+			warn "failed to open map $map\n";
+		} else {
+			$error = 0;
+		}
+		print grep($_ =~ /$expression/, <IN>);
+		close(<IN>);
+	}
+	return $error;
+};
+
+#
+# The help command prints out a summary page of the available commands.
+#
+$help{"help"} =
+    "help [command] ...\n\t- gives a summary for each of the given commands\n";
+$procs{"?"} = $procs{"help"} = sub {
+	my $error = 0;
+	if ($#_ == -1) {
+		foreach $key (sort keys %help) {
+			print $help{$key};
+		}
+	} else {
+		foreach $key (@_) {
+			if ($help{$key}) {
+				print $help{$key};
+			} else {
+				warn "$key is not a valid command\n";
+				$error = &EINVAL;
+			}
+		}
+	}
+	return $error;
+};
+
+#
+# The flush command removes all elements from a cache file.
+#
+$help{"flush"} =
+    "flush [map] ...\n\t- removes all keys from given cache file\n";
+$procs{"flush"} = sub {
+	my $dir;
+	my @dirs;
+	my $error = 0;
+
+	if ($#_ == -1) {
+		push (@_, "*");
+	}
+	@dirs = globall("/ns/$domain",@_);
+	if ($#dirs < 0) {
+		warn "no matching files: ", join(' ', @_), "\n";
+		return &ENOENT;
+	}
+	foreach $dir (globall("/ns/$domain",@_)) {
+		if ( -d $dir && -w $dir ) {
+			rmdir($dir);
+		} else {
+			$error = $!;
+			print "$dir: Failed to flush\n";
+		}
+	}
+	return $error;
+};
+
+#
+#
+
+#
+# The maps command will list all maps
+#
+$help{"maps"} = 
+    "maps\n\t- list all maps\n";
+$procs{"maps"} = sub {
+	opendir(DIR, "/ns/$domain");
+	column_print(grep(!/^\.+$/, readdir(DIR)));
+	closedir(DIR);
+	return 0;
+};
+
+#
+# The match command is like ypmatch.  It simply looks up a list of keys
+# in a map.
+#
+$help{"match"} =
+    "match map key ...\n\t- looks up one or more keys in a map\n";
+$procs{"match"} = sub {
+	if ($#_ < 1) {
+	        warn $help{"match"};
+		return &EINVAL;
+	}
+	$map = shift;
+	warn "no such map $map\n" if (! -d "/ns/.local/$map");
+	foreach $key (@_) {
+		open(IN, "</ns/.local/$map/$key") or
+		    warn "no such key $key in map $map\n";
+		print <IN>;
+		close(<IN>);
+	}
+	return 0;
+};
+
+#
+# The remove command removes a cache file
+#
+$help{"remove"} = 
+    "remove [cache_file] ...\n\t- Correctly invalidates and removes a cache file\n";
+$procs{"remove"} = sub {
+	my @files;
+	my $files;
+	my $pushedStar=0;
+
+	if ($#_ < 0) {
+		push(@_,"*");
+		$pushedStar=1;
+	}
+	@files = ismdbmfile(globall("/var/ns/cache",@_));
+	if ($#files < 0) {
+	        if (! $pushedStar) {
+			warn "no matching mdbm files: ", join(' ', @_), "\n";
+		}
+		return &ENOENT;
+	}
+	if (! mdbm_require()) {
+		$files = join(' ', @files);
+		return `/sbin/mdbm_remove $files`;
+	}
+	foreach $cache (@files) {
+		$mdbm = tie(%db, MDBM_File, "$cache", O_RDWR,0);
+		if ($mdbm || ((int($!) == &ESTALE)|| (int($!) == &EBADF))) {
+			if ($mdbm) {
+			      MDBM_File::invalidate($mdbm);
+			}
+			unlink("$cache");
+			untie(%db);
+		} else {
+			if (int($!) != &EBADFD) {
+				warn "unable to remove $cache: $!\n";
+			}
+		}
+	}
+	return 0;
+};
+		
+#
+# The restart command will restart nsd
+#
+$help{"restart"} =
+    "restart [args]\n\t- kills and restarts nsd\n";
+$procs{"restart"} = sub {
+	if ($> != 0) {
+		warn "You need to be root to restart nsd\n";
+		return &EPERM;
+	}
+
+	$command = "/usr/etc/nsd ";
+	if (open(OPTS, "/etc/config/nsd.options")) {
+		chop($command .= <OPTS>);
+		close(OPTS);
+	}
+	$command .= " " . join(" ", @_);
+
+	system("/sbin/umount /ns 2>/dev/null");
+	while (! system("/sbin/killall", "-TERM", "nsd")) {
+		sleep(1);
+	}
+	system("/sbin/umount /ns 2>/dev/null");
+	&{$procs{"remove"}}();
+	
+	unless(fork) {
+		my $error;
+
+		exec $command;
+		$error = $?;
+		warn "failed to exec $command\n";
+		return $?;
+	}
+
+	if (!system("/sbin/chkconfig ypserv")) {
+	    if (system("/sbin/grep -s -q nisserv /var/ns/domains/*/nsswitch.conf")){
+		warn "No NIS domains found to serve.  chkconfig ypserv off or ypinit the system.\n";
+		return 1;
+	    }
+	}	    
+	return 0;
+};
+
+
+#
+# The watch command monitors nsd and restarts it if it dies.
+#
+$help{"watch"} = 
+    "watch\n\t- monitors the nsd process and restarts on failure\n";
+$procs{"watch"} = sub {
+	while (1) {
+		local($flags) = "";
+		local($pid) = 0;
+		local($status);
+		open(IN, "</etc/config/nsd.options") and
+			chomp($flags = <IN>);
+		if (system("/sbin/killall", "-0", "nsd") != 0) {
+			warn "nsd is not running\n";
+			unless ($pid = fork) {
+				exec "nsd $flags";
+				die "failed exec\n";
+			}
+		}
+		if ($pid) {
+			waitpid($pid, 0);
+		} else {
+			sleep(10);
+		}
+	}
+};
+
+#
+# The quit/exit command just exits the program.
+#
+$procs{"quit"} = $procs{"exit"} = sub { exit(0) };
+
+sub get_winsize {
+	open(TTY, "+</dev/tty") or $cols = 80, return;
+	local($winsize) = '';
+	if (ioctl(TTY, $TIOCGWINSZ, $winsize)) {
+		($rows, $cols, $xpixel, $ypixel) = unpack('S4', $winsize);
+		$cols--; # xwsh wraps on last char
+	} else {
+		$cols = $ENV{"COLUMNS"} ? $ENV{"COLUMNS"} - 1 : 79;
+	}
+	close(TTY);
+}
+
+eval "use Term::ReadLine";
+if (defined &Term::ReadLine::Stub::readline) {
+    $term = new Term::ReadLine 'nsadmin';
+}
+
+if ($#ARGV < 0) {
+	do {
+		if (defined &Term::ReadLine::Stub::readline) {
+			if (!defined($line = $term->readline($cursor))) {
+				print "\n";
+				exit(0);
+			}
+			$term->addhistory($line) if /\S/;
+		} else {
+			print $cursor;
+			if (!($line = <>)) {
+				print "\n";
+				exit(0);
+			}
+		}
+		$line =~ s/^\s+//;
+		chomp($line);
+		@line = split(/\s+/, $line);
+		$command = shift(@line);
+		if ($command) {
+			@coms = grep(/^$command.*/, keys %procs);
+			if ($#coms > 0) {
+				warn "Multiple matching commands: $command\n";
+				column_print(@coms);
+			} elsif ($#coms == 0) {
+			    	$error=&{$procs{$coms[0]}}(@line);
+			} else {
+				print "Unrecognized command: $command\n";
+				column_print(keys %help);
+			}
+		}
+	} while (1);
+} else {
+	$command = shift(@ARGV);
+	if ($procs{$command}) {
+	    if ($interactive{$command}) {
+       warn "The $command command can only be used in the interactive mode.\n";
+		    $error=&EINVAL;
+	    } else {
+		    $error=&{$procs{$command}}(@ARGV);
+	    }
+	} else {
+		warn "$program: Unrecognized command: $command\n";
+		$error = &EINVAL;
+	}	       
+}
+exit $error;

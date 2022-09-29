@@ -1,0 +1,555 @@
+.\" Copyright (c) 1980 Regents of the University of California.
+.\" All rights reserved.  The Berkeley software License Agreement
+.\" specifies the terms and conditions for redistribution.
+.\"
+.\"	@(#)dump.1M	6.3 (Berkeley) 5/23/86
+.\"
+.TH dump 1M "May 23, 1986"
+.SH NAME
+dump, rdump \- incremental filesystem backup for EFS filesystems
+.SH SYNOPSIS
+.nf
+\f3dump\f1 [ key [ argument ... ] ] filesystem
+\f3rdump\f1 [ key [ argument ... ] ] filesystem
+.fi
+.SH DESCRIPTION
+.I dump
+and 
+.I rdump
+are applicable only to EFS filesystems, use
+.IR xfsdump (1m)
+for XFS filesystems.
+.PP
+.I dump
+backs up all files in
+.I filesystem
+or files changed after a certain date
+to magnetic tape or files.
+The
+.I key
+specifies the date and other options about the dump.
+.I key
+consists of characters from
+the set
+.BR 0123456789fusCcdbWwn .
+Any arguments supplied for specific options are given as subsequent words
+on the command line, in the same order as that of the options listed.
+.PP
+If no key is given,
+the
+.I key
+is assumed to be
+.B 9u
+and the
+.I filesystem
+specified is dumped
+to the default tape device \f2/dev/tape\fP.
+.TP 5
+.B 0\-9
+This number is the \f2dump level\f1.
+All files modified since the last date stored
+in the file
+.I /etc/dumpdates
+for the same
+.I filesystem
+at lesser levels
+are dumped.
+If no date is determined by the level,
+the beginning of time is assumed;
+thus the option
+.B 0
+causes the entire filesystem to be dumped.
+For instance, if you did a level 2 dump
+on Monday, followed by a level 4 dump on
+Tuesday, a subsequent level 3 dump on Wednesday would
+contain all files modified or added to the
+.I filesystem
+since the level 2
+(Monday) backup.
+A level 0 dump copies the entire
+filesystem to the dump volume.
+.TP 5
+.B f
+Place the dump on the next
+.I argument
+file
+instead of the default tape device
+.I /dev/tape.
+If the name of the file is ``\-'',
+.I dump
+writes to standard output.
+If the name of the file is of the format
+.IR machine:device ,
+the
+.I filesystem
+is dumped across the network to the remote machine.
+Since
+.I dump
+is normally run by root, the name of the local machine must appear
+in the
+.I .rhosts
+file of the remote machine.
+If the filename
+.I argument
+is of the form
+.I user@machine:device,
+.I dump
+attempts to execute as the specified user on the remote machine.
+The specified user must have a
+.I .rhosts
+file on the remote
+machine that allows root from the local machine.
+.I dump
+creates a remote server,
+.IR /etc/rmt ,
+on the client machine to access the tape device.
+.TP 5
+.B u
+If the
+dump
+completes successfully,
+write the date of the beginning of the dump on
+file
+.IR /etc/dumpdates .
+This file records a separate date for
+each filesystem and each dump level.
+The format of
+.I /etc/dumpdates
+is readable by people, consisting of one
+free format record per line:
+filesystem name, increment level,
+and
+.IR ctime (3C)
+format dump date.
+.I /etc/dumpdates
+can be edited to change any of the fields,
+if necessary.
+.TP 5
+.B s
+The size of the dump tape is specified in feet.
+The number of feet is taken from the next
+.I argument.
+It is recommended that the
+.B C
+option be used instead, as it is more predictable.
+When the specified size is reached,
+.I dump
+prompts the operator and
+wait for the reel/volume to be changed.
+.TP 5
+.B d
+The density of the tape, expressed in BPI (bytes per inch),
+is taken from the next
+.I argument.
+This is used in calculating the amount of tape used per reel.
+It is recommended that the
+.B C
+option be used instead, as it is more predictable.
+.TP 5
+.B b
+The blocking factor (number of 1-kilobyte blocks written out together) is
+taken from the next
+.I argument.
+The default is 10.
+The default blocking factor for tapes of density
+6250 BPI and greater is 32.
+For some network, tape type, and server combinations, there may
+be a significant throughput improvement by using a blocking factor
+of 32, rather than the default of 10, when using rdump.
+If values larger than 32 are used,
+.I restore
+does not correctly determine the block size unless the
+.B b
+option is also used.
+To maximize tape utilization, use a blocking
+factor that is a multiple of 8.
+For most types of supported tape drives, the
+greatest capacity and tape throughput is obtained using a blocking
+factor of 128 or even larger; note that
+.IR restore (1M)
+automatically determines the blocking factor only if it is 32 or less.
+.TP 5
+.B C
+This specifies the total tape capacity in 1-kilobyte blocks, overriding the
+.BR c ,
+.BR s ,
+and
+.B d
+arguments if they are also given.
+Unlike the size and density arguments, the capacity is used as specified,
+no correction factors are applied.
+Since capacity lost to retries or underruns (by the drive), are not taken
+into account, you should be conservative when specifying capacity.
+The
+.I argument
+is parsed with
+.IR strtoul (3C),
+so it can be in any base (for example, a 0x prefix specifies a
+hexadecimal value,
+a 0 prefix specifies octal, no prefix is decimal).
+The
+argument can have a
+.BR k ,
+.BR K ,
+.BR m ,
+or
+.B M
+suffix.
+The first two multiply the value by 1024, the third and fourth
+multiply by 1048576, so a tape with a 2.2 Gbyte capacity might
+be specified as
+.B "C 2m"
+allowing 10% loss to retries, and so on.
+
+When the specified capacity has been written,
+.I dump
+prompts the operator and
+wait for the reel/volume to be changed.
+It is not currently possible to specify different capacitties for
+different volumes of multi-volume backups.
+.TP 5
+.B c
+Indicates that the tape is a cartridge tape instead of the standard default
+half-inch reel.
+This should always be specified when using cartridge tapes, unless
+the
+.B C
+option is used.
+The values for blocking factor, size, and density are taken to be
+10 (1-kilobyte blocks),
+5400 feet, and
+1000 BPI respectively unless overridden with the
+.BR b ,
+.BR s ,
+or
+.B d
+option.
+.TP 5
+.B W
+.I dump
+tells the operator what filesystems need to be dumped.
+This information is gleaned from the files
+.I /etc/dumpdates
+and
+.IR /etc/fstab .
+The
+.B W
+option causes
+.I dump
+to print out, for each filesystem in
+.IR /etc/dumpdates ,
+the most recent dump date and level
+and highlights those filesystems that should be dumped.
+The
+.I mnt_freq
+field in the
+.I /etc/fstab
+entry of the filesystem must be nonzero for
+.I dump
+to determine whether the filesystem should be dumped or not.
+If the
+.B W
+option is set, no other option must be given and
+.I dump
+exits immediately.
+.TP 5
+.B w
+Is like
+.BR W ,
+but prints only those filesystems that need to be dumped.
+.TP 5
+.B n
+Whenever
+.I dump
+requires operator attention,
+notify by means similar to a
+.IR wall (1)
+all of the operators in the group \f3operator\f1.
+.PP
+.I dump
+reads the character device associated with the
+.I filesystem
+and dumps
+the contents onto the specified tape device.
+It searches
+.I /etc/fstab
+to find the associated character device.
+.SH NOTES
+.I rdump
+is a link to
+.IR dump .
+.PP
+.SS "Operator Intervention"
+.I dump
+requires operator intervention on these conditions:
+end of tape,
+end of dump,
+tape write error,
+tape open error, or
+disk read error (if there are more than a threshold of 32).
+In addition to alerting all operators implied by the
+.B n
+key,
+.I dump
+interacts with the operator on
+.IR dump 's
+control terminal at times when
+.I dump
+can no longer proceed
+or if something is grossly wrong.
+All questions
+.I dump
+poses
+must
+be answered by typing \f3yes\f1 or \f3no\f1,
+appropriately.
+.PP
+Since making a dump involves a lot of time and effort for full dumps,
+.I dump
+checkpoints itself at the start of each tape volume.
+If writing that volume fails for some reason,
+.IR dump ,
+with operator permission,
+restarts itself from the checkpoint
+after the old tape has been rewound and removed
+and a new tape has been mounted.
+.PP
+.I dump
+reports periodically,
+including usually
+the percentage of the dump completed,
+low estimates of the number of blocks to write in 1-kilobyte blocks
+(or, more strictly,
+TP_BSIZE units from
+.IR protocols/dumprestore.h ),
+the number of tapes it will take, the time to completion, and
+the time to the tape change.
+The estimated time is given as hours:minutes and is based on
+the time taken to dump the blocks already on tape.
+It is normal for
+this estimate to show variance, and the estimate improves over time.
+The output is verbose,
+so that others know that the terminal
+controlling
+.I dump
+is busy
+and will be for some time.
+.PP
+.SS "Suggested Dump Schedule"
+It is vital to perform full level 0
+dumps at regular intervals.
+When performing a full dump, bring the machine down to
+single-user mode using
+.BR "shutdown \-is" .
+Otherwise the dump may not be internally consistent and may not
+restore correctly.
+While preparing for a full dump, it is a good idea to clean the
+tape drive and heads (most types of drives require head cleaning
+for approximately every 30 hours of tape motion).
+.LP
+Incremental dumps allow for convenient backup and recovery of active
+files on a more frequent basis, with a minimum of media and time.
+However, there are some trade-offs.
+First, the interval between backups
+should be kept to a minimum (once a day at least).
+To guard against
+data loss as a result of a media failure (a rare but possible
+occurrence), it is a good idea to capture active files on (at least)
+two sets of dump volumes.
+Keep unnecessary
+duplication of files to a minimum to save both operator time and media
+storage.
+A third consideration is the ease with which a particular
+backed up version of a file can be located and restored.
+The following four-week schedule offers a reasonable trade-off between
+these goals.
+.sp .8v
+.nf
+.ft CW
+         Sun    Mon    Tue    Wed    Thu    Fri
+Week 1:  Full   5      5      5      5      3
+Week 2:         5      5      5      5      3
+Week 3:         5      5      5      5      3
+Week 4:         5      5      5      5      3
+.fi
+.ft P
+.LP
+Although the Tuesday through Friday incrementals contain extra
+copies
+of files from Monday, this scheme assures that any file
+modified during the week can be recovered from the previous
+day's incremental dump.
+.SS "Dump Parameters"
+Since it is suggested that the
+.B C
+option be used instead of the density and size options, and since
+those values are almost never really correct for any tape drive
+except 9 track tapes, recommended values for these parameters
+are no longer suggested in this man page.  As an example of the
+capacity, a typical QIC150 cartridge would use \fBC 140k\fP,
+a DDS1 90 meter DAT or 112 meter 8mm (8200 mode) cartridge would use
+\fBC 1800k\fP, and a DDS2 120 meter cartridge would use \fBC 3800k\fP.
+.PP
+.SH EXAMPLES
+.Ex
+/dev/usr /usr efs rw,raw=/dev/rdsk/dks0d1s6 0 0
+.Ee
+Here are a few examples on how to dump the
+.I /usr
+filesystem with
+the above
+.I /etc/fstab
+entry.
+.Ex
+\f4dump 0Cfu 140k guest@kestrel:/dev/tape /usr\f1
+.Ee
+does a level 0 dump of
+.I /usr
+onto a remote cartridge tape device
+.I /dev/tape
+on host kestrel using the guest account.
+.I dump
+also updates the file
+.IR /etc/dumpdates .
+.Ex
+\f4dump 2Cu 140k /usr\f1
+.Ee
+does a level 2 dump of
+.I /usr
+to the local cartridge tape device
+.I /dev/tape
+and also updates the file
+.IR /etc/dumpdates .
+.Ex
+dump 0Cb 140k 128 /usr\f1
+.Ee
+does a level '0' dump of
+.I /usr
+to the local tape device
+.I /dev/tape
+using a blocking factor of 128.
+The tape is specified to have
+a capacity of 140 megabytes in the second, which
+allows for retries, space lost to repositioning, and so on.
+It is also appropriate
+for a QIC 150 quarter-inch tape drive.
+The ordering of the arguments depends on the ordering of the key.
+.Ex
+\f4dump 1Cf 140k /dev/mt/tps0d7 /usr
+dump 1Cf 140k /dev/mt/tps0d7 /dev/rdsk/dks0d1s6\f1
+.Ee
+both do a level 1 dump of
+.I /usr
+to the local cartridge tape.
+.Ex
+\f4dump /usr\f1
+.Ee
+does a level 9 dump of
+.I /usr
+to the local tape device
+.I /dev/tape
+and updates the file
+.IR /etc/dumpdates .
+.Ex
+dump 9uCf 2048k /dev/mt/tps0d6nrnsv /os
+dump 9uCf 2m /dev/mt/tps0d6nrnsv /os
+.Ee
+Both do a level 9 dump of
+.I /os
+to the local tape device
+.I /dev/mt/tps0d6nrnsv
+where the tape device being used is an 8mm tape drive, and we are being
+somewhat optimistic about the capacity.
+.Ex
+\f4dump W\f1
+.Ee
+prints out, for each filesystem in
+.IR /etc/dumpdates ,
+the most recent dump date and level
+and highlights those filesystems that should be dumped.
+.SH FILES
+.nf
+.ta \w'/etc/dumpdates\ \ \ 'u
+/dev/tape	default tape unit to dump to
+/etc/dumpdates	new format dump date record
+/etc/fstab	dump table: filesystems and frequency
+/etc/group	to find group \f2operator\fP
+.fi
+.DT
+.br
+.SH "SEE ALSO"
+restore(1M),
+rmt(1M),
+shutdown(1M),
+xfsdump(1M),
+xfsrestore(1M),
+wall(1),
+ctime(3C),
+fstab(4),
+group(4),
+rhosts(4),
+dump(5),
+mtio(7).
+.SH DIAGNOSTICS
+While running,
+.I dump
+emits many verbose messages.
+.PP
+The exit codes are
+.PP
+.PD 0
+.TP 3
+0
+Normal exit
+.TP
+1
+Startup errors encountered
+.TP
+3
+Abnormal termination
+.PD
+.SH BUGS
+Fewer than 32 read errors on the filesystem are ignored.
+Each reel requires a new process, so parent processes for
+reels already written just hang around until the entire tape
+is written.
+.PP
+.I dump
+with the
+.B W
+or
+.B w
+options does not report filesystems that have never been recorded
+in
+.IR /etc/dumpdates ,
+even if listed in
+.IR /etc/fstab .
+.PP
+It would be nice if
+.I dump
+knew about the dump sequence,
+kept track of the tapes scribbled on,
+told the operator which tape to mount when,
+and provided more assistance
+for the operator running
+.IR restore .
+.PP
+It is recommended that incremental dumps also be performed with the system
+running in single-user mode.
+.PP
+.I dump
+needs accurate information regarding the length and density of the tapes
+used.
+It can dump the filesystem on multiple volumes, but since there is no way
+of specifying different sizes for multiple tapes, all tapes
+used should be at least as long as the specified/default length.
+If
+.I dump
+reaches the end of the tape volume unexpectedly (as a result of a longer
+than actual length specification), it aborts the entire dump.  This
+can be a problem when writing multiple dumps to the same physical tape,
+or when the tape drive supports hardware compression, and it is not
+possible to determine the average compression ratio ahead of time.
+Currently the only solution to this problem in this version of
+.I dump
+is to be conservative in specifying capacity.

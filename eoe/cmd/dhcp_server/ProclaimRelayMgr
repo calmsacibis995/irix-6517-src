@@ -1,0 +1,495 @@
+#!/usr/sgitcl/bin/sgitcl -n
+
+#
+#all Widgets have a capital W at end
+#
+
+#
+#falback resources get these from the .Xdefaults file
+#
+set fbacks {
+    {*sgiMode:       true}
+    {*useSchemes:    all}				
+    {ProclaimRelay*title:			Proclaim Relay: Server Database}
+}
+
+#
+# messages
+#
+set ILLEGAL_OPTIONS_MSG "Illegal Option in File"
+set BAD_SERVER_ENTRY "Format is a.b.c.d \[# hostname\]"
+set IS_DUPLICATE "Entry exists already , replacing"
+set ENTER_A_SERVER "Enter a server address to add"
+set ENTER_A_SERVER_DEL "Enter a server address to delete"
+set ENTRY_NOT_FOUND "This entry does not exist"
+set SERVER_ON_WARNING "chkconfig proclaim_server is on"
+set HELP_MESSAGE "Please see the man pages for dhcp_relay"
+set HOST_LOOKUP_ERROR "Host Lookup Error"
+set DELETE_SERVER_QTN "Confirm Delete"
+#
+#global defines
+#
+set defaultOptionsDir /etc/config
+set defaultOptionsMask \*.options
+set defaultOptionsFile $defaultOptionsDir/dhcp_relay.options
+set defaultProclaimConfigDir /var/dhcp/config
+set serversFile dhcp_relay.servers
+
+#
+#global variables
+#
+set optionsFile $defaultOptionsFile
+set proclaimConfigDir	$defaultProclaimConfigDir	;# -c
+
+set serversFileList   {}
+
+#
+#global widgets
+#
+set dialW	""; #is a global used for small popup messages
+set qdialW	""
+
+set fileSDWokCB "" ; # callback for file selection widget
+set qdialOkCB ""
+set qdialCanCB ""
+
+
+#
+#general routines used in several places 	    
+#
+proc createCPanel {parent nbuttons cbList } {
+    xmForm $parent.cpForm
+    $parent.cpForm setValues -fractionBase [expr 20*$nbuttons-1]\
+	    -leftOffset 10 -rightOffset 10
+    set retW $parent.cpForm
+    set oldw 0
+    for {set i 0} {$i < $nbuttons} {set i [expr $i+1]} {
+	xmPushButton $retW.btn$i managed
+	$retW.btn$i getValues -width w
+	if {$w > $oldw} {
+	    set oldw $w
+	}
+	$retW.btn$i activateCallback [lindex $cbList $i]
+	$retW.btn$i setValues -topAttachment attach_form\
+		-bottomAttachment attach_form\
+		-showAsDefaults [expr $i==0] -defaultButtonShadowThickness 1
+	if {$i == [expr $nbuttons-1]} {
+	    $retW.btn$i setValues -rightAttachment attach_form
+	} 
+#	else {
+#	    $retW.btn$i setValues -rightAttachment attach_position -rightPosition [expr 20*$i+19]
+#	}
+	if {$i != 0} {
+	    if {$i != [expr $nbuttons-1]} {
+		$retW.btn$i setValues -leftAttachment attach_position\
+			-leftPosition [expr 20*$i]
+	    }
+	} else {
+	    $retW.btn$i setValues -leftAttachment attach_form
+	    $parent.cpForm getValues -marginHeight h
+	    $parent.cpForm.btn$i getValues -height ht
+	    set ht [expr $ht + 2*$h]
+	    $parent.cpForm setValues -paneMaximum $ht -paneMinimum $ht\
+		    -defaultButton $retW.btn0
+	}
+    }
+    for {set i 0} {$i < $nbuttons} {incr i} {
+	$retW.btn$i setValues -width $oldw
+    }
+    $retW manageChild
+    return $retW
+}
+
+proc postDialog {widget type msg} {
+    global dialW
+
+    if {[lempty $widget]} {
+	set dialW .dialW
+	set widget .dialW
+	xmMessageDialog .$widget 
+	.$widget.Cancel unmanageChild
+	.$widget.Help unmanageChild
+    }
+    .$widget setValues -dialogType $type -messageString $msg
+    .$widget manageChild
+}
+
+#
+# read and update the Options Form
+#
+proc readOptionsFile {} {
+    global optionsFile  
+    global serversList proclaimConfigDir
+    global dialW ILLEGAL_OPTIONS_MSG
+    if {[catch {set fd [open $optionsFile r]} msg]} {
+	postDialog $dialW dialog_error [list $msg]
+	return -1
+    }
+    while {[gets $fd line] >= 0} {
+	if {[lempty $line] || [cequal [cindex $line 0] #]} {
+	    continue
+	}
+	split $line "\ \t\n"
+	set len [llength $line]
+	for {set index 0} {$index < $len} {set index [expr $index+1]} {
+	    switch -- [lindex $line $index] {
+		-c { set proclaimConfigDir [lindex $line [set index [expr $index+1]]]
+		.main.mPaneW.serversFormW.paneW.rcW.dirTextW setValues\
+			-value $proclaimConfigDir}
+		default { postDialog $dialW dialog_error $ILLEGAL_OPTIONS_MSG }
+	    }
+	}
+    }
+    close $fd
+}
+
+#
+#callbacks for the server form
+#
+proc getServersList {} {
+    global  serversFile dialW proclaimConfigDir
+    set sFileList {}
+    if {[catch {set fd [open $proclaimConfigDir/$serversFile r]} msg]} {
+	postDialog $dialW dialog_error [list $msg]
+	return {}
+    }
+    while {[gets $fd line] >= 0} {
+	if {[lempty $line] || [cequal [cindex $line 0] #]} {
+	    continue
+	}
+	lappend sFileList $line
+    }
+    return $sFileList
+}
+
+proc maintainServersList {} {
+    global serversFileList proclaimConfigDir
+    set serversFileList [getServersList]
+    .main.mPaneW.serversFormW.paneW.listW setValues -items $serversFileList\
+	    -itemCount [llength $serversFileList]
+}
+
+
+proc updateConfigDir {} {
+    global serversFileList
+    global proclaimConfigDir defaultProclaimConfigDir
+    .main.mPaneW.serversFormW.paneW.rcW.dirTextW getValues -value \
+	    proclaimConfigDir
+    if {![string compare [string trim $proclaimConfigDir] ""]} {
+	set proclaimConfigDir $defaultProclaimConfigDir
+	.main.mPaneW.serversFormW.paneW.rcW.dirTextW setValues -value\
+		$proclaimConfigDir
+    }
+    set serversFileList [getServersList]
+    .main.mPaneW.serversFormW.paneW.listW setValues -items $serversFileList\
+	    -itemCount [llength $serversFileList]
+}
+    
+proc doSelectFromList {} {
+    .main.mPaneW.serversFormW.paneW.listW getValues -selectedItems items
+}
+
+proc optionsSave {} {
+    global dialW 
+    global optionsFile defaultProclaimConfigDir
+    global serversList proclaimConfigDir
+    set buf ""
+    .main.mPaneW.serversFormW.paneW.rcW.dirTextW getValues\
+	    -value proclaimConfigDir
+    if {[string compare [string trim $proclaimConfigDir] ""]} {
+	if {[string compare $proclaimConfigDir $defaultProclaimConfigDir]} {
+	    set buf [format "%s-c %s" $buf $proclaimConfigDir]		
+	}
+    }
+    if {[catch {set fd [open $optionsFile w]} msg]} {
+	postDialog $dialW dialog_error [list $msg]
+	return
+    }
+    puts $fd $buf
+    close $fd
+}
+
+proc serversSaveCB {} {
+    global proclaimConfigDir serversFile serversFileList dialW \
+	    defaultProclaimConfigDir
+    optionsSave
+    if {![string compare [string trim $proclaimConfigDir] ""]} {
+	set proclaimConfigDir $defaultProclaimConfigDir
+	.main.mPaneW.serversFormW.paneW.rcW.dirTextW setValues -value\
+		$proclaimConfigDir
+    }
+    if {[catch {set fd [open $proclaimConfigDir/$serversFile w]} msg]} {
+	postDialog $dialW dialog_error [list $msg]
+	return
+    }
+    foreach l $serversFileList {
+	puts $fd $l
+    }
+    close $fd
+}
+
+proc addServerOkCB {} {
+    global stillModal answer serversFileList
+    set stillModal 0
+    set answer 1
+    .main.mPaneW.serversFormW.paneW.rc1W.textW getValues -value entry
+    .main.mPaneW.serversFormW.paneW.listW addItem $entry 0
+    lappend serversFileList $entry
+}
+
+proc addServerCanCB {} {
+    global stillModal answer
+    set stillModal 0
+    set answer 0
+    return;
+}
+
+
+proc serversAddCB {} {
+    global dialW BAD_SERVER_ENTRY IS_DUPLICATE serversFileList ENTER_A_SERVER\
+	    qdialW
+    .main.mPaneW.serversFormW.paneW.rc1W.textW getValues -value entry
+    if {[string compare $entry ""]} {
+	#get the address part of the list
+	if {[scan $entry "%s %s" a s] < 1} {
+	    postDialog $dialW dialog_error $BAD_SERVER_ENTRY
+	    return
+	}
+	# check that it is not already in the list
+	set pos 1
+	foreach l $serversFileList {
+	    if {[scan $l "%s %s" aa ss] >= 1} {
+		if {([expr ![string compare $a $aa]])} {
+		    postDialog $dialW dialog_message $IS_DUPLICATE
+		    .main.mPaneW.serversFormW.paneW.listW deletePosition $pos
+		    set serversFileList [lreplace $serversFileList [expr $pos-1] [expr $pos-1]]
+		    break
+		}
+	    }
+	    incr pos
+	}
+	if {[catch {gethostbyname hostent $entry} msg]} {
+	    set msg [format "%s %s Add?" $entry: $msg]
+	    ask $qdialW $msg addServerOkCB addServerCanCB
+	} else {
+	    .main.mPaneW.serversFormW.paneW.listW addItem $entry 0
+	    lappend serversFileList $entry
+	}
+	.main.mPaneW.serversFormW.paneW.rc1W.textW setValues -value ""
+    } else {
+	postDialog $dialW dialog_error $ENTER_A_SERVER
+    }
+}
+
+proc delServerOkCB {} {
+    global stillModal answer serversFileList
+    set stillModal 0
+    set answer 1
+    .main.mPaneW.serversFormW.paneW.listW getValues -selectedItems entry
+    set pos [lsearch $serversFileList $entry]
+    set serversFileList [lreplace $serversFileList $pos $pos]
+    .main.mPaneW.serversFormW.paneW.listW setValues -items $serversFileList\
+		-itemCount [llength $serversFileList]
+}
+
+proc delServerCanCB {} {
+    global stillModal answer
+    set stillModal 0
+    set answer 0
+    return;
+}
+
+proc serversDelCB {} {
+    global serversFileList dialW ENTRY_NOT_FOUND ENTER_A_SERVER_DEL\
+	    qdialW DELETE_SERVER_QTN
+    .main.mPaneW.serversFormW.paneW.listW getValues -selectedItems entry
+    if {[string compare $entry ""]} {
+	set pos [lsearch $serversFileList $entry]
+	if {$pos == -1} {
+	    postDialog $dialW dialog_error $ENTRY_NOT_FOUND
+	    return
+	} else {
+	    set msg [format "%s: %s" $DELETE_SERVER_QTN $entry]
+	    ask $qdialW $msg delServerOkCB delServerCanCB
+	}
+	.main.mPaneW.serversFormW.paneW.rc1W.textW setValues -value ""
+    } else {
+	postDialog $dialW dialog_error $ENTER_A_SERVER_DEL
+    }
+}
+    
+#
+# runtime callbacks
+#
+proc setRelayOnOff {} {
+    global dialW
+    .main.mPaneW.serversFormW.paneW.rc2W.chkconfigROnOffW getValues \
+	-set relayOnOffStatus 
+    if {$relayOnOffStatus} {
+	if {[catch {exec chkconfig proclaim_relayagent on} msg]} {
+	    postDialog $dialW dialog_error [list $msg]
+	    .main.mPaneW.serversFormW.paneW.rc2W.chkconfigROnOffW setValues \
+		-set False
+	} else {
+	    catch {exec chkconfig proclaim_server off}
+	}
+    } else {
+	if {[catch {exec chkconfig proclaim_relayagent off} msg]} {
+	    postDialog $dialW dialog_error [list $msg]
+	    .main.mPaneW.serversFormW.paneW.rc2W.chkconfigROnOffW setValues \
+		-set True
+	}
+    }
+}
+
+#
+# question dialog
+#
+proc ask {widget msg okCB canCB} {
+    global stillModal answer qdialOkCB qdialCanCB qdialW
+    if {![lempty $widget]} {
+	xmQuestionDialog .qdialW\
+		-dialogStyle dialog_full_application_modal
+	set qdialW qdialW
+	set widget qdialW
+	.$widget.Help unmanageChild
+    }
+    if {[string compare $qdialOkCB ""]} {
+	.$widget removeCallback okCallback $qdialOkCB
+    }
+    if {[string compare $qdialOkCB ""]} {
+	.$widget removeCallback cancelCallback $qdialCanCB
+    }
+    set qdialOkCB $okCB
+    set qdialCanCB $canCB
+    .$widget okCallback $qdialOkCB
+    .$widget cancelCallback $qdialCanCB
+    
+    .$widget setValues -messageString $msg
+    .$widget manageChild
+    set stillModal 1
+    while {$stillModal} {
+	. processEvent
+    }
+    .$widget unmanageChild
+}
+
+#
+# main program begins here
+#
+xtAppInitialize -class ProclaimRelay\
+	-fallbackResources $fbacks
+
+xmMainWindow .main
+
+#
+# create a menu bar
+#
+xmMenuBar .main.barW managed 
+
+xmPanedWindow .main.mPaneW managed\
+	-sashWidth 1 -sashHeight 1 -separatorOn false
+
+.main setValues -menuBar .main.barW \
+	-workWindow .main.mPaneW	
+
+#
+# create servers List form
+#
+xmForm .main.mPaneW.serversFormW
+
+xmPanedWindow .main.mPaneW.serversFormW.paneW\
+	-sashWidth 1 -sashHeight 1\
+	-leftAttachment attach_form -rightAttachment attach_form \
+	-topAttachment attach_form -bottomAttachment attach_form
+
+xmRowColumn .main.mPaneW.serversFormW.paneW.rcW managed\
+	-orientation horizontal -isaligned true
+	
+xmLabel .main.mPaneW.serversFormW.paneW.rcW.dirLabelW managed
+
+xmText .main.mPaneW.serversFormW.paneW.rcW.dirTextW managed\
+	-columns 30\
+	-value [expr {[string compare $proclaimConfigDir ""]? \
+	$proclaimConfigDir: $defaultProclaimConfigDir}]
+
+.main.mPaneW.serversFormW.paneW.rcW.dirTextW activateCallback {updateConfigDir}
+
+xmScrolledList .main.mPaneW.serversFormW.paneW.listW managed\
+	-selectionPolicy single_select -scrollBarDisplayPolicy static
+.main.mPaneW.serversFormW.paneW.listW singleSelectionCallback {doSelectFromList}
+
+xmRowColumn .main.mPaneW.serversFormW.paneW.rc1W managed\
+	-orientation horizontal -isaligned true
+
+xmLabel .main.mPaneW.serversFormW.paneW.rc1W.selLabelW managed
+
+xmText .main.mPaneW.serversFormW.paneW.rc1W.textW managed \
+	-columns 30
+.main.mPaneW.serversFormW.paneW.rc1W.textW activateCallback\
+	serversAddCB
+.main.mPaneW.serversFormW.paneW.rc1W.textW getValues -height h -marginHeight mh
+.main.mPaneW.serversFormW.paneW.rc1W setValues -paneMaximum [expr $h+2*$mh]\
+	-paneMinimum [expr $h+2*$mh]
+
+#
+# create the control panel for the dialog
+#
+set cpanel [createCPanel .main.mPaneW.serversFormW.paneW 2 {serversAddCB serversDelCB  }]
+set relayOnOffStatus [expr ![catch {exec chkconfig proclaim_relayagent}]]
+if {$relayOnOffStatus} {
+    if {[expr ![catch {exec chkconfig proclaim_server}]]} {
+	postDialog $dialW dialog_warning $SERVER_ON_WARNING
+    }
+}
+xmRowColumn .main.mPaneW.serversFormW.paneW.rc2W managed
+xmToggleButton .main.mPaneW.serversFormW.paneW.rc2W.chkconfigROnOffW managed\
+	-highlightThickness 0\
+	-alignment alignment_beginning -set $relayOnOffStatus
+
+.main.mPaneW.serversFormW.paneW.rc2W.chkconfigROnOffW valueChangedCallback {setRelayOnOff}
+.main.mPaneW.serversFormW.paneW.rc2W.chkconfigROnOffW getValues -height h 
+.main.mPaneW.serversFormW.paneW.rc2W getValues -marginHeight mh
+.main.mPaneW.serversFormW.paneW.rc2W setValues -paneMinimum [expr $h+2*$mh]\
+	-paneMaximum [expr $h+2*$mh]
+
+.main.mPaneW.serversFormW.paneW manageChild
+.main.mPaneW.serversFormW manageChild
+
+readOptionsFile
+maintainServersList
+
+
+
+#
+# create "file" pull-down menu
+#
+xmPulldownMenu .main.barW.fileMenuW
+xmPushButton .main.barW.fileMenuW.saveW managed
+xmPushButton .main.barW.fileMenuW.syslogW managed
+xmPushButton .main.barW.fileMenuW.quitW managed
+
+.main.barW.fileMenuW.saveW activateCallback {serversSaveCB}
+.main.barW.fileMenuW.syslogW activateCallback {catch {exec sysmon &}}
+.main.barW.fileMenuW.quitW	activateCallback {exit 0}
+
+#
+# create cascade buttons
+#
+xmCascadeButton .main.barW.fileW managed \
+	-subMenuId .main.barW.fileMenuW
+xmCascadeButton .main.barW.helpW managed 
+.main.barW setValues -menuHelpWidget .main.barW.helpW
+
+.main.barW.helpW activateCallback {catch {exec /usr/sbin/insight -v IA_NetwkMail -a 'query(DHCP)' &}}
+
+
+.main manageChild
+set stillModal 0
+set answer 0
+
+
+dlopen libsautil.so init SAUtil_Init
+
+. realizeWidget
+. mainLoop

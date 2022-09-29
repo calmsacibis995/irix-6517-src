@@ -1,0 +1,395 @@
+#! /sbin/sh
+#
+#ident "$Revision: 1.21 $"
+#
+# amregister: AvailMon Utility - save system configuration data/files and
+#				 send back registration form
+#
+
+CMD=$0
+ID=`id | sed -e "s/(.*//" -e "s/.*=//"`
+if [ "$ID" != 0 ] ; then
+    echo "Error: $CMD: must be superuser to register/deregister."
+    exit 1
+fi
+
+AMRVERSIONNUM=2.1
+AVAILDIR=/var/adm/avail
+SAVEDIR=$AVAILDIR/.save
+CONFIGDIR=$AVAILDIR/config
+USRETCDIR=/usr/etc
+
+OPTIONS=`cat /etc/config/savecore.options 2> /dev/null`
+CRASHDIR=""
+if [ "$OPTIONS" != "" ] ; then
+    for DIR in $OPTIONS ; do
+	if [ -d "$DIR" ] ; then
+	    CRASHDIR=$DIR
+	fi
+    done
+    if [ "$CRASHDIR" = "" ] ; then
+	CRASHDIR=/var/adm/crash
+    fi
+else
+    CRASHDIR=/var/adm/crash
+fi
+
+AMREGISTER=$USRETCDIR/amregister
+AMCONFIG=$USRETCDIR/amconfig
+AMSYSINFO=$USRETCDIR/amsysinfo
+AMNOTIFY=$USRETCDIR/amnotify
+AMSYSLOG=$USRETCDIR/amsyslog
+AMTIME1970=$USRETCDIR/amtime1970
+AMTICKERD=$USRETCDIR/amtickerd
+
+LASTSYSLOG=$SAVEDIR/lastsyslog
+
+LOGFILE=$AVAILDIR/availlog
+PREVSTARTFILE=$SAVEDIR/prevstart
+EVENTFILE=$SAVEDIR/event
+
+AUTOEMAILFILE=$CONFIGDIR/autoemail
+SHUTDOWNREASONFILE=$CONFIGDIR/shutdownreason
+TICKERDFILE=$CONFIGDIR/tickerd
+AUTOEMAILLIST=$CONFIGDIR/autoemail.list
+
+TICKFILE=$AVAILDIR/lasttick
+
+AVAILREPFILE=$CRASHDIR/availreport
+DIAGREPFILE=$CRASHDIR/diagreport
+
+TMPFILE=$AVAILDIR/tmpfile
+DIFFFILE=$AVAILDIR/difffile
+
+PLATFORM=`uname -m`
+SERIALNUM=""
+
+# ask a question and get an yes-no answer, default is $1
+getanswer() {
+    ANS=-1
+    while [ $ANS != 0 -a $ANS != 1 ] ; do
+	echo -n $2
+	read ANS
+	case X$ANS in
+	    Xy* | XY*)
+        	return 0
+	    ;;
+	    Xn* | XN*)
+        	return 1
+	    ;;
+	    X)
+		if [ $1 = y ] ; then
+		    return 0
+		else
+		    return 1
+		fi
+	    ;;
+	    *)
+        	echo "Incorrect answer.  Try again."
+        	ANS=-1
+	esac
+    done
+}
+
+appenddata() {
+    if [ -f $SAVEDIR/$1 ] ; then
+	echo "$2|begin" >> $DIAGREPFILE
+	cat $SAVEDIR/$1  >> $DIAGREPFILE
+	echo "$2|end" >> $DIAGREPFILE
+    fi
+}
+
+#
+# generate registration report
+#
+genregisrep() {
+    echo "SERIALNUM|$SERIALNUM" > $AVAILREPFILE
+    echo "SERIALNUM|$SERIALNUM" > $DIAGREPFILE
+    echo "HOSTNAME|$HOSTNAME" >> $AVAILREPFILE
+    echo "HOSTNAME|$HOSTNAME" >> $DIAGREPFILE
+    echo "AMRVERSION|$AMRVERSIONNUM" >> $AVAILREPFILE
+    echo "AMRVERSION|$AMRVERSIONNUM" >> $DIAGREPFILE
+    echo "UNAME|`uname -Ra`" >> $AVAILREPFILE
+    echo "UNAME|`uname -Ra`" >> $DIAGREPFILE
+    SINCE1970=`$AMTIME1970`
+    SINCE1970DATE=`$AMTIME1970 -d $SINCE1970`
+    if [ -f $PREVSTARTFILE ] ; then
+	MSG=`cat $PREVSTARTFILE`
+	echo "$MSG" >> $AVAILREPFILE
+	echo "$MSG" >> $DIAGREPFILE
+	echo "EVENT|-9|$SINCE1970|$SINCE1970DATE" >> $AVAILREPFILE
+	echo "EVENT|-9|$SINCE1970|$SINCE1970DATE" >> $DIAGREPFILE
+    elif [ -f $LOGFILE ] ; then
+	MSG=`grep '^START|' $LOGFILE | tail -1`
+	echo "PREV$MSG" >> $AVAILREPFILE
+	echo "PREV$MSG" >> $DIAGREPFILE
+	echo "PREV$MSG" > $PREVSTARTFILE
+	echo "EVENT|-9|$SINCE1970|$SINCE1970DATE" >> $AVAILREPFILE
+	echo "EVENT|-9|$SINCE1970|$SINCE1970DATE" >> $DIAGREPFILE
+    else
+	MSG=`$AMTIME1970 -i`
+	echo "PREV$MSG" >> $AVAILREPFILE
+	echo "PREV$MSG" >> $DIAGREPFILE
+	echo "PREV$MSG" > $PREVSTARTFILE
+	echo "$MSG" > $LOGFILE
+	echo "EVENT|-9|$SINCE1970|$SINCE1970DATE" >> $AVAILREPFILE
+	echo "EVENT|-9|$SINCE1970|$SINCE1970DATE" >> $DIAGREPFILE
+    fi
+    LASTTICK=`cat $TICKFILE 2> /dev/null`
+    LASTTICK=${LASTTICK:=-1}
+    if [ $LASTTICK -ge 0 ] ; then
+	LASTTICKDATE=`$AMTIME1970 -d $LASTTICK`
+    else
+	LASTTICKDATE="unknown"
+    fi
+    MSG="LASTTICK|$LASTTICK|$LASTTICKDATE"
+    echo "$MSG" >> $AVAILREPFILE
+    echo "$MSG" >> $DIAGREPFILE
+    STATUSINTERVAL=`cat $CONFIGDIR/statusinterval 2> /dev/null`
+    echo "STATUSINTERVAL|$STATUSINTERVAL" >> $AVAILREPFILE
+    echo "STATUSINTERVAL|$STATUSINTERVAL" >> $DIAGREPFILE
+    echo "REGISTRATION|" >> $AVAILREPFILE
+    echo "REGISTRATION|" >> $DIAGREPFILE
+
+    appenddata hinv HINV
+    appenddata versions VERSIONS
+    appenddata gfxinfo GFXINFO
+}
+
+#
+# generate deregistration report
+#
+genderegisrep() {
+    echo "SERIALNUM|$SERIALNUM" > $AVAILREPFILE
+    echo "HOSTNAME|$HOSTNAME" >> $AVAILREPFILE
+    echo "AMRVERSION|$AMRVERSIONNUM" >> $AVAILREPFILE
+    if [ -f $PREVSTARTFILE ] ; then
+	cat $PREVSTARTFILE >> $AVAILREPFILE
+    elif [ -f $LOGFILE ] ; then
+	MSG=`tail -1 $LOGFILE`
+	echo "PREV$MSG" >> $AVAILREPFILE
+    else
+	MSG=`$AMTIME1970 -i`
+	echo "PREV$MSG" >> $AVAILREPFILE
+    fi
+    if [ -f $EVENTFILE ] ; then
+	awk -F'|' '{print $1, -8, $3, $4}' OFS='|' $EVENTFILE >> $AVAILREPFILE
+    else
+	SINCE1970=`$AMTIME1970 | awk '{print $1 - 10}'`
+	SINCE1970DATE=`$AMTIME1970 -d $SINCE1970`
+	echo "EVENT|-8|$SINCE1970|$SINCE1970DATE" >> $AVAILREPFILE
+    fi
+    echo "DEREGISTRATION|" >> $AVAILREPFILE
+}
+
+#
+# get/check serial number and hostname
+#
+getid() {
+    if [ "$SERIALNUM" != "" ] ; then
+        case $PLATFORM in
+	  IP19 | IP21 | IP22 | IP25 | IP26 | IP27 | IP28 | IP30 | IP32)
+	    echo "Error: $CMD: this platform, $PLATFORM, has machine-readable"
+	    echo "serial number.  Please do not use '-s' option."
+	    exit 1
+	esac
+	$AMSYSINFO -s $SERIALNUM > /dev/null
+	if  [ $? -ne 0 ] ; then
+	    echo "ERROR: $CMD: $2 is not valid for platform $PLATFORM."
+	    echo "please provide the correct serial number."
+	    exit 1
+	fi
+	if [ -f $SAVEDIR/serialnum ] ; then
+	    SERIALNUM1=`cat $SAVEDIR/serialnum`
+	    if $AMSYSINFO -s $SERIALNUM1 > /dev/null ; then
+		if [ "$SERIALNUM" != "$SERIALNUM1" ] ; then
+		    echo "\nWARNING: $CMD: the saved serial number, $SERIALNUM1, is different"
+		    echo "from the input serial number $SERIALNUM.  Assume the input one is correct."
+		    $AMREGISTER -d
+		fi
+	    else
+		$AMREGISTER -d
+	    fi
+	fi
+	echo $SERIALNUM > $SAVEDIR/serialnum
+    elif [ $DEREGIST = 1 ] ; then
+	if [ -f $SAVEDIR/serialnum ] ; then
+	    SERIALNUM=`cat $SAVEDIR/serialnum`
+	else
+	    # saved file got killed
+	    # this is not a normal case
+	    # may need special handling
+	    SERIALNUM="unknown"
+	fi
+    else
+	SERIALNUM=`$AMSYSINFO -s`
+        case $PLATFORM in
+	  IP19 | IP21 | IP22 | IP25 | IP26 | IP27 | IP28 | IP30 | IP32)
+	    if [ "$SERIALNUM" = "unknown" ] ; then
+		echo "Error: $CMD: the machine-readable serial number, $SERIALNUM,"
+		echo "is invalid.  Please contact SGI support to correct it."
+		exit 1
+	    fi
+	    ;;
+	  *)
+	    if [ $REGIST = 1 -o $DEREGIST = 1 ] ; then
+		echo "Error: $CMD: this platform, $PLATFORM, does not have"
+		echo "machine-readable serial number.  Pleas use '-s' option."
+		exit 1
+	    fi
+	esac
+    fi
+
+    if [ -f $SAVEDIR/hostname ] ; then
+	HOSTNAME=`cat $SAVEDIR/hostname`
+    else
+	HOSTNAME=`$AMSYSINFO -n`
+	echo "$HOSTNAME" > $SAVEDIR/hostname
+    fi
+}
+
+cmdlineerror() {
+    echo "Error: $CMD: incorrect argument"
+    echo "Usage: $CMD [ [ -s <serial #> ] -r | -d ]"
+    exit 1
+}
+
+#
+# check for improper installation and corruption
+#
+
+if [ ! -d $AVAILDIR ] ; then
+    echo "\nAvailMon: cannot find directory $AVAILDIR!!"
+    echo "Please try re-instaling availmon\n"
+    exit 1
+elif [ ! -x $AMREGISTER -o ! -x $AMNOTIFY -o ! -x $AMSYSLOG -o ! -x $AMTICKERD \
+	-o ! -x $AMTIME1970 -o ! -x $AMSYSINFO -o ! -x $AMCONFIG \
+	-o ! -x $USRETCDIR/amreceive -o ! -x $USRETCDIR/amsend \
+	-o ! -x $USRETCDIR/amparse -o ! -x $USRETCDIR/amreport ] ; then
+    echo "AvailMon: executable files are corrupted!!"
+    echo "Please try re-instaling availmon\n"
+    exit 1
+elif [ ! -d $SAVEDIR ] ; then
+    echo "AvailMon: saved directory is missing!!"
+    echo "Please reboot the machine.\n"
+    exit 1
+fi
+
+REGIST=0
+DEREGIST=0
+CONFILE=0
+while [ $# != 0 ] ; do
+    if [ $1 = '-s' ] ; then
+	if [ $# = 1 ] ; then
+	    cmdlineerror
+	elif [ $DEREGIST = 1 ] ; then
+	    cmdlineerror
+	else
+	    SERIALNUM=$2
+	    shift
+	    shift
+	fi
+    elif [ $1 = '-r' ] ; then
+	if [ $DEREGIST = 1 ] ; then
+	    cmdlineerror
+	else
+	    REGIST=1
+	    shift
+	fi
+    elif [ $1 = '-d' ] ; then
+	if [ $REGIST = 1 ] ; then
+	    cmdlineerror
+	elif [ "$SERIALNUM" != "" ] ; then
+	    cmdlineerror
+	else
+	    DEREGIST=1
+	    shift
+	fi
+    elif [ $1 = '-c' ] ; then
+	if [ $# = 1 ] ; then
+	    cmdlineerror
+	else
+	    CONFILE=$2
+	    shift
+	    shift
+	fi
+    else
+	cmdlineerror
+    fi
+done
+
+getid
+if [ $CONFILE = 0 ] ; then
+    if [ $DEREGIST = 1 ] ; then
+	if $AMCONFIG autoemail -s ; then
+	    genderegisrep
+	    $AMNOTIFY -c $SAVEDIR/autoemail.list -a $AVAILREPFILE -i $AVAILREPFILE -r
+	fi
+	echo "off" > $CONFIGDIR/autoemail
+	echo "off" > $SAVEDIR/autoemail
+	cp $CONFIGDIR/autoemail.list $SAVEDIR/autoemail.list
+    elif [ $REGIST = 1 ] ; then
+	if $AMCONFIG autoemail -s ; then
+	    echo "on" > $CONFIGDIR/autoemail
+	    $AMCONFIG -k
+	    exit
+	fi
+	genregisrep
+	$AMNOTIFY -c $AUTOEMAILLIST -a $AVAILREPFILE -i $DIAGREPFILE -r
+	echo "on" > $CONFIGDIR/autoemail
+	echo "on" > $SAVEDIR/autoemail
+	cp $CONFIGDIR/autoemail.list $SAVEDIR/autoemail.list
+    else
+	if getanswer y "Do you want auto-email on? [y/n] (y) " ; then
+	    if [ "$SERIALNUM" = "unknown" ] ; then
+		echo -n "Please input this machine's serial number: "
+		read SERIALNUM
+		$AMSYSINFO -s $SERIALNUM > /dev/null
+		while [ $? -ne 0 ] ; do
+		    echo "\nERROR: $CMD: $SERIALNUM is not valid for platform $PLATFORM"
+		    echo -n "Please input this machine's serial number: "
+		    read SERIALNUM
+		    $AMSYSINFO -s $SERIALNUM > /dev/null
+		done
+		echo "$SERIALNUM" > $SAVEDIR/serialnum
+	    fi
+	    if $AMCONFIG autoemail -s ; then
+		echo "on" > $CONFIGDIR/autoemail
+		$AMCONFIG autoemail.list
+		exit
+	    fi
+	    echo "off" > $CONFIGDIR/autoemail
+	    $AMCONFIG autoemail.list
+	    genregisrep
+	    $AMNOTIFY -c $AUTOEMAILLIST -a $AVAILREPFILE -i $DIAGREPFILE -r
+	    echo "on" > $CONFIGDIR/autoemail
+	    echo "on" > $SAVEDIR/autoemail
+	else
+	    if $AMCONFIG autoemail -s ; then
+		genderegisrep
+		$AMNOTIFY -c $SAVEDIR/autoemail.list -a $AVAILREPFILE -i $AVAILREPFILE -r
+	    fi
+	    echo "off" > $CONFIGDIR/autoemail
+	    echo "off" > $SAVEDIR/autoemail
+	    cp $CONFIGDIR/autoemail.list $SAVEDIR/autoemail.list
+	fi
+    fi
+else
+    if [ ! -f $CONFILE ] ; then
+	exit
+    fi
+    if [ -f $SAVEDIR/serialnum ] ; then
+	SERIALNUM=`cat $SAVEDIR/serialnum`
+    else
+	exit
+    fi
+    if [ $REGIST = 1 ] ; then
+	genregisrep
+	$AMNOTIFY -c $CONFILE -a $AVAILREPFILE -i $DIAGREPFILE -r
+    elif [ $DEREGIST = 1 ] ; then
+	genderegisrep
+	$AMNOTIFY -c $CONFILE -a $AVAILREPFILE -i $AVAILREPFILE -r
+    else
+	cmdlineerror
+    fi
+fi

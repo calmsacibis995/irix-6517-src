@@ -1,0 +1,142 @@
+# Tests of DL_ENABMULTI_REQ, DL_DISABMULTI_REQ
+#	1) Error conditions:
+#	    DL_OUTSTATE -- stream in state DL_UNATTACHED
+#	    DL_BADADDR -- specify a non-multicast MAC addr (will generate
+#		an error from the LAN driver)
+#	    DL_NOTENAB -- attempt to use DL_DISABMULTI_REQ on an address that
+#		isn't enabled
+#	    DL_TOOMANY -- try to register too many multicast addrs
+#	2) Normal use of DL_ENABMULTI -- ensure that stream receives frames
+#	    addressed to the normal addr of the stream, and to the multicast
+#	    addr
+#	3) Normal usage of DL_DISABMULTI_REQ -- stream doesn't receive frames
+#	    addressed to the multicast addr after it is disabled
+#	4) If stream is unbound while multicast addr enabled, multicast addr
+#	    shouldn't be enabled if stream rebound to same SAP
+#	5) Test that can receive multicast frames if more than one multicast
+#	    addr is enabled
+
+
+###### Test case #1 ######
+open 1
+
+# Try to send DL_ENABMULTI_REQ, DL_DISABMULTI_REQ when in state DL_UNATTACHED
+enab_multi $1 9:0:0:0:0:0		dl_error_ack dl_outstate
+disab_multi $1 9:0:0:0:0:0		dl_error_ack dl_outstate
+
+attach $1 43
+
+# Try to send DL_ENABMULTI_REQ, DL_DISABMULTI_REQ when in state DL_UNBOUND
+#enab_multi $1 9:0:0:0:0:0		dl_error_ack dl_outstate
+#disab_multi $1 9:0:0:0:0:0		dl_error_ack dl_outstate
+
+#bind $1 40 2 0 0 0
+
+# Try to send DL_ENABMULTI_REQ, DL_DISABMULTI_REQ on an LLC2 stream
+#enab_multi $1 9:0:0:0:0:0		dl_error_ack dl_outstate
+#disab_multi $1 9:0:0:0:0:0		dl_error_ack dl_outstate
+
+#unbind $1
+
+#bind $1 40 1 0 0 0
+
+# Try to specify a non-multicast addr (will generate an error from the
+# LAN driver)
+enab_multi $1 8:0:0:0:0:0		dl_error_ack dl_badaddr
+disab_multi $1 8:0:0:0:0:0		dl_error_ack dl_notenab
+
+# Try to disable a multicast addr that wasn't enabled
+disab_multi $1 9:0:2b:0:0:5		dl_error_ack dl_notenab
+
+# Try to enable too many multicast addrs (assume here that the max #
+# allowed is 10)
+enab_multi $1 9:0:0:0:0:1
+enab_multi $1 9:0:0:0:0:2
+enab_multi $1 9:0:0:0:0:3
+enab_multi $1 9:0:0:0:0:4
+enab_multi $1 9:0:0:0:0:5
+enab_multi $1 9:0:0:0:0:6
+enab_multi $1 9:0:0:0:0:7
+enab_multi $1 9:0:0:0:0:8
+enab_multi $1 9:0:0:0:0:9
+enab_multi $1 9:0:0:0:0:a
+enab_multi $1 9:0:0:0:0:b		dl_error_ack dl_toomany
+close $1
+
+###### Test case #2 ######
+open 1
+attach $1 43
+bind $1 fe 1 0 0 0
+
+open 2
+attach $2 43
+bind $2 48 1 0 0 0
+
+# Enable multicast address.  The multicast addr used here is the OSI ES-IS
+# multicast addr.  This test assumes that there are machines on the LAN
+# running ES-IS.
+enab_multi $1 9:0:2b:0:0:5
+
+# Should eventually receive a frame addressed to the multicast addr
+recv_udata $1
+
+# Send normal data to stream w/ multicast addr enabled -- should receive
+# it.
+send_udata $2 0:0:0:0:0:0,48 '1 2 3 4 5'
+
+recv_udata $2 '1 2 3 4 5'
+
+# Now receive another multicast packet
+recv_udata $1
+
+close $1
+close $2
+
+###### Test case #3 ######
+# Disable the multicast addr
+open 1
+attach $1 43
+#bind $1 48 1 0 0 0
+enab_multi $1 9:0:2b:0:0:5
+disab_multi $1 9:0:2b:0:0:5
+#unbind $1 
+
+bind $1 fe 1 0 0 0
+
+# Shouldn't see any activity on the stream
+sleep 10
+poll $1 $1 0
+
+close $1
+
+###### Test case #4 ######
+open 1
+attach $1 43
+bind $1 48 1 0 0 0
+
+enab_multi $1 9:0:2b:0:0:5
+
+# Now unbind and re-bind the stream while the multicast addr is enabled
+unbind $1
+bind $1 fe 1 0 0 0
+
+# The newly-bound stream should not see any multicast frames
+sleep 10
+poll $1 $1 0
+
+close $1
+
+###### Test case #5 ######
+open 1
+attach $1 43
+bind $1 fe 1 0 0 0
+
+enab_multi $1 9:0:2b:0:0:a
+enab_multi $1 9:0:2b:0:0:5
+
+# Should eventually receive a frame addressed to the second multicast addr
+recv_udata $1
+
+close $1
+
+

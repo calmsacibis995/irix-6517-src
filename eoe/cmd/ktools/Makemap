@@ -1,0 +1,253 @@
+#!/usr/local/bin/perl
+# $Modified: Tue Jul  6 13:48:31 1993 by cwilson $
+# $Revision: 1.5 $
+#
+# churn annex portsfile into ktools nis map.
+#
+#
+#
+#ktools map
+#
+#key			values
+#
+#classes		classname, description, owner, owner-uname, owner-ext
+#classes			EVTEST, "Everest Testing", "Mike Verbatin", OS, "O/S Machine Room", "Chan Wilson", OS_SERVER, "O/S Server Lab", PERF, "Performance Testing"
+#
+#annexes			"os-annex.wpd.sgi.com", "server-annex.wpd.sgi.com"
+#
+#<annex>_config		#ports, boothost, location, owner name, owner uname, owner ext
+#os-annex.wpd.sgi.com	64, maddog.wpd.sgi.com, "7L O/S Machine Room", "Chan Wilson", cwilson, 5006
+#ev-annex.asd.sgi.com	64, snort.asd.sgi.com, "7U Hardware Lab", "Mike Verbatin", mikev, 3082
+#
+#<class>_config		annexes
+#OS_config		os-annex.wpd.sgi.com
+#EVTEST_config		everest-annex.asd.sgi.com, everest-annex2.asd.sgi.com
+#
+#<annex>_machines	list of machines
+#os-annex.wpd.sgi.com	thrasher, nitro, phyloxia, ...
+#
+#<machine>		desc, mach-type, mktg-mach-type, chassis-type, gfx, memory, special hw, location, \
+#			asset #, serial #, notes, owner, owner-uname, owner-ext, \
+#			#ports, annex, reset_machine, list of console ports (r precedes port # if rtelnet-able), list of debug ports, \
+#			access list of users
+#
+#babylon			"Server for O/S Group", IP7, 4D/460, P3, S, 64, "7L Aquarium Lab", \
+#			72457, S122253, , "Server for O/S Group.  DON'T MUCK WITH UNLESS YOU'RE DEBUGGING!!!!", \
+#			"Chan Wilson", cwilson, 5006, \
+#			8, server-annex.wpd.sgi.com, , 1,2,3,4,5,6,7,8, ,
+#
+#stimpy			"ComplexityEngine 2", IP19, 4D/6X0, T3, S, 16, "7U Hardware Lab", \
+#			Pilot System, Pilot System, , , \
+#			"Mike Verbatin", mikev, 3028, \
+#			6, everest-annex.asd.sgi.com, r7, r8, 9, 10, 11, 12 
+#
+
+#$CONFIGFILE = 'portsfile';
+
+#open(CONF, $CONFIGFILE) || die "unable to open portsfile";
+
+$UPDATE	= grep(/-u/, @ARGV);
+
+shift @ARGV if $UPDATE;
+
+@Mach= (    mach,
+	    desc,
+	    machtype,
+	    mktgtype,
+	    chassis,
+	    gfx,
+	    memory,
+	    hw,
+	    loc,
+	    asset,
+	    serial,
+	    notes,
+	    owner,
+	    uname,
+	    ext,
+	    ports,
+	    annex,
+	    reset_mach,
+	    consoles,
+	    debugs,
+	    access,
+	);
+
+while (<>) {
+    next if /^#/;		# skip comments
+    if (/(\w+)\s+\(/) {
+	if ($1 eq 'annex') {
+	    ($annex = <>) =~ s/\s//g;
+	    ($ports = <>) =~ s/\s//g;
+	    ($boot  = <>) =~ s/\s//g;
+	    ($loc   = <>) =~ s/^\s+//g; chop $loc;
+	    ($owner = <>) =~ s/^\s+//g; chop $owner;
+	    ($uname = <>) =~ s/\s//g;
+	    ($ext   = <>) =~ s/\s//g;
+	    $Annex{$annex} = "$ports`$boot`$loc`$owner`$uname`$ext";
+	} elsif ($1 eq 'class') {
+	    ($class = <>) =~ s/\s//g; 
+	    ($desc  = <>) =~ s/^\s+//g; chop $desc;
+	    ($owner = <>) =~ s/^\s+//g; chop $owner;
+	    ($uname = <>) =~ s/\s//g;
+	    ($ext   = <>) =~ s/\s//g;
+	    ($annex = <>) =~ s/\s//g;
+	    $Class{$class} = "$desc`$owner`$uname`$ext`$annex";
+	} elsif ($1 eq 'port') {
+	    ($port = <>) =~ s/^\s(\S+)\s+#.*$/$1/; chop $port;
+	    ($annex = <>) =~ s/^\s(\S+)\s+#.*$/$1/; chop $annex;
+	    $Special{$annex} .= "set port=$port";
+	    until (( $_ = <> ) =~ /^\)/ ) {
+		s/\s+#.*$//;
+		chop;
+		$Special{$annex} .= $_;
+	    }
+	    $Special{$annex} .= "\n";
+	} elsif ($1 eq 'machine') {
+	    foreach $item (@Mach) {
+		*x = $item;
+		$x = <>;
+		$x =~ s/^\s//g;	# remove leading whitespace
+		$x =~ s/\s+#.*$//;
+		if ($item eq 'desc' || $item eq 'notes' ) { chop $x; }
+		else { $x =~ s/\s//g; }
+	    }
+	    $Mach{$mach} = "$desc`$machtype`$mktgtype`$chassis`$gfx`$memory`$hw`$loc`" .
+		"$asset`$serial`$notes`$owner`$uname`$ext`$ports`$annex`$reset_mach`" .
+		    "$consoles`$debugs`$access";
+	    $A{$annex} .= "$mach`";
+	    *it = "$annex";
+	    $i = 0;
+	    foreach $c ( split(',', $consoles)) {
+		$c =~ s/r//;
+		$it{$c} = "$mach.con.$i";
+		$i++
+		}
+	    $i = 0;
+	    foreach $c ( split(',', $debugs)) {
+		$c =~ s/r//;
+		$it{$c} = "$mach.dbg.$i";
+		$i++
+		}
+#	    $AC{$annex} .= "$mach%$consoles%$debugs`";
+	}
+    }
+}	
+
+# print classes available
+#
+print "classes\t" . join('`', keys Class) . "\n\n";
+
+# print class config
+#
+foreach (sort keys Class) {
+    print $_ . "_config\t" . $Class{$_} . "\n";
+}    
+print "\n\n";
+
+
+# print the annexes available
+#
+print "annexes\t" . join('`', keys Annex) . "\n\n";
+
+# print each annex's config
+#
+foreach (sort keys Annex) {
+    print $_ . "_config\t" . $Annex{$_} . "\n";
+}
+print "\n\n";
+
+# print list of machines connected to each annex
+#
+foreach (sort keys A) {
+    chop $A{$_};
+    print $_ . "_machines\t$A{$_}\n";
+}
+
+# print new annex config
+#
+foreach $annex (sort keys A) {
+    rename ( $annex . ".config", $annex . ".config.old" );
+    open (FILE, '>' . $annex . ".config") || warn "unable to open $annex.config for writing, $!";
+    print FILE "# Changes to the Engineering Annexes CU device configuration\n";
+    print FILE "# Effecting: " . `date` . "\n\n";
+    print FILE "annex $annex\n\n";
+
+    *it = "$annex";
+    $i = 1;
+    foreach $port (sort keys it) {
+	while ($port != $i) {
+	    print FILE "set port=$i location\t\"unknown\"\n";
+	    print FILE "set port=$i mode \"slave\"\n";
+	    $i++;
+	}
+	print FILE "set port=$port location\t\"$it{$port}\"\n";
+	print FILE "set port=$port mode \"slave\"\n";
+	$i++;
+    }	
+    print FILE "\n";
+    print FILE "$Special{$annex}" if $Special{$annex};
+    close FILE;
+}
+
+# print the good stuff, each machine's config.
+#
+foreach (sort keys Mach) {
+    print "$_\t\t$Mach{$_}\n";
+
+
+
+#    foreach $mach (sort( split("$;", $Annex{$_}))) {
+#	$mach =~ s/^(\w+)(.*)/$1/;
+#	next if $mach eq $oldmach;
+#	print "$mach\t";
+#	($mkt, $gfx, $mem, @desc) = split(/\s+/, $Conf{$mach});
+#	$desc = join(' ', @desc); $desc =~ s/^\(//; $desc =~ s/\)$//;
+#	print "$desc` ";
+#	if (!$Mach_type{$mach}) {
+#	    print "IP4` " if $mkt =~ /\/[5678]0$/;
+#	    print "IP5` " if $mkt =~ /1[24]0$/;
+#	    print "IP6` " if $mkt =~ /2[05]$/;
+#	    print "IP7` " if $mkt =~ /[34][2468]0$/;
+#	    print "IP9` " if $mkt =~ /210/;
+#	    print "IP12` " if $mkt =~ /3[05]|RPC/;
+#	    print "IP17` " if $mkt =~ /510/;
+#	    print "IP19` " if $mkt =~ /6../;
+#	    print "IP20` " if $mkt =~ /R4C/;
+#	}
+#	else { print "$Mach_type{$mach}` "; }
+#
+#	print "$mkt` $Chassis{$mach}` $gfx` $mem` $Special{$mach}` $Location{$mach}` ";
+#	print "$Asset{$mach}` $Serial{$mach}` $Note{$mach}` $Owner{$mach}` $Owner_uname{$mach}` $Owner_ext{$mach}` ";
+#	print scalar(split(',', $Con{$mach})) . "` $_` ";
+#	print $Reset{$mach} ? 'labdoor.wpd`' : '`';
+#	print "$Con{$mach}` $Dbg{$mach}` $Access{$mach}\n\n";
+#	$oldmach = $mach;
+#    }
+}
+
+
+# Evil evil evil
+#
+$foo = `grep rcsversion kwho.c`;
+($kwho_version) = $foo =~ /(\d\.\d+)/;
+print "kwho_version\t$kwho_version\n";
+
+$foo = `grep Revision kcons`;
+($kcons_version) = $foo =~ /(\d\.\d+)/;
+print "kcons_version\t$kcons_version\n";
+
+$foo = `grep Revision kreset`;
+($kreset_version) = $foo =~ /(\d\.\d+)/;
+print "kreset_version\t$kreset_version\n";
+
+
+# push new config to annexes if desired
+if ($UPDATE) {
+    foreach $annex (sort keys A) {
+	# only push if changes
+	if (`diff $annex.config $annex.config.old | wc -l` > 4) {
+	    print `na < $annex.config`;
+	}
+    }
+}

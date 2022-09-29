@@ -1,0 +1,409 @@
+#!/usr/bin/perl5 -- # -*-Perl-*-
+
+$Usage = "Usage: $0 [-l][-i ignore_test][-N ntrials] logfile ...";
+
+$TIMEOUT_TM = 50.0;		# times > this are timeouts
+$avgonly = 1;			# print averages only, or long list
+$ntrials = 20;			# number of trials to use from logfile
+
+$tnamelen = 24;			# test name field length
+
+# process options
+while ($ARGV[0] =~ /^-.*/) {
+
+    if ($ARGV[0] eq "-i") {
+	$ignore = $ARGV[1];
+	$ignore_tests[$#ignore_tests + 1] = $ignore;
+	shift; shift;
+	next;
+    }
+
+    if ($ARGV[0] eq "-l") {
+	$avgonly = 0;
+	shift;
+	next;
+    }
+
+    if ($ARGV[0] =~ /^-N/) {
+	$ntrials = $ARGV[1];
+	die "invalid number $ntrials\n$Usage\n" if $ntrials <= 0;
+	shift; shift;
+	next;
+    }
+
+    die "invalid flag: $ARGV[0]\n$Usage\n";
+}
+
+die $Usage if $#ARGV < 0;
+
+
+# read in each of the logfiles
+foreach $f ( @ARGV ) {
+
+    # %timesref is an associative array indexed by the
+    # logfile name.  The values are references to another
+    # associative array indexed by test names.  The values
+    # of this array are strings which contain a space-separated
+    # list of test times for this test from this logfile.
+
+    $timesref{$f} = &read_logfile($f);
+
+    $logfiles[$#logfiles + 1] = $f;
+}
+
+
+$avgonly ? &printavg : &printlong;
+
+exit;
+
+
+# Print out the average summary
+sub printavg {
+    # inter column space
+    $ics = "  ";
+
+
+    # print column keys
+    foreach $i ( 0..$#logfiles ) {
+	$id = $logfiles[$i];
+	$id =~ s+^.*/++;	# just print basename
+	$id =~ s/^log\.//;
+	printf ' ' x $tnamelen . $ics . "%d = %s\n", $i, $id;
+    }
+    print "\n";
+
+
+    # print column headers
+    print ' ' x $tnamelen, $ics, "  0  ";
+    foreach $i ( 1..$#logfiles ) {
+	printf $ics . "     %2d       ", $i;
+    }
+    print "\n";
+
+    # print column -------
+    print ' ' x $tnamelen, $ics, "-----";
+    foreach $i ( 1..$#logfiles ) {
+	print $ics, '-' x 14;
+    }
+    print "\n";
+
+
+    $baselog = shift @logfiles;
+    $basetm  = $timesref{$baselog};
+
+    # The keys of %alltests are all the unique test names
+    # from all the log files.  Note that a test name may
+    # not appear in every logfile.
+
+    foreach $t (sort keys %alltests) {
+	printf "%-$tnamelen.$tnamelen" . "s", $t;
+
+	@times = split(' ', $$basetm{$t});
+	$baseav = &average(@times);
+
+	printf $ics . "%5.2f", $baseav if $baseav;
+	printf $ics . " N/A "          if !$baseav;
+
+	$both_avs = 0;
+	foreach $log (@logfiles) {
+	    @times = split(' ', ${ $timesref{$log} }{$t});
+	    $av = &average(@times);
+
+	    # If we have both averages, compute percent change
+	    if ($baseav && $av) {
+
+		$pchg = 100.0 * ($av - $baseav) / $baseav;
+		printf $ics . "%5.2f (%5.1f%%)", $av, $pchg;
+
+		$both_avs++;
+
+	    # No base value?  Print value without percent change.
+	    } elsif ($av) {
+		printf $ics . "%5.2f (  N/A )", $av;
+
+	    # No value for this test from this logfile.
+	    } else {
+		printf $ics . " N/A  (  N/A )";
+	    }
+	}
+	print "\n";
+
+
+	# If we had both averages for all of the logfiles
+	# add the averages to each of the running totals.
+	if ($both_avs == $#logfiles + 1) {
+	    $basetot += $baseav;
+	
+	    foreach $log (@logfiles) {
+		@times = split(' ', ${ $timesref{$log} }{$t});
+		$av = &average(@times);
+		$avtot{$log} += $av;
+	    }
+	}
+    }
+
+    print "\n";
+    printf "%-" . $tnamelen . "s", "TOTAL";
+    printf ' ' x (length($ics)-1) . "%6.2f", $basetot;
+
+    for $log (@logfiles) {
+	$pchg = 100.0 * ($avtot{$log} - $basetot) / $basetot;
+
+	printf ' ' x (length($ics)-1) . "%6.2f (%5.1f%%)",
+	    $avtot{$log}, $pchg;
+    }
+    print "\n";
+}
+
+
+sub printlong {
+    # inter column space
+    $ics = "  ";
+
+
+    # print column keys
+    foreach $i ( 0..$#logfiles ) {
+	$id = $logfiles[$i];
+	$id =~ s/^log\.//;
+	printf ' ' x 14 . $ics . "%d = %s\n", $i, $id;
+    }
+    print "\n";
+
+
+    # print column headers
+    print ' ' x 14, $ics, "  0  ";
+    foreach $i ( 1..$#logfiles ) {
+	printf $ics . "     %2d       ", $i;
+    }
+    print "\n";
+
+    # print column -------
+    print ' ' x 14, $ics, "-----";
+    foreach $i ( 1..$#logfiles ) {
+	print $ics, '-' x 14;
+    }
+    print "\n";
+
+
+    $baselog = shift @logfiles;
+    $basetm  = $timesref{$baselog};
+
+    # The keys of %alltests are all the unique test names
+    # from all the log files.  Note that a test name may
+    # not appear every logfile.
+
+    foreach $t (sort keys %alltests) {
+	# print test name
+	printf "%s\n", $t;
+
+	@times = split(' ', $$basetm{$t});
+	($basehi, $baselo, $basetot) = &times_hilotot(@times);
+
+	$basen = $#times + 1;
+	$baseav = $basen ? $basetot / $basen : 0;
+
+	$basestdev = &standard_deviation($baseav, @times);
+
+
+	# ================
+	# Print Entries
+	printf "    %-10s", "Entries:";
+	printf $ics . "%2d   ", $basen;
+	
+	foreach $log (@logfiles) {
+	    @times = split(' ', ${ $timesref{$log} }{$t});
+	    $ntimes = $#times + 1;
+
+	    printf $ics . "%2d            ", $ntimes;
+	}
+	print "\n";
+
+
+	# ================
+	# Print High
+	printf "    %-10s", "High:";
+	printf $ics . "%5.2f", $basehi;
+
+	foreach $log (@logfiles) {
+	    @times = split(' ', ${ $timesref{$log} }{$t});
+	    ($hi, $lo, $tot) = &times_hilotot(@times);
+
+	    if ($basehi && $hi) {
+		$pchg = 100.0 * ($hi - $basehi) / $basehi;
+		printf $ics . "%5.2f (%5.1f%%)", $hi, $pchg;
+	    } else {
+		printf $ics . "%5.2f (  N/A )", $hi;
+	    }
+	}
+	print "\n";
+
+
+	# ================
+	# Print Low
+	printf "    %-10s", "Low:";
+	printf $ics . "%5.2f", $baselo;
+
+	foreach $log (@logfiles) {
+	    @times = split(' ', ${ $timesref{$log} }{$t});
+	    ($hi, $lo, $tot) = &times_hilotot(@times);
+
+	    if ($baselo && $lo) {
+		$pchg = 100.0 * ($lo - $baselo) / $baselo;
+		printf $ics . "%5.2f (%5.1f%%)", $lo, $pchg;
+	    } else {
+		printf $ics . "%5.2f (  N/A )", $lo;
+	    }
+	}
+	print "\n";
+
+
+	# ================
+	# Print Average
+	printf "    %-10s", "Average:";
+	printf $ics . "%5.2f", $baseav;
+
+	foreach $log (@logfiles) {
+	    @times = split(' ', ${ $timesref{$log} }{$t});
+	    $av = &average(@times);
+
+	    if ($baseav && $av) {
+		$pchg = 100.0 * ($av - $baseav) / $baseav;
+		printf $ics . "%5.2f (%5.1f%%)", $av, $pchg;
+	    } else {
+		printf $ics . "%5.2f (  N/A )", $av;
+	    }
+	}
+	print "\n";
+
+
+	# ================
+	# Print Standard Deviation
+	printf "    %-10s", "St Dev:";
+	printf $ics . "%5.2f", $basestdev;
+
+	foreach $log (@logfiles) {
+	    @times = split(' ', ${ $timesref{$log} }{$t});
+	    $stdev = &standard_deviation(&average(@times), @times);
+
+	    if ($basestdev && $stdev) {
+		$pchg = 100.0 * ($stdev - $basestdev) / $basestdev;
+		printf $ics . "%5.2f (%5.1f%%)", $stdev, $pchg;
+	    } else {
+		printf $ics . "%5.2f (  N/A )", $stdev;
+	    }
+	}
+	print "\n";
+    }
+}
+
+
+# Walk through the logfile.  We find lines of the form
+#
+#	$	Software Manager
+#	Startup time: 9527 milliseconds
+#	$	Capture Tool
+#	Startup time: 12786 milliseconds
+#	...
+# We gather test names and startup time values into the
+# %timeslist array and return a reference to it.
+#
+# We also fill in the global %alltests array with all the
+# test names across all the files.  We'll use the keys of
+# %alltests to drive the main output loop once all the
+# logfiles have been read.
+
+sub read_logfile {
+    local($logfile) = @_[0];
+    local(%timeslist, $test, $starttm, @stline, %trials);
+
+    open(logfile) || die "Can't open $logfile: $!\n";
+
+logproc:
+    while (<logfile>) {
+	# new test name
+	if (/^\$\s/) {
+	    chop;		# kill \n
+	    s/^\$\s*//;
+	    $test = $_;		# remember test name
+	    next;
+	}
+
+	# grab the startup time for this test
+	if (/^Startup/) {
+
+	    # If this test is in the list of tests we
+	    # want to ignore for this report, skip it.
+
+	    next if grep(/^\Q$test\E$/, @ignore_tests);
+
+	    # If we only want to process a specified number
+	    # of trials from the logfile (from cmdline -N option),
+	    # stop processing logfile if any one test case
+	    # reaches the limit.
+
+	    last logproc if $ntrials && ++$trials{$test} > $ntrials;
+
+	    @stline = split;
+	    $starttm = $stline[2] / 1000;
+
+	    # push on this time (if valid)
+	    $timeslist{$test} .= ' ' . $starttm if $starttm < $TIMEOUT_TM;
+
+	    # Remember test name in keys of global %alltests
+	    $alltests{$test}++;
+
+	    next;
+	}
+    }
+    close logfile;
+
+    return \%timeslist;
+}
+
+
+# pass over this list of times and
+# calculate interesting items.
+sub times_hilotot {
+    local($hitime, $lotime, $totime);
+
+    $totime = 0;
+    foreach $tm (@_) {
+	$hitime = $tm if $tm > $hitime;
+	$lotime = $tm if $tm < $lotime || !$lotime;
+	$totime += $tm;
+    }
+
+    return ($hitime, $lotime, $totime);
+}
+
+
+# compute average of list of numbers
+sub average {
+    local($n, $total);
+    local($cnt) = $#_ + 1;
+
+    $total = 0;
+    foreach $n (@_) {
+	$total += $n;
+    }
+    return $cnt ? $total / $cnt : 0;
+}
+
+
+# standard_deviation($average, @numbers)
+sub standard_deviation {
+    local($av) = shift;
+    local($n, $rsum, $resid);
+    local($cnt) = $#_ + 1;
+
+    return 0 if $cnt <= 1;	# stdev for 0,1 samples?
+
+    # sum the residuals
+    $rsum = 0;
+    foreach $n (@_) {
+	$resid = $n - $av;
+	$rsum += $resid * $resid;
+    }
+
+    return sqrt($rsum / $cnt);
+}

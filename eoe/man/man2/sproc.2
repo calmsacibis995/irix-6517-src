@@ -1,0 +1,468 @@
+'\"macro stdmacro
+.TH SPROC 2  LOCAL
+.SH NAME
+sproc, sprocsp, nsproc \- create a new share group process
+.Op c p a
+.SH C SYNOPSIS
+.B #include <sys/types.h>
+.br
+.B #include <sys/prctl.h>
+.sp
+.br
+.B "pid_t sproc (void (\(**entry) (void \(**), unsigned inh, ...);"
+.sp
+Type of optional third argument:
+.br
+.B "void \(**arg;"
+.sp
+.B "pid_t sprocsp (void (\(**entry) (void \(**, size_t), unsigned inh,
+.br
+.B "			void \(**arg, caddr_t sp, size_t len);"
+.Op
+.Op f
+.SH FORTRAN SYNOPSIS
+.B #include <sys/prctl.h>
+.br
+.B "integer*4 function sproc (entry, inh, arg)"
+.br
+.B external entry
+.br
+.B integer*4 inh
+.br
+.B integer*4 arg
+.nf
+.Op
+.SH DESCRIPTION
+The \f4sproc\fP and \f4sprocsp\fP system calls are a variant of the standard
+\f4fork\fP(2) call.  Like \f4fork\f1, the \f4sproc\f1 calls create a new
+process that is a clone of the calling process.  The difference is that after
+an \f4sproc\f1 call, the new child process shares the virtual address space of
+the parent process (assuming that this sharing option is selected, as described
+below), rather than simply being a copy of the parent.  The parent and the
+child each have their own program counter value and stack pointer, but all the
+text and data space is visible to both processes.  This provides one of the
+basic mechanisms upon which parallel programs can be built.
+.PP
+The system call \f4nsproc\fP is no longer supported as an external interface;
+any calls to it should be replaced with \f4sprocsp\fP.
+.PP
+A group of processes created by \f4sproc\f1 calls from a common ancestor is
+referred to as a \f2share group\f1 or \f2shared process group\f1.  A share
+group is initially formed when a process first executes an \f4sproc\fP or
+\f4sprocsp\fP call.  All subsequent \f4sproc\fP calls by either the parent or
+other children in this share group will add another process to the share group.
+In addition to virtual address space, members of a share group can share other
+attributes such as file tables, current working directories, effective userids
+and others described below.
+.PP
+The three calls differ in just two ways - how the stack for the new process is
+initialized and in the interpretation of the \f3inh\fP argument.  If the
+argument \f2sp\fP is set to
+.SM
+.B NULL
+then the system will create a stack region for the child.  This stack region
+will not overlap with any other area of the share group's address space.  These
+stack regions grow downward, and are automatically grown if the process
+accesses new areas of the stack.  The \f2len\fP argument specifies how much
+margin (in bytes) the system should attempt to leave for the child's stack.
+This margin is used when the system attempts to place additional stacks or
+other virtual spaces (e.g. from \f4mmap\fP).  The system will attempt to leave
+enough room such that the stack could grow to \f2len\fP bytes if it needs to.
+This margin in no way sets a limit on stack growth nor guarantees a particular
+stack size.  The process can continue to grow its stack up to the maximum
+permissible size (specified via the resource limit \f4RLIMIT_STACK\fP) as long
+as it doesn't run into any other virtual space of the share group.  Conversely,
+if the share group's virtual space gets crowded, parts of the stack that
+haven't yet been claimed could be used for additional stacks or other requested
+virtual spaces.  A minimum of 16K for \f2len\fP is recommended.  Note that
+there are no 'red' zones - a process growing its stack could easily start
+accessing the stack of another process in the share group.
+.PP
+If \f2len\fP is set to be smaller than the stack size required by the sproc at
+creation time, an error message indicating that there is "not enough memory to
+lock stack" may be reported to the system log. This indicates that the system
+attempted to place the sproc's stack using the \f2len\fP value supplied in the
+\f4sprocsp\fP call, but that the initial size of the sproc's stack would
+overlap into other portions of the share group's virtual space.  The offending
+sproc will be killed.
+.PP
+If \f2sp\fP is set to a valid virtual address in the share group then the stack
+of the new process is set to this value.  With this option, the entire
+responsibility of stack management is the calling process's.  The system will
+no longer attempt to automatically grow the process's stack region.  \f2sp\fP
+should point to the top (highest address) of the new stack. It will
+automatically be rounded down to provide the appropriate alignment.  No
+validity checks are made on \f2sp\fP.
+.PP
+\f4sproc\fP is equivalent to calling \f4sprocsp\fP with the \f2sp\fP argument
+set to
+.SM
+.B NULL
+and the \f2len\fP argument set to the \f2rlim_cur\fP value of the resource 
+limit
+.SM
+.BR RLIMIT_STACK .
+This means that each time a process calls \f4sproc\fP, the total size of each
+member of the share group increases by the size of the new process's stack.
+.PP
+Calling \f4sproc\fP or \f4sprocsp\fP too often, when the stack size is set
+very large can easily cause the share group to grow larger than the per-process
+maximum allowable size \f2{PROCSIZE_MAX}\fP [see \f4intro\fP(2)].  In this
+case, the call will fail and return
+.SM
+.BR ENOMEM .
+.PP
+A process with lots of distinct virtual spaces (e.g. lots of files mapped
+via \f4mmap\fP(2)) can fragment the calling process's address space such that
+it is impossible to find a suitable place for the new child's stack.  This
+case will also cause \f4sproc\fP or \f4sprocsp\fP to fail.
+.PP
+The new child process resulting from \f4sproc\f1(2) differs from a normally
+forked process in the following ways:
+.RS 0.3i
+.PP
+If the
+.SM
+.B PR_SADDR
+bit is set in \f2inh\fP then the new process will share ALL the virtual space
+of the parent, except the PRDA (see below).  During a normal \f4fork\f1(2) or
+if the
+.SM
+.B PR_SADDR
+is not set, the writable portions of the process's address space are marked
+copy-on-write.  If either process writes into a given page, then a copy is
+made of the page and given to the process.  Thus writes by one process will
+not be visible to the other forks.  With the
+.SM
+.B PR_SADDR
+option of \f4sproc(2)\f1, however, all the processes have read/write privileges
+to the entire virtual space.
+.PP
+The new process can reference the parent's stack.
+.PP
+The new process has its own
+.I process data area
+.SM (PRDA)
+which contains, among other things, the \f2process id\f1.  Part of the
+.SM PRDA
+is used by the system, part by system libraries, and part is available to the
+application program [see
+.BR <sys/prctl.h> ].
+The
+.SM PRDA
+is at a fixed virtual address in each process which is given by the constant
+.SM
+.B PRDA
+defined in
+.BR prctl.h .
+.PP
+The machine state (general/floating point registers) is not duplicated with the
+exception of the floating point control register.  This means that if a process
+has enabled floating point traps, these will be enabled in the child process.
+.PP
+If created via \f4sproc\fP the new process will be invoked as follows:
+.PP
+.ti 2i
+.B "entry(void \(**arg)"
+.br
+.sp
+If created via \f4sprocsp\fP the new process will be invoked as follows:
+.PP
+.ti 2i
+.B "entry(void \(**arg, size_t stksize)"
+.br
+.sp
+where
+.I stksize
+is the
+.I len
+argument the parent passed to \f4sprocsp\fP.
+.RE
+.PP
+In addition to the attributes inherited during the \f4sproc\fP call itself,
+the \f2inh\fP flag to \f4sproc\fP can request that the new process have future
+changes in any member of the share group be applied to itself.  A process can
+only request that a child process share attributes that it itself is sharing.
+The creator of a share group is effectively sharing everything.  These
+persisting attributes are selectable via the \f2inh\fP flag:
+.TP 1i
+.SM
+.B PR_SADDR
+All virtual space attributes (shared memory, mapped files, data space) are
+shared.  If one process in a share group attaches to a shared memory segment,
+all processes in the group can access that segment.
+.TP 1i
+.SM
+.B PR_SFDS
+The open file table is kept synchronized.  If one member of the share group
+opens a file, the open file descriptor will appear in the file tables of all
+members of the share group.
+.sp
+Note especially that the converse is also true: if one member closes a file,
+it is closed for all members of the group; this has been known to surprise
+applications programmers!  Note also that there is only one file pointer for
+each file descriptor shared within a shared process group.
+.TP 1i
+.SM
+.B PR_SDIR
+The current and root directories are kept synchronized.  If one member of the
+group issues a \f4chdir\f1(2) or \f4chroot\f1(2) call, the current working
+directory or root directory will be changed for all members of the share group.
+.TP 1i
+.SM
+.B PR_SUMASK
+The file creation mask,
+.I umask
+is kept synchronized.
+.TP 1i
+.SM
+.B PR_SULIMIT
+The limit on maximum file size is kept synchronized.
+.TP 1i
+.SM
+.B PR_SID
+The real and effective user and group ids are kept synchronized.
+.PP
+To take advantage of sharing all possible attributes, the constant
+.SM
+.B PR_SALL
+may be used.
+.PP
+In addition to specifying shared attributes, the
+.I inh
+flag can be used to pass flags that govern certain operations within the
+\f4sproc\fP call itself.  Currently two flags are supported:
+.TP 1i
+.SM
+.BR PR_BLOCK
+causes the calling process to be blocked [see \f4blockproc\f1(2)] before
+returning from a successful call.  This can be used to allow the child process
+access to the parent's stack without the possibility of collision.
+.TP 1i
+.SM
+.B PR_NOLIBC
+causes the child to not join the C library (libc) arena (see below).  If all
+\f4sproc\fP calls that a process makes specify this flag then the C library
+arena will never be created.  The creation of the C library arena includes the
+initialization of the per-thread system error value \f2errno\fP.
+.PP
+No scheduling synchronization is implied between shared processes: they are
+free to run on any processor in any sequence.  Any required synchronization
+must be provided by the application using locks and semaphores [see
+\f4usinit\f1(3P)] or other mechanisms.
+.PP
+If one member of a share group exits or otherwise dies, its stack is removed
+from the virtual space of the share group.  If the process which first created
+the share group exits, its stack is not removed.  This ensures continued access by other share group members to the
+environment and starting argument vectors.  In addition, if the
+.SM
+.B PR_SETEXITSIG
+option [see \f4prctl\fP(2)] has been enabled then all remaining members of the
+share group will be signaled.
+.PP
+By default, standard C library routines such as \f4printf\fP and \f4malloc\fP
+function properly even though two or more shared processes access them
+simultaneously.  To accomplish this, a special arena is set up [see
+\f4usinit\fP(3P)] to hold the locks and semaphores required.  Unless the
+.SM
+.B PR_NOLIBC
+flag is present, the parent will initialize and each child will join the C
+library arena.  Arenas have a configurable maximum number of processes that
+can join, that is set when the arena is first created.  This maximum (default
+8) can be configured using \f4usconfig\fP(3P).
+Each process in the share group needs access to this arena and requires a
+single file lock [see \f4fcntl\fP(2)].  This may require more file locks to be
+configured into the system than the default system configuration provides.
+Programs using share groups that are invoking system services (either system
+calls or \f3libc\fP routines), should be compiled with the feature test macro
+.SM
+.B _SGI_MP_SOURCE
+set in any file containing functions that share group members might access
+(see CAVEATS section below).  Currently, this is only required for correct
+treatment of the system error value
+.I errno
+(see discussion below) but in the future may be required for the correct
+functioning of other services.
+.PP
+\f4sproc\fP
+will fail and no new process will be created if one or more of the following
+are true:
+.TP 15
+.SM
+\%[ENOMEM]
+If there is not enough virtual space to allocate a new stack.  The default
+stack size is settable via \f4prctl\fP(2), or \f4setrlimit\fP(2).
+.TP 15
+.SM
+\%[EAGAIN]
+The system-imposed limit on the total number of processes under execution,
+.SM
+.I {NPROC}
+[see
+.BR intro (2)],
+would be exceeded.
+.TP
+.SM
+\%[EAGAIN]
+The system-imposed limit on the total number of processes under execution
+by a single user
+.SM
+.I {CHILD_MAX}
+[see
+.BR intro (2)],
+would be exceeded.
+.TP
+.SM
+\%[EAGAIN]
+Amount of system memory required is temporarily unavailable.
+.TP
+.SM
+\%[EINVAL]
+.I sp
+was null and
+.I len
+was less than 8192.
+.TP
+.SM
+\%[EPERM]
+The system call is not permitted from a pthreaded program (see CAVEATS section
+below).
+.PP
+When called with the
+.SM
+.B PR_NOLIBC
+flag not set, in addition to the above errors \f4sproc\fP will fail and no new
+process will be created if one or more of the following are true:
+.TP 15
+.SM
+\%[ENOSPC]
+If the size of the share group exceeds the number of users specified via
+\f4usconfig\fP(3P) (8 by default).  Any changes via \f4usconfig\fP(3P) must be
+done BEFORE the first \f4sproc\fP is performed.
+.TP 15
+.SM
+\%[ENOLCK]
+There are not enough file locks in the system.
+.TP 15
+.SM
+\%[EACCES]
+The shared arena file (located in /usr/tmp) used in conjunction with the C
+library could not be opened or created for read/write.
+.TP 15
+.I "New process pid # could not join I/O arena:<..>"
+if the new share group member could not properly join the C library arena.
+The new process exits with a \-1.
+.PP
+See also the possible errors from \f4usinit\fP(3P).
+.SH NOTES
+IrisGL processes that share virtual address space will share access to the
+graphics hardware and associated data structures.  IrisGL calls made by such
+processes must be single threaded to avoid simultaneous access to these
+resources.  Furthermore, \f4gflush\fP(3G) must be called prior to leaving the
+critical section represented by the set of graphics calls.
+.PP
+This manual entry has described ways in which processes created by \f4sproc\f1
+differ from those created by \f4fork\f1.  Attributes and behavior not mentioned
+as different should be assumed to work the same way for \f4sproc\f1 processes
+as for processes created by \f4fork\f1.  Here are some respects in which the
+two types of processes are the same:
+.RS 0.3i
+.PP
+The parent and child after an \f4sproc\f1 each have a unique process id
+(\f2pid\f1), but are in the same process group.
+.PP
+A signal sent to a specific \f2pid\f1 in a share group [see \f4kill\f1(2)]
+will be received by only the process to which it was sent.  Other members of
+the share group will not be affected.  A signal sent to an entire process group
+will be received by all the members of the process group, regardless of share
+group affiliations [see \f4killpg\f1(3B)].  See \f4prctl\fP(2) for ways to
+alter this behavior.
+.PP
+If the child process resulting from an \f4sproc\f1 dies or calls \f4exit\f1(2),
+the parent process receives the
+.SM SIGCLD
+signal [see \f4sigset\f1(2), \f4sigaction\f1(2), and \f4sigvec\f1(3B)].
+.RE
+.SH CAVEATS
+Removing virtual space (e.g. unmapping a file) is an expensive operation and
+forces all processes in the share group to single thread their memory
+management operations for the duration of the unmap system call.  The reason
+for this is that the system must insure that no other processes in the share
+group can reference the virtual space that is being removed or the underlying
+physical pages during or after the removal.  To accomplish this, the system
+memory management code does the following:
+.RS 0.3i
+.PP
+Locks a lock on the share group that prevents any other process in the group
+from doing any memory management operations (page faults, protection faults,
+second level TLB misses, \f4mmap\f1(2), \f4munmap\f1(2), \f4sbrk\f1(2)).
+.PP
+Sends TLB shootdown interrupts to all other cpus in the system that cause them
+to remove any entries from the processor's Translation Lookaside Buffer (TLB)
+for the share group for the address range being deleted.
+.PP
+Removes the virtual mapping from the share group's memory management data
+structures and frees any underlying physical pages.
+.PP
+Releases the lock to allow parallel operations to continue.
+.RE
+.PP
+\f4pixie\fP(1) and \f4prof\fP(1) do not work on processes that call \f4sproc\fP
+and do not share address space (i.e.
+.SM
+.B PR_SADDR
+is not set).
+.PP
+Note that the global variable
+.I errno
+is normally a single location shared by all processes in a share group in which
+address space is a shared attribute.  This means that if multiple processes in
+the group make system calls or other library functions which set \f2errno\fP,
+the value of
+.I errno
+is no longer useful, since it may be overwritten at any time by a call in
+another process in the share group.  To have each thread have its own private
+version of
+.IR errno ,
+programs should be compiled with the feature test macro
+.SM
+.B _SGI_MP_SOURCE
+defined before including the header file
+.IR "errno.h" .
+Note however that some system supplied libraries have not been converted to set
+the per-thread error value - they will only set the global error value.
+This will be corrected in future releases.  This means an application compiled
+with \f4_SGI_MP_SOURCE\fP and directly referencing \f2errno\fP will reference
+the per-thread error value and not get the global error value that a
+non-converted library might have set.  There are two workarounds to this
+problem: 1) define the feature test macro \f4_SGI_MP_SOURCE\fP only in files
+that test \f2errno\fP as the result of an error from a function defined in
+\f2libc\fP, \f2libw\fP, \f2libm\fP, \f2libadm\fP, \f2libgen\fP, or
+\f2libmalloc\fP; or
+2) for accesses of \f2errno\fP in response to errors from functions not in one
+of the above mentioned libraries, call \f4goserror\fP(3C) (which always returns
+the global error value).  \f4perror\fP(3C) always reads the 'appropriate' error
+value so for a threaded application it will read the per-thread value.  This
+means that threaded programs that call errno setting functions in non-converted
+libraries and attempt to have \f4perror\fP print out the error will not get the
+correct error value.  In this case \f2strerror(goserror())\fP should be used
+instead.
+.PP
+\f4rld\fP(1) does not support execution of \f4sproc\fP during shared object
+initialization, such as that described under the -init flag to \f4ld\fP(1).
+In particular, C++ users must take care that their code does not contain global
+objects which have constructors which call \f4sproc\fP(2).  Should
+\f4sproc\fP(2) be called during object initialization, results will generally
+be non-deterministic and unpredictable.
+.PP
+The \f4sproc\fP model of threading is incompatible with POSIX threads.
+Attempts to create an sproc process from a pthreaded program will be rejected
+[see \f4pthreads\f1(5)].
+.SH "SEE ALSO"
+blockproc(2), fcntl(2), fork(2), intro(2), prctl(2), setrlimit(2), goserror(3C),
+oserror(3C), pcreate(3C), pthreads(5), usconfig(3P), usinit(3P), rld(1), ld(1).
+.SH DIAGNOSTICS
+Upon successful completion, \f4sproc\fP returns the process id of the new
+process.  Otherwise, a value of \-1 is returned to the calling process, and
+.I errno\^
+is set to indicate the error.

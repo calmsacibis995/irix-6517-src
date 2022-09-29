@@ -1,0 +1,1197 @@
+#! /bin/sh
+#
+# Sendmail configuration functions.
+
+CONFIGDIR=/etc
+UETC=/usr/etc
+SBIN=/usr/sbin
+MAILSCRIPT=/etc/init.d/mail
+
+CONFIGOVRD=${CONFIGOVRD:-$CONFIGDIR/sendmail.params}
+CONFIG=$0
+
+# XXXrs - where does this go in the file reorg?
+PATHALIASDB=/usr/lib/news/maps/palias
+
+CANONHOST="$SBIN/canonhost 2>&1"
+
+HOSTNAME=/usr/bsd/hostname
+SHORTHOSTNAME="/usr/bsd/hostname -s"
+
+SETUPPARAMS="forwarder rootdomain loglevel"
+NOTSETUPPARAMS="directdomains localdomain pathalias recsubdomains relayname"
+ALLPARAMS="$SETUPPARAMS $NOTSETUPPARAMS"
+FUNC="deadhosts domainrelay mycanonname numcpus"
+
+NULLIND="[NULL]"
+NULLRE=`echo $NULLIND | sed -e 's/\[/\\\[/' -e 's/\]/\\\]/'`
+
+# just in case the user has a restrictive umask
+umask 022
+
+case "$1" in
+
+ 'help')
+	if test "$2" != "" && test "$2" != "usage"; then
+		sed -e "1,/START_$2_$1/ d" -e "/END_$2_$1/,\$ d" $0
+	else
+		echo
+		echo "Usage: $0 (help|get|set|unset <param>)"
+		echo
+		echo "Where <param> is one of:"
+		for param in $ALLPARAMS
+		do
+			echo "\t$param"
+		done
+		echo
+		echo "or: $0 (help|get <func>)"
+		echo
+		echo "Where <func> is one of:"
+		for func in $FUNC
+		do
+			echo "\t$func"
+		done
+		echo
+		echo "or: $0 (setup | list)"
+		echo
+		echo "Use \"$0 setup\" for quick sendmail set-up."
+		echo
+	fi
+	;;
+
+
+ 'migrate2mc')
+# This function is an inst exit-op that will migrate to the new mc style
+# sendmail configuration
+	if test ! -e "/etc/sendmail.cf.Orig"; then
+	    mv /etc/sendmail.cf /etc/sendmail.cf.Orig
+
+# determine if we need to do mailnews relaying
+	    grep '$@$>29<@' /etc/sendmail.cf.Orig | awk '
+		BEGIN {
+		    lines = 0;
+		}
+		{
+		    lines++;
+		    group=$1 ; 
+		    sub(/^R/,"", group);
+			 sub(/\. ?$*.*/,"",group);
+		    if (match(group,/^news$/)) {
+		    	news="_NEWS_";
+		    } else {
+			groups = groups group " ";
+		    }
+				    
+		    relay=$2 ; 
+		    sub(/:.*/,"", relay);
+			 sub(/.*@/,"", relay);
+		}	
+	        END {
+			if (lines > 0) {
+			    printf "#\n# Generated from the historic SGI sendmail.cf\n" ;
+			    printf "#\n# Support mailnews relaying\n";
+			    printf "define(`USENET_RELAY&, `%s&)dnl\n", relay;
+			    printf "FEATURE(`mailnews&,`%s%s&)dnl\n", groups, news;
+			}	
+		}' | tr '&' "'" >> /etc/sendmail.mc
+#end mailnews
+
+	fi
+	$CONFIG params2mc
+	;;
+
+ 'params2mc')
+# This function attempts to map the parameters that configmail has
+# historically used into terms that the current sendmail.cf file
+# understands.  
+#
+# forwarder	- Map to SMART_HOST
+# relayname	- Map to SMART_HOST (after forwarder) 
+# rootdomain	- Map into FEATURE(`smart_host_domain')
+# directdomains	- Map into FEATURE(`smart_host_domain')
+# localdomain	- Map into FEATURE(`smart_host_domain')
+# loglevel	- Map to confLOG_LEVEL
+# recsubdomains	- XXX GAUNTET SUPPORT ONLY
+# pathalias	- unsupported
+#
+# deadhosts	- Append entries (/etc/sendmail.killed) to CW class
+# domainrelay	- unused
+# mycanonname	- unused
+# numcpus	- suppored by FEATURE(`per_cpu_*')
+	if test -e $CONFIGOVRD; then
+	    forwarder=`sed -n 's/forwarder:\(.*\)/\1/p' $CONFIGOVRD | \
+		sed 's/\[NULL\]//'`
+	    rootdomain=`sed -n 's/rootdomain:\(.*\)/\1/p' $CONFIGOVRD | \
+		sed 's/\[NULL\]//'`
+	    loglevel=`sed -n 's/loglevel:\(.*\)/\1/p' $CONFIGOVRD | \
+		sed 's/\[NULL\]//'`
+	    directdomain=`sed -n 's/directdomain:\(.*\)/\1/p' $CONFIGOVRD | \
+		sed 's/\[NULL\]//'`
+	    localdomain=`sed -n 's/localdomain:\(.*\)/\1/p' $CONFIGOVRD | \
+		sed 's/\[NULL\]//'`
+	    recsubdomains=`sed -n 's/recsubdomains:\(.*\)/\1/p' $CONFIGOVRD | \
+		sed 's/\[NULL\]//'`
+	    relayname=`sed -n 's/relayname:\(.*\)/\1/p' $CONFIGOVRD | \
+		sed 's/\[NULL\]//'`
+	fi
+
+	if test "$forwarder" != ""; then 
+	    smartHost=$forwarder
+	elif test "$relayname" != ""; then
+	    smartHost=$relayname
+	fi
+
+	smartHostDomain=`echo "$localdomain $rootdomain $directdomans" | \
+	    sed 's/^\ *//'`
+
+	if test -r $CONFIGDIR/sendmail.killed; then
+	    cat $CONFIGDIR/sendmail.killed >> /etc/sendmail.cw
+	    mv $CONFIGDIR/sendmail.killed $CONFIGDIR/sendmail.killed.Old
+	fi
+
+	x=/etc/sendmail.mc
+	if ! test -e $x; then
+	    echo "$x does not exit" >&2
+	    exit 1
+	fi
+	cp $x ${x}.tmp
+	rm -f ${x}.tmp2
+
+	if test "$smartHost" != ""; then
+	    sed 's/^\([^#].*SMART_HOST.*\)/# \1/' < ${x}.tmp | egrep -v 'SMART_HOST.*# configmail' >> ${x}.tmp2
+	    echo "define(\`SMART_HOST',\`$smartHost')dnl # configmail" >> ${x}.tmp2
+	    mv ${x}.tmp2 ${x}.tmp
+	fi
+
+	if test "$smartHostDomain" != ""; then
+	    sed 's/^\([^#].*smart_host_domain.*\)/# \1/' < ${x}.tmp | egrep -v 'smart_host_domain.*# configmail' >> ${x}.tmp2
+	    echo "FEATURE(\`smart_host_domain',\`$smartHostDomain')dnl # configmail" >> ${x}.tmp2
+	    mv ${x}.tmp2 ${x}.tmp
+	fi
+
+	if test "$loglevel" != ""; then
+	    sed 's/^\([^#].*confLOG_LEVEL.*\)/# \1/' < ${x}.tmp | egrep -v 'confLOG_LEVEL.*# configmail' >> ${x}.tmp2
+	    echo "define(\`confLOG_LEVEL',$loglevel)dnl # configmail" >> ${x}.tmp2
+	    mv ${x}.tmp2 ${x}.tmp
+	fi
+
+	if test -s ${x}.tmp; then
+	    if ! test -e ${x}.Orig; then
+		mv ${x} ${x}.Orig
+	    fi
+	    mv ${x}.tmp ${x}
+	else
+	    echo "Migration of configmail -> /etc/sendmail.mc failed" >&2
+	    exit 1
+	fi
+
+	if `chkconfig sendmail_cf`; then
+	    $CONFIG mc2cf
+	fi
+	;;
+
+ 'mc2cf')
+	m4 -D_CF_DIR_=/usr/lib/sendmail.cf_m4/ /usr/lib/sendmail.cf_m4/m4/cf.m4 /etc/sendmail.mc > /etc/sendmail.cf.$$
+	if test ! -e /etc/sendmail.cf; then
+		mv /etc/sendmail.cf.$$ /etc/sendmail.cf
+	fi
+	if test -s /etc/sendmail.cf.$$; then
+	    grep -v '^#####' /etc/sendmail.cf > /tmp/sendmail.$$.1
+	    grep -v '^#####' /etc/sendmail.cf.$$ > /tmp/sendmail.$$.2
+	    if ! diff -q /tmp/sendmail.$$.1 /tmp/sendmail.$$.2 > /dev/null 2>&1
+	    then 
+		cp /etc/sendmail.cf /etc/sendmail.cf.Old
+		mv /etc/sendmail.cf.$$ /etc/sendmail.cf
+	    fi
+	fi
+	rm -f /etc/sendmail.cf.$$ /tmp/sendmail.$$.1 /tmp/sendmail.$$.2
+	;;
+
+ 'percpu')
+	case "$2" in
+	 [0-9]*)
+		cpus=`$CONFIG get numcpus`
+		echo `expr $cpus \* $2`
+		;;
+	 *)
+		$CONFIG help usage
+		;;
+	esac
+	;;
+
+ 'list')
+	ALL="$ALLPARAMS $FUNC"
+	echo
+	for pf in $ALL
+	do
+		result=`$CONFIG get $pf`
+		echo "$pf = \"$result\""
+	done
+	echo
+	;;
+
+ 'm4')
+	ALL="$ALLPARAMS $FUNC"
+	for pf in $ALL
+	do
+		result=`$CONFIG get $pf`
+		echo "define(\`configmail_$pf',\`$result')dnl"
+	done
+	;;
+
+ 'get')
+
+	case "$2" in
+
+	 'deadhosts')
+
+		DEADHOSTFILE=$CONFIGDIR/sendmail.killed
+
+		# List known dead hosts.  This is a list of all hosts in the
+		# domain for which this host is a forwarder.  If a message is
+		# received that is destined for one of these hosts, it will
+		# have the hostname stripped, and the username will be aliased
+		# in the hope of finding his new location.
+		#
+
+		if test -r $DEADHOSTFILE; then
+			awk -F# '{if (length($1) != 0) print $1}' $DEADHOSTFILE
+		fi
+		echo "somewhere"
+		;;
+
+	 'directdomains')
+
+		if test -r $CONFIGOVRD; then
+			domain=`sed -n 's/directdomains:\(.*\)/\1/p' \
+				$CONFIGOVRD`
+		fi
+		if test "$domain" = $NULLIND; then
+			exit 0
+		fi
+		if test "$domain" != ""; then
+			echo $domain
+			exit 0
+		fi
+
+		myname=`$CONFIG get mycanonname`
+		mydomain=`$CONFIG get localdomain`
+		localfwdhost=`$CONFIG get domainrelay $mydomain`
+		if test $? != 0; then
+			exit 0
+		fi
+		canonlocalfwdhost=`eval $CANONHOST $localfwdhost`
+		if test $? = 0 &&
+		   test "$myname" = "$canonlocalfwdhost"; then
+			$CONFIG get localdomain
+		fi
+		;;
+
+	 'domainrelay')
+
+		relayname=`$CONFIG get relayname`
+		if test "$3" != ""; then
+			relayhost=$relayname.$3
+		else
+			relayhost=$relayname
+		fi
+		canonrelayname=`eval $CANONHOST $relayhost`
+		if test $? = 0; then
+			echo $relayhost
+			exit 0
+		else
+			echo $canonrelayname
+			exit 1
+		fi
+		;;
+
+	 'mycanonname')
+
+		myname=`$SHORTHOSTNAME`
+		mydomain=`$CONFIG get localdomain`
+
+		if test "$mydomain" != ""; then
+			echo "$myname.$mydomain"
+		else
+			echo "$myname"
+		fi
+		;;
+
+	 'localdomain')
+
+		# Determine the name of my domain.
+		#
+		# Try hostname command.  If that returns a hostname without
+		# domain, do gethostbyname on the name returned by the
+		# hostname command and return any domain found there.
+		#
+		# Return null if no domain found.
+
+		if test -r $CONFIGOVRD; then
+			domain=`sed -n 's/localdomain:\(.*\)/\1/p' \
+				$CONFIGOVRD`
+		fi
+		if test "$domain" = $NULLIND; then
+			exit 0
+		fi
+		if test "$domain" != ""; then
+        		echo $domain
+			exit 0
+		fi
+		hostname=`$HOSTNAME`
+		canonhostname=`eval $CANONHOST $hostname`
+		if test $? = 0; then
+			domain=`expr $canonhostname : '[^.]*\.\(.*\)'`
+			if test "$domain" != ""; then
+				echo $domain
+			fi
+		fi
+		;;
+
+	'loglevel')
+		if test -r $CONFIGOVRD; then
+			loglevel=`sed -n 's/loglevel:\(.*\)/\1/p' $CONFIGOVRD`
+		fi
+		if test "$loglevel" = ""; then
+			loglevel=1
+		fi
+		echo $loglevel
+		;;
+
+	 'forwarder')
+
+		# Determine the name of my forwarding host.  If no forwarding
+		# host is found, or if that host is me, return my name.
+
+		if test -r $CONFIGOVRD; then
+			configfwdhost=`sed -n 's/forwarder:\(.*\)/\1/p' \
+					$CONFIGOVRD`
+		fi
+		if test "$configfwdhost" != ""; then
+			if test "$configfwdhost" = $NULLIND; then
+				exit 0
+			fi
+			if test "$3" = "-s"; then
+				echo $configfwdhost | awk -F. '{print $1}'
+			else
+        			echo $configfwdhost
+			fi
+        		exit 0
+		fi
+
+		canonthishost=`$CONFIG get mycanonname`
+
+		# Try relay for root domain.
+
+		rootdomain=`$CONFIG get rootdomain`
+		rootfwdhost=`$CONFIG get domainrelay $rootdomain`
+		if test $? = 0; then
+			canonrootfwdhost=`eval $CANONHOST $rootfwdhost`
+			if test $? = 0 &&
+			   test "$canonrootfwdhost" != "$canonthishost"; then
+				if test "$3" = "-s"; then
+					echo $rootfwdhost | awk -F. '{print $1}'
+				else
+        				echo $rootfwdhost
+				fi
+        			exit 0
+			fi
+		fi
+
+		# Try relay for local domain.
+
+		mydomain=`$CONFIG get localdomain`
+		localfwdhost=`$CONFIG get domainrelay $mydomain`
+		if test $? = 0; then
+			canonlocalfwdhost=`eval $CANONHOST $localfwdhost`
+			if test $? = 0 &&
+			   test "$canonlocalfwdhost" != "$canonthishost"; then
+				if test "$3" = "-s"; then
+					echo $localfwdhost | \
+						awk -F. '{print $1}'
+				else
+        				echo $localfwdhost
+				fi
+        			exit 0
+			fi
+		fi
+
+		# Try just "relay".
+
+		rawfwdhost=`$CONFIG get domainrelay`
+		if test $? = 0; then
+			canonrawfwdhost=`eval $CANONHOST $rawfwdhost`
+			if test $? = 0 &&
+			   test "$canonrawfwdhost" != "$canonthishost"; then
+				if test "$3" = "-s"; then
+					echo $rawfwdhost | awk -F. '{print $1}'
+				else
+        				echo $rawfwdhost
+				fi
+        			exit 0
+			fi
+		fi
+
+		if test "$3" = "-s"; then
+			echo $canonthishost | awk -F. '{print $1}'
+		else
+       			echo $canonthishost
+		fi
+		;;
+
+	 'recsubdomains')
+
+		# Determine the list of recognized subdomains which are
+		# being used as mail forwarders.
+
+		if test -r $CONFIGOVRD; then
+			recsubdomains=`sed -n 's/recsubdomains:\(.*\)/\1/p' \
+					$CONFIGOVRD`
+		fi
+		if test "$recsubdomains" != ""; then
+			if test "$recsubdomains" = $NULLIND; then
+				exit 0
+			fi
+       			echo $recsubdomains
+		fi
+       		exit 0
+		;;
+
+	 'pathalias')
+
+		# Return the location of the pathalias database or /dev/null
+		# if none.
+
+		if test -r $CONFIGOVRD; then
+			db=`sed -n 's/pathalias:\(.*\)/\1/p' $CONFIGOVRD`
+		fi
+		if test "$db" = $NULLIND; then
+			echo "/dev/null"
+			exit 0
+		fi
+		if test "$db" != ""; then
+			echo $db
+			exit 0
+		fi
+		if test -r $PATHALIASDB; then
+			echo $PATHALIASDB
+		else
+			echo "/dev/null"
+		fi
+		;;
+
+	 'relayname')
+
+		# Return the name used to denote relay hosts.  "relay" is
+		# suggested.
+
+		if test -r $CONFIGOVRD; then
+			name=`sed -n 's/relayname:\(.*\)/\1/p' $CONFIGOVRD`
+		fi
+		if test "$name" = $NULLIND; then
+			echo "relay"
+			exit 0
+		fi
+		if test "$name" != ""; then
+			echo $name
+		else
+			echo "relay"
+		fi
+		;;
+
+	 'rootdomain')
+
+		# Determine the name of the top level domain.
+		#
+		# If none configured, use our domain name.
+
+		if test -r $CONFIGOVRD; then
+			root=`sed -n 's/rootdomain:\(.*\)/\1/p' $CONFIGOVRD`
+		fi
+		if test "$root" != $NULLIND && test "$root" != ""; then
+			echo $root
+			exit 0
+		fi
+		if test -r $CONFIGOVRD; then
+			fwdr=`sed -n 's/forwarder:\(.*\)/\1/p' $CONFIGOVRD`
+			if test "$fwdr" != ""; then
+				root=`expr $fwdr : '[^.]*\.\(.*\)'`
+			fi
+		fi
+		if test "$root" != ""; then
+			echo $root
+			exit 0
+		fi
+		$CONFIG get localdomain
+		;;
+	 'numcpus')
+		if test -x /usr/sbin/mpadmin -a -x /sbin/wc; then
+			result=`/usr/sbin/mpadmin -u | /sbin/wc -l`
+			echo $result
+		else
+			echo 1
+		fi
+		;;
+	 *)
+		$CONFIG help usage
+		;;
+	esac
+	;;
+
+ 'set'|'unset')
+
+	uid=`id | sed 's/uid=\([0-9]*\).*/\1/'`
+	if test $uid != 0; then
+		echo "You must be super-user to $1 parameters."
+		exit 1
+	fi
+	if test ! -d $CONFIGDIR; then
+		echo $CONFIGDIR missing!
+		exit 1
+	fi
+	if test ! -f $CONFIGOVRD; then
+		echo "" > $CONFIGOVRD
+		if test $? != 0; then
+			echo "Cannot create $CONFIGOVRD."
+			exit 1
+		fi
+	fi
+	if test ! -w $CONFIGOVRD || test ! -r $CONFIGOVRD; then
+		echo "Cannot access $CONFIGOVRD."
+		exit 1
+	fi
+
+	case "$2" in
+	 'deadhosts'|\
+	 'domainrelay'|\
+	 'mycanonname')
+		echo
+		echo "$2 is a configmail function, not a true parameter."
+		echo "You cannot $1 $2."
+		echo "Use:"
+		echo
+		echo "\t$0 help $2"
+		echo
+		echo "for more information."
+		echo
+		;;
+	 'directdomains'|\
+	 'localdomain'|\
+	 'loglevel'|\
+	 'pathalias'|\
+	 'rootdomain'|\
+	 'forwarder'|\
+	 'recsubdomains'|\
+	 'relayname')
+		if test "$1" = "set"; then
+			echo "=========="
+			$CONFIG help $2
+			current=`sed -n "s/$2:\(.*\)/\1/p" $CONFIGOVRD`
+		else
+			echo "Removing any override for $2."
+		fi
+		sed "/^$2:/d" $CONFIGOVRD > $CONFIGOVRD.tempfoo
+		mv $CONFIGOVRD.tempfoo $CONFIGOVRD
+		suggested=`$CONFIG get $2`
+		if test "$suggested" = ""; then
+			suggested=$NULLIND
+		fi
+		if test "$1" = "unset"; then
+			echo "Restored default for $2 is: $suggested."
+			if test "$current" != ""; then
+				if test "$3" = "SUB"; then
+					exit 2
+				fi
+				$CONFIG commit
+			fi
+			exit 0
+		fi
+		if test "$current" != ""; then
+			echo "Current setting: $current"
+		fi
+		echo "Suggested setting: $suggested"
+		echo
+		loop=1
+		while (test $loop = 1)
+		do
+			loop=0
+			if test "$current" != "" && \
+			   test "$current" != "$suggested"; then
+				echo "Enter new setting, \".\" for null ($current): \c"
+			else
+				echo "Enter new setting, \".\" for null ($suggested): \c"
+			fi
+			read setting
+			if test "$setting" = ""; then
+				if test "$current" != ""; then
+					setting=$current
+				else
+					setting=$suggested
+				fi
+			fi
+			if test "$setting" = "."; then
+				setting=""
+			fi
+			if test "$setting" != "$current" &&\
+			   test "$setting" != "$suggested"; then
+				err=`$CONFIG verify $2 $setting`
+				if test $? != 0; then
+				   echo
+				   echo "WARNING --- questionable setting of $2"
+				   echo "Reason: $err"
+				   echo
+				   echo "Use new setting anyway? (y|n): \c"
+				   read useit
+				   case "$useit" in
+				    'y'|'Y'|'y*'|'Y*')
+					echo "Using new setting."
+					break
+					;;
+			    	    *)
+					echo "Abort new setting."
+					loop=1
+					;;
+				   esac
+				fi
+			fi
+		done
+		if test "$setting" = ""; then
+			setting=$NULLIND
+		fi
+		if test "$setting" != "$suggested"; then
+			echo "Setting $2 to: $setting"
+			echo
+			echo "$2:$setting" | cat - $CONFIGOVRD \
+				> $CONFIGOVRD.tempfoo
+			mv $CONFIGOVRD.tempfoo $CONFIGOVRD
+			if test "$setting" = "$current"; then
+				exit 0
+			fi
+			if test "$3" = "SUB"; then
+				exit 2
+			fi
+			$CONFIG commit
+			exit 0
+		else
+			echo "Using $suggested for $2"
+			echo
+			if test "$current" != ""; then
+				if test "$3" = "SUB"; then
+					exit 2
+				fi
+				$CONFIG commit
+			fi
+			exit 0
+		fi
+		;;
+
+	 *)
+		$CONFIG help usage
+		;;
+
+	esac
+	;;
+
+ 'setup')
+
+	changemade=0
+	for param in $SETUPPARAMS
+	do
+		$CONFIG set $param SUB
+		rtn=$?
+		if test $rtn = 1; then
+			exit 1
+		fi
+		if test $rtn = 2; then
+			changemade=1
+		fi
+	done
+	for param in $NOTSETUPPARAMS
+	do
+		current=`sed -n "s/$param:\(.*\)/\1/p" $CONFIGOVRD`
+		if test "$current" != ""; then
+
+			$CONFIG set $param SUB
+			rtn=$?
+			if test $rtn = 1; then
+				exit 1
+			fi
+			if test $rtn = 2; then
+				changemade=1
+			fi
+		fi
+	done
+	echo
+	echo "=== SETUP COMPLETE ==="
+	echo
+	if test $changemade = 1; then
+		$CONFIG commit
+	fi
+	;;
+
+ 'commit')
+	if test -e /etc/sendmail.mc; then
+	    echo 
+	    echo "Seting configmail paramaters has been deprecated"
+	    echo "You should manually edit /etc/sendmail.mc"
+	    echo 
+	    echo "Migrating changes into /etc/sendmail.mc"
+	    $CONFIG params2mc
+	fi
+	echo
+	echo "Changes have been made to the configuration.  To put these"
+	echo "changes into effect, you must restart sendmail."
+	echo
+	echo "Restart sendmail now? (y|n): \c"
+	read useit
+	case "$useit" in
+	 'y'|'Y'|'y*'|'Y*')
+		echo
+		echo "Restarting sendmail..."
+		echo
+		$MAILSCRIPT start
+		;;
+	 *)
+		echo
+		echo "Sendmail has not been restarted.  The changes you made"
+		echo "may not take effect until sendmail is restarted."
+		echo
+		echo "Use: \"$MAILSCRIPT start\" to restart sendmail."
+		echo
+		;;
+	esac
+	;;
+
+ 'verify')
+	case "$2" in
+	 'deadhosts'|\
+	 'directdomains'|\
+	 'domainrelay'|\
+	 'localdomain'|\
+	 'mycanonname'|\
+	 'pathalias'|\
+	 'relayname')
+		echo "OK"
+		;;
+
+	 'forwarder')
+		# if the forwarder hostname cannot be canonicalized, complain.
+		if test "$3" != ""; then
+			fwdr=`echo $3`
+		else
+			fwdr=`$CONFIG get forwarder`
+		fi
+		if test "$fwdr" != ""; then
+			err=`eval $CANONHOST $fwdr`
+			if test $? != 0; then
+				echo $err
+				exit 1
+			fi
+		fi
+		echo "OK"
+		;;
+
+	 'recsubdomains')
+		# if there is not a relay.recsubdomain, complain.
+		if test "$3" != ""; then
+			rsubs=`echo $3`
+		else
+			rsubs=`$CONFIG get recsubdomains`
+		fi
+		rootdomain=`$CONFIG get rootdomain`
+		if test "$rsubs" != ""; then
+			errstat=0
+			for ENTRY in $rsubs; do
+				if test "$rootdomain" != ""; then
+					relayname=relay.$ENTRY.$rootdomain
+				else
+					relayname=relay.$ENTRY
+				fi
+				err=`eval $CANONHOST $relayname`
+				if test $? != 0; then
+					echo $err
+					errstat=1
+				fi
+			done
+			if test $errstat != 0; then
+				exit 1
+			fi
+		fi
+		echo "OK"
+		;;
+
+	 'rootdomain')
+		# if the root domain is not some suffix of the local domain,
+		# complain.
+
+		domain=`$CONFIG get localdomain`
+		if test "$3" != ""; then
+			rtdomain=`echo $3`
+		else
+			rtdomain=`$CONFIG get rootdomain`
+		fi
+		while (test "TRUE")
+		do
+			if test "$domain" = "$rtdomain"; then
+				echo "OK"
+				exit 0
+			fi
+			if test "$domain" = ""; then
+				echo "Root Domain not suffix of Local Domain"
+				exit 1
+			fi
+			domain=`expr $domain : '[^.]*\.\(.*\)'`
+		done
+		echo "Root Domain not suffix of Local Domain"
+		exit 1
+		;;
+
+	 *)
+		$CONFIG help usage
+		;;
+	esac
+	;;
+
+ updateCFsyntax)
+	uid=`id | sed 's/uid=\([0-9]*\).*/\1/'`
+	if test "$uid" != 0; then
+		echo "You must be super-user to update your sendmail.cf syntax"
+		exit 1
+	fi
+	x=/etc/sendmail.cf
+	if test ! -r "$x"; then
+	    exit 0
+	fi
+	/usr/bin/nawk -v pathalias="`/usr/etc/configmail get pathalias`" '
+#init
+          BEGIN { line=1
+		  braces=0
+		  changes=0
+		  foldMlocal=1
+		  cf[0]="\# This file has been syntactically updated by configmail updateCFsyntax."
+		}
+# suck stdin into the cf array
+	  {cf[line++]=$0}
+
+# process the file
+	  END { for (i=1;i<line;i++) {
+
+# Remove the "u" bit from the local mailer defination if we are working on a 
+# non-installed sendmail.cf file.
+		    if (match(cf[i],/allow Uppercase user names.*Mlocal/)) {
+			foldMlocal=0
+		    }
+		    if ((foldMlocal > 0) && match(cf[i],/^Mlocal.*F=[^,]*u/)){
+			orig=cf[i]
+			changed=orig
+			bits=orig
+			sub(/^.*F=/,"",bits)
+			sub(/,.*$/,"",bits)
+			sub(/u/,"",bits)
+			bits = "F=" bits
+			sub(/F=[^,]*/,bits,changed)
+			new="\# The \"u\" flag (allow Uppercase user names) has been removed from Mlocal\n\# " orig "\n" changed
+			cf[i]=new
+			cf[0] = cf[0] "\n#  The \"u\" flag (allow Uppercase user names) has been removed from Mlocal"
+			changes++
+		    }
+
+# deal with ${@ ... $}
+		    if (match(cf[i],/^[^#].*\$\{\@/)) {
+			braces++
+			orig=cf[i];
+			changed=orig
+			gsub(/\$\{\@/,"$(bestmx ",changed)
+			gsub(/\$\}/,"$)",changed)
+			new="\# ${ is not supported in modern sendmail. Use bestmx class instead.\n#" orig "\n" changed "\nR\$\*\.\^\$\*\^\$\*\^\$\*\t\t\$1\^\$2\^\$3\^\$4\t\tNeed to Remove trailing dot\n"
+			cf[i]=new
+		    }
+		}
+		if (braces > 0) {
+		    changes = changes + braces;
+		    cf[0] = cf[0] "\n#  Replace ${@ class with $(bestmx"
+		}
+
+# Initialize the bestmx class if needed
+		if (braces > 0) {
+		    tmp=0
+		    for (i=1;tmp == 0 && i<line;i++) {
+			if (match(cf[i],/^Kbestmx bestmx/)) {
+			    tmp=1
+			}
+		    }
+		    if (tmp == 0) {
+			for (i=1;tmp == 0 && i<line; i++) {
+			    if (match(cf[i],/^DZ/)) {
+				cf[i] = cf[i] "\n\n# Initialize the bestmx class\nKbestmx bestmx" 
+				tmp=1
+				cf[0] = cf[0] "\n#  Initialize the bestmx class"
+				changes = changes + 1
+			    }
+			}
+		    }
+		}
+
+# Comment out bogus (unused) pathalias define.  Now causes a warning.
+		tmp = 1
+		if (match(pathalias,"/dev/null")) {
+		    tmp=0
+		}
+		for (i=1; tmp == 0 && i < line ; i++) {
+		    if (match(cf[i],/^DP\|\/usr\/etc\/configmail get pathalias/)) {
+			cf[i] = "# Uncomment this if you are using pathalias\n#" cf[i]
+			changes = changes + 1			    
+			cf[0] = cf[0] "\n#  Commented out unused pathalias macro (causes warning message)"
+			tmp = 1
+		    }
+		}
+
+# Change UUCP #domain-machine to be a normal fileclass.
+# "#" characters are now stripped in included files. 
+		tmp = 0
+		for (i=1; tmp == 0 && i<line; i++) {
+		    if (match(cf[i],/^[^#]*#domain-machine/)) {
+			orig=cf[i];
+			changed="FN-o /etc/uucp/Systems.domain-machines";
+			new="\# The \"#\" character is considered a comment for files loaded by sendmail.\n\# Use a seperate file instead of searching for \#domain-machine.\n\# " orig "\n" changed;
+			cf[i]=new;
+			changes = changes + 1;
+			tmp=1;
+			cf[0] = cf[0] "\n#  Replaced uucp \#domain-machine fileclass include to use a seperate file";
+		    }
+		}
+
+# print it out
+		for (i=0; i<line;i++) {
+		   print cf[i]
+		}
+		exit changes
+	      }
+	' < $x > $x.P
+	status=$?
+	if test \! -s $x.P; then
+		exit 1
+	fi
+	if test "$status" != 0 ; then 
+		y=0
+		z=$x.O
+		while (test -f $z ) do 
+			y=`expr $y + 1`
+			z=$x.O$y
+		done
+		mv $x $z;
+		mv $x.P $x
+
+# deal with /etc/uucp/Systems
+		S=/etc/uucp/Systems
+		D=${S}.domain-machines
+		if test ! -f $D -a "`fgrep '#domain-machine' $S`" != ""; then
+		    echo "# This file contains a list of smart UUCP neighbors" > $D
+		    fgrep '#domain-machine' $S | awk '{print $2}' >> $D
+		fi
+
+# is the sendmail daemon running?  (implies we are in multiuser mode)
+		if `/sbin/ps -aef | /sbin/grep sendmail | /sbin/grep -- '-bd' >/dev/null 2>&1`; then
+			echo "Restarting mail daemons"
+			/etc/init.d/mail stop
+			/etc/init.d/mail start
+		else
+			/usr/lib/sendmail -bz
+		fi    
+	else
+		/bin/rm -f $x.P
+	fi
+	;;
+
+ *)
+	$CONFIG help usage
+	;;
+esac
+exit 0
+
+# Various help text blocks follow.  The START and END tags, in combination
+# with sed are used to display the selected block to the user when needed.
+
+START_deadhosts_help
+
+Dead Hosts:
+
+This parameter is a list of all hosts in the local domain that
+no longer exist or are permanently "down" for whatever reason.
+This list will only be checked if the local host is a relay
+for the local domain.
+
+The contents of this list is determined by the contents of the
+file $CONFIGDIR/sendmail.killed.
+
+END_deadhosts_help
+
+START_directdomains_help
+
+Direct Domains:
+
+This parameter is a list of all domains into which the local
+host should send mail directly (without the use of any
+forwarder, relay, or MX host).
+
+If the local host is a relay or MX host for a particular
+domain, the name of that domain must appear in this list.
+
+If the local host is not a relay or MX host, this parameter may
+be null.
+
+END_directdomains_help
+
+START_domainrelay_help
+
+Domain Relay:
+
+This is an internal function to configmail that returns
+the name of any relay host for the given domain name.
+
+This is not a parameter and cannot be set.
+
+END_domainrelay_help
+
+START_forwarder_help
+
+Forwarder Hostname:
+
+This parameter must contain the name of the host that acts as
+the mail gateway between the local network and all foreign
+networks.  (As defined by the rootdomain parameter.)
+
+Mail will be sent to the forwarder host whenever the destination
+host exists on the "other side" of the mail gateway, or whenever
+the local host cannot figure out how to deliver a particular
+message.
+
+If no forwarder host exists, this parameter should be empty.
+If the local host is the forwarder host, this parameter should
+contain the local host's name.
+
+END_forwarder_help
+
+START_localdomain_help
+		
+Local Domain:
+
+This parameter must contain the full local domain name.
+
+If domain addressing is not used, this parameter should be null.
+
+END_localdomain_help
+
+START_mycanonname_help
+		
+My Canonical Name:
+
+This is an internal function to configmail that returns
+the canonical name of the local host.
+
+This is not a parameter and cannot be set.
+
+END_mycanonname_help
+
+START_pathalias_help
+		
+Pathalias Database:
+
+This parameter must contain the location of the pathalias
+database used for UUCP mail routing.
+
+If the local host does not do UUCP forwarding, or if pathalias
+is not used, this parameter should be set to /dev/null.
+
+END_pathalias_help
+
+START_recsubdomains_help
+
+Recognized Subdomains:
+
+This parameter will only take effect if the Gauntlet for IRIX firewall
+product is installed on the system.  Most sites with that product
+installed will not need to modify this parameter, as the product's
+administrative interface takes care of setting this parameter.
+
+This parameter contains the list of local recognized subdomains.  By
+recognized subdomains, it is meant that they will not be re-written
+out of sender addresses for email being delivered or forwarded by this
+system.  For example, if "corp" is a recognized subdomain of the
+network, "ficticious.com", mail passing through this system that is
+destined for a non-local, i.e., "outside", host will have sender
+headers that read user@host1.corp.ficticious.com rewritten to
+user@corp.ficticious.com rather than user@ficticious.com.
+
+More than one recognized subdomain can exist.  Only the recognized
+portion of the subdomain should be entered, i.e., "corp" rather than
+"corp.ficticious.com".  Recognized subdomains will be assumed to be
+subdomains of the configmail root domain.
+
+END_recsubdomains_help
+
+START_relayname_help
+
+Relay Host Name:
+
+This parameter is the hostname or alias used for all relay
+machines.
+
+END_relayname_help
+
+START_rootdomain_help
+
+Root Domain:
+
+This parameter defines the boundary between the local and
+foreign networks.  All domain names that end in the root
+domain will be considered local domains and all hosts that
+exist in those domains will be considered part of the local
+network.  All other domains will be considered foreign domains
+and all hosts that exist in them will be considered to belong
+to foreign networks.
+
+All mail addressed to hosts in foreign networks will be sent
+to the forwarder (mail gateway) host for delivery.
+
+For example, if the root domain were set to "company.com", the
+domains "engr.company.com" and "mktg.company.com" would be
+considered to be local, while "othercompany.com" would be
+foreign.  Mail to hosts in any of the "company.com" domains
+would be delivered without the use of the forwarder host, while
+mail to any host "outside" the "company.com" domains would be
+routed through the forwarder.
+
+If domain addressing is not used, this parameter should be null.
+
+END_rootdomain_help
+
+START_loglevel_help
+
+Log Level:
+
+This parameter defines the verboseness of sendmail's logging.  
+The higher the value the logging will be generated.  Values are
+between 0 and 20, with 1 and 9 being standard settings.
+
+END_loglevel_help
+
+START_numcpus_help
+
+Number of CPUs:
+
+This function will return the number of cpus in a system.
+
+END_numcpus_help
+
+START_percpu_help
+
+percpu:
+
+This function will multiply the argument by the number of cpus in the
+system.  This allows for scaling of options by the size of a system.
+
+For example the line "Ox|/usr/etc/configmail percpu 10" will set the
+the "x" option to 10 times the number of cpus in the system.
+
+END_percpu_help

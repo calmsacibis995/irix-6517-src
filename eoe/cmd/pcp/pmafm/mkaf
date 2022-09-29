@@ -1,0 +1,132 @@
+#!/bin/sh
+#Tag 0x00010D0C
+#
+# Copyright 1995, Silicon Graphics, Inc.
+# ALL RIGHTS RESERVED
+# 
+# UNPUBLISHED -- Rights reserved under the copyright laws of the United
+# States.   Use of a copyright notice is precautionary only and does not
+# imply publication or disclosure.
+# 
+# U.S. GOVERNMENT RESTRICTED RIGHTS LEGEND:
+# Use, duplication or disclosure by the Government is subject to restrictions
+# as set forth in FAR 52.227.19(c)(2) or subparagraph (c)(1)(ii) of the Rights
+# in Technical Data and Computer Software clause at DFARS 252.227-7013 and/or
+# in similar or successor clauses in the FAR, or the DOD or NASA FAR
+# Supplement.  Contractor/manufacturer is Silicon Graphics, Inc.,
+# 2011 N. Shoreline Blvd. Mountain View, CA 94039-7311.
+# 
+# THE CONTENT OF THIS WORK CONTAINS CONFIDENTIAL AND PROPRIETARY
+# INFORMATION OF SILICON GRAPHICS, INC. ANY DUPLICATION, MODIFICATION,
+# DISTRIBUTION, OR DISCLOSURE IN ANY FORM, IN WHOLE, OR IN PART, IS STRICTLY
+# PROHIBITED WITHOUT THE PRIOR EXPRESS WRITTEN PERMISSION OF SILICON
+# GRAPHICS, INC.
+#
+# $Id: mkaf,v 2.5 1999/04/26 23:33:29 kenmcd Exp $
+
+# Some degree of paranoia here ...
+PATH=/usr/sbin:/usr/bsd:/sbin:/usr/bin:/bin:/usr/pcp/bin
+export PATH
+
+_usage()
+{
+    echo "Usage: mkaf [findopts] filename ..."
+}
+
+if [ $# -eq 0 ]
+then
+    _usage
+    exit 1
+fi
+
+tmp=/tmp/$$
+status=0
+trap "rm -f $tmp; exit \$status" 0 1 2 3 15
+findopts=""
+
+while [ $# -gt 0 ]
+do
+    case $1
+    in
+	-?)
+	    _usage
+	    exit 1
+	    ;;
+	-*)
+	    findopts="$findopts $1"
+	    ;;
+
+	*)
+	    type=`file $1 | sed -e 's/^[^ 	]*:[ 	]*//'`
+	    case "$type"
+	    in
+
+		directory)
+		    [ -z "$findopts" ] && findopts="-follow"
+		    echo >&2 "Searching \"find $1 \\( $findopts \\) ...\" \c"
+		    find $1 \( $findopts \) -type f -print \
+		    | xargs file \
+		    | sed -e 's/://' \
+		    | while read file type
+		    do
+			case "$type"
+			in
+			    "PCP archive"*)
+				echo $file >>$tmp
+				;;
+			esac
+		    done
+		    echo >&2 " done"
+		    ;;
+
+		"PCP archive"*)
+		    echo $1 >>$tmp
+		    ;;
+
+	    esac
+	    ;;
+
+    esac
+
+    shift
+done
+
+
+if [ ! -s $tmp ]
+then
+    echo >&2 "mkaf: Warning: no PCP archives found, so no folio created"
+    status=1
+    exit
+fi
+
+host=somehost
+[ -x /usr/bsd/hostname ] && host=`/usr/bsd/hostname`
+
+cat <<End-of-File
+PCPFolio
+Version: 1
+# use pmafm(1) to process this PCP archive folio
+#
+Created: on $host at `date`
+Creator: mkaf
+# 		Host			Basename
+#
+End-of-File
+
+sed <$tmp \
+    -e 's/\.[0-9][0-9]*$//' \
+    -e 's/\.meta$//' \
+    -e 's/\.index$//' \
+| sort -u \
+| while read base
+do
+    host=`pmdumplog -l $base 2>&1 | sed -n -e '/^Performance metrics/s/.* host //p'`
+    if [ -z "$host" ]
+    then
+	echo >&2 "mkaf: Warning: cannot extract hostname from archive \"$base\" ... skipped"
+    else
+	printf "%-15s %-23s %s\n" "Archive:" "$host" "$base"
+    fi
+done
+
+exit

@@ -1,0 +1,174 @@
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/cf/README sendmail-8.9.3.patch.usenet_relay/cf/README
+*** sendmail-8.9.3/cf/README	Wed Feb  3 14:06:38 1999
+--- sendmail-8.9.3.patch.usenet_relay/cf/README	Thu Sep  2 14:37:04 1999
+***************
+*** 342,347 ****
+--- 342,351 ----
+  domain file includes definitions for several internal distinguished
+  hosts:
+  
++ USENET_RELAY	The host that will accept USENET-addressed email.
++ 		If not defined, usenet addressed mail will be handled
++ 		by the usenet mailer as normal.
++ 		USENET-addressed email has the form newsgroup.USENET
+  UUCP_RELAY	The host that will accept UUCP-addressed email.
+  		If not defined, all UUCP sites must be directly
+  		connected.
+***************
+*** 864,869 ****
+--- 868,879 ----
+  		user@site for relaying.  This feature changes that
+  		behavior.  It should not be needed for most installations.
+  
++ mailnews
++ 		Turns on the ability to have mail to be forwarded to a
++ 		usenet newsgroup.   Mail addressed to groups specified in
++ 		the mailnews FEATURE will be translated to group.USENET and
++ 		either locally delivered (via USENET_MAILER) for forwared
++ 		(via USENET_RELAY)
+  
+  +-------+
+  | HACKS |
+***************
+*** 2214,2220 ****
+     K
+     L	Luser Relay
+     M	Masquerade (who I claim to be)
+!    N
+     O
+     P
+     Q
+--- 2224,2230 ----
+     K
+     L	Luser Relay
+     M	Masquerade (who I claim to be)
+!    N	Usenet Relay
+     O
+     P
+     Q
+***************
+*** 2244,2250 ****
+     K
+     L	addresses that should not be forwarded to $R
+     M	domains that should be mapped to $M
+!    N
+     O	operators that indicate network operations (cannot be in local names)
+     P	top level pseudo-domains: BITNET, DECNET, FAX, UUCP, etc.
+     Q
+--- 2254,2260 ----
+     K
+     L	addresses that should not be forwarded to $R
+     M	domains that should be mapped to $M
+!    N	newsgroups to automaticly forward to usenet
+     O	operators that indicate network operations (cannot be in local names)
+     P	top level pseudo-domains: BITNET, DECNET, FAX, UUCP, etc.
+     Q
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/cf/feature/mailnews.m4 sendmail-8.9.3.patch.usenet_relay/cf/feature/mailnews.m4
+*** sendmail-8.9.3/cf/feature/mailnews.m4
+--- sendmail-8.9.3.patch.usenet_relay/cf/feature/mailnews.m4	Wed Aug 25 17:43:36 1999
+***************
+*** 0 ****
+--- 1,22 ----
++ divert(-1)
++ #
++ # Copyright (c) 1998 Sendmail, Inc.  All rights reserved.
++ # Copyright (c) 1983 Eric P. Allman.  All rights reserved.
++ # Copyright (c) 1988, 1993
++ #	The Regents of the University of California.  All rights reserved.
++ #
++ # By using this file, you agree to the terms and conditions set
++ # forth in the LICENSE file which can be found at the top level of
++ # the sendmail distribution.
++ #
++ #
++ 
++ divert(0)
++ VERSIONID(`@(#)mailnews.m4	8.14 (Berkeley) 10/6/1998')
++ divert(-1)
++ 
++ ifdef(_ARG_, ifelse(index(_ARG_, `_NEWS_'), `-1', 
++ 		`define(`USENET_MAILNEWS', `_ARG_')', 
++ 		`define(`USENET_MAILNEWS_NEWS', 1)
++ 		 define(`USENET_MAILNEWS', 
++ 			substr(_ARG_, 0, index(_ARG_, `_NEWS_')))'))
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/cf/m4/proto.m4 sendmail-8.9.3.patch.usenet_relay/cf/m4/proto.m4
+*** sendmail-8.9.3/cf/m4/proto.m4	Tue Feb  2 15:21:30 1999
+--- sendmail-8.9.3.patch.usenet_relay/cf/m4/proto.m4	Thu Nov 18 16:16:36 1999
+***************
+*** 86,91 ****
+--- 86,102 ----
+  
+  CP.
+  
++ ifdef(`USENET_RELAY',
++ `# USENET relay host
++ DN`'USENET_RELAY
++ CPUSENET
++ 
++ ')dnl
++ ifdef(`USENET_MAILNEWS',
++ `# newsgroups that get mailed to USENET mailer
++ CN`'USENET_MAILNEWS
++ 
++ ')dnl
+  ifdef(`UUCP_RELAY',
+  `# UUCP relay host
+  DY`'UUCP_RELAY
+***************
+*** 774,781 ****
+--- 785,812 ----
+  `dnl')
+  
+  # short circuit local delivery so forwarded email works
++ ifdef(`USENET_MAILNEWS',
++ `# mailnews relay.  Allows mail to a newsgroup to be mapped to a USENET msg.'
++ ifdef(`USENET_MAILNEWS_NEWS',
++ `# mailing to news.group gets mapped to group.USENET. 
++ Rnews . $* < $* > $* 	$: _MAILNEWS_ $1 . USENET <$2> $3	remote newsgroup
++ Rnews . $*		$: _MAILNEWS_ $1 . USENET		local newsgroup',
++ 	`dnl')
++ `# mailing to these newsgroups gets mapped to USENET newsgroup
++ R$=N . $* < $* > $* 	$: _MAILNEWS_ $1 . $2 . USENET <$3> $4	remote subgroups
++ R$=N < $* > $* 		$: _MAILNEWS_ $1 . USENET <$2> $3	remote groups
++ R$=N . $*		$: _MAILNEWS_ $1 . $2 . USENET 		local subgroup
++ R$=N			$: _MAILNEWS_ $1 . USENET 		local group
++ # clean up mailnews
++ R$* . USENET . USENET $* 	$1 . USENET $2			Handle forwared msg
++ ifdef(`_MAILER_usenet_',`dnl',`dnl
++ R_MAILNEWS_ $* < @ $=w . > $*	$: _MAILNEWS_ $1 < @ $N > $3	send to relay')
++ R_MAILNEWS_ $*		$: $1					de-protect',
++ 	`dnl')
+  ifdef(`_MAILER_usenet_', `dnl
++ R$+ . USENET $@		$1 . USENET < @ $j . >		local delivery
+  R$+ . USENET < @ $=w . >	$#usenet $: $1		handle usenet specially', `dnl')
++ 
+  ifdef(`_STICKY_LOCAL_DOMAIN_',
+  `R$+ < @ $=w . >		$: < $H > $1 < @ $2 . >		first try hub
+  R< $+ > $+ < $+ >	$>95 < $1 > $2 < $3 >		yep ....
+***************
+*** 829,838 ****
+  `# forward other UUCP traffic straight to UUCP
+  R$* < @ $+ .UUCP. > $*		$#_UUCP_ $@ $2 $: $1 < @ $2 .UUCP. > $3	user@host.UUCP',
+  	`dnl')')
+! ifdef(`_MAILER_usenet_', `
+! # addresses sent to net.group.USENET will get forwarded to a newsgroup
+  R$+ . USENET		$#usenet $: $1',
+! 	`dnl')
+  
+  ifdef(`_LOCAL_RULES_',
+  `# figure out what should stay in our local mail system
+--- 860,873 ----
+  `# forward other UUCP traffic straight to UUCP
+  R$* < @ $+ .UUCP. > $*		$#_UUCP_ $@ $2 $: $1 < @ $2 .UUCP. > $3	user@host.UUCP',
+  	`dnl')')
+! 
+! ifdef(`USENET_RELAY',
+! `# forward non-local USENET traffic to our USENET relay
+! R$* . USENET		$: $>95 < $N > $1 . USENET <@ $N>	usenet mail',
+! `ifdef(`_MAILER_usenet_',
+! `# addresses sent to net.group.USENET will get forwarded to a newsgroup
+  R$+ . USENET		$#usenet $: $1',
+! 	`dnl')')
+  
+  ifdef(`_LOCAL_RULES_',
+  `# figure out what should stay in our local mail system

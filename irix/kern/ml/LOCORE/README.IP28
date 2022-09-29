@@ -1,0 +1,88 @@
+#if R10000_SPECULATION_WAR
+	/*
+	 * NOTE: This applies only to IP28 (aka pacecar currently).
+ 	 *
+	 * NOTE: Stores to $sp, $r0 (zero) and $gp (in C code) are
+	 *	 safe on IP28.  Also stores with the target dependent
+	 *	 in the basic block to an area that will not be DMAed
+	 *	 to (ie stack, or eframe) is safe, even if done
+	 *	 speculatively.
+	 *
+	 * Background on R10000 Cache Coherency and AUTO_CACHE_BARRIERS:
+	 *
+	 * HOT>	Code sections that may execute with SP not
+	 *	containing a valid kernel virtual address *must*
+	 *	be surrounded with AUTO_CACHE_BARRIERS_DISABLE and
+	 *	AUTO_CACHE_BARRIERS_ENABLE.
+	 *
+	 *	Why?
+	 *
+	 *	The R10000 can speculatively issue instructions
+	 *	past branches before knowing whether or not
+	 *	those branches will be taken. Its designers
+	 *	chose to assume a completely cache coherent
+	 *	system (ie. *all* accesses to a given cell of
+	 *	real memory are via a single physical address
+	 *	and all are cache coherent). This allowed them
+	 *	to make the optimization of issuing speculative
+	 *	cache misses, and indeed speculatively changing
+	 *	cache line states to dirty-exclusive in
+	 *	preperation for committing the data (which does
+	 *	not happen until the store is graduated, of
+	 *	course, since that would be an unrecoverable
+	 *	loss of external state).
+	 *
+	 *	The IP28 (pacecar) system places an R10000 into
+	 *	an older system architecture where all DMA is in
+	 *	fact not cache-coherent. This requires some
+	 *	special actions that would not normally be
+	 *	required on either earlier (non-speculative)
+	 *	processors or on later (completely coherent)
+	 *	system designs.
+	 *
+	 *	We already have code to write back dirty data to
+	 *	a buffer before DMA proceeds from that memory to
+	 *	a device, and to invalidate the cache (or at
+	 *	least the dirty lines) before DMA into memory...
+	 *
+	 *	R10000 plus non-coherent DMA now requres us to
+	 *	invalidate the buffer *after* DMA to memory has
+	 *	completed.
+	 *
+	 *	Furthermore, we must *prevent* speculative
+	 *	stores to any memory being modified by a non-
+	 *	cache-coherent access (generally IP28 DMA). THIS
+	 *	IS THE HARD PART: The compiler and assembler
+	 *	have been modified to automatically insert cache
+	 *	operations in appropriate code blocks, where we
+	 *	might issue a speculative store due to a mis-
+	 *	predicted branch at a "garbage" address.
+	 *
+	 *	HOWEVER- AND THIS IS THE HARD BIT- The assembler
+	 *	can't do this to "noreorder" blocks, and we
+	 *	can't let it do this anywhere the stack pointer
+	 *	is invalid. While the cache op does not use the
+	 *	address for anything, it does attempt to
+	 *	translate it, and if the cacheop graduates, the
+	 *	address must be valid.
+	 */
+#if MH_R10000_SPECULATION_WAR
+	/*
+	 * Notes on the Moosehead variation on the workaround
+	 *
+	 *	On Moosehead R10000, only the first 8 MB of memory
+	 *	will accept "coherent" block reads, but all of memory
+	 *	will accept "noncoherent" block reads.  By setting
+	 *	the $config.K0 field to "coherent", we limit K0SEG
+	 *	to accessing the first 8 MB of memory.  We then apply
+	 *	the Pacecar user-mode workaround (basically, invalidating
+	 *	PTEs for pages for which a DMA read is active) to kernel
+	 *	PTEs as well, which means that we do not need to insert
+	 *	cache barriers, except in a very few routines (mainly
+	 *	the routine which atomically invalidates a page and
+	 *	then invalidates its PTE).  MH_R10000_SPECULATION_WAR
+	 *	assumes that R10000_SPECULATION_WAR is enabled, and it
+	 *	then turns off the cache barrier parts of the latter.
+	 */
+#endif /* MH_R10000_SPECULATION_WAR */
+#endif /* R10000_SPECULATION_WAR */

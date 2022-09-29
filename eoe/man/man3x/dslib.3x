@@ -1,0 +1,344 @@
+.if \nX=0 .ds x} dslib 3X "Specialized Libraries" "\&"
+.TH \*(x}
+.SH NAME
+dslib: dsopen, dsclose \- communicate with generic SCSI devices
+.SH SYNOPSIS
+.nf
+\f3#include <dslib.h>
+.sp .8v
+struct dsreq *dsopen(opath, oflags)
+.sp .8v
+dsclose(dsp)
+.sp .8v
+ds_showcmd(dsp)
+.sp .8v
+testunitready00(dsp)
+requestsense03(dsp, data, datalen, vu)
+read08(dsp, data, datalen, lba, vu)
+write0a(dsp, data, datalen, lba, vu)
+inquiry12(dsp, data, datalen, vu)
+modeselect15(dsp, data, datalen, save, vu)
+reserveunit16(dsp, data, datalen, tpr, tpdid, extent, resid, vu)
+releaseunit17(dsp, tpr, tpdid, extent, resid, vu)
+modesense1a(dsp, data, datalen, pagectrl, pagecode, vu)
+senddiagnostic1d(dsp, data, datalen, self, dofl, uofl, vu)
+.sp .8v
+readcapacity25(dsp, data, datalen, lba, pmi, vu)
+readextended28(dsp, data, datalen, lba, vu)
+writeextended2a(dsp, data, datalen, lba, vu)
+.sp .8v
+getfd(dsp)
+doscsireq(fd, dsp)
+void fillg0cmd(dsp, cmdbuf, b0, ..., b5)
+void fillg1cmd(dsp, cmdbuf, b0, ..., b9)
+void filldsreq(dsp, data, datalen, flags)
+void vtostr(value, table)
+.sp .8v
+extern int dsdebug;
+extern int ds_default_timeout;
+extern long dsreqflags;
+DSDBG(statement; ...)
+.sp .8v
+struct dsreq *dsp;
+struct vtab *table;
+char *opath, *cmdbuf, *data;
+char b0, ..., b9, dofl, extent, pagecode, pagectrl, pmi, resid,
+	save, self, tpdid, tpr, uofl, vu;
+int fd, oflags;
+long datalen, lba, value;\f1
+.fi
+.SH DESCRIPTION
+These routines form the basis for a simplified interface to
+.IR ds (7M)
+devices.
+They are included in a program by compiling with the
+.B \-lds
+option.
+An application would typically use
+.IR dsopen ,
+.IR dsclose ,
+and a set of command-specific routines such as
+.IR testunitready00 .
+The source to this library can be obtained by loading the
+.I irix_dev.gifts.scsi
+subsystem, with the source code for the library in the files
+.I dstab.c
+and
+.I dslib.c
+in the directory
+.IR /usr/share/src/irix/examples/scsi .
+There are also several sample programs using the dslib library
+in the same directory.
+.LP
+The number of truly general SCSI commands is quite limited, so provision
+is made for supporting vendor-specific commands.
+This is normally done
+by using one of the existing routines as a template, and creating a
+new routine of your own, such as
+.I fillg5cmd
+if you needed to support Group 5 (12 byte) commands.
+It is expected
+that most non-trivial uses of the library will involve creating
+or modifying existing routines.
+As of release 4.0 of IRIX, any
+SCSI command length from 1 to 12 bytes is supported by the underlying
+kernel drivers, providing the ds_cmdlen field is set correctly.
+.LP
+A set of helper routines
+.RI ( fillg0cmd
+and so on) are used as the basis for creating your own routines.
+The utility function
+.IR ds_showcmd ( dsp )
+can be used to show information about the most recently executed
+command, in cases where the use of
+.I dsdebug
+is too verbose.
+.IR testunitready00 ,
+for instance, is implemented as:
+.Ex
+.ta 2 +2 +2 +2 +2 +2 +2 +2
+testunitready00(dsp)
+struct dsreq *dsp;
+{
+	fillg0cmd(dsp, CMDBUF(dsp), G0_TEST, 0, 0, 0, 0, 0);
+	filldsreq(dsp, 0, 0, DSRQ_READ|DSRQ_SENSE);
+	return(doscsireq(getfd(dsp), dsp));
+}
+.Ee
+Note that many of these routines depend upon the exact setup of the
+.I dsreq
+structure used by
+.IR dsopen .
+It is therefore
+.I not
+recommended that users attempt to use independently derived
+.I dsreq
+structures with them.
+.LP
+.I dsopen
+passes
+.I opath
+and
+.I oflags
+to the
+.I open
+system call.
+If the
+.I open
+succeeds,
+.I dsopen
+allocates and fills a
+.I dsreq
+structure, along with some associated context information.
+.I dsclose
+deallocates the specified
+.I dsreq
+structure, then calls
+.I close
+to close the device.
+.LP
+.I fillg0cmd
+and
+.I fillg1cmd
+are used to fill Group 0 and 1 command buffers, respectively.
+.I filldsreq
+fills a
+.I dsreq
+structure with commonly needed data.
+The value of dsreqflags is ORed into the
+.I ds_flags
+field.
+This is useful if you want a flag (such as DSRQ_SENSE)
+set for some or all commands, as it allows you to avoid duplicating the
+library routines when you need a special flag set.  It also sets the
+default timeout (for functions that do not explictly set
+a timeout).  The timeout is set from the global variable
+.IR ds_default_timeout ,
+and that variable is initialized to 10 seconds.  It may be changed
+for applications that want longer default timeouts.  Individual
+functions may still need to set longer (or shorter) timeouts, after
+calling
+.IR filldsreq .
+.I doscsireq
+issues the SCSI
+.IR ioctl ,
+performs a variety of error-handling functions,
+and returns the SCSI status byte.
+Also of interest on return
+is the ds_ret field, which is 0 on successful returns, and on
+failures indicates what type of error occurred (the DSRT_* values in
+.IR <sys/dsreq.h> .
+.PP
+.I ds_vtostr
+Takes a value, and a table to look it up in.
+If the value is found
+in the given table, a string describing the value is returned, else
+the empty string.
+Five tables are provided:
+.PP
+.PD 0
+.TP 15
+.I dsrqnametab
+for the DSRQ_* flags
+.TP
+.I dsrtnametab
+for the DSRT_* flags
+.TP
+.I cmdstatustab
+for the SCSI status byte return in ds_status
+.TP
+.I msgnametab
+for the SCSI message bytes
+.TP
+.I cmdnametab
+for the SCSI commands, such as Testunitready (value is the command byte;
+G0_TEST in this case)
+.PD
+.PP
+The
+.I dsdebug
+variable, and the
+.IR DSDBG ()
+macro can be used to enable debug
+.IR printf s,
+and to add your own.
+If the
+.I dsdebug
+variable is non-zero, debugging information is printed by the library
+routines.
+The
+.I DSDBG
+macro is used for this purpose.
+A more or less arbitrary
+sequence of statements can be used within the parentheses
+of the
+.I DSDBG
+macro, but some form of print statement is most
+frequently used.
+.LP
+Overlay structures define the layouts of the three (Group 0, 1, 6)
+Common Command Set command buffers.
+Bytes are named both by position (g0_b0) and by typical
+function in the command buffer (g1_op_code).
+.LP
+Mnemonic names are also defined for all CCS command codes (G0_TEST),
+message bytes (MSG_ABORT), and status bytes (STA_BUSY).
+There are also a number of macros suitable for accessing
+.I dsreq
+structures, SCSI byte and bit fields, etc.
+.LP
+A set of structures contains values, name strings, and
+descriptions for commonly used codes and values.
+The structures document DSRQ_* and DSRT_* codes,
+CCS command codes, and CCS status and message bytes.
+They are principally useful in generating explicit error messages.
+.SH
+EXAMPLE PROGRAM
+.LP
+The following code fragment illustrates simple use of the library,
+and of some
+.I /dev/scsi
+support macros.
+If you have installed the
+.I 4Dgifts.src.full
+image,
+the full source code for this program can be found in the file
+.IR /usr/people/4Dgifts/examples/devices/devscsi/inquire.c ,
+.Ex
+.ta 2 +2 +2 +2 +2 +2 +2 +2
+.\" This should be kept in sync with the file mentioned above
+while (--argc > 0) {
+	fn = *++argv;
+	printf("%-17s  ", fn);
+	if ((dsp = dsopen(fn, O_RDONLY)) == NULL) {
+		fflush(stdout);
+		perror("cannot open");
+		continue;
+	}
+.sp .8v
+	if(inquiry12(dsp, inqbuf, sizeof inqbuf, 0) != 0)
+		printf("%-10s inquiry failure\n", "---");
+	else {
+		pdt = DATABUF(dsp)[0] & 0x7F;
+		if (DATASENT(dsp) >= 1)
+			printf("%-10s", pdt_types[(pdt<NPDT) ? pdt : NPDT-1]);
+		if (DATASENT(dsp) >= 16) printf("  %-12.8s", &DATABUF(dsp)[8]);
+		if (DATASENT(dsp) >= 32) printf("  %.16s",   &DATABUF(dsp)[16]);
+		if (DATASENT(dsp) >= 36) printf("  %.4s",    &DATABUF(dsp)[32]);
+		/*	do test unit ready only if inquiry successful, since many
+			devices, such as tapes, return inquiry info, even if
+			not ready (i.e., no tape in a tape drive). */
+		if(testunitready00(dsp) != 0) {
+			printf("  %s\n",
+				(RET(dsp)==DSRT_NOSEL) ? "cannot select" : "not ready");
+		}
+		else
+			printf("  ready\n");
+	}
+	dsclose(dsp);
+}
+.Ee
+Each device is opened, and the necessary data structures created.
+An inquiry is done to see if the device exists; if so, it's type
+is printed.
+A test unit ready is done to see if the device is
+ready for I/O.
+Finally, the device is closed, releasing the data structures.
+The normal output is of the form:
+.Ex
+/dev/scsi/sc0d2l0   Tape     ARCHIVE       VIPER 150  21247  -605  not ready
+.Ee
+.SH DIAGNOSTICS
+.I dsopen
+returns a
+.B NULL
+pointer on failure.
+.I doscsireq
+returns -1 on absolute failure, and the status byte otherwise.
+A status byte of 0xff indicates an invalid status byte because
+the scsi command didn't complete.
+The RET(dsp) macro returns
+a result code, which can be consulted for any error or 'unusual'
+status from the driver; a value of 0 indicates a normal return.
+.SH NOTE
+A common failure occurs when the byte count passed to the dslib
+routines doesn't match the byte count implied by the values in
+the SCSI command descriptor (as filled by
+.I fillg0cmd
+and so on).
+This is particularly common with
+.IR read08 , write0a , readextended28 ,
+and
+.IR writeextended2a .
+This is because these commands occur in a number of device
+specific forms.
+If you get console error messages similar to
+.Ex
+SCSI Bus=# ID=# LUN=#: Too much data (probable SCSI bus cabling problem)
+.Ee
+then you are probably seeing this kind of mismatch.
+See the comments in the
+.I dslib.c
+source file
+for more information.
+.LP
+As of IRIX 5.1, this library and the underlying driver are supported
+on all Silicon Graphics SCSI adapters (wd93, wd95, and jag) for
+all controllers that are installed.
+Prior to that release, it was
+supported only on the wd93 controller.
+.LP
+As of IRIX 5.1, devices can be open via both the
+.I ds
+and other high level drivers at the same time (except for
+.IR tpsc ).
+Only one program can have any
+.I ds
+device open at a time, however.
+.SH FILES
+/dev/scsi/*
+.SH "SEE ALSO"
+hinv(1M),
+ds(7M).
+.PP
+IRIX Device Driver Programmer's Guide

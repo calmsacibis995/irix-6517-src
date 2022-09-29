@@ -1,0 +1,257 @@
+.TH alenlist_ops D3X
+.SH NAME
+\f4 alenlist_ops:\f1
+alenlist_append,
+alenlist_clear,
+alenlist_create,
+alenlist_cursor_create,
+alenlist_cursor_destroy,
+alenlist_cursor_init,
+alenlist_cursor_offset,
+alenlist_destroy,
+alenlist_get,
+kvaddr_to_alenlist,
+uvaddr_to_alenlist,
+buf_to_alenlist \- operations on address/length lists
+.SH SYNOPSIS
+.nf
+.ft 3
+#include <sys/types.h>
+#include <sys/alenlist.h>
+#include <sys/ddi.h>
+.sp .8v
+alenlist_t
+alenlist_create(unsigned \f2flags\fP);
+.sp .8v
+void
+alenlist_clear(alenlist_t \f2plist\fP);
+.sp .8v
+void
+alenlist_destroy(alenlist_t \f2plist\fP);
+.sp .8v
+alenlist_cursor_t
+alenlist_cursor_create(alenlist_t \f2plist\fP, unsigned \f2flags\fP);
+.sp .8v
+void
+alenlist_cursor_destroy(alenlist_cursor_t \f2ocursor\fP);
+.sp .8v
+int
+alenlist_get(alenlist_t \f2plist\fP,
+		alenlist_cursor_t \f2icursor\fP,
+		size_t \f2maxlength\fP,
+		alenaddr_t *\f2paddr\fP,
+		size_t *\f2plength\fP,
+		unsigned \f2flags\fP);
+.sp .8v
+int
+alenlist_cursor_init(alenlist_t \f2plist\fP,
+		size_t \f2offset\fP,
+		alenlist_cursor_t \f2icursor\fP);
+.sp .8v
+size_t
+alenlist_cursor_offset(alenlist_t \f2plist\fP, alenlist_cursor_t \f2icursor\fP);
+.sp .8v
+int
+alenlist_append(alenlist_t \f2plist\fP,
+		alenaddr_t \f2address\fP,
+		size_t \f2length\fP,
+		unsigned \f2flags\fP);
+.sp .8v
+alenlist_t
+kvaddr_to_alenlist(alenlist_t \f2plist\fP,
+		caddr_t \f2kvaddr\fP,
+		size_t \f2length\fP,
+		unsigned \f2flags\fP);
+.sp .8v
+alenlist_t
+uvaddr_to_alenlist(	alenlist_t \f2plist\fP,
+		uvaddr_t \f2uvaddr\fP,
+		size_t \f2length\fP,
+		unsigned \f2flags\fP);
+.sp .8v
+alenlist_t
+buf_to_alenlist(alenlist_t \f2plist\fP,
+		struct buf *\f2buf\fP,
+		unsigned \f2flags\fP);
+.ft 1
+.fi
+.SS Arguments
+.IP "\f2address\fP" 12n
+An address in some address space.
+.IP "\f2buf\fP" 12n
+Address of a buf struct.
+.IP "\f2flags\fP" 12n
+A Boolean combination of the flags declared in sys/alenlist.h.
+.IP "\f2icursor\fP" 12n
+A handle to an existing cursor,
+or NULL to indicate the implicit cursor in
+.IR plist .
+.IP "\f2kvaddr\fP" 12n
+A valid address in kernel virtual memory.
+.IP "\f2length\fP" 12n
+The length related to an address.
+.IP "\f2maxlength\fP" 12n
+The maximum length allowed in the returned address/length pair,
+or 0 to indicate no maximum applies.
+.IP "\f2ocursor\fP" 12n
+A handle to an existing cursor, the target of the operation.
+.IP "\f2offset\fP" 12n
+An initial byte offset for
+.IR icursor ,
+usually 0.
+.IP "\f2paddr\fP" 12n
+A pointer to a variable to receive the address from an address/length pair.
+.IP "\f2plength\fP" 12n
+A pointer to a variable to receive the length from an address/length pair.
+.IP "\f2plist\fP" 12n
+A handle to an existing alenlist.
+.IP "\f2uvaddr\fP" 12n
+A valid address in user virtual memory for the in-context process.
+.SH DESCRIPTION
+For an overview of address/length lists (alenlists) see
+.IR alenlist (D4X).
+.SS "Allocation and Release"
+Create an empty list using
+.IR alenlist_create ().
+The AL_NOSLEEP flag ensures that the caller will not sleep
+waiting for memory.
+If memory cannot be allocated, NULL is returned.
+The returned list has no pairs in it, and its implicit cursor
+is initialized to point to the start of the (empty) list.
+.P
+The functions
+.IR kvaddr_to_alenlist (),
+.IR uvaddr_to_alenlist (),
+and
+.IR buf_to_alenlist (),
+when the
+.I plist
+argument is NULL,
+allocate a new alenlist and return it.
+However, these functions do not honor AL_NOSLEEP,
+either when creating a list or when getting memory to
+extend an existing list.
+If it is important not to sleep, preallocate the list.
+.P
+Empty a list by applying
+.IR alenlist_clear ().
+The implicit cursor is reset to the start of the (empty) list.
+.P
+Release a list using
+.IR alenlist_destroy ().
+This lets the system know that the specified List is no longer in use.
+.P
+Create a cursor by calling
+.IR alenlist_cursor_create ().
+Pass AL_NOSLEEP to avoid sleeping on memory allocation.
+When a cursor cannot be created, NULL is returned.
+The new cursor is associated with
+.I plist
+and is initialized to point to the head of that list.
+More than one cursor can point to a given list.
+.P
+Use
+.IR alenlist_cursor_destroy ()
+to tell the system the cursor is no longer needed.
+The cursor must not be used after this call is made.
+.SS "Reading a List"
+Use the
+.IR alenlist_get ()
+function to retrieve pairs from the list.
+An address/length pair from
+.I plist
+is stored based on
+.I paddr
+and
+.IR plength .
+The pair to retrieve is established by a cursor, either
+.I icursor
+or the implicit cursor in
+.I plist
+when
+.I icursor
+is NULL.
+The cursor used is updated by the length returned,
+provided the AL_LEAVE_CURSOR flag is not used.
+.P
+It is not necessary to read out exactly the pairs that were
+added to the list.
+When
+.I maxlength
+is nonzero, it establishes the maximum length retrieved.
+When
+.I maxlength
+is also an integral power of 2,
+the returned length is further constrained so that the returned
+address and length do not cross a
+.I maxlength
+boundary.
+For example, when
+.I maxlength
+is 512, the address/length values returned are such that the
+next pair returned will begin on a 512-boundary.
+.P
+Returns ALENLIST_SUCCESS or ALENLIST_FAILURE.
+The normal cause for failure is that the list is exhausted.
+.P
+Call
+.IR alenlist_cursor_init ()
+to initialize a cursor to a specified
+.I offset
+(usually 0).
+If
+.I cursorp
+is NULL,
+the implicit internal cursor of
+.I plist
+is initialized.
+.P
+To retrieve the current byte offset of a cursor, call
+.IR alenlist_cursor_offset ().
+When
+.I icursor
+is NULL, the offset of the implicit cursor in
+.I plist
+is returned.
+.SS "Loading a List"
+The basic operation to add an address/length pair to a list is
+.IR alenlist_append ().
+The list is expanded if necessary.
+Use the AL_NOSLEEP flag to prevent sleeping on memory allocation
+that might be necessary to resize the list.
+Use AL_NOCOMPACT to prevent the added pair from being merged into
+a logically-adjacent preceding pair.
+Returns ALENLIST_SUCCESS or ALENLIST_FAILURE.
+.P
+To build an alenlist that describes a buffer in kernel virtual memory, call
+.IR kvaddr_to_alenlist ().
+The specified kernel virtual address
+is converted into a list of physical address/length pairs and
+the pairs are appended to an alenlist.
+A handle to the alenlist is returned.
+When
+.I plist
+is NULL, a new list is created, and this list is returned.
+.P
+To build an alenlist that describes a buffer in user virtual memory, call
+.IR uvaddr_to_alenlist ().
+The specified user virtual address for the specified length
+is converted into a list of physical address/length pairs and
+the pairs are appended to an alenlist.
+A handle to the alenlist is returned.
+When
+.I plist
+is NULL, a new list is created, and this list is returned.
+.P
+To build an alenlist that describes a buffer mapped by a buf structure, call
+.IR buf_to_alenlist ().
+The memory described by the buf
+is converted into a list of physical address/length pairs and
+the pairs are appended to an alenlist.
+A handle to the alenlist is returned.
+When
+.I plist
+is NULL, a new list is created, and this list is returned.
+.SH SEE ALSO
+alenlist(D4X),
+IRIX Device Driver Programmer's Guide

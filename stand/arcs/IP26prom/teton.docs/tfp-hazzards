@@ -1,0 +1,297 @@
+
+Here's a chart which attempts to describe our requirements for
+adding ssnops to assembly language code.  The whole purpose of 
+adding ssnops is to keep certain instructions from going down
+the pipe together, or within some number of cycles of each other.
+In many cases it may be possible for you to do this with no ssnops
+at all,  by using integer instructions that you want to execute anyway
+as  padding instead of ssnops.
+
+For example, in your code above where you have a jal followed by an
+xori followed by a dmtc0, the xori will go down the pipe with the jal,
+so the dmtc0 will forced to go down once cycle later.  Thus, you don't
+need any ssnops at all.  I can sit down with you and look at your code 
+if you really want to optimize it,
+
+The chart below tells how to use ssnops to force the software interlocks
+required by many of our tlb, dmtc0, dmfc0 ops.
+   
+Here's how to read this chart.  Suppose you want to have a
+dmfc0 followed by a  jal and you want to know how man ssnops to put
+between them.  Look for the dmfc0 in column 0, 
+then look across that row for the jal.  Then look below the
+jal for the number of ssnops that you should put between them.
+
+Just for your info, in the chart below '1 ssnop' corresponds to a 1
+cycle delay between the two instructions.  By this I mean that if
+instruction 'a 'is in the E stage at cycle 1000 and instruction 'b' is
+in the E stage at cycle 1001, there is a 1 cycle delay.  If 'b' is in
+the E stage at cycle 1002, there is a 2 cycle delay.  If 'a' and
+'b' are in the E stage at the same time, there is a 0 cycle delay.
+
+
+
+
+col 0      
+---------------------------------------------------------------------
+dmfc0            dmfc0      dmtc0     jal       jalr     
+                 1 ssnop    1 ssnop   1 ssnop   1 ssnop  
+
+
+dmtc0            dmfc0      dmtc0     jal       jalr    
+                 2 ssnop    1ssnop    2 ssnop   2 ssnop 
+
+dmtc0 vaddr |    tlb_op
+      status|    2 ssnop
+      tlbset|
+      enhi  |
+      enlo
+
+dmtc0 SR to      any_op
+enable/disable   4 ssnops before new mask takes effect
+interrupts
+
+dmtc0 SR to      fp_op
+enable/disable   4 ssnops before new mask takes effect
+FP debug mode
+
+tlb_op           mem_op
+                 3 ssnop
+            
+tlbp             dmfc0 tlbset  
+                 4 ssnops (?)     
+
+tlbr             dmfc0 ENLO|ENHI
+                 4 ssnops (?)
+
+dctr             dmfc0 DCACHE
+                 3 ssnops (?)
+
+jal/jalr         dmfc0      dmtc0
+                 1 nop      1 nop
+
+
+
+
+There are probably cases I have left out here and we may need some
+revisions to get this right once and for all.
+
+I was surprised myself to see the 4 ssnops required for reading from
+tlbset after a tlbp.  I looked at my notes on how tlbp gets executed
+to figure this out, and I think it is right, but I'm not sure I have
+*ever* done this in my own code.  Joe Scanlon - comments?
+
+Note that if you ever jump to an instruction you must still abide by
+these conventions, and if your target is predicted, it may get
+executed in the same cycle as the jump.  So, if you have a tlbp, 
+followed by a jal, followed by a dmfc0 tlbset, there may or may not
+be 4 cycles in between the tlbp and the dmfc0 tlbset, depending on
+whether your branch was predicted or not.  Not a good thing to depend
+on (in my experience... ).
+
+Let me know if you want some help optimizing the OS code.
+
+ - Margie
+
+
+Warts (i.e. TFP Hazards)
+------------------------
+
+
+    Pipe:       |   |   |   |   |     |   |
+    	    	| F | D | A | E | W/G | H |
+    	    	|   |   |   |   |     |   |
+
+    The MiscBus
+    -----------
+    The MiscBus is a bus which roams around the processor, and is used for transferring
+    data in various cases where we don't have dedicated buses.  These include JAL, MFC0,
+    MTC0.  This shared use has lead to some hazards.
+
+    - <E> mfc0 / <E> mfc0
+    - <W> mtc0 / <W> mtc0
+    - <E> jal  / <E> jal
+      Each of these instructions uses the MiscBus.  This is a single resource though, and
+    it is not controlled by scoreboarding.  A hazard occurs if two of any of these
+    instructions occurs in the same pipe stage (eg. 2 mfc0's, 2 mtc0's, 2 jal's).
+      ==> Only one mfc0 must occur in a cycle.
+      	    	   Only one mtc0 must occur in a cycle.
+      	    	   Only one jal  must occur in a cycle.
+
+    - <E> mfc0 / <W> mtc0
+      MoveFrom and MoveTo coprocessor 0 both use the MiscBus to transfer data between
+    the gpr and the coprocessor 0 registers.  However, they use the bus in different 
+    cycles of the pipeline.  Mfc0 uses the MiscBus in the E-stage, while Mtc0 uses the
+    MiscBus in the W-stage.  
+      ==> A mfc0 must not occur in the cycle following a mtc0.
+    
+    - <E> mfc0 / <E> jal
+      A Jal uses the MiscBus to pass the pc from the ibox to the ebox to store it into
+    r31 of the gpr.  Jal uses the MiscBus in the E-stage, as does a mfc0.  Therefor,
+    a hazard exists if jal and mfc0 attempt to execute in the same cycle.  
+      ==> A jal and a mfc0 must not occur in the same cycle.
+
+    - <W> mtc0 / <E> jal
+    A Jal uses the MiscBus to pass the pc from the ibox to the ebox to store it into
+    r31 of the gpr.  Jal uses the MiscBus in the E-stage.  Mtc0 uses the MiscBus in the
+    W-stage. Therefor, a hazard exists if jal and mfc0 attempt to execute in the same cycle.
+      ==> A jal must not occur in the cycle following a mtc0.
+
+
+    The Address Generation Pipe
+    ===========================
+    The IU has two address generation pipelines that are used for all loads and stores.
+    These instructions flow down the pipe stages A-E-W.  Cop0mem instructions are those
+    coprocessor 0 instructions that use the memory pipe, as opposed to using the integer
+    pipe.  Cop0mem instructions use the memory pipe, but do not do so with the same
+    flow as loads/stores.  This hazard is now detected in the hardware, but not in
+    scoreboarding, but as an abort condition later in the pipe.  So, although it is 
+    detected and operation will be correct, a pipeline flush will occur, so it is best
+    avoided.
+
+    - <W> cop0mem / <A> mem
+      Cop0mem instructions use the address pipe two cycles later than a normal load/store
+    mem op.  So, if a mem op follows a cop0mem op by two cycles in the pipe, the normal
+    mem op will be killed in it's E-stage, the pipe will be flushed, and the mem op will be 
+    restarted.
+
+
+    Cop0Mem Instructions and the Registers they use
+    ===============================================
+    .Vaddr.   Vaddr is used in addressing for cop0mem instructions.  When a cop0mem
+    	      instruction is in the E-stage, the Vaddr is forced back into the memory
+    	      pipe in the D-stage.  If doing a mtc0 vaddr and expecting the new value
+    	      of vaddr to index the tlb/dcache, the mtc0 has a latency of 2:
+
+    	    	    	ssnop
+    	    	    	mtc0 vaddr \ these 2 instructions go together
+    	    	    	ssnop	   / 
+    	    	    	ssnop	   - goes alone
+    	    	    	tlbr       - 2 cycles after mtc0.
+
+    .Status.  Status register has no effect on DCTR/DCTW.
+
+    	      The KPS/UPS fields of the Status Register may affect addressing of the 
+    	      TLB for TLBR/TLBW/TLBP.  If the region of the address in Vaddr points to
+    	      kernel physical (KP) space, the Status Register page size fields have no
+    	      effect on the indexing of the TLB.  
+
+    	      If the region of the address in Vaddr points to a virtual address space, 
+    	      then the KPS/UPS is used to choose the lower 7-bits of 
+    	      the virtual page.  The mtc0 sr has a latency of 1 to the tlbr/tlbw/tlbp.
+
+    	    	    	ssnop
+    	    	    	mtc0 sr    \ these 2 instructions go together
+    	    	    	ssnop	   / 
+    	    	    	tlbr       - 1 cycles after mtc0.
+
+    .TLBSet.  TLBSet is used to determine the write-enables to the TLB when the TLBW
+    	      is in the W-stage.  Mtc0 tlbset has a latency of 1 to a tlbw.  Tlbset
+    	      has a latency of 0 to a tlbr.
+
+    	    	    	ssnop
+    	    	    	mtc0 tlbset
+    	    	    	ssnop
+    	    	    	tlbw
+
+    	    	    	ssnop
+    	    	    	mtc0 tlbset
+    	    	    	tlbr
+    	      
+
+    .EntryHi. EntryHi serves as a data register for TLBW to write the TLB.  TLBW picks
+              up the data from EntryHi when the TLBR is in the H-stage.  A mtc0 writes
+    	      to EntryHi at the end of the W-stage.  Since the TLBW picks up the value
+    	      from EntryHi so late in the pipe, the mtc0 is 0 latency wrt the TLBW.
+    	      The mtc0 EntryHi can come down the pipe in the same cycle with the TLBW,
+    	      and the TLBW will get the new data.
+
+    	      EntryHi also may affect the index into the TLB for tlbr/tlbw/tlbp.  If the
+    	      address in Vaddr is to Kernel Global (KV1) space, then the asid in EntryHi
+    	      does not affect the indexing.  Otherwise, the asid is xor'd with the least
+    	      significant 7-bits of the virtual page # to index into the tlb.  So, for 
+    	      this reason, the mtc0 needs to occur one cycle before the tlbw/tlbr/tlbp
+    	      in the pipe.  The mtc0 has a latency of 1 wrt the tlbw/tlbr/tlbp:
+
+    	    	    	ssnop
+    	    	    	mtc0 EntryHi \ these 2 instructions go together
+    	    	    	ssnop	     / 
+    	    	    	tlbr         - 1 cycles after mtc0.
+
+
+    	      TLBR loads EntryHi/EntryLo late in the pipeline.  TLBR has a latency of
+    	      3 to a mfc0.  The mfc0 EntryHi/EntryLo must come 3 cycles after the TLBR.
+    	      The following sequence will get the new data placed in EntryHi/EntryLo from
+    	      a TLBR:	tlbr
+    	    	    	ssnop
+    	    	    	ssnop
+    	    	    	ssnop
+    	    	    	mfc0 EntryHi
+
+
+    - <H> dctr   / <W> mtc0 dcache
+    - <H> tlbr   / <W> mtc0 entryhi,entrylo
+    - <H> tlbprb / <W> mtc0 tlbset
+      There is no scoreboarding between two writes to the same register, such as between
+      tlbr and mtc0 entryhi, which both target entryhi.  If a mtc0 entryhi/entrylo is in
+      the next cycle after a tlbr, the result of the mtc0 will be put into entryhi/entrylo.
+
+
+    Vaddr Mux
+    =========
+    - <W> mtc0 vaddr / <E> cop0mem
+      A mtc0 vaddr and a cop0mem require a mux in the pipeline which is a single resource.
+      If a cop0mem executes in the cycle after a cop0mem, there will be a collision for
+      this resource. 
+      ==> A mtc0 vaddr must not occur in the cycle following a cop0mem instruction.
+      
+
+    Don't Know What to Call It
+    ==========================
+    - <W> mtc0 vaddr / <W> Istore that got <W> killed.
+      A tricky mechanism had to be invented to get around a timing problem with cancelling
+      integer stores.  This mechanism recirculates the store address back through the
+      address pipe to invalidate the store data in the dcache while the pipe is being
+      flushed.  This requires the use of the same mux mentioned in the previous example,
+      so that it would collide with a mtc0 vaddr which was executing in the same cycle.
+      ==> To avoid this problem, don't put a Istore in the same cycle with a mtc0 vaddr.
+
+
+
+    Address Translation and Control Registers
+    =========================================
+    This section will describe the latency of instructions which affect address translation.
+
+    * TLBW: As described earlier, the tlbw instruction uses the memory pipe in a different
+    	    fashion than loads and stores.  While these standard memory ops access the tlb
+    	    in the E-stage, the tlbw does not access the tlb until two cycles later, in the
+    	    H-stage.  At the end of the H-stage, the tlb will be written with a new value,
+    	    which can be used for translation.  Thus, a memory op can come 3 cycles behind
+    	    a tlbw and get the new translation.  So, the actual latency of a tlbw is 
+    	    3 cycles.
+
+    	    However, the effective latency of the tlbw can be 0 at the end of an exception
+    	    handler. If the tlbw is at the end of an exception handler, so there is an eret coming, 
+    	    the eret will cause a pipe flush, which will create a bubble in the pipeline
+    	    of 3 cycles.  So, if you are at the end of the fast tlb exception handler, and
+    	    do a tlbw to put a translation into the tlb, and then eret to go back to the 
+    	    instruction that caused the tlb miss, no ssnops are needed to get the required
+    	    3 cycles following the tlbw and before the use of the translation.
+
+    * MTC0 SR (UPS/KPS fields):
+    	    Latency of 3.  Three cycles after a mtc0 sr, new values in the KPS and UPS fields
+    	    will affect address translation. (Mtc0 takes effect at end of W-stage, page size
+    	    is used in A-stage to set-up tlb controls).
+
+    * MTC0 EntryHi (Asid)
+    	    Latency of 3.  Three cycles after a mtc0 entryhi, the new value in the asid field
+    	    will affect the hashing into the tlb. (Mtc0 takes effect at end of W-stage, asid
+    	    size is used in A-stage to hash tlb-index into pre-decoder).
+
+    * 
+    	    
+    	    
+    	    
+    
+    
+

@@ -1,0 +1,1997 @@
+'\"!tbl|mmdoc
+'\"macro stdmacro
+.TH refcnt 5
+.SH NAME
+\f3Memory Reference Counters\f1 \- Analysis of memory access patterns
+
+.SH DESCRIPTION
+The Origin hardware and Cellular Irix provide memory reference counters to
+assist application programmers in tuning their algorithms
+for optimal performance on a NUMA system. These counters are capable
+of unveiling the exact memory reference patterns exhibited by an
+application or a specific algorithm, enabling the programmer to
+optimize the application data layout and to provide specific 
+memory placement hints to the Operating System in order to 
+maximize cache utilization and locality of memory access, therefore achieving
+best memory access performance.
+
+.SH IMPLEMENTATION
+.SS Hardware Reference Counters
+Origin 2000 and Origin 200 systems provide a set of counters for
+every 4 KB hardware page of memory. The number of counters per set
+depends on the number of nodes in the system: for systems with less
+than 64 nodes (that is 128 processors) a counter set has one counter
+per node, and for systems with more than 64 nodes a counter set has 
+one counter for every 8 nodes. 
+For systems with 64 or less nodes, each counter in a counter set
+counts the numbers of references from each of the nodes. Thus, the 
+application programmer can tell exactly how many references have been
+issued to a page from each node in the system. For systems with more than
+64 nodes, each counter in a  counter set corresponds to the number of references
+to a page issued by a group of 8 nodes.
+.PP
+Note that a \f3hardware page\fP is not equivalent to a \f3base software page\fP 
+(or just \f3page\fP). A \f3hardware page\fP defines the granularity at with
+the hardware does reference counting and other hardware operations; a base software
+page is the smallest unit of memory that can be mapped by user processes
+via the Translation Look-aside Buffer or the Page Tables. For Origin 2000
+and Origin 200 systems a hardware page, and therefore the memory reference
+counting granularity, is 4 KB; and a base sofware page is 16KB. 
+.PP
+For example, consider an 8 node (16 cpu) Origin 2000 system with the
+memory configuration shown in the table below. This table shows
+the number of hardware pages (equivalent to the number of counter sets),
+the number of total counters, and the number of base software pages per node.
+For this configuration of 8 nodes, each counter set has 8 counters (one per node).
+.bp
+.Ex
+.TS
+center;
+c s s s s s s
+c c c c c c c
+^ ^ ^ c c c c
+^ ^ c c c c c
+c c n n n n n.
+Memory Configuration
+Module	Slot	Memory	Hardware	Counter	Total	Base
+			Pages	Sets	Counters	Software Pages
+		[bytes]	Mem/4Kb	1/Hpage	8*Sets	Mem/16Kb
+1	n1	512M	128K	128K	1024K	32K
+1	n2	256M	65K	65K	512K	16K 
+1	n3	256M	65K	65K	512K	16K
+1	n4	512M	128K	128K	1024K	32K
+2	n1	256M	65K	65K	512K	16K
+2	n2	64M	16K	16K	128K	4K
+2	n3	64M	16K	16K	128K	4K
+2	n4	256M	65K	65K	512K	16K
+.TE
+.Ee 
+.PP
+The length of each counter also depends on the system configuration.
+For systems with more than 16 nodes (32 cpus), the counters have
+a length of 19 bits (maximum count is 0x7ffff). For systems with
+less than 16 nodes, the length of the counters depends on the
+the kind of directory SIMMS installed on the machine. If 
+\f3STANDARD SIMMS\fP are installed, then the counters are 11-bit 
+(maximum count 0x7ff); if \f3PREMIUM SIMMS\fP are installed, then the
+counters are 19-bit. 
+
+.SS Sofware Extended Reference Counters
+The hardware counters peg when they reach their maximum count. This is
+a problem for the 11-bit counters that would peg after only
+0x7ff (2047) references to a page from one node. To allow application
+programmers to keep track of memory references beyond this small number,
+Cellular Irix provides \fBSoftware Extended Memory Reference Counters\fP.
+.PP
+The Extended Counters are implemented as an array of 32-bit counters
+that closely mirror the hardware counters, extending their maximum count
+to 2^32.
+The hardware counters are setup in such a way that they send
+an interrupt when they reach a threshold close to the maximum count. 
+When this interrupt is received by the operating system, the current 
+hardware counter count is added to the corresponding software extended
+counter mirror, and the hardware counter is reset to 0. This \f3update\fP
+procedure is performed for complete counter sets, that is, when 
+we receive the overflow interrupt we not only update the counter that is
+overflowing, but also all the other counters in its set.
+
+.SH INTERFACE
+
+.SS Enabling Reference Counting
+To enable reference counting for a section of virtual memory within
+an application, the programmer can use a Policy Module (mmci(5)) with
+the migration policy set to "MigrationRefcnt".
+.PP
+.Ex
+void
+refcnt_enable(char* vaddr, size_t len)
+{
+        pmo_handle_t pm;
+        policy_set_t policy_set;
+
+        pm_filldefault(&policy_set);
+        policy_set.migration_policy_name = "MigrationRefcnt";
+        policy_set.migration_policy_args = NULL;
+
+        if ((pm = pm_create(&policy_set)) < 0) {
+                perror("pm_create");
+                exit(1);
+        }
+
+        if (pm_attach(pm, vaddr, size) < 0) {
+                perror("pm_attach");
+                exit(1);
+        }
+}
+.Ee
+
+.SS Hardware Reference Counters
+The hardware reference counters for a section of an address space can 
+be accessed using \f3procfs\fP (proc(4)). The ioctl command code used
+for this purpose is PIOCGETSN0REFCNTRS. The third argument is used to
+specify both the virtual address space range we need the counters for,
+and the buffer where the system should copy the counter values to. 
+This argument is
+of type sn0_refcnt_args_t, as defined in <sys/SN/hwcntrs.h>:
+.PP
+.Ex
+typedef struct sn0_refcnt_args {
+        caddr_t             vaddr;
+        long                len;
+        sn0_refcnt_buf_t*   buf;
+} sn0_refcnt_args_t;
+.Ee
+.PP
+The first field \f3vaddr\fP is the base of the virtual address space range,
+the field \f3len\fP is the corresponding length in bytes, and the field
+\f3buf\fP is a pointer to a user buffer where the system will store
+the counter values and additional information. This buffer is an array
+of elements of type sn0_refcnt_buf_t, where each element corresponds
+to the counter information associated with one hardaware page:
+.PP
+.Ex
+typedef struct sn0_refcnt_buf {
+	sn0_refcnt_set_t   refcnt_set;
+	__uint64_t         paddr;
+        __uint64_t         page_size;
+        cnodeid_t          cnodeid;  
+} sn0_refcnt_buf_t;
+.Ee
+.PP
+The field \f3refcnt_set\fP contains the set of counters associated
+with the virtual address passed via \f3sn0_refcnt_args\fP, \f3paddr\fP is the
+address of the physical page associated with this virtual address,
+\f3page_size\fP is the page size being used to map it, and \f3cnodeid\fP
+is the physical page home node, expressed in terms of \fICompact
+Node Identifiers\fP which can be mapped back to node names using the
+command topology(1).
+The \f3refcnt_set\fP type is defined by
+.PP
+.Ex
+typedef struct sn0_refcnt_set {
+        refcnt_t    refcnt[SN0_REFCNT_MAX_COUNTERS];
+        __uint64_t  flags;
+} sn0_refcnt_set_t;
+.Ee
+.PP
+The field \f3refcnt\fP is the actual set of counters (one counter
+per node), and \f3flags\fP
+is a state vector reserved for future use.
+The counters in \f3refcnt\fP are ordered according to the 
+\fICompact Node Identifiers\fP, also known as \f3cnodeids\fP (numa(5)).
+
+
+.SS Software Extended Reference Counters
+The extended reference counters for a section of an address space can 
+be accessed using \f3procfs\fP (proc(4)), using practically the 
+same interface defined above for the hardware reference counters.
+The ioctl command code used
+for this purpose is PIOCGETSN0EXTREFCNTRS (the difference between this
+command and the command used for the hardware counters is the prefix
+EXT before the word REFCNTRS). The third argument is used to
+specify both the virtual address space range we need the counters for,
+and the buffer where the system should copy the counter values to. 
+This argument is
+of type sn0_refcnt_args_t, as defined in <sys/SN/hwcntrs.h>:
+.PP
+.Ex
+typedef struct sn0_refcnt_args {
+        caddr_t             vaddr;
+        long                len;
+        sn0_refcnt_buf_t*   buf;
+} sn0_refcnt_args_t;
+.Ee
+.PP
+The first field \f3vaddr\fP is the base of the virtual address space range,
+the field \f3len\fP is the corresponding length in bytes, and the field
+\f3buf\fP is a pointer to a user buffer where the system will store
+the counter values and additional information. This buffer is an array
+of elements of type sn0_refcnt_buf_t, where each element corresponds
+to the counter information associated with one hardaware page:
+.PP
+.Ex
+typedef struct sn0_refcnt_buf {
+	sn0_refcnt_set_t   refcnt_set;
+	__uint64_t         paddr;
+        __uint64_t         page_size;
+        cnodeid_t          cnodeid; 
+} sn0_refcnt_buf_t;
+.Ee
+.PP
+The field \f3refcnt_set\fP contains the set of counters associated
+with the virtual address passed via \f3sn0_refcnt_args\fP, \f3paddr\fP is the
+address of the physical page associated with this virtual address,
+\f3page_size\fP is the page size being used to map it, and \f3cnodeid\fP
+is the physical page home node, expressed in terms of \fICompact
+Node Identifiers\fP which can be mapped back to node names using the
+command topology(1).
+The \f3refcnt_set\fP type is defined by
+.PP
+.Ex
+typedef struct sn0_refcnt_set {
+        refcnt_t    refcnt[SN0_REFCNT_MAX_COUNTERS];
+        __uint64_t  flags;
+} sn0_refcnt_set_t;
+.Ee
+.PP
+The field \f3refcnt\fP is the actual set of counters (one counter
+per node), and \f3flags\fP
+is a state vector reserved for future use.
+The counters in \f3refcnt\fP are ordered according to the 
+\fICompact Node Identifiers\fP, also known as \f3cnodeids\fP (numa(5)).
+.PP
+The following routineshows how to access both the hardware counters
+and the sofware extended counters using procfs.
+.Ex
+void
+print_refcounters(char* vaddr, int len)
+{
+        pid_t pid = getpid();
+        char  pfile[256];
+        int fd;
+        sn0_refcnt_buf_t* refcnt_buffer;
+        sn0_refcnt_buf_t* direct_refcnt_buffer;        
+        sn0_refcnt_args_t* refcnt_args;
+        int npages;
+        int gen_start;
+        int numnodes;
+        int page;
+        int node;
+        char mem_node[512];
+        refcnt_t* set_base;
+
+        sprintf(pfile, "/proc/%05d", pid);
+        if ((fd = open(pfile, O_RDONLY)) < 0) {
+		fprintf(stderr,"Can't open /proc/%d", pid);
+		exit(1);
+	}
+
+        vaddr = (char *)( (unsigned long)vaddr & ~(hw_page_size-1) );
+        npages = (len + (hw_page_size-1)) >> logb2(hw_page_size);
+
+        if ((refcnt_buffer = malloc(sizeof(sn0_refcnt_buf_t) * npages)) == NULL) {
+                perror("malloc refcnt_buffer");
+                exit(1);
+        }
+        
+        if ((direct_refcnt_buffer = malloc(sizeof(sn0_refcnt_buf_t) * npages)) == NULL) {
+                perror("malloc refcnt_buffer");
+                exit(1);
+        }
+        
+        if ((refcnt_args = malloc(sizeof(sn0_refcnt_args_t))) == NULL) {
+                perror("malloc refcnt_args");
+                exit(1);
+        }
+
+        refcnt_args->vaddr = (__uint64_t)vaddr;
+        refcnt_args->len = len;
+        refcnt_args->buf = refcnt_buffer;
+
+        if ((gen_start = ioctl(fd, PIOCGETSN0EXTREFCNTRS, (void *)refcnt_args)) < 0) {
+		perror("ioctl  PIOCGETSN0EXTREFCNTRS returns error");
+		exit(1);
+	}
+
+        refcnt_args->vaddr = (__uint64_t)vaddr;
+        refcnt_args->len = len;
+        refcnt_args->buf = direct_refcnt_buffer;        
+        if ((gen_start = ioctl(fd, PIOCGETSN0REFCNTRS, (void *)refcnt_args)) < 0) {
+		perror("ioctl  PIOCGETSN0REFCNTRS returns error");
+		exit(1);
+	}
+        
+        if ((numnodes = sysmp(MP_NUMNODES)) < 0) {
+                perror("sysmp MP_NUMNODES");
+                exit(1);
+        }
+
+        for (page = 0; page < npages; page++) {
+                printf("page[%05d, 0x%lx, 0x%llx (0x%llx)]:",
+                       page,
+                       vaddr + page*0x1000,
+                       refcnt_buffer[page].paddr,
+                       refcnt_buffer[page].paddr >> 14);
+                for (node = 0; node < numnodes; node++) {
+                        printf(" %ll05d (%ll06d)",
+                               refcnt_buffer[page].refcnt_set.refcnt[node],
+                               direct_refcnt_buffer[page].refcnt_set.refcnt[node]);
+                }
+                printf("\n");
+        }
+
+        close(fd);
+        free(refcnt_args);
+        free(refcnt_buffer);
+}
+.Ee
+.PP
+
+
+.SS Memory Mapped Software Extended Reference Counters
+The extended reference counters can also be accessed by mmapping them
+to a user application's virtual address space. This interface is intended
+to be used by performance tools that provide a global system view
+rather than a localized process view.
+.PP
+This interface is based on a device driver associated with a device that
+represents the reference counters for each node in an Origin system.
+Here is the list of reference counter devices for an 8 node system:
+.Ex
+/hw/module/2/slot/n1/node/refcnt
+/hw/module/2/slot/n2/node/refcnt
+/hw/module/2/slot/n3/node/refcnt
+/hw/module/2/slot/n4/node/refcnt
+/hw/module/1/slot/n1/node/refcnt
+/hw/module/1/slot/n2/node/refcnt
+/hw/module/1/slot/n3/node/refcnt
+/hw/module/1/slot/n4/node/refcnt
+.Ee
+.PP
+To map the counters in a node, a user needs to open the refcnt device for
+the node, then using the open file descriptor the user needs to obtain
+information regarding the counters, defined by rcb_info_t in <sys/SN/hwcntrs.h>,
+using ioctl(fd, RCB_INFO_GET, &rcbinfo).
+.Ex
+typedef struct rcb_info {
+        __uint64_t  rcb_len;                  /* total refcnt buffer len in bytes */
+
+        int         rcb_sw_sets;              /* number of sw counter sets in buffer */
+        int         rcb_sw_counters_per_set;  /* sw counters per set -- numnodes */
+        int         rcb_sw_counter_size;      /* sizeof(refcnt_t) -- size of sw cntr */
+
+        int         rcb_base_pages;           /* number of base pages in node */
+        int         rcb_base_page_size;       /* sw base page size */        
+        __uint64_t  rcb_base_paddr;           /* base physical address for this node */
+
+        int         rcb_cnodeid;              /* cnodeid for this node */
+        int         rcb_granularity;          /* hw page size used for counter sets */
+        uint        rcb_hw_counter_max;       /* max hwcounter count (width mask) */
+        int         rcb_diff_threshold;       /* current node differential threshold */
+        int         rcb_abs_threshold;        /* current node absolute threshold */
+        int         rcb_num_slots;            /* physmem slots */
+        
+} rcb_info_t;
+.Ee
+.PP
+Physical memory in a node is not always contiguous, and therefore additional
+information is necessary to determine the counter buffer location associated
+with a physical page. Physical memory within a node is divided into a number
+of contiguous sections called "slots". The slot configuration for a node can
+be obtained using ioctl(fd, RCB_SLOT_GET, slotconfig), where slot config is 
+of type rcb_slot_t defined in <sys/SN/hwcntrs.h>.
+.Ex
+typedef struct rcb_slot {
+        __uint64_t  base;    /* Base physical address for slot */
+        __uint64_t  size;    /* Size of slot in bytes */
+} rcb_slot_t;
+.Ee
+.PP
+The procedure below shows the complete sequence of operations required to
+mmap the reference counters for all nodes. The counters in a buffer are
+organized as follows:
+
+.Ex
+Set for hardware page 0 in node /hw/module/1/slot/n2/node
+	counter for accesses from node with cnodeid 0
+	counter for accesses from node with cnodeid 1
+	...
+	...
+Set for hardware page 1 in node /hw/module/1/slot/n2/node
+	counter for accesses from node with cnodeid 0
+	counter for accesses from node with cnodeid 1
+	...
+	...
+...
+...
+.Ee
+.PP
+.Ex
+/*
+ * Reference Counter Configuration for all nodes
+ */
+rcb_info_t** rcbinfo;
+
+/*
+ * Physical Memory Config for all nodes
+ */
+rcb_slot_t** slotconfig;
+
+/*
+ * Mapped counters for all nodes
+ */
+refcnt_t** cbuffer;
+
+
+void
+mmap_counters(void)
+{
+        int fd;
+        char refcnt[1024];
+        refcnt_t* set_base;
+        int numnodes;
+        int node;
+
+        /* number of nodes */
+
+        numnodes = sysmp(MP_NUMNODES);
+
+        /* space for refcnt config -- just basic array for now */
+
+        rcbinfo = (rcb_info_t**)malloc(sizeof(rcb_info_t*) * numnodes);
+        if (rcbinfo == NULL) {
+                perror("malloc");
+                exit(1);
+        }
+
+        /* space for phys mem config -- just basic array for now*/
+
+        slotconfig = (rcb_slot_t**)malloc(sizeof(rcb_slot_t*) * numnodes);
+        if (slotconfig == NULL) {
+                perror("malloc");
+                exit(1);
+        }
+
+        /* space for array of pointers to the counter buffers */
+        cbuffer = (refcnt_t**)malloc(sizeof(refcnt_t*) * numnodes);
+        if (cbuffer == NULL) {
+                perror("malloc");
+                exit(1);
+        }
+
+        for (node = 0; node < numnodes; node++) {
+                sprintf(refcnt, "/hw/nodenum/%d/refcnt", node);
+                if (verbose) {
+                        printf("Opening dev %s\n", refcnt);
+                }
+        
+                if ((fd = open(refcnt, O_RDONLY)) < 0) {
+                        perror("open");
+                        exit(1);
+                }
+
+                /* get rcb info */
+                
+                rcbinfo[node] = (rcb_info_t*)malloc(sizeof(rcb_info_t));
+                if (rcbinfo[node] == NULL) {
+                        perror("malloc");
+                        exit(1);
+                }
+                
+                if (ioctl(fd, RCB_INFO_GET, rcbinfo[node]) < 0) {
+                        perror("icctl RCB_INFO_GET");
+                        exit(1);
+                }
+
+                /* get phys mem config */
+                
+                slotconfig[node] = 
+                    (rcb_slot_t*)malloc(rcbinfo[node]->rcb_num_slots * 
+                    sizeof(rcb_slot_t));
+                if (slotconfig[node] == NULL) {
+                        perror("malloc");
+                        exit(1);
+                }
+
+                if (ioctl(fd, RCB_SLOT_GET, slotconfig[node]) < 0) {
+                        perror("ioctl RCB_SLOT_GET");
+                        exit(1);
+                }                
+
+                /* map the counter buffer for this node */
+                cbuffer[node] = 
+                   (refcnt_t*)mmap(0,
+                                   rcbinfo[node]->rcb_len, 
+                                   PROT_READ, MAP_SHARED, fd, 0);
+                if (cbuffer[node] == (refcnt_t*)MAP_FAILED) {
+                        perror("mmap");
+                        exit(1);
+                }
+
+                if (close(fd) <  0) {
+                        perror("close");
+                        exit(1);
+                }
+                
+        }
+}
+  
+.Ee
+.PP
+All counters in a node are placed contiguosly, but as mentioned earlier,
+memory may not be contiguos. Therefore, the mapping between a physical page
+and its set of counters needs to be done taking the memory
+gaps in consideration, as shown below:
+.Ex
+uint
+logb2(uint v)
+{
+        uint r;
+        uint l;
+
+        r = 0;
+        l = 1;
+        while (l < v) {
+                r++;
+                l <<= 1;
+        }
+
+        return (r);
+}
+
+
+refcnt_t*
+paddr_to_setbase(int node, __uint64_t paddr)
+{
+        int slot_index;
+        int s;
+        uint set_offset;
+        int btoset_shift;
+        refcnt_t* set_base;
+        
+
+        btoset_shift = logb2(rcbinfo[node]->rcb_granularity);
+        slot_index = -1;
+        set_offset = 0;
+
+        for (s = 1; s < rcbinfo[node]->rcb_num_slots; s++) {
+                if (paddr < slotconfig[node][s].base) {
+                        slot_index = s - 1;
+                        break;
+                }
+                set_offset += slotconfig[node][s - 1].size >> btoset_shift;
+        }
+        if (slot_index < 0) {
+                fprintf(stderr, "Could not find slot\n");
+                exit(1);
+        }
+        
+        set_offset += (paddr - slotconfig[node][slot_index].base) >> btoset_shift;
+        set_base  = cbuffer[node] + set_offset * rcbinfo[node]->rcb_sw_counters_per_set;
+        
+        return (set_base);
+}
+
+.Ee
+.PP
+This function finds the slot where the physical address is located, and then
+calculates and returns the location of the associated set of reference counters.
+.PP
+
+.SH EXAMPLES
+.SS Accessing the Reference Counters via procfs
+.Ex
+/*****************************************************************************
+ * Copyright 1997, Silicon Graphics, Inc.
+ * ALL RIGHTS RESERVED
+ *
+ * UNPUBLISHED -- Rights reserved under the copyright laws of the United
+ * States.   Use of a copyright notice is precautionary only and does not
+ * imply publication or disclosure.
+ *
+ * U.S. GOVERNMENT RESTRICTED RIGHTS LEGEND:
+ * Use, duplication or disclosure by the Government is subject to restrictions
+ * as set forth in FAR 52.227.19(c)(2) or subparagraph (c)(1)(ii) of the Rights
+ * in Technical Data and Computer Software clause at DFARS 252.227-7013 and/or
+ * in similar or successor clauses in the FAR, or the DOD or NASA FAR
+ * Supplement.  Contractor/manufacturer is Silicon Graphics, Inc.,
+ * 2011 N. Shoreline Blvd. Mountain View, CA 94039-7311.
+ *
+ * THE CONTENT OF THIS WORK CONTAINS CONFIDENTIAL AND PROPRIETARY
+ * INFORMATION OF SILICON GRAPHICS, INC. ANY DUPLICATION, MODIFICATION,
+ * DISTRIBUTION, OR DISCLOSURE IN ANY FORM, IN WHOLE, OR IN PART, IS STRICTLY
+ * PROHIBITED WITHOUT THE PRIOR EXPRESS WRITTEN PERMISSION OF SILICON
+ * GRAPHICS, INC.
+ ****************************************************************************/
+
+
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <malloc.h>
+#include <sys/types.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <sys/prctl.h>
+#include <procfs/procfs.h>
+#include <sys/pmo.h>
+#include <sys/syssgi.h>
+#include <sys/sysmp.h>
+#include <sys/SN/hwcntrs.h>
+
+#define HPSIZE           (0x1000)
+#define HPSIZE_MASK      (HPSIZE-1)
+#define HPSIZE_SHIFT     (12)
+#define DATA_POOL_SIZE   (128*1024)
+#define CACHE_TRASH_SIZE ((4*1024*1024)/sizeof(long))
+
+char data_pool[DATA_POOL_SIZE];
+long cache_trash_buffer[CACHE_TRASH_SIZE];
+
+
+void
+place_data(char* vaddr, int size, char* node)
+{
+        pmo_handle_t mld;
+        pmo_handle_t mldset;
+        raff_info_t  rafflist;
+        pmo_handle_t pm;
+        policy_set_t policy_set;
+
+        if ((mld = mld_create(0, size)) < 0) {
+                perror("mld_create");
+                exit(1);
+        }
+
+        if ((mldset = mldset_create(&mld, 1)) < 0) {
+                perror("mldst_create");
+                exit(1);
+        }
+
+        rafflist.resource = node;
+        rafflist.restype = RAFFIDT_NAME;
+        rafflist.reslen = (ushort)strlen(node);
+        rafflist.radius = 0;
+        rafflist.attr = RAFFATTR_ATTRACTION;
+
+        if (mldset_place(mldset,
+                         TOPOLOGY_PHYSNODES,
+                         &rafflist,
+                         1,
+                         RQMODE_ADVISORY) < 0) {
+                perror("mldset_place");
+                exit(1);
+        }
+
+        pm_filldefault(&policy_set);
+
+        policy_set.placement_policy_name = "PlacementFixed";
+        policy_set.placement_policy_args = (void*)mld;
+        policy_set.migration_policy_name = "MigrationRefcnt";
+        policy_set.migration_policy_args = NULL;
+                
+        if ((pm = pm_create(&policy_set)) < 0) {
+                perror("pm_create");
+                exit(1);
+        }
+
+        if (pm_attach(pm, vaddr, size) < 0) {
+                perror("pm_attach");
+                exit(1);
+        }
+
+}
+
+void
+place_process(char* node)
+{
+        pmo_handle_t mld;
+        pmo_handle_t mldset;
+        raff_info_t  rafflist;
+        
+        /*
+         * The mld, radius = 0 (from one node only)
+         */
+        
+        if ((mld = mld_create(0, 0)) < 0) {
+                perror("mld_create");
+                exit(1);
+        }
+
+        /*
+         * The mldset
+         */
+
+        if ((mldset = mldset_create(&mld, 1)) < 0) {
+                perror("mldset_create");
+                exit(1);
+        }
+
+        /*
+         * Placing the mldset with the one mld
+         */
+
+        rafflist.resource = node;
+        rafflist.restype = RAFFIDT_NAME;
+        rafflist.reslen = (ushort)strlen(node);
+        rafflist.radius = 0;
+        rafflist.attr = RAFFATTR_ATTRACTION;
+
+        if (mldset_place(mldset,
+                         TOPOLOGY_PHYSNODES,
+                         &rafflist, 1,
+                         RQMODE_ADVISORY) < 0) {
+                perror("mldset_place");
+                exit(1);
+        }
+
+        /*
+         * Attach this process to run only on the node
+         * where thr mld has been placed.
+         */
+
+        if (process_mldlink(0, mld, RQMODE_MANDATORY) < 0) {
+                perror("process_mldlink");
+                exit(1);
+        }
+
+}
+
+
+void
+print_refcounters(char* vaddr, int len)
+{
+        pid_t pid = getpid();
+        char  pfile[256];
+        int fd;
+        sn0_refcnt_buf_t* refcnt_buffer;
+        sn0_refcnt_buf_t* direct_refcnt_buffer;        
+        sn0_refcnt_args_t* refcnt_args;
+        int npages;
+        int gen_start;
+        int numnodes;
+        int page;
+        int node;
+
+        sprintf(pfile, "/proc/%05d", pid);
+        if ((fd = open(pfile, O_RDONLY)) < 0) {
+		fprintf(stderr,"Can't open /proc/%d", pid);
+		exit(1);
+	}
+
+        vaddr = (char *)( (unsigned long)vaddr & ~HPSIZE_MASK );
+        npages = (len + HPSIZE_MASK) >> (HPSIZE_SHIFT);
+
+        if ((refcnt_buffer = malloc(sizeof(sn0_refcnt_buf_t) * npages)) == NULL) {
+                perror("malloc refcnt_buffer");
+                exit(1);
+        }
+        
+        if ((direct_refcnt_buffer = malloc(sizeof(sn0_refcnt_buf_t) * npages)) == NULL) {
+                perror("malloc refcnt_buffer");
+                exit(1);
+        }
+        
+        if ((refcnt_args = malloc(sizeof(sn0_refcnt_args_t))) == NULL) {
+                perror("malloc refcnt_args");
+                exit(1);
+        }
+
+        refcnt_args->vaddr = vaddr;
+        refcnt_args->len = len;
+        refcnt_args->buf = refcnt_buffer;
+
+        if ((gen_start = ioctl(fd, PIOCGETSN0EXTREFCNTRS, (void *)refcnt_args)) < 0) {
+		perror("ioctl  PIOCGETSN0EXTREFCNTRS returns error");
+		exit(1);
+	}
+
+        refcnt_args->vaddr = vaddr;
+        refcnt_args->len = len;
+        refcnt_args->buf = direct_refcnt_buffer;
+        
+        if ((gen_start = ioctl(fd, PIOCGETSN0REFCNTRS, (void *)refcnt_args)) < 0) {
+		perror("ioctl  PIOCGETSN0REFCNTRS returns error");
+		exit(1);
+	}
+        
+        if ((numnodes = sysmp(MP_NUMNODES)) < 0) {
+                perror("sysmp MP_NUMNODES");
+                exit(1);
+        }
+
+        for (page = 0; page < npages; page++) {
+                printf("page[%05d, 0x%lx, 0x%llx (0x%llx)]:",
+                       page,
+                       vaddr + page*0x1000,
+                       refcnt_buffer[page].paddr,
+                       refcnt_buffer[page].paddr >> 14);
+                for (node = 0; node < numnodes; node++) {
+                        printf(" %05lld (%06lld)",
+                               refcnt_buffer[page].refcnt_set.refcnt[node],
+                               direct_refcnt_buffer[page].refcnt_set.refcnt[node]);
+                }
+                printf("\n");
+        }
+
+        close(fd);
+        free(refcnt_args);
+        free(refcnt_buffer);
+}
+
+
+void
+init_buffer(void* m, size_t size)
+{
+        size_t i;
+        char* p = (char*)m;
+        
+        for (i = 0; i < size; i++) {
+                p[i] = (char)i;
+        }
+}
+
+long
+buffer_auto_dotproduct_update(void* m, size_t size)
+{
+        size_t i;
+        size_t j;
+        char* p = (char*)m;
+        long sum = 0;
+
+        
+        for (i = 0, j = size - 1; i < size; i++, j--) {
+                sum += (long)p[i]-- * (long)p[j]++;
+        }
+
+        return (sum);
+}
+
+long
+cache_trash(long* m, size_t long_size)
+{
+        int i;
+        long sum = 0;
+
+        for (i = 0; i < long_size; i++) {
+               m[i] = i;
+        }
+
+        for (i = 0; i < long_size; i++) {
+                sum += m[i];
+        }
+
+        return (sum);
+}
+
+void
+do_stuff(void* m, size_t size, int loops, char* label)
+{
+        long total = 0;
+        int count = loops;
+
+        while (count--) {
+                total += buffer_auto_dotproduct_update(m, size);
+                total += cache_trash(cache_trash_buffer, CACHE_TRASH_SIZE);
+        }
+        printf("{%s}, sum after %d loops: 0x%x\n", label, loops, total);
+}
+
+void
+main(int argc, char** argv)
+{
+        char* thread_node;
+        char* mem_node;
+
+        if (argc != 3) {
+                fprintf(stderr, "Usage %s <thread-node> <mem-node>\n", argv[0]);
+                exit(1);
+        }
+
+        thread_node = argv[1];
+        mem_node = argv[2];
+
+
+        place_data(&data_pool[0], DATA_POOL_SIZE, mem_node);
+        init_buffer(&data_pool[0], DATA_POOL_SIZE);
+        
+        /*
+         * Place process
+         */
+        place_process(thread_node);
+
+        /*
+         * Reference pages & print refcnt
+         */
+
+        do_stuff(data_pool, DATA_POOL_SIZE, 100, "BUFFER");
+        print_refcounters(data_pool, DATA_POOL_SIZE);
+}  
+.Ee
+.PP
+The program above places a data buffer and the running process on
+nodes specified on the command line. When the data buffer is placed,
+we also enable reference counting by specifying the migration
+policy to be "MigrationRefcnt". Then we just access the buffer several
+times, making sure that we flush the cache between loops.
+At the end, we print both the extended reference counters and the hardware
+reference counters for all hardware pages being used for the data buffer.
+.PP
+For a machine with the following configuration
+.Ex
+System Configuration
+# hinv
+FPU: MIPS R10010 Floating Point Chip Revision: 0.0
+CPU: MIPS R10000 Processor Chip Revision: 2.6
+16 180 MHZ IP27 Processors
+Main memory size: 2048 Mbytes
+Instruction cache size: 32 Kbytes
+Data cache size: 32 Kbytes
+Secondary unified instruction/data cache size: 1 Mbyte
+
+Topology
+
+# topology
+
+Machine ricotta has 16 cpu's, 8 memory nodes, and 4 routers.
+
+The cpus are:
+cpu   0 is /hw/module/2/slot/n1/node/cpu/a
+cpu   1 is /hw/module/2/slot/n1/node/cpu/b
+cpu   2 is /hw/module/2/slot/n2/node/cpu/a
+cpu   3 is /hw/module/2/slot/n2/node/cpu/b
+cpu   4 is /hw/module/2/slot/n3/node/cpu/a
+cpu   5 is /hw/module/2/slot/n3/node/cpu/b
+cpu   6 is /hw/module/2/slot/n4/node/cpu/a
+cpu   7 is /hw/module/2/slot/n4/node/cpu/b
+cpu   8 is /hw/module/1/slot/n1/node/cpu/a
+cpu   9 is /hw/module/1/slot/n1/node/cpu/b
+cpu  10 is /hw/module/1/slot/n2/node/cpu/a
+cpu  11 is /hw/module/1/slot/n2/node/cpu/b
+cpu  12 is /hw/module/1/slot/n3/node/cpu/a
+cpu  13 is /hw/module/1/slot/n3/node/cpu/b
+cpu  14 is /hw/module/1/slot/n4/node/cpu/a
+cpu  15 is /hw/module/1/slot/n4/node/cpu/b
+
+The nodes are:
+/hw/module/1/slot/n1/node
+/hw/module/1/slot/n2/node
+/hw/module/1/slot/n3/node
+/hw/module/1/slot/n4/node
+/hw/module/2/slot/n1/node
+/hw/module/2/slot/n2/node
+/hw/module/2/slot/n3/node
+/hw/module/2/slot/n4/node
+
+The routers are:
+/hw/module/1/slot/r1/router
+/hw/module/1/slot/r2/router
+/hw/module/2/slot/r1/router
+/hw/module/2/slot/r2/router
+
+The topology is defined by:
+/hw/module/1/slot/n1/node/link -> /hw/module/1/slot/r1/router
+/hw/module/1/slot/n2/node/link -> /hw/module/1/slot/r1/router
+/hw/module/1/slot/n3/node/link -> /hw/module/1/slot/r2/router
+/hw/module/1/slot/n4/node/link -> /hw/module/1/slot/r2/router
+/hw/module/2/slot/n1/node/link -> /hw/module/2/slot/r1/router
+/hw/module/2/slot/n2/node/link -> /hw/module/2/slot/r1/router
+/hw/module/2/slot/n3/node/link -> /hw/module/2/slot/r2/router
+/hw/module/2/slot/n4/node/link -> /hw/module/2/slot/r2/router
+
+/hw/module/1/slot/r1/router/1 -> /hw/module/2/slot/r1/router
+/hw/module/1/slot/r1/router/4 -> /hw/module/1/slot/n2/node
+/hw/module/1/slot/r1/router/5 -> /hw/module/1/slot/n1/node
+/hw/module/1/slot/r1/router/6 -> /hw/module/1/slot/r2/router
+/hw/module/1/slot/r2/router/1 -> /hw/module/2/slot/r2/router
+/hw/module/1/slot/r2/router/4 -> /hw/module/1/slot/n4/node
+/hw/module/1/slot/r2/router/5 -> /hw/module/1/slot/n3/node
+/hw/module/1/slot/r2/router/6 -> /hw/module/1/slot/r1/router
+/hw/module/2/slot/r1/router/1 -> /hw/module/1/slot/r1/router
+/hw/module/2/slot/r1/router/4 -> /hw/module/2/slot/n2/node
+/hw/module/2/slot/r1/router/5 -> /hw/module/2/slot/n1/node
+/hw/module/2/slot/r1/router/6 -> /hw/module/2/slot/r2/router
+/hw/module/2/slot/r2/router/1 -> /hw/module/1/slot/r2/router
+/hw/module/2/slot/r2/router/4 -> /hw/module/2/slot/n4/node
+/hw/module/2/slot/r2/router/5 -> /hw/module/2/slot/n3/node
+/hw/module/2/slot/r2/router/6 -> /hw/module/2/slot/r1/router
+.Ee
+.PP
+we obtain the following output when running the example program:
+.Ex
+# ./refcnt_procfs /hw/module/2/slot/n3/node /hw/module/2/slot/n3/node
+{BUFFER}, sum after 100 loops: 0xee780000
+page[00000, 0x10002000, 0x207ece000 (0x81fb3)]: 00000 (000038) 00000 (000000) 
+00000 (002047) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00001, 0x10003000, 0x207ecf000 (0x81fb3)]: 00000 (000065) 00000 (000000)
+ 00000 (002047) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00002, 0x10004000, 0x2278d0000 (0x89e34)]: 00041 (000000) 00000 (000000)
+ 01793 (001569) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00003, 0x10005000, 0x2278d1000 (0x89e34)]: 00033 (000000) 00000 (000000)
+ 01664 (001504) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00004, 0x10006000, 0x2278d2000 (0x89e34)]: 00032 (000000) 00000 (000000)
+ 01664 (001504) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00005, 0x10007000, 0x2278d3000 (0x89e34)]: 00032 (000000) 00000 (000000)
+ 01664 (001504) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00006, 0x10008000, 0x207cd4000 (0x81f35)]: 00048 (000000) 00000 (000000)
+ 03136 (000032) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00007, 0x10009000, 0x207cd5000 (0x81f35)]: 00039 (000000) 00000 (000000)
+ 03586 (000068) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00008, 0x1000a000, 0x207cd6000 (0x81f35)]: 00041 (000000) 00000 (000000)
+ 03136 (000065) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00009, 0x1000b000, 0x207cd7000 (0x81f35)]: 00042 (000000) 00000 (000000)
+ 03104 (000064) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00010, 0x1000c000, 0x207ad8000 (0x81eb6)]: 00060 (000000) 00000 (000000) 
+01793 (001513) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00011, 0x1000d000, 0x207ad9000 (0x81eb6)]: 00035 (000000) 00000 (000000) 
+01696 (001472) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00012, 0x1000e000, 0x207ada000 (0x81eb6)]: 00032 (000000) 00000 (000000) 
+01696 (001472) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00013, 0x1000f000, 0x207adb000 (0x81eb6)]: 00035 (000000) 00000 (000000)
+ 01696 (001472) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00014, 0x10010000, 0x2068dc000 (0x81a37)]: 00041 (000000) 00000 (000000)
+ 01793 (001375) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00015, 0x10011000, 0x2068dd000 (0x81a37)]: 00034 (000000) 00000 (000000)
+ 01792 (001376) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00016, 0x10012000, 0x2068de000 (0x81a37)]: 00034 (000000) 00000 (000000)
+ 01792 (001376) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00017, 0x10013000, 0x2068df000 (0x81a37)]: 00034 (000000) 00000 (000000)
+ 01792 (001376) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00018, 0x10014000, 0x206be0000 (0x81af8)]: 00035 (000000) 00000 (000000)
+ 01632 (001536) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00019, 0x10015000, 0x206be1000 (0x81af8)]: 00039 (000000) 00000 (000000)
+ 01632 (001536) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00020, 0x10016000, 0x206be2000 (0x81af8)]: 00034 (000000) 00000 (000000)
+ 01793 (001636) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00021, 0x10017000, 0x206be3000 (0x81af8)]: 00035 (000000) 00000 (000000)
+ 01664 (001504) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00022, 0x10018000, 0x226ce4000 (0x89b39)]: 00051 (000000) 00000 (000000)
+ 01793 (001515) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00023, 0x10019000, 0x226ce5000 (0x89b39)]: 00044 (000000) 00000 (000000)
+ 01728 (001440) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00024, 0x1001a000, 0x226ce6000 (0x89b39)]: 00037 (000000) 00000 (000000)
+ 01728 (001440) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00025, 0x1001b000, 0x226ce7000 (0x89b39)]: 00034 (000000) 00000 (000000)
+ 01728 (001440) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00026, 0x1001c000, 0x2066e8000 (0x819ba)]: 00033 (000000) 00000 (000000) 
+02741 (000529) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00027, 0x1001d000, 0x2066e9000 (0x819ba)]: 00041 (000000) 00000 (000000)
+ 03586 (000680) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00028, 0x1001e000, 0x2066ea000 (0x819ba)]: 00033 (000000) 00000 (000000)
+ 02688 (000480) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00029, 0x1001f000, 0x2066eb000 (0x819ba)]: 00034 (000000) 00000 (000000)
+ 02688 (000480) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00030, 0x10020000, 0x2200ec000 (0x8803b)]: 00045 (000000) 00000 (000000)
+ 02688 (000480) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00031, 0x10021000, 0x2200ed000 (0x8803b)]: 00033 (000000) 00000 (000000)
+ 02688 (000480) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+.Ee
+.PP
+We place the data buffer and the process on the same node. In this case we chose node
+/hw/module/2/slot/n3/node, which corresponds to cpus 4 and 5 according to the information
+obtained using the command "topology"
+.Ex
+cpu   4 is /hw/module/2/slot/n3/node/cpu/a
+cpu   5 is /hw/module/2/slot/n3/node/cpu/b
+.Ee
+.PP
+which corresponds to a node with cnodeid 2.
+.PP
+We print one record per hardware page. Each record shows a page number within the
+data buffer, the virtual address for the page, the physical hardware page associated
+with the virtual address, and the page frame number for the physical page. Then follows 
+a list of counters, two values per node: the first counter of each pair is the extended
+reference counter, and the second counter of each pair is the actual hardware
+reference counter.
+.PP
+As expected, we see that the counters for node 2 show a high count.
+.PP
+.SS "Accessing the extended reference counters via mmap"
+The following example mmaps the counter buffer, and uses both procfs
+and the mmapped buffer to access and print out the counts.
+.Ex
+
+/*****************************************************************************
+ * Copyright 1997, Silicon Graphics, Inc.
+ * ALL RIGHTS RESERVED
+ *
+ * UNPUBLISHED -- Rights reserved under the copyright laws of the United
+ * States.   Use of a copyright notice is precautionary only and does not
+ * imply publication or disclosure.
+ *
+ * U.S. GOVERNMENT RESTRICTED RIGHTS LEGEND:
+ * Use, duplication or disclosure by the Government is subject to restrictions
+ * as set forth in FAR 52.227.19(c)(2) or subparagraph (c)(1)(ii) of the Rights
+ * in Technical Data and Computer Software clause at DFARS 252.227-7013 and/or
+ * in similar or successor clauses in the FAR, or the DOD or NASA FAR
+ * Supplement.  Contractor/manufacturer is Silicon Graphics, Inc.,
+ * 2011 N. Shoreline Blvd. Mountain View, CA 94039-7311.
+ *
+ * THE CONTENT OF THIS WORK CONTAINS CONFIDENTIAL AND PROPRIETARY
+ * INFORMATION OF SILICON GRAPHICS, INC. ANY DUPLICATION, MODIFICATION,
+ * DISTRIBUTION, OR DISCLOSURE IN ANY FORM, IN WHOLE, OR IN PART, IS STRICTLY
+ * PROHIBITED WITHOUT THE PRIOR EXPRESS WRITTEN PERMISSION OF SILICON
+ * GRAPHICS, INC.
+ ****************************************************************************/
+
+
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <malloc.h>
+#include <sys/types.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <sys/prctl.h>
+#include <procfs/procfs.h>
+#include <sys/pmo.h>
+#include <sys/syssgi.h>
+#include <sys/sysmp.h>
+#include <sys/SN/hwcntrs.h>
+
+
+#define DATA_POOL_SIZE  (8*16*1024)
+#define CACHE_TRASH_SIZE ((4*1024*1024)/sizeof(long))
+
+char fixed_data_pool[DATA_POOL_SIZE];
+long cache_trash_buffer[CACHE_TRASH_SIZE];
+
+/*
+ * Reference Counter Configuration for all nodes
+ */
+rcb_info_t** rcbinfo;
+
+/*
+ * Hardware Page Size
+ */
+uint hw_page_size;
+
+/*
+ * Physical Memory Config for all nodes
+ */
+rcb_slot_t** slotconfig;
+
+/*
+ * Mapped counters for all nodes
+ */
+refcnt_t** cbuffer;
+
+/*
+ * Verbose ?
+ */
+
+int verbose = 0;
+
+void
+print_rcb(int node, rcb_info_t* rcb, rcb_slot_t* slot)
+{
+        int s;
+        
+        printf("RCB for node [%d]\n", node);
+        
+        printf("\trcb_len: %lld\n", rcb->rcb_len);
+        printf("\trcb_sw_sets: %d\n", rcb->rcb_sw_sets);        
+        printf("\trcb_sw_counters_per_set: %d\n", rcb->rcb_sw_counters_per_set);
+        printf("\trcb_sw_counter_size: %d\n", rcb->rcb_sw_counter_size);
+        
+        printf("\trcb_base_pages: %d\n", rcb->rcb_base_pages);
+        printf("\trcb_base_page_size: %d\n", rcb->rcb_base_page_size);
+        printf("\trcb_base_paddr: 0x%llx\n", rcb->rcb_base_paddr);
+        
+        printf("\trcb_cnodeid: %d\n", rcb->rcb_cnodeid);
+        printf("\trcb_granularity: %d\n", rcb->rcb_granularity);
+        printf("\trcb_hw_counter_max: %d\n", rcb->rcb_hw_counter_max);
+        printf("\trcb_diff_threshold: %d\n", rcb->rcb_diff_threshold);        
+        printf("\trcb_abs_threshold: %d\n", rcb->rcb_abs_threshold);
+
+        for (s = 0; s < rcb->rcb_num_slots; s++) {
+                printf("\tSlot[%d]: 0x%llx -> 0x%llx, size: 0x%llx\n",
+                       s, slot[s].base, slot[s].base + slot[s].size, slot[s].size);
+        }
+}
+
+void
+mmap_counters(void)
+{
+        int fd;
+        char refcnt[1024];
+        refcnt_t* set_base;
+        int numnodes;
+        int node;
+
+        /* number of nodes */
+
+        numnodes = sysmp(MP_NUMNODES);
+
+        /* space for refcnt config -- just basic array for now */
+
+        rcbinfo = (rcb_info_t**)malloc(sizeof(rcb_info_t*) * numnodes);
+        if (rcbinfo == NULL) {
+                perror("malloc");
+                exit(1);
+        }
+
+        /* space for phys mem config -- just basic array for now*/
+
+        slotconfig = (rcb_slot_t**)malloc(sizeof(rcb_slot_t*) * numnodes);
+        if (slotconfig == NULL) {
+                perror("malloc");
+                exit(1);
+        }
+
+        /* space for array of pointers to the counter buffers */
+        cbuffer = (refcnt_t**)malloc(sizeof(refcnt_t*) * numnodes);
+        if (cbuffer == NULL) {
+                perror("malloc");
+                exit(1);
+        }
+
+        for (node = 0; node < numnodes; node++) {
+                sprintf(refcnt, "/hw/nodenum/%d/refcnt", node);
+                if (verbose) {
+                        printf("Opening dev %s\n", refcnt);
+                }
+        
+                if ((fd = open(refcnt, O_RDONLY)) < 0) {
+                        perror("open");
+                        exit(1);
+                }
+
+                /* get rcb info */
+                
+                rcbinfo[node] = (rcb_info_t*)malloc(sizeof(rcb_info_t));
+                if (rcbinfo[node] == NULL) {
+                        perror("malloc");
+                        exit(1);
+                }
+                
+                if (ioctl(fd, RCB_INFO_GET, rcbinfo[node]) < 0) {
+                        perror("icctl RCB_INFO_GET");
+                        exit(1);
+                }
+
+                /* get phys mem config */
+                
+                slotconfig[node] = (rcb_slot_t*)malloc(rcbinfo[node]->rcb_num_slots *
+                                    sizeof(rcb_slot_t));
+                if (slotconfig[node] == NULL) {
+                        perror("malloc");
+                        exit(1);
+                }
+
+                if (ioctl(fd, RCB_SLOT_GET, slotconfig[node]) < 0) {
+                        perror("ioctl RCB_SLOT_GET");
+                        exit(1);
+                }                
+
+                /* map the counter buffer for this node */
+                cbuffer[node] = (refcnt_t*)mmap(0, rcbinfo[node]->rcb_len,
+                                                PROT_READ, MAP_SHARED, fd, 0);
+                if (cbuffer[node] == (refcnt_t*)MAP_FAILED) {
+                        perror("mmap");
+                        exit(1);
+                }
+
+                if (verbose) {
+                        print_rcb(node, rcbinfo[node], slotconfig[node]);
+                }
+
+                if (close(fd) <  0) {
+                        perror("close");
+                        exit(1);
+                }
+                
+        }
+}
+  
+
+uint
+logb2(uint v)
+{
+        uint r;
+        uint l;
+
+        r = 0;
+        l = 1;
+        while (l < v) {
+                r++;
+                l <<= 1;
+        }
+
+        return (r);
+}
+
+
+refcnt_t*
+paddr_to_setbase(int node, __uint64_t paddr)
+{
+        int slot_index;
+        int s;
+        uint set_offset;
+        int btoset_shift;
+        refcnt_t* set_base;
+        
+
+        btoset_shift = logb2(rcbinfo[node]->rcb_granularity);
+        slot_index = -1;
+        set_offset = 0;
+
+        for (s = 1; s < rcbinfo[node]->rcb_num_slots; s++) {
+                if (paddr < slotconfig[node][s].base) {
+                        slot_index = s - 1;
+                        break;
+                }
+                set_offset += slotconfig[node][s - 1].size >> btoset_shift;
+        }
+        if (slot_index < 0) {
+                fprintf(stderr, "Could not find slot\n");
+                exit(1);
+        }
+        
+        set_offset += (paddr - slotconfig[node][slot_index].base) >> btoset_shift;
+        set_base  = cbuffer[node] + set_offset * rcbinfo[node]->rcb_sw_counters_per_set;
+        
+        return (set_base);
+}
+
+void
+place_data(char* vaddr, int size, char* node, int migr_on)
+{
+        pmo_handle_t mld;
+        pmo_handle_t mldset;
+        raff_info_t  rafflist;
+        pmo_handle_t pm;
+        policy_set_t policy_set;
+        migr_policy_uparms_t migr_parms;
+
+        if ((mld = mld_create(0, size)) < 0) {
+                perror("mld_create");
+                exit(1);
+        }
+
+        if ((mldset = mldset_create(&mld, 1)) < 0) {
+                perror("mldst_create");
+                exit(1);
+        }
+
+        rafflist.resource = node;
+        rafflist.restype = RAFFIDT_NAME;
+        rafflist.reslen = (ushort)strlen(node);
+        rafflist.radius = 0;
+        rafflist.attr = RAFFATTR_ATTRACTION;
+
+        if (mldset_place(mldset,
+                         TOPOLOGY_PHYSNODES,
+                         &rafflist,
+                         1,
+                         RQMODE_ADVISORY) < 0) {
+                perror("mldset_place");
+                exit(1);
+        }
+
+        pm_filldefault(&policy_set);
+
+        policy_set.placement_policy_name = "PlacementFixed";
+        policy_set.placement_policy_args = (void*)mld;
+        policy_set.migration_policy_name = "MigrationRefcnt";
+        policy_set.migration_policy_args = NULL;
+                
+        if ((pm = pm_create(&policy_set)) < 0) {
+                perror("pm_create");
+                exit(1);
+        }
+
+        if (pm_attach(pm, vaddr, size) < 0) {
+                perror("pm_attach");
+                exit(1);
+        }
+
+}
+
+void
+place_process(char* node)
+{
+        pmo_handle_t mld;
+        pmo_handle_t mldset;
+        raff_info_t  rafflist;
+        
+        /*
+         * The mld, radius = 0 (from one node only)
+         */
+        
+        if ((mld = mld_create(0, 0)) < 0) {
+                perror("mld_create");
+                exit(1);
+        }
+
+        /*
+         * The mldset
+         */
+
+        if ((mldset = mldset_create(&mld, 1)) < 0) {
+                perror("mldset_create");
+                exit(1);
+        }
+
+        /*
+         * Placing the mldset with the one mld
+         */
+
+        rafflist.resource = node;
+        rafflist.restype = RAFFIDT_NAME;
+        rafflist.reslen = (ushort)strlen(node);
+        rafflist.radius = 0;
+        rafflist.attr = RAFFATTR_ATTRACTION;
+
+        if (mldset_place(mldset,
+                         TOPOLOGY_PHYSNODES,
+                         &rafflist, 1,
+                         RQMODE_ADVISORY) < 0) {
+                perror("mldset_place");
+                exit(1);
+        }
+
+        /*
+         * Attach this process to run only on the node
+         * where thr mld has been placed.
+         */
+
+        if (process_mldlink(0, mld, RQMODE_MANDATORY) < 0) {
+                perror("process_mldlink");
+                exit(1);
+        }
+
+}
+
+
+void
+print_refcounters(char* vaddr, int len)
+{
+        pid_t pid = getpid();
+        char  pfile[256];
+        int fd;
+        sn0_refcnt_buf_t* refcnt_buffer;
+        sn0_refcnt_buf_t* direct_refcnt_buffer;        
+        sn0_refcnt_args_t* refcnt_args;
+        int npages;
+        int gen_start;
+        int numnodes;
+        int page;
+        int node;
+        char mem_node[512];
+        refcnt_t* set_base;
+
+        sprintf(pfile, "/proc/%05d", pid);
+        if ((fd = open(pfile, O_RDONLY)) < 0) {
+		fprintf(stderr,"Can't open /proc/%d", pid);
+		exit(1);
+	}
+
+        vaddr = (char *)( (unsigned long)vaddr & ~(hw_page_size-1) );
+        npages = (len + (hw_page_size-1)) >> logb2(hw_page_size);
+
+        if ((refcnt_buffer = malloc(sizeof(sn0_refcnt_buf_t) * npages)) == NULL) {
+                perror("malloc refcnt_buffer");
+                exit(1);
+        }
+        
+        if ((direct_refcnt_buffer = malloc(sizeof(sn0_refcnt_buf_t) * npages)) == NULL) {
+                perror("malloc refcnt_buffer");
+                exit(1);
+        }
+        
+        if ((refcnt_args = malloc(sizeof(sn0_refcnt_args_t))) == NULL) {
+                perror("malloc refcnt_args");
+                exit(1);
+        }
+
+        refcnt_args->vaddr = (__uint64_t)vaddr;
+        refcnt_args->len = len;
+        refcnt_args->buf = refcnt_buffer;
+
+        if ((gen_start = ioctl(fd, PIOCGETSN0EXTREFCNTRS, (void *)refcnt_args)) < 0) {
+		perror("ioctl  PIOCGETSN0EXTREFCNTRS returns error");
+		exit(1);
+	}
+
+        refcnt_args->vaddr = (__uint64_t)vaddr;
+        refcnt_args->len = len;
+        refcnt_args->buf = direct_refcnt_buffer;        
+        if ((gen_start = ioctl(fd, PIOCGETSN0REFCNTRS, (void *)refcnt_args)) < 0) {
+		perror("ioctl  PIOCGETSN0REFCNTRS returns error");
+		exit(1);
+	}
+        
+        if ((numnodes = sysmp(MP_NUMNODES)) < 0) {
+                perror("sysmp MP_NUMNODES");
+                exit(1);
+        }
+
+        for (page = 0; page < npages; page++) {
+                printf("page[%05d, 0x%lx, 0x%llx (0x%llx)]:",
+                       page,
+                       vaddr + page*0x1000,
+                       refcnt_buffer[page].paddr,
+                       refcnt_buffer[page].paddr >> 14);
+                for (node = 0; node < numnodes; node++) {
+                        printf(" %ll05d (%ll06d)",
+                               refcnt_buffer[page].refcnt_set.refcnt[node],
+                               direct_refcnt_buffer[page].refcnt_set.refcnt[node]);
+                }
+                printf("\n");
+                
+                set_base = paddr_to_setbase(refcnt_buffer[page].cnodeid,
+                                            refcnt_buffer[page].paddr);
+                printf("MMAPPED CTRS: ");
+                for (node = 0; node < numnodes; node++) {
+                        printf(" %ll05d (%ll06d)",
+                               set_base[node],
+                               direct_refcnt_buffer[page].refcnt_set.refcnt[node]);
+                }
+                printf("\n");
+        }
+
+        close(fd);
+        free(refcnt_args);
+        free(refcnt_buffer);
+}
+
+void
+check_refcounters(char* vaddr, int len)
+{
+        pid_t pid = getpid();
+        char  pfile[256];
+        int fd;
+        sn0_refcnt_buf_t* refcnt_buffer;
+        sn0_refcnt_buf_t* direct_refcnt_buffer;        
+        sn0_refcnt_args_t* refcnt_args;
+        int npages;
+        int gen_start;
+        int numnodes;
+        int page;
+        int node;
+        char mem_node[512];
+        refcnt_t* set_base;
+
+        sprintf(pfile, "/proc/%05d", pid);
+        if ((fd = open(pfile, O_RDONLY)) < 0) {
+		fprintf(stderr,"Can't open /proc/%d", pid);
+		exit(1);
+	}
+
+        vaddr = (char *)( (unsigned long)vaddr & ~0xfff );
+        npages = (len + 0xfff) >> 12;
+
+        if ((refcnt_buffer = malloc(sizeof(sn0_refcnt_buf_t) * npages)) == NULL) {
+                perror("malloc refcnt_buffer");
+                exit(1);
+        }
+        
+        if ((direct_refcnt_buffer = malloc(sizeof(sn0_refcnt_buf_t) * npages)) == NULL) {
+                perror("malloc refcnt_buffer");
+                exit(1);
+        }
+        
+        if ((refcnt_args = malloc(sizeof(sn0_refcnt_args_t))) == NULL) {
+                perror("malloc refcnt_args");
+                exit(1);
+        }
+
+        refcnt_args->vaddr = (__uint64_t)vaddr;
+        refcnt_args->len = len;
+        refcnt_args->buf = refcnt_buffer;
+
+        if ((gen_start = ioctl(fd, PIOCGETSN0EXTREFCNTRS, (void *)refcnt_args)) < 0) {
+		perror("ioctl  PIOCGETSN0EXTREFCNTRS returns error");
+		exit(1);
+	}
+
+        refcnt_args->vaddr = (__uint64_t)vaddr;
+        refcnt_args->len = len;
+        refcnt_args->buf = direct_refcnt_buffer;        
+        if ((gen_start = ioctl(fd, PIOCGETSN0REFCNTRS, (void *)refcnt_args)) < 0) {
+		perror("ioctl  PIOCGETSN0REFCNTRS returns error");
+		exit(1);
+	}
+        
+        if ((numnodes = sysmp(MP_NUMNODES)) < 0) {
+                perror("sysmp MP_NUMNODES");
+                exit(1);
+        }
+
+        for (page = 0; page < npages; page++) {
+                set_base = paddr_to_setbase(refcnt_buffer[page].cnodeid,
+                                            refcnt_buffer[page].paddr);
+                for (node = 0; node < numnodes; node++) {
+                        if (refcnt_buffer[page].refcnt_set.refcnt[node] != 
+                            set_base[node]) {
+                                if (verbose) {
+                                     fprintf(stderr,
+                                     "DIFF: procf-refcnt: %lld, mmapped-refcnt: %lld\n",
+                                     refcnt_buffer[page].refcnt_set.refcnt[node],
+                                     set_base[node]);
+                                }
+                        }
+                }
+        }
+
+        close(fd);
+        free(refcnt_args);
+        free(refcnt_buffer);
+}
+
+
+
+void
+init_buffer(void* m, size_t size)
+{
+        size_t i;
+        char* p = (char*)m;
+        
+        for (i = 0; i < size; i++) {
+                p[i] = (char)i;
+        }
+}
+
+long
+buffer_auto_dotproduct_update(void* m, size_t size)
+{
+        size_t i;
+        size_t j;
+        char* p = (char*)m;
+        long sum = 0;
+
+        
+        for (i = 0, j = size - 1; i < size; i++, j--) {
+                sum += (long)p[i]-- * (long)p[j]++;
+        }
+
+        return (sum);
+}
+
+long
+cache_trash(long* m, size_t long_size)
+{
+        int i;
+        long sum = 0;
+
+        for (i = 0; i < long_size; i++) {
+               m[i] = i;
+        }
+
+        for (i = 0; i < long_size; i++) {
+                sum += m[i];
+        }
+
+        return (sum);
+}
+
+
+        
+void
+do_stuff(void* m, size_t size, int loops, char* label)
+{
+        long total = 0;
+        int count = loops;
+
+        while (count--) {
+                total += buffer_auto_dotproduct_update(m, size);
+                total += cache_trash(cache_trash_buffer, CACHE_TRASH_SIZE);
+        }
+
+        if (verbose) {
+                printf("{%s}, sum after %d loops: 0x%x\n", label, loops, total);
+        }
+}
+
+
+
+void
+main(int argc, char** argv)
+{
+        char* thread_node;
+        char* mem_node;
+
+        if (argc != 4) {
+                fprintf(stderr,
+                "Usage %s <thread-node> <mem-node> <0|1 (verbose)>\n", argv[0]);
+                exit(1);
+        }
+
+        thread_node = argv[1];
+        mem_node = argv[2];
+        verbose = atoi(argv[3]);
+
+        mmap_counters();
+        hw_page_size = rcbinfo[0]->rcb_granularity;
+        
+        /*
+         * Place data, migr off
+         */
+        place_data(&fixed_data_pool[0], DATA_POOL_SIZE, mem_node, 0);
+        init_buffer(&fixed_data_pool[0], DATA_POOL_SIZE);
+        
+        /*
+         * Place process
+         */
+        place_process(thread_node);
+
+        
+        /*
+         * Reference pages & verify
+         */
+
+        do_stuff(fixed_data_pool, DATA_POOL_SIZE, 100, "FIXED");
+
+        if (verbose) {
+                print_refcounters(fixed_data_pool, DATA_POOL_SIZE);
+        }
+
+        check_refcounters(fixed_data_pool, DATA_POOL_SIZE);
+
+        
+
+}        
+        
+.Ee
+.PP
+The output on ricotta follows:
+.Ex
+ricotta:migr> mapcnt /hw/nodenum/3 /hw/nodenum/3  1
+Opening dev /hw/nodenum/0/refcnt
+RCB for node [0]
+        rcb_len: 4194304
+        rcb_sw_sets: 65536
+        rcb_sw_counters_per_set: 8
+        rcb_sw_counter_size: 8
+        rcb_base_pages: 16384
+        rcb_base_page_size: 16384
+        rcb_base_paddr: 0x800000000
+        rcb_cnodeid: 0
+        rcb_granularity: 4096
+        rcb_hw_counter_max: 2047
+        rcb_diff_threshold: 10
+        rcb_abs_threshold: 1023
+        Slot[0]: 0x800000000 -> 0x808000000, size: 0x8000000
+        Slot[1]: 0x820000000 -> 0x828000000, size: 0x8000000
+        Slot[2]: 0x840000000 -> 0x840000000, size: 0x0
+        Slot[3]: 0x860000000 -> 0x860000000, size: 0x0
+        Slot[4]: 0x880000000 -> 0x880000000, size: 0x0
+        Slot[5]: 0x8a0000000 -> 0x8a0000000, size: 0x0
+        Slot[6]: 0x8c0000000 -> 0x8c0000000, size: 0x0
+        Slot[7]: 0x8e0000000 -> 0x8e0000000, size: 0x0
+Opening dev /hw/nodenum/1/refcnt
+RCB for node [1]
+        rcb_len: 4194304
+        rcb_sw_sets: 65536
+        rcb_sw_counters_per_set: 8
+        rcb_sw_counter_size: 8
+        rcb_base_pages: 16384
+        rcb_base_page_size: 16384
+        rcb_base_paddr: 0x900000000
+        rcb_cnodeid: 1
+        rcb_granularity: 4096
+        rcb_hw_counter_max: 2047
+        rcb_diff_threshold: 10
+        rcb_abs_threshold: 1023
+        Slot[0]: 0x900000000 -> 0x908000000, size: 0x8000000
+        Slot[1]: 0x920000000 -> 0x928000000, size: 0x8000000
+        Slot[2]: 0x940000000 -> 0x940000000, size: 0x0
+        Slot[3]: 0x960000000 -> 0x960000000, size: 0x0
+        Slot[4]: 0x980000000 -> 0x980000000, size: 0x0
+        Slot[5]: 0x9a0000000 -> 0x9a0000000, size: 0x0
+        Slot[6]: 0x9c0000000 -> 0x9c0000000, size: 0x0
+        Slot[7]: 0x9e0000000 -> 0x9e0000000, size: 0x0
+Opening dev /hw/nodenum/2/refcnt
+RCB for node [2]
+        rcb_len: 4194304
+        rcb_sw_sets: 65536
+        rcb_sw_counters_per_set: 8
+        rcb_sw_counter_size: 8
+        rcb_base_pages: 16384
+        rcb_base_page_size: 16384
+        rcb_base_paddr: 0xa00000000
+        rcb_cnodeid: 2
+        rcb_granularity: 4096
+        rcb_hw_counter_max: 2047
+        rcb_diff_threshold: 10
+        rcb_abs_threshold: 1023
+        Slot[0]: 0xa00000000 -> 0xa08000000, size: 0x8000000
+        Slot[1]: 0xa20000000 -> 0xa28000000, size: 0x8000000
+        Slot[2]: 0xa40000000 -> 0xa40000000, size: 0x0
+        Slot[3]: 0xa60000000 -> 0xa60000000, size: 0x0
+        Slot[4]: 0xa80000000 -> 0xa80000000, size: 0x0
+        Slot[5]: 0xaa0000000 -> 0xaa0000000, size: 0x0
+        Slot[6]: 0xac0000000 -> 0xac0000000, size: 0x0
+        Slot[7]: 0xae0000000 -> 0xae0000000, size: 0x0
+Opening dev /hw/nodenum/3/refcnt
+RCB for node [3]
+        rcb_len: 4194304
+        rcb_sw_sets: 65536
+        rcb_sw_counters_per_set: 8
+        rcb_sw_counter_size: 8
+        rcb_base_pages: 16384
+        rcb_base_page_size: 16384
+        rcb_base_paddr: 0xb00000000
+        rcb_cnodeid: 3
+        rcb_granularity: 4096
+        rcb_hw_counter_max: 2047
+        rcb_diff_threshold: 10
+        rcb_abs_threshold: 1023
+        Slot[0]: 0xb00000000 -> 0xb08000000, size: 0x8000000
+        Slot[1]: 0xb20000000 -> 0xb28000000, size: 0x8000000
+        Slot[2]: 0xb40000000 -> 0xb40000000, size: 0x0
+        Slot[3]: 0xb60000000 -> 0xb60000000, size: 0x0
+        Slot[4]: 0xb80000000 -> 0xb80000000, size: 0x0
+        Slot[5]: 0xba0000000 -> 0xba0000000, size: 0x0
+        Slot[6]: 0xbc0000000 -> 0xbc0000000, size: 0x0
+        Slot[7]: 0xbe0000000 -> 0xbe0000000, size: 0x0
+Opening dev /hw/nodenum/4/refcnt
+RCB for node [4]
+        rcb_len: 4194304
+        rcb_sw_sets: 65536
+        rcb_sw_counters_per_set: 8
+        rcb_sw_counter_size: 8
+        rcb_base_pages: 16384
+        rcb_base_page_size: 16384
+        rcb_base_paddr: 0xc00000000
+        rcb_cnodeid: 4
+        rcb_granularity: 4096
+        rcb_hw_counter_max: 2047
+        rcb_diff_threshold: 10
+        rcb_abs_threshold: 1023
+        Slot[0]: 0xc00000000 -> 0xc08000000, size: 0x8000000
+        Slot[1]: 0xc20000000 -> 0xc28000000, size: 0x8000000
+        Slot[2]: 0xc40000000 -> 0xc40000000, size: 0x0
+        Slot[3]: 0xc60000000 -> 0xc60000000, size: 0x0
+        Slot[4]: 0xc80000000 -> 0xc80000000, size: 0x0
+        Slot[5]: 0xca0000000 -> 0xca0000000, size: 0x0
+        Slot[6]: 0xcc0000000 -> 0xcc0000000, size: 0x0
+        Slot[7]: 0xce0000000 -> 0xce0000000, size: 0x0
+Opening dev /hw/nodenum/5/refcnt
+RCB for node [5]
+        rcb_len: 4194304
+        rcb_sw_sets: 65536
+        rcb_sw_counters_per_set: 8
+        rcb_sw_counter_size: 8
+        rcb_base_pages: 16384
+        rcb_base_page_size: 16384
+        rcb_base_paddr: 0xd00000000
+        rcb_cnodeid: 5
+        rcb_granularity: 4096
+        rcb_hw_counter_max: 2047
+        rcb_diff_threshold: 10
+        rcb_abs_threshold: 1023
+        Slot[0]: 0xd00000000 -> 0xd08000000, size: 0x8000000
+        Slot[1]: 0xd20000000 -> 0xd28000000, size: 0x8000000
+        Slot[2]: 0xd40000000 -> 0xd40000000, size: 0x0
+        Slot[3]: 0xd60000000 -> 0xd60000000, size: 0x0
+        Slot[4]: 0xd80000000 -> 0xd80000000, size: 0x0
+        Slot[5]: 0xda0000000 -> 0xda0000000, size: 0x0
+        Slot[6]: 0xdc0000000 -> 0xdc0000000, size: 0x0
+        Slot[7]: 0xde0000000 -> 0xde0000000, size: 0x0
+Opening dev /hw/nodenum/6/refcnt
+RCB for node [6]
+        rcb_len: 4194304
+        rcb_sw_sets: 65536
+        rcb_sw_counters_per_set: 8
+        rcb_sw_counter_size: 8
+        rcb_base_pages: 16384
+        rcb_base_page_size: 16384
+        rcb_base_paddr: 0xe00000000
+        rcb_cnodeid: 6
+        rcb_granularity: 4096
+        rcb_hw_counter_max: 2047
+        rcb_diff_threshold: 10
+        rcb_abs_threshold: 1023
+        Slot[0]: 0xe00000000 -> 0xe08000000, size: 0x8000000
+        Slot[1]: 0xe20000000 -> 0xe28000000, size: 0x8000000
+        Slot[2]: 0xe40000000 -> 0xe40000000, size: 0x0
+        Slot[3]: 0xe60000000 -> 0xe60000000, size: 0x0
+        Slot[4]: 0xe80000000 -> 0xe80000000, size: 0x0
+        Slot[5]: 0xea0000000 -> 0xea0000000, size: 0x0
+        Slot[6]: 0xec0000000 -> 0xec0000000, size: 0x0
+        Slot[7]: 0xee0000000 -> 0xee0000000, size: 0x0
+Opening dev /hw/nodenum/7/refcnt
+RCB for node [7]
+        rcb_len: 4194304
+        rcb_sw_sets: 65536
+        rcb_sw_counters_per_set: 8
+        rcb_sw_counter_size: 8
+        rcb_base_pages: 16384
+        rcb_base_page_size: 16384
+        rcb_base_paddr: 0xf00000000
+        rcb_cnodeid: 7
+        rcb_granularity: 4096
+        rcb_hw_counter_max: 2047
+        rcb_diff_threshold: 10
+        rcb_abs_threshold: 1023
+        Slot[0]: 0xf00000000 -> 0xf08000000, size: 0x8000000
+        Slot[1]: 0xf20000000 -> 0xf28000000, size: 0x8000000
+        Slot[2]: 0xf40000000 -> 0xf40000000, size: 0x0
+        Slot[3]: 0xf60000000 -> 0xf60000000, size: 0x0
+        Slot[4]: 0xf80000000 -> 0xf80000000, size: 0x0
+        Slot[5]: 0xfa0000000 -> 0xfa0000000, size: 0x0
+        Slot[6]: 0xfc0000000 -> 0xfc0000000, size: 0x0
+        Slot[7]: 0xfe0000000 -> 0xfe0000000, size: 0x0
+{FIXED}, sum after 100 loops: 0xee780000
+page[00000, 0x10004000, 0xa242a0000 (0x2890a8)]: 00000 (000029) 00000 (000007) 00000 (000000) 00000 (002047) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00000 (000029) 00000 (000007) 00000 (000000) 00000 (002047) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00001, 0x10005000, 0xa242a1000 (0x2890a8)]: 00000 (000033) 00000 (000032) 00000 (000000) 00000 (002047) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00000 (000033) 00000 (000032) 00000 (000000) 00000 (002047) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00002, 0x10006000, 0xa242a2000 (0x2890a8)]: 00000 (000032) 00000 (000032) 00000 (000000) 00000 (002047) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00000 (000032) 00000 (000032) 00000 (000000) 00000 (002047) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00003, 0x10007000, 0xa242a3000 (0x2890a8)]: 00000 (000032) 00000 (000032) 00000 (000000) 00000 (002047) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00000 (000032) 00000 (000032) 00000 (000000) 00000 (002047) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00004, 0x10008000, 0xb226a4000 (0x2c89a9)]: 00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00005, 0x10009000, 0xb226a5000 (0x2c89a9)]: 00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00006, 0x1000a000, 0xb226a6000 (0x2c89a9)]: 00033 (000000) 00000 (000000) 00000 (000000) 02826 (000180) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00033 (000000) 00000 (000000) 00000 (000000) 02826 (000180) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00007, 0x1000b000, 0xb226a7000 (0x2c89a9)]: 00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00008, 0x1000c000, 0xb276a8000 (0x2c9daa)]: 00032 (000000) 00000 (000000) 00000 (000000) 03037 (000160) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00032 (000000) 00000 (000000) 00000 (000000) 03037 (000160) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00009, 0x1000d000, 0xb276a9000 (0x2c9daa)]: 00032 (000000) 00000 (000000) 00000 (000000) 03007 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00032 (000000) 00000 (000000) 00000 (000000) 03007 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00010, 0x1000e000, 0xb276aa000 (0x2c9daa)]: 00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00011, 0x1000f000, 0xb276ab000 (0x2c9daa)]: 00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00012, 0x10010000, 0xb03eac000 (0x2c0fab)]: 00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00013, 0x10011000, 0xb03ead000 (0x2c0fab)]: 00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00014, 0x10012000, 0xb03eae000 (0x2c0fab)]: 00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00015, 0x10013000, 0xb03eaf000 (0x2c0fab)]: 00032 (000000) 00000 (000000) 00000 (000000) 02975 (000224) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00032 (000000) 00000 (000000) 00000 (000000) 02975 (000224) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00016, 0x10014000, 0xb05ab0000 (0x2c16ac)]: 00032 (000000) 00000 (000000) 00000 (000000) 02877 (000214) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00032 (000000) 00000 (000000) 00000 (000000) 02877 (000214) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00017, 0x10015000, 0xb05ab1000 (0x2c16ac)]: 00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00018, 0x10016000, 0xb05ab2000 (0x2c16ac)]: 00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00019, 0x10017000, 0xb05ab3000 (0x2c16ac)]: 00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00020, 0x10018000, 0xb242b4000 (0x2c90ad)]: 00032 (000000) 00000 (000000) 00000 (000000) 02976 (000224) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00032 (000000) 00000 (000000) 00000 (000000) 02976 (000224) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00021, 0x10019000, 0xb242b5000 (0x2c90ad)]: 00032 (000000) 00000 (000000) 00000 (000000) 03009 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00032 (000000) 00000 (000000) 00000 (000000) 03009 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00022, 0x1001a000, 0xb242b6000 (0x2c90ad)]: 00035 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00035 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00023, 0x1001b000, 0xb242b7000 (0x2c90ad)]: 00033 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00033 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00024, 0x1001c000, 0xb246b8000 (0x2c91ae)]: 00033 (000000) 00000 (000000) 00000 (000000) 03008 (000195) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00033 (000000) 00000 (000000) 00000 (000000) 03008 (000195) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00025, 0x1001d000, 0xb246b9000 (0x2c91ae)]: 00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00026, 0x1001e000, 0xb246ba000 (0x2c91ae)]: 00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00027, 0x1001f000, 0xb246bb000 (0x2c91ae)]: 00032 (000000) 00000 (000000) 00000 (000000) 03007 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00032 (000000) 00000 (000000) 00000 (000000) 03007 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00028, 0x10020000, 0xb252bc000 (0x2c94af)]: 00033 (000000) 00000 (000000) 00000 (000000) 02977 (000226) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00033 (000000) 00000 (000000) 00000 (000000) 02977 (000226) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00029, 0x10021000, 0xb252bd000 (0x2c94af)]: 00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00030, 0x10022000, 0xb252be000 (0x2c94af)]: 00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+page[00031, 0x10023000, 0xb252bf000 (0x2c94af)]: 00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+MMAPPED CTRS:  00032 (000000) 00000 (000000) 00000 (000000) 03008 (000192) 00000 (000000) 00000 (000000) 00000 (000000) 00000 (000000)
+ricot
+.Ee
+
+.SH CAVEATS
+The reference counters are not virtualized. This means that if a process
+starts paging, or its pages start migrating, the counter set associated
+with a virtual page will change. 
+.PP
+The extended memory reference counters may be out of sync with the
+hardware reference counters by up to the hardware reference counter
+maximum count (2047 for 11-bit counters and 524287 for 19-bit counters).
+
+.SH SEE ALSO
+For more information, see numa(5), mmci(5), proc(4), migration(5), sn(1), nstats(1)

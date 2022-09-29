@@ -1,0 +1,128 @@
+#!/bin/sh
+# $Revision: 1.8 $
+
+#
+# NAME
+#       aliases-ip - configure network IP aliases
+#
+# SYNOPSIS
+#       /etc/init.d/aliases-ip ( start | stop ) [ debug ]
+#
+# DESCRIPTION
+#       This script automates the configuration of IP address aliases for
+#       network interfaces.
+#
+#       The file /etc/config/ipaliases.options contains the list of hosts or
+#       IP addresses to be used as IP address aliases. The format of
+#       this file is:
+#
+#               interface host1 [netmask addr] [broadcast addr]
+#               interface host2 [netmask addr] [broadcast addr]
+#               ...
+#               interface host3 [netmask addr] [broadcast addr]
+#
+#       hosti is either a valid hostname in /etc/hosts or is a "dot"
+#       notation IP address as in 192.22.33.44.  The interface should be
+#       the interface name as reported by netstat -i which will support
+#       the alias (i.e. ec0, ec3, et cetera).
+#
+# NOTE:
+#	If you have previously installed the PPP IP alias interim solution
+#	then you will have a ppp ip alias data file named "/etc/ip-aliases.tab'
+#	which is in the wrong format and location.
+#	To convert this file to the new format, run the following command lines
+#	The shell variable 'interface' should be set to the name of the network
+#	interface on which you want the new alias'es to be assigned.
+#	
+#	OLD=/etc/ipaliases.tab
+#	NEW=/etc/config/ipaliases.options
+#	interface=ec0
+#
+#	while read alias
+#	do
+#		stuff=`echo $alias | sed -e 's/^#.*//'`
+#		test -n "$stuff" && echo "$interface $stuff" >> $NEW
+#	done < $OLD
+#	
+# FILES
+#       /etc/hosts              # host table file
+#       /etc/config/ipaliases.options
+#                               # table of IP addresses to configure.
+#       /etc/config/ipaliases   # chkconfig control file for ipaliases startup
+#       /etc/config/network     # chkconfig control file for network startup
+#
+# SEE ALSO
+#       chkconfig(1M), ifconfig(1M), netstat(1), routed(1M)
+#
+# COPYRIGHT NOTICE
+#       Copyright (C) 1995, Silicon Graphics.  All Rights Reserved.
+#
+
+#
+# Configuration variables
+#
+IPALIASES_TABLE="/etc/config/ipaliases.options"
+
+#
+# Convenience macros
+#
+IS_ON="/sbin/chkconfig"
+IFCONFIG="/usr/etc/ifconfig"
+
+#
+# If "debug" is passed as second argument, enable output of noisy commands
+# to stdout/stderr. Otherwise redirect extraneous output to /dev/null.
+#
+if test "$2" = "debug" || $IS_ON verbose ; then
+    DBGOUT="/dev/fd/1"
+    DBGERR="/dev/fd/2"
+else
+    DBGOUT="/dev/null"
+    DBGERR="/dev/null"
+fi
+
+#
+# "main" body.  Handle "start|stop".
+#
+case $1 in
+    "start")
+    if $IS_ON network && $IS_ON ipaliases; then
+
+        #
+        # Get hosts from ipaliases.tab.  Parse out # comments which begin
+        # in first column.
+        #
+        while read line
+        do
+                ipaliases=`echo $line | sed -e 's/[     ]*#.*$//' -e '/^$/d' `
+                if test -z "$ipaliases" ; then
+                        continue;
+                fi
+		read interface host restofline <<-EOF
+		$ipaliases
+		EOF
+                /sbin/suattr -C CAP_NETWORK_MGT+ip -c "$IFCONFIG $interface alias $host $restofline" && echo "Adding alias $host to interface $interface" > $DBGOUT;
+        done < $IPALIASES_TABLE
+    fi
+    ;;
+
+    "stop")
+	if $IS_ON network && $IS_ON ipaliases; then
+        #
+        # Get hosts from ipaliases.tab.  Parse out # comments which begin
+        # in first column.
+        #
+        while read line
+        do
+                ipaliases=`echo $line | sed -e 's/[     ]*#.*$//' -e '/^$/d' `
+                if test -z "$ipaliases" ; then
+                        continue;
+                fi
+		read interface host restofline <<-EOF
+		$ipaliases
+		EOF
+                /sbin/suattr -C CAP_NETWORK_MGT+ip -c "$IFCONFIG $interface delete $host" && echo "Deleting alias $host to interface $interface" > $DBGOUT;
+        done < $IPALIASES_TABLE
+	fi
+    ;;
+esac

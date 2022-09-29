@@ -1,0 +1,273 @@
+'\"macro stdmacro
+.if n .pH man1.nsd @(#)nsd	1.0 of 11/7/96
+.TH NSD 1M
+.SH NAME
+nsd \- UNS name service daemon
+.SH SYNOPSIS
+.B /usr/etc/nsd
+[
+.B \-lnv
+]
+[
+.BI \-t " timeout"
+]
+[
+.BI \-a " key=value"
+]
+.SH DESCRIPTION
+.IX  "nsd command"  ""  "\fLnsd\fP \(em UNS server process"
+The Unified Name Service (UNS) provides a generic interface to network
+lookup services.  The daemon provides a filesystem front end to the
+name service namespace, and maintains local cache files.  The services
+that the nsd daemon supports are NIS and NIS+ - the Network Information
+Service, DNS - the Domain Name Service, local configuration files,
+MDBM, NDBM, and DB - local hash files, LDAP - Lightweight Directory
+Access Protocol.
+
+By default the nsd daemon is activated at system startup time from the
+\fI/etc/init.d/network\fR startup script if the configuration flag \fBnsd\fR
+is set on (see \fIchkconfig\fR(1M)).  The default options to the daemon
+can be set by changing the file \fI/etc/config/nsd.options\fP.
+
+The nsd daemon acts as a user level stacked filesystem.  Each request is
+converted into a pathname and an internal filesystem tree is walked to
+find the result.  If any path element does not exist name service library
+routines are called in order until the element is found.  The libraries,
+and the order to use them, are specified in the nsd configuration file
+\fBnsswitch.conf\fR.  For the default domain this is /etc/nsswitch.conf,
+and for domains for which we are a server it would be
+/var/ns/domains/<domainname>/nsswitch.conf (for the given <domainname>).
+
+Keys which are looked up are cached into local hash files found in
+/var/ns/cache/.  The name service API routine ns_lookup(3N) will check
+in the cache for keys that have already been looked up before calling
+the nsd daemon.  All of the name service library routines such as
+getpwnam(3C), gethostbyname(3N), etc. are built on top of the ns_lookup(3)
+interface.
+
+The nsd daemon presents the keys through the filesystem in the files
+/ns/domain/table/key.  To lookup the password entry for the root user
+in the domain engr.sgi.com you could simply cat the file:
+/ns/engr.sgi.com/passwd.byname/root.  A special directory \fI.local\fR
+is created for the local domain so the root password entry for the local domain
+can always be found in the file: /ns/.local/passwd.byname/root.  A
+special file \fI.all\fR is created in each table directory which enumerates the
+entire table.  Using 'cat /ns/.local/passwd.byname/.all' would list
+every password entry using all the library routines listed in nsswitch.conf.
+Finally, a special directory \fI.library\fR is created under each table
+directory for each of the libraries listed for that table in nsswitch.conf.
+Listing every password entry for the local NIS domain can be done by: 'cat
+/ns/.local/passwd.byname/.nis/.all'.
+
+When the nsd daemon is started it automatically mounts the name service
+namespace onto \fI/ns\fR using the nsmount command.  The ns_lookup()
+library routine will always open files under this directory to satisfy
+the requests from name service lookups so this should not be changed.
+
+.SH "Attributes"
+The nsd daemon uses named attributes attached to the files in its internal
+filesystem to control behavior.  Attributes are inherited from parent
+directories if they do not exist on the individual files.  These attributes
+are usually set from the nsswitch.conf configuration file, but global
+attributes can be set from the command line using the \fB-a\fR option.
+Attributes are key value pairs where both the key and value are strings,
+but may be interpreted internally as character strings, integers or booleans.
+
+Most attributes are library specific, and are listed in the section 7P
+manual page for the protocols, but a few are universal or used by the
+\fBnsd\fP daemon proper.  Attributes that are to be set for all domains for
+for use by nsd must be set on the nsd command line using the -a flag.
+Attributes that are intended for one library may be set in the appropriate
+nsswitch.conf file.  Attributes that are not supported by a library are
+simply ignored.   
+.TP
+.B timeout
+The \fBtimeout\fR attribute sets the cache file record timeout in seconds.
+This should be set to a positive integer value, the default is 300
+(five minutes).
+.TP
+.B negative_timeout
+The \fBnegative_timeout\fR attribute sets the cache file record timeout in
+seconds for lookups that failed.  If this attribute is unset (the default)
+the value of the \fBtimeout\fR attribute is used.  This should be set to a
+positive integer value, the default is to use the value of the timeout attribute
+which defaults to 300 seconds.
+.TP
+.B lookup_timeout
+The \fBlookup_timeout\fR attribute set the timeout of files under /ns in
+seconds.  If this attribute is unset (the default) the internal file timeout
+(-t command line option) is used.  This should be set to a positive integer
+value, and defaults to the value given by the '-t' command line option, or
+30 seconds.
+.TP
+.B list_timeout
+The \fBlist_timeout\fR attribute set the timeout of the special enumeration
+files under /ns (.all) in seconds. If this attribute is unset (the default) the
+internal file timeout (-t command line option) is used.  This should be set
+to a positive integer value, the default is to use the value given with
+the '-t' command line option, or 30 seconds.
+.TP
+.B wait_for_server
+The \fBwait_for_server\fR attribute determines whether nsd should try forever
+to reach a name server or should fail the request if a server cannot be found.
+This is a boolean value which should be set to "true" or "false", and
+defaults to false.
+.TP 
+.B domain
+The \fBdomain\fR attribute is empty by default and sets the default domain.
+The interpretation of this varies by protocol.  It should be set to a character
+string, see the protocol man pages for explanations of how this string is
+used.
+.TP
+.B program
+The \fBprogram\fR attribute is the name of the daemon used in printing
+error messages.  It is automatically set to the character string passed
+in the environment, and should be considered read only.
+.TP
+.B library
+The \fBlibrary\fP attribute is set to the name of the protocol library,
+as given in nsswitch.conf, which provided the information.  It should be
+considered read only.
+.TP 
+.B hostname
+The \fBhostname\fR attribute is the primary name of the local system.  It
+is automatically set by calling \fBhostname(1)\fP, and should be considered
+read only.
+.TP
+.B local
+The \fBlocal\fR attribute marks part of the tree as being only accessible
+by the local host.  By default the ".local" domain is marked as
+\fBlocal\fR, while all other trees may be remotely read.  This is a
+boolean value which defaults to "false" for all but the ".local" subtree
+which defaults to "true".
+.TP
+.B mode
+The \fBmode\fP attribute controls the permissions of the cache files created
+by nsd.   This should be set to an octal integer value, the default is 0666
+and is modified by the nsd processes umask.
+.TP
+.B owner
+The \fBowner\fP attribute controls the owner of the cache files created
+by nsd.  This should be set to an integer user ID, and the default is 0.
+.TP
+.B group
+The \fBgroup\fP attribute controls the group of the cache files created
+by nsd.   This should be set to an integer group ID and the default is 0.
+.TP
+.B cachesize
+The \fBcachesize\fP attribute controls the fixed size of the cache files
+created by nsd.  This should be set to an integer power of 2 and
+defaults to 4.  The formula for computing the resulting cache size is:
+(2^n * p), where \fBn\fP is the value of the \fBcachesize\fP
+parameter and \fBp\fP is the current pagesize.  Using the default
+values, this formula becomes (2^4 * 4096) or 64KB.
+.TP
+.B pagesize
+The \fBpagesize\fP attribute controls the mdbm pagesize of the cache
+files created by nsd.   This should be set to an integer power of 2 between
+8 and 16.  The default is 12 resulting in a 4KB page size.
+.TP
+.B casefold
+The \fBcasefold\fP attribute tells the protocol libraries that keys should
+be delt with in a case insensitive manner.  The default is unset (false)
+except for the maps bootparams, ethers.byname, hosts.byname, mail.aliases,
+and netgroup.byhost which default to "true".   For protocol libraries that
+can not process keys in a case insensitive manner, the key will be
+lowercased. 
+.TP
+.B dynamic
+The \fBdynamic\fP attribute allows nsd to create and use table names
+that have not been listed in \fBnsswitch.conf(4)\fP.  The dynamic
+tables are created as subdirectories of the table marked
+\fBdynamic\fP.  The obvious example would be \fBAutoFS\fP maps.  The
+nsswitch.conf line:
+
+.in +0.5in
+automount(dynamic):	nis ldap
+.in -0.5in
+
+instructs nsd to allow tables to be created as subdirectories
+of the \fBautomount\fP directory.  The dynamically created tables
+inherit all protocol information (\fBnis\fP first followed by
+\fBldap\fP) as well as owner and permissions from their parent
+directory, in this case \fB/ns/.local/automount\fP. Following the
+filesystem semantics of the nsd interface, the dynamic tables are
+created with the \fBmkdir(2)\fP system call. 
+.TP
+.B enumerate_key
+The \fBenumerate_key\fP attribute requests that the key be added to the
+line for each item when enumerating a map.  This exists for maps which
+traditionally did not include the keys but may need to be parsed like the
+traditional file that they were generated from.  These are: automount,
+bootparams and netgroup.
+.SH "ADMINISTRATION"
+The command \fBnsadmin\fP(1M) allows for a simple protocol-independent
+method for manipulating the name space and cache files maintained by
+nsd.
+
+The nsd daemon has handlers for a number of signals so that its behavior
+can be controlled while running.  Sending nsd the SIGHUP signal will cause
+the daemon to reread all the nsswitch.conf files and rebuild its internal
+filesystem.  The SIGUSR1 signal will cause the daemon to write a listing
+of its filesystem into the file \fI/var/tmp/nsd.dump\fR which can be useful
+for debugging.  The SIGUSR2 signal
+will cycle the log level, increasing the level one value on each signal
+through level six, then setting it back to zero.  Sending the SIGTERM
+signal will cause nsd to exit cleanly, attempting to unmount the /ns
+filesystem.
+
+An example would be if you changed the nsswitch.conf file you would type:
+"killall -HUP nsd" for the changes to take affect.
+
+.SH "NSD OPTIONS"
+.PP
+The following options can be specified in
+.IR /etc/config/nsd.options
+or on the nsd command line:
+.TP
+.B \-a " key=value"
+sets the named attribute given by key to the string given by value.
+See above, and each of the protocol man pages, for interesting attributes
+with their default and allowable values.
+.TP
+.B \-l " level"
+sets the log level to a value from 0 through 6.  The higher the level
+the more verbose the debug logging.  This defaults to 1, and can
+be changed at run time by sending the SIGUSR2 signal to the process.
+Levels above 2 are primarily for debugging.
+.TP
+.B \-n
+tells nsd not to mount the /ns filesystem.
+.TP
+.B \-t " timeout"
+sets the internal file timeout to the specified value in seconds.  The
+default in 30 seconds.
+.TP
+.B \-v
+``Verbose'' \- run the daemon in foreground and display messages
+to stderr instead of syslog.
+
+.SH "FILES"
+.nf
+/etc/config/nsd.options
+/etc/nsswitch.conf
+/var/ns/cache/*
+/var/ns/domains/*
+/var/ns/lib/libns_*.so
+/var/tmp/nsd.dump
+.fi
+
+.SH "BUGS"
+Since the nsd daemon uses the NFS protocol to present the data to the
+local system it should never be sent a SIGKILL signal, or be forced to
+exit.  Doing so results in logged messages of the form "NFS3 access failed
+for server localhost (nsd): Timed out".  Cleanly unmounting the filesystem
+or restarting the daemon will stop these messages.
+
+When the nsd daemon is not running, or not responding the name service
+routines fall back to local files.
+
+.SH "SEE ALSO"
+ns_lookup(3N), ns_list(3N), nsmount(1M), nsadmin(1M), nsswitch.conf(4),
+chkconfig(1M), 
+dns(7P), nis(7P), files(7P), mdbm(7P), db(7P), ndbm(7P), ldap(7P)

@@ -1,0 +1,52 @@
+#!/usr/bin/perl
+
+#
+# Computes the current checksum of a PROM's loadable sections, then
+# uses the "tag" command to patch the binary so that the checksum
+# becomes zero.  This works because the tag number happens to go
+# into a loadable section.
+#
+
+$max_prom_size = 10 * 1048576;
+
+$convert = "../tools/convert/convert";
+$tag     = "/usr/sbin/tag";
+
+if ($#ARGV < 0) {
+	print STDERR
+	    "Usage: zero_csum prom_binary\n";
+	print STDERR
+	    "   Patches a PROM binary so that the checksum of the\n";
+	print STDERR
+	    "   loadable segments will be zero (according to\n";
+	print STDERR
+	    "   $convert -f pure).\n";
+	exit 1;
+}
+
+$prom_binary = $ARGV[0];
+
+# Remove all signs of existing checksum modification, if any.
+
+system "$tag 0 $prom_binary; $tag -c $prom_binary";
+
+# Calculate current checksum
+
+open(PROMDATA, "$convert -f pure $prom_binary 2> /dev/null |");
+
+($prom_size = read(PROMDATA, $prom_data, $max_prom_size)) <= 0
+	&& die "Can't run: \"$convert -f pure $prom_binary\"";
+
+close(PROMDATA);
+
+$checksum = unpack("%8C*", $prom_data);
+
+#printf "Patching $prom_binary to change checksum from $checksum to zero.\n";
+
+# Tag increases byte sum by tag value (0 to 255) plus 1 ("tagged" bit).
+
+$byte = 255 - $checksum % 256;
+
+system "$tag $byte $prom_binary";
+
+exit 0;

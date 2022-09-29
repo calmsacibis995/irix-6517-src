@@ -1,0 +1,317 @@
+# Copyright 1990 Silicon Graphics, Inc.  All rights reserved.
+#
+#ident "$Revision: 1.1 $"
+#
+# Common makefile rules.
+
+# Notes:
+#	- After including ${ROOT}/usr/include/make/commondefs, a makefile may
+#	  say ``include ${COMMONRULES}'' to get this file.
+#	- It is up to the including makefile to define a default rule before
+#	  including ${COMMONRULES}.
+#	- This file defines the following lists: SOURCES, enumerating all
+#	  source files; OBJECTS, the .o files derived from compilable source;
+#	  and DIRT, which lists intermediates and temporary files to be
+#	  removed by clean.
+#	- The including (parent) makefile may define source file lists for each
+#	  standard suffix: CFILES for .c, ASFILES for .s (named after ASFLAGS),
+#	  YFILES for .y, etc.  This file combines all such lists into SOURCES.
+#	- The parent makefile must define TARGETS in order for clobber to work.
+#	- If the parent makefile must overload the common targets with special
+#	  rules (e.g. to perform recursive or subdirectory makes), then set
+#	  COMMONPREF to some unique prefix before including ${COMMONRULES},
+#	  and make sure that each common target depends on its prefixed name.
+#	  For example, a makefile which passes common targets and install on
+#	  to makes in subdirectories listed in DIRS might say
+#
+#		COMMONPREF= xxx
+#		include ${COMMONRULES}
+#
+#		${COMMONTARGS} install: ${COMMONPREF}$$@
+#			@for d in ${DIRS}; do \
+#				${ECHO} "\tcd $$d; ${MAKE} $@"; \
+#				cd $$d; ${MAKE} $@; cd ..; \
+#			done
+#
+#	  Thus, all of the common rules plus install are passed to sub-makes
+#	  *and* executed in the current makefile (as xxxclean, xxxclobber,
+#	  xxxinstall, etc).
+#
+SOURCES= ${HFILES} ${ASFILES} ${C++FILES} ${CFILES} ${EFILES} ${FFILES} \
+	 ${LFILES} ${PFILES} ${RFILES} ${SHFILES} ${YFILES}
+
+OBJECTS= ${ASFILES:.s=.o} ${C++FILES:.c++=.o} ${CFILES:.c=.o} ${EFILES:.e=.o} \
+	 ${FFILES:.f=.o} ${LFILES:.l=.o} ${PFILES:.p=.o} ${RFILES:.r=.o} \
+	 ${YFILES:.y=.o}
+
+#
+# C++ inference rules.  Certain of these may show up in make someday.
+#
+.SUFFIXES: .c++ .yuk
+
+.c++:
+	${C++} ${C++FLAGS} $< ${LDFLAGS} -o $@
+.c++.o:
+	${C++} ${C++FLAGS} -c $<
+.c++.s:
+	${C++} ${C++FLAGS} -S $<
+.c++.i:
+	${C++} ${C++FLAGS} -E $< > $*.i
+.c++.yuk:
+	${C++} ${C++FLAGS} -Fc -.yuk $<
+
+#
+# Rather than removing ${OBJECTS}, clean removes ${CLEANOBJECTS} which we
+# set to *.[ou] by default, to remove obsolete objects and -O3 ucode files
+# after source has been reorganized.  If files ending in .[ou] should not
+# be removed by clean, this definition can be overridden after the include
+# of commonrules to define CLEANOBJECTS=${OBJECTS}.
+#
+CLEANOBJECTS= *.[ou]
+
+#
+# What gets cleaned, apart from objects.
+#
+DIRT= ${GDIRT} ${VDIRT} ${LDIRT}
+GDIRT= a.out core lex.yy.[co] y.tab.[cho] ${_FORCE}
+
+#
+# An always-unsatisfied target.  The name is unlikely to occur in a file tree,
+# but if _force existed in a make's current directory, this target would be
+# always-satisfied and targets that depended on it would not be made.
+#
+_FORCE= ${COMMONPREF}_force
+${_FORCE}:
+
+#
+# File removal rules: there are three.
+#	- clean removes intermediates and dirt
+#	- clobber removes targets as well as intermediates and dirt
+#	- rmtargets removes targets only
+# One might 'make clean' in a large tree to reclaim disk space after targets
+# are built, but before they are archived into distribution images on disk.
+# One might 'make rmtargets' to remove badly-linked executables, and then
+# run a 'make' to re-link the good objects.
+#
+# If you use incdepend (see below), then 'make clobber' will remove the
+# .*dependtime marker files used by incdepend to find modified ${DEPFILES}.
+# Multi-product incremental depend uses the .*${PRODUCT}incdepend markers.
+# To clobber everything but the marker files, use 'make clean rmtargets'.
+#
+.PRECIOUS: .sdependtime .c++dependtime .cdependtime \
+	   .s${PRODUCT}incdepend .c++${PRODUCT}incdepend .c${PRODUCT}incdepend
+
+${COMMONPREF}clobber: ${COMMONPREF}clean ${COMMONPREF}rmtargets ${_FORCE}
+	rm -rf ${MKDEPFILE} .*dependtime .*incdepend
+
+${COMMONPREF}clean: ${_FORCE}
+	rm -rf ${CLEANOBJECTS} ${DIRT}
+
+${COMMONPREF}rmtargets: ${_FORCE}
+	rm -rf ${TARGETS}
+
+#
+# Automated header dependency inference.  Most makefiles need only set the
+# CFILES, ASFILES, etc. lists and include commonrules.  Those makefiles that
+# build product-dependent source (with product-dependent includes) should set
+# MKDEPRULE to ${EVERYPRODUCT_MKDEPRULE} *after* including commonrules, and
+# should set EVERYPRODUCT to the list of products that they build.
+#
+MKDEPRULE= NP
+EVERYPRODUCT_MKDEPRULE= EP
+
+${COMMONPREF}depend: ${_FORCE}
+	@slist="${ASDEPFILES}" Clist="${C++DEPFILES}" clist="${CDEPFILES}"; \
+	case ${MKDEPRULE} in \
+	  NP)	case "$$slist" in \
+		  *.*) \
+			${ECHO} "${MKDEPENDAS} ${MKDEPFILE} $$slist"; \
+			${MKDEPENDAS} ${MKDEPFILE} $$slist; \
+			touch .sdependtime; \
+		esac; \
+		case "$$Clist" in \
+		  *.*) \
+			${ECHO} "${MKDEPENDC++} ${MKDEPFILE} $$Clist"; \
+			${MKDEPENDC++} ${MKDEPFILE} $$Clist; \
+			touch .c++dependtime; \
+		esac; \
+		case "$$clist" in \
+		  *.*) \
+			${ECHO} "\t${MKDEPENDC} ${MKDEPFILE} $$clist"; \
+			${MKDEPENDC} ${MKDEPFILE} $$clist; \
+			touch .cdependtime; \
+		esac;; \
+	  EP)	nprod=`echo ${EVERYPRODUCT} | wc -w`; \
+		case "$$slist" in \
+		  *.*) \
+		    for p in ${EVERYPRODUCT}""; do \
+			${ECHO} 1>&2 "Making .s depend for PRODUCT $$p."; \
+			${MAKE} -sf ${MAKEFILE} PRODUCT=$$p _s$${p}depend; \
+		    done | \
+		    ${MKDEPEND} ${MKDEPASFLAGS} -p $$nprod ${MKDEPFILE}; \
+		esac; \
+		case "$$Clist" in \
+		  *.*) \
+		    for p in ${EVERYPRODUCT}""; do \
+			${ECHO} 1>&2 "Making .c++ depend for PRODUCT $$p."; \
+			${MAKE} -sf ${MAKEFILE} PRODUCT=$$p _c++$${p}depend; \
+		    done | \
+		    ${MKDEPEND} ${MKDEPC++FLAGS} -p $$nprod ${MKDEPFILE}; \
+		esac; \
+		case "$$clist" in \
+		  *.*) \
+		    for p in ${EVERYPRODUCT}""; do \
+			${ECHO} 1>&2 "Making .c depend for PRODUCT $$p."; \
+			${MAKE} -sf ${MAKEFILE} PRODUCT=$$p _c$${p}depend; \
+		    done | \
+		    ${MKDEPEND} ${MKDEPCFLAGS} -p $$nprod ${MKDEPFILE}; \
+		esac; \
+	esac
+
+_s${PRODUCT}depend: ${ASDEPFILES} ${_FORCE}
+	${ASF} -M ${ASDEPFILES} | ${PRODUCT_RAWDEPFILTER}; \
+	touch .s${PRODUCT}incdepend
+
+_c++${PRODUCT}depend: ${C++DEPFILES} ${_FORCE}
+	${C++F} -M ${C++DEPFILES} | ${PRODUCT_RAWDEPFILTER}; \
+	touch .c++${PRODUCT}incdepend
+
+_c${PRODUCT}depend: ${CDEPFILES} ${_FORCE}
+	${CCF} -M ${CDEPFILES} | ${PRODUCT_RAWDEPFILTER}; \
+	touch .c${PRODUCT}incdepend
+
+#
+# Incremental depend uses marker files to find ${DEPFILES} that are newer
+# than their dependencies.  Note that the non-incremental rules, above, also
+# touch the marker files.  Care is taken not to write a product-independent
+# dependency on ${DEPFILES}, so that the list of dependent source can vary
+# with each product.
+#
+# XXX can't run only one sub-make that depends on all .*dependtime, because
+# XXX smake will parallelize and mkdepend doesn't interlock itself
+#
+${COMMONPREF}incdepend: ${_FORCE}
+	@slist="${ASDEPFILES}" Clist="${C++DEPFILES}" clist="${CDEPFILES}"; \
+	case ${MKDEPRULE} in \
+	  NP)	case "$$slist" in \
+		  *.*) \
+			${MAKE} -f ${MAKEFILE} _quiet.sdependtime; \
+		esac; \
+		case "$$Clist" in \
+		  *.*) \
+			${MAKE} -f ${MAKEFILE} _quiet.c++dependtime; \
+		esac; \
+		case "$$clist" in \
+		  *.*) \
+			${MAKE} -f ${MAKEFILE} _quiet.cdependtime; \
+		esac;; \
+	  EP)	nprod=`echo ${EVERYPRODUCT} | wc -w`; \
+		case "$$slist" in \
+		  *.*) \
+		    for p in ${EVERYPRODUCT}""; do \
+			${ECHO} 1>&2 "Making .s incdepend for PRODUCT $$p."; \
+			${MAKE} -sf ${MAKEFILE} PRODUCT=$$p _s$${p}incdepend; \
+		    done | \
+		    ${MKDEPEND} ${MKDEPASFLAGS} -ip $$nprod ${MKDEPFILE}; \
+		esac; \
+		case "$$Clist" in \
+		  *.*) \
+		    for p in ${EVERYPRODUCT}""; do \
+			${ECHO} 1>&2 "Making .c++ incdepend for PRODUCT $$p.";\
+			${MAKE} -sf ${MAKEFILE} PRODUCT=$$p _c++$${p}incdepend;\
+		    done | \
+		    ${MKDEPEND} ${MKDEPC++FLAGS} -ip $$nprod ${MKDEPFILE}; \
+		esac; \
+		case "$$clist" in \
+		  *.*) \
+		    for p in ${EVERYPRODUCT}""; do \
+			${ECHO} 1>&2 "Making .c incdepend for PRODUCT $$p."; \
+			${MAKE} -sf ${MAKEFILE} PRODUCT=$$p _c$${p}incdepend; \
+		    done | \
+		    ${MKDEPEND} ${MKDEPCFLAGS} -ip $$nprod ${MKDEPFILE}; \
+		esac; \
+	esac
+
+# so that make doesn't announce "`.sdependtime' is up to date."
+_quiet.sdependtime: .sdependtime
+_quiet.c++dependtime: .c++dependtime
+_quiet.cdependtime: .cdependtime
+
+.sdependtime: ${ASDEPFILES}
+	@if test -n "$?"; then \
+		${ECHO} "\t${MKDEPENDAS} -i ${MKDEPFILE} $?"; \
+		${MKDEPENDAS} -i ${MKDEPFILE} $?; \
+		touch $@; \
+	fi
+
+.c++dependtime: ${C++DEPFILES}
+	@if test -n "$?"; then \
+		${ECHO} "\t${MKDEPENDC++} -i ${MKDEPFILE} $?"; \
+		${MKDEPENDC++} -i ${MKDEPFILE} $?; \
+		touch $@; \
+	fi
+
+.cdependtime: ${CDEPFILES}
+	@if test -n "$?"; then \
+		${ECHO} "\t${MKDEPENDC} -i ${MKDEPFILE} $?"; \
+		${MKDEPENDC} -i ${MKDEPFILE} $?; \
+		touch $@; \
+	fi
+
+# you can't add dependencies to a target that begins with '.'
+_s${PRODUCT}incdepend: .s${PRODUCT}incdepend
+_c++${PRODUCT}incdepend: .c++${PRODUCT}incdepend
+_c${PRODUCT}incdepend: .c${PRODUCT}incdepend
+
+.s${PRODUCT}incdepend: ${ASDEPFILES}
+	@if test -n "$?"; then \
+		${ASF} -M $? | ${PRODUCT_RAWDEPFILTER}; \
+		touch $@; \
+	fi
+
+.c++${PRODUCT}incdepend: ${C++DEPFILES}
+	@if test -n "$?"; then \
+		${C++F} -M $? | ${PRODUCT_RAWDEPFILTER}; \
+		touch $@; \
+	fi
+
+.c${PRODUCT}incdepend: ${CDEPFILES}
+	@if test -n "$?"; then \
+		${CCF} -M $? | ${PRODUCT_RAWDEPFILTER}; \
+		touch $@; \
+	fi
+
+#
+# A sed filter that prepends ${VPATH} to object targets emitted by cc -M.
+# ${VPATH} should name a directory that holds product-dependent objects.
+#
+PRODUCT_RAWDEPFILTER= sed -e 's:^:${VPATH}/:'
+
+#
+# Lint and C tags support.
+#
+${COMMONPREF}fluff: ${_FORCE}
+	${LINT} ${LINTFLAGS} ${CDEFS} ${CINCS} ${CFILES} ${LDLIBS}
+
+CTAGS= ctags
+
+${COMMONPREF}tags: ${_FORCE}
+	rm -f tags
+	find . \( -name '*.[cfhlpy]' -o -name '*.c++' \) \
+		! -name '.*' ! -name 'llib-*' ! -name '*,v' \
+		${CTAGFINDARGS} -print | \
+	    sed 's:^\./::' | \
+	    xargs ${CTAGS} -a ${CTAGOPTS}
+	if test -f tags; then \
+		sort -u +0 -1 -o tags tags; \
+	fi
+
+#
+# Include the make dependency file if it exists.
+#
+#sinclude ${MKDEPFILE}
+
+#
+# Local make rules
+#
+#sinclude ${LOCALRULES}

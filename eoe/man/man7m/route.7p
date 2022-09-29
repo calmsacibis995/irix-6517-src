@@ -1,0 +1,279 @@
+'\"macro stdmacro
+.if n .pH man7.route @(#)route	30.3 of 2/1/86
+.nr X
+.if \nX=0 .ds x} ROUTE 7P "Silicon Graphics" "\&"
+.if \nX=1 .ds x} ROUTE 7P "Source Code Control System Utilities"
+.if \nX=2 .ds x} ROUTE 7P "" "\&"
+.if \nX=3 .ds x} ROUTE "" "" "\&"
+.TH \*(x}
+.UC 5
+.\" Copyright (c) 1990, 1991, 1993
+.\"	The Regents of the University of California.  All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\" 3. All advertising materials mentioning features or use of this software
+.\"    must display the following acknowledgement:
+.\"	This product includes software developed by the University of
+.\"	California, Berkeley and its contributors.
+.\" 4. Neither the name of the University nor the names of its contributors
+.\"    may be used to endorse or promote products derived from this software
+.\"    without specific prior written permission.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\"     @(#)route.4	8.6 (Berkeley) 4/19/94
+.\"
+.Dt ROUTE 4
+.Os
+.SH NAME
+route \-
+kernel packet forwarding database
+.SH SYNOPSIS
+.B #include <sys/socket.h>
+.br
+.B #include <net/if.h>
+.br
+.B #include <net/route.h>
+.br
+.B int socket(PF_ROUTE, SOCK_RAW, family);
+.SH DESCRIPTION
+The system
+provides some packet routing facilities.
+The kernel maintains a routing information database, which
+is used in selecting the appropriate network interface when
+transmitting packets.
+.PP
+A user process (or possibly multiple co-operating processes)
+maintains this database by sending messages over a special kind
+of socket.
+This supplants fixed size
+.IR ioctl (2)'s
+used in earlier releases.
+Routing table changes may only be carried out by the super user.
+.PP
+The operating system may spontaneously emit routing messages in response
+to external events, such as receipt of a re-direct, or failure to
+locate a suitable route for a request.
+The message types are described in greater detail below.
+.PP
+Routing database entries come in two flavors: for a specific
+host, or for all hosts on a generic subnetwork (as specified
+by a bit mask and value under the mask.
+The effect of wildcard or default route may be achieved by using
+a mask of all zeros, and there may be hierarchical routes.
+.PP
+When the system is booted and addresses are assigned
+to the network interfaces, each protocol family
+installs a routing table entry for each interface when it is ready for traffic.
+Normally the protocol specifies the route
+through each interface as a
+``direct''
+connection to the destination host
+or network.  If the route is direct, the transport layer of
+a protocol family usually requests the packet be sent to the
+same host specified in the packet.  Otherwise, the interface
+is requested to address the packet to the gateway listed in the routing entry
+(
+.I i.e.
+the packet is forwarded).
+.PP
+When routing a packet,
+the kernel will attempt to find 
+the most specific route matching the destination.
+(If there are two different mask and value-under-the-mask pairs
+that match, the more specific is the one with more bits in the mask.
+A route to a host is regarded as being supplied with a mask of
+as many ones as there are bits in the destination).
+If no entry is found, the destination is declared to be unreachable,
+and a routing\-miss message is generated if there are any
+listers on the routing control socket described below.
+.PP
+A wildcard routing entry is specified with a zero
+destination address value, and a mask of all zeroes.
+Wildcard routes will be used
+when the system fails to find other routes matching the
+destination.  The combination of wildcard
+routes and routing redirects can provide an economical
+mechanism for routing traffic.
+.PP
+One opens the channel for passing routing control messages
+by using the socket call shown in the synopsis above:
+.PP
+The
+.I family
+parameter may be
+.I AF_UNSPEC
+which will provide
+routing information for all address families, or can be restricted
+to a specific address family by specifying which one is desired.
+There can be more than one routing socket open per system.
+.PP
+Messages are formed by a header followed by a small
+number of sockaddrs
+interpreted by position.
+An example of a message with three addresses might be a
+redirect:
+Destination, Gateway, and Author of the redirect.
+The interpretation of which addresses are present is given by a
+bit mask within the header, and the sequence is least significant
+to most significant bit within the vector.
+.PP
+Any messages sent to the kernel are returned, and copies are sent
+to all interested listeners.  The kernel will provide the process
+id. for the sender, and the sender may use an additional sequence
+field to distinguish between outstanding messages.  However,
+message replies may be lost when kernel buffers are exhausted.
+.PP
+The kernel may reject certain messages, and will indicate this
+by filling in the
+.I rtm_errno
+field.
+The routing code returns
+.I EEXIST
+if
+requested to duplicate an existing entry,
+.I ESRCH
+if
+requested to delete a non-existent entry,
+or
+.I ENOBUFS
+if insufficient resources were available
+to install a new route.
+In the current implementation, all routing processes run locally,
+and the values for
+.I rtm_errno
+are available through the normal
+.I errno
+mechanism, even if the routing reply message is lost.
+.PP
+A process may avoid the expense of reading replies to
+its own messages by issuing a
+.IR setsockopt (2)
+call indicating that the
+.I SO_USELOOPBACK
+option
+at the
+.I SOL_SOCKET
+level is to be turned off.
+A process may ignore all messages from the routing socket
+by doing a 
+.IR shutdown (2)
+system call for further input.
+.PP
+If a route is in use when it is deleted,
+the routing entry will be marked down and removed from the routing table,
+but the resources associated with it will not
+be reclaimed until all references to it are released. 
+User processes can obtain information about the routing
+entry to a specific destination by using a
+.I RTM_GET
+message,
+or by reading the
+.I /dev/kmem
+device.
+.PP
+Messages include:
+.Ex
+#define	RTM_ADD		0x1    /* Add Route */
+#define	RTM_DELETE	0x2    /* Delete Route */
+#define	RTM_CHANGE	0x3    /* Change Metrics, Flags, or Gateway */
+#define	RTM_GET		0x4    /* Report Information */
+#define	RTM_LOOSING	0x5    /* Kernel Suspects Partitioning */
+#define	RTM_REDIRECT	0x6    /* Told to use different route */
+#define	RTM_MISS		0x7    /* Lookup failed on this address */
+#define	RTM_RESOLVE	0xb    /* request to resolve dst to LL addr */
+.Ee
+.PP
+A message header consists of:
+.Ex
+struct rt_msghdr {
+    u_short rmt_msglen;  /* to skip over non-understood messages */
+    u_char  rtm_version; /* future binary compatibility */
+    u_char  rtm_type;    /* message type */
+    u_short rmt_index;   /* index for associated ifp */
+    pid_t   rmt_pid;     /* identify sender */
+    __uint32_t     rtm_addrs;   /* bitmask identifying sockaddrs in msg */
+    int     rtm_seq;     /* for sender to identify action */
+    int     rtm_errno;   /* why failed */
+    int     rtm_flags;   /* flags, incl kern & message, e.g. DONE */
+    int     rtm_use;     /* from rtentry */
+    u_long  rtm_inits;   /* which values we are initializing */
+    struct  rt_metrics rtm_rmx;	/* metrics themselves */
+};
+.Ee
+.PP
+where
+.Ex
+struct rt_metrics {
+    u_long rmx_locks;     /* Kernel must leave these values alone */
+    u_long rmx_mtu;       /* MTU for this path */
+    u_long rmx_hopcount;  /* max hops expected */
+    u_long rmx_expire;    /* lifetime for route, e.g. redirect */
+    u_long rmx_recvpipe;  /* inbound delay-bandwidth product */
+    u_long rmx_sendpipe;  /* outbound delay-bandwidth product */
+    u_long rmx_ssthresh;  /* outbound gateway buffer limit */
+    u_long rmx_rtt;       /* estimated round trip time */
+    u_long rmx_rttvar;    /* estimated rtt variance */
+};
+.Ee
+.PP
+Flags include the values:
+.Ex
+#define	RTF_UP        0x1       /* route usable */
+#define	RTF_GATEWAY   0x2       /* destination is a gateway */
+#define	RTF_HOST      0x4       /* host entry (net otherwise) */
+#define	RTF_REJECT    0x8       /* host or net unreachable */
+#define	RTF_DYNAMIC   0x10      /* created dynamically (by redirect) */
+#define	RTF_MODIFIED  0x20      /* modified dynamically (by redirect) */
+#define	RTF_DONE      0x40      /* message confirmed */
+#define	RTF_MASK      0x80      /* subnet mask present */
+#define	RTF_CLONING   0x100     /* generate new routes on use */
+#define	RTF_XRESOLVE  0x200     /* external daemon resolves name */
+#define	RTF_LLINFO    0x400     /* generated by ARP or ESIS */
+#define	RTF_STATIC    0x800     /* manually added */
+#define	RTF_BLACKHOLE 0x1000    /* just discard pkts (during updates) */
+#define	RTF_PROTO2    0x4000    /* protocol specific routing flag #1 */
+#define	RTF_PROTO1    0x8000    /* protocol specific routing flag #2 */
+#define	RTF_CKSUM     0x10000   /* TCP/UDP checksumming done on this route */
+.Ee
+.PP
+Specifiers for metric values in rmx_locks and rtm_inits are:
+.Ex
+#define	RTV_SSTHRESH  0x1    /* init or lock _ssthresh */
+#define	RTV_RPIPE     0x2    /* init or lock _recvpipe */
+#define	RTV_SPIPE     0x4    /* init or lock _sendpipe */
+#define	RTV_HOPCOUNT  0x8    /* init or lock _hopcount */
+#define	RTV_RTT       0x10   /* init or lock _rtt */
+#define	RTV_RTTVAR    0x20   /* init or lock _rttvar */
+#define	RTV_MTU       0x40   /* init or lock _mtu */
+.Ee
+.PP
+Specifiers for which addresses are present in the messages are:
+.Ex
+#define RTA_DST       0x1    /* destination sockaddr present */
+#define RTA_GATEWAY   0x2    /* gateway sockaddr present */
+#define RTA_NETMASK   0x4    /* netmask sockaddr present */
+#define RTA_GENMASK   0x8    /* cloning mask sockaddr present */
+#define RTA_IFP       0x10   /* interface name sockaddr present */
+#define RTA_IFA       0x20   /* interface addr sockaddr present */
+#define RTA_AUTHOR    0x40   /* sockaddr for author of redirect */
+.Ee
+.SH "SEE ALSO"
+ip(7p), netintro(7p)

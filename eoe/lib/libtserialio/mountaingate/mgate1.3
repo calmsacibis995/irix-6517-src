@@ -1,0 +1,277 @@
+
+===================================
+Technical Proposal for Mountaingate
+Serial Deck Emulation Kernel Support
+VERSION 1.3
+===================================
+
+--- Terms
+
+SGI provides the custom software described below to Mountaingate.
+
+Mountaingate may use this software to develop a demo for trade shows.
+SGI will fix any problems in SGI's custom software if it does not
+perform the task described below.
+
+Mountaingate may not use this software in any shipping product.
+SGI will not support any such use.
+
+SGI will send the custom software to mountaingate by February 5th,
+1997.
+
+SGI will provide functionality equivalent to this custom software in a
+public SGI operating system release.  "Equivalent" is defined below.
+Mountaingate must build their shipping products on that release,
+and not this custom software.
+
+This agreement does not commit SGI to any particular developer beta or
+customer shipment date for this public SGI operating system release.
+
+SGI is free to offer the support described in this agreement to any
+other customer at any time, under any terms.
+
+OUTSTANDING ISSUE: this agreement is pending coordination with SGI
+employees Ted Wilcox and Eric Lin, who are working out some PCI 32/64
+issues with Mountaingate.  SGI's custom tserialio support may have
+interdependencies with SGI's custom PCI support.
+
+
+--- Basic Proposal
+
+- Mountaingate installs "IRIX 6.3 for O2 including R10000"
+
+- Mountaingate installs patch 1719
+
+- Mountaingate doesn't install any other patches or images, except
+possibly some dmedia patches or images agreed upon by SGI and
+Mountaingate.
+
+- SGI gives Mountaingate a new /var/sysgen/boot/tserialio.o, which has
+3 new entry points described below.
+
+- Mountaingate writes their own deck control driver which uses the new
+entry points.  this driver can be static or dynamic.
+
+- SGI provides some skeleton sample code for the deck control driver 
+to be written by Mountaingate, which shows:
+        1. how to use the 3 new entry points to echo input serial 
+           characters to the output within 2ms.
+        2. how to expose an mmap() interface to user mode for use
+           with these new callbacks
+
+- SGI provides a way for Mountaingate to get the current value
+of the UST clock from any part of their deck control driver.
+
+- SGI provides a way to allocate properly colored kernel pages which
+can be mapped into user space with no virtual coherency problems
+(kvpalloc/kvpfree).
+
+- Mountaingate may use a set of (normally unsupported) ll/sc 
+atomic operations listed below in their O2-based demo
+
+- Mountaingate also writes and includes their own driver for a PCI
+fiberchannel driver.
+
+
+--- Mountaingate's app will manage the serial ports this way:
+
+- Mountaingate's user-mode app will first open their desired serial
+port using normal tserialio calls (see man tserialio).  at no point
+in the lifetime of this TSport will Mountaingate's app use tsRead()
+or tsWrite().  the port runs at 38400 baud or less.  Mountaingate
+will open each port only once for reading and once for writing.
+
+- Mountaingate then opens their deck control driver, and passes it
+(presumably via an ioctl()) the minor device number of the serial port
+in question (1 for port 1 and 2 for port 2)
+
+- the deck control driver then calls the first of the 3 new entry
+points to register a callback function:
+
+typedef void (*callback_t)(int minor, stamp_t now);
+
+void tsio_register_callback(int minor, callback_t funcptr);
+
+  - minor is the minor device number described above
+  - funcptr is a pointer to a Mountaingate-written function
+    which tserialio will call at every time t = (1ms)*N +-1ms
+    for N=0,1,2,3,.....
+
+    tserialio will then begin calling the callback function.
+
+    if funcptr is NULL, tserialio will cease to call any previously
+    registered callback function for that minor device.  
+    Mountaingate must be sure to do this before their driver is closed, 
+    and especially before their driver is unloaded.
+
+    the argument 'minor' to the callback routine contains the
+    minor number of the serial port which Mountaingate's callback
+    routine should manipulate.
+
+    Mountaingate may register a callback for both serial ports
+    simultaneously.  this of course requires having two TSports open
+    in user-mode.  the callbacks may have the same funcptr (the 
+    function will be able to tell which port it is to manipulate
+    by examining 'minor').
+
+    the argument 'now' contains the current UST (unadjusted system time),
+    whose characteristics are defined in dmGetUST(3dm).
+ 
+    the deck control driver's callback function may:
+
+    - access physical or pinned virtual memory, 
+      even memory mapped into user mode
+    - call tsio_uart_read, described below
+    - call tsio_uart_write, described below
+    - use the ll/sc atomic operations from this list:
+        extern int atomicAddInt(int *, int);
+        extern uint atomicAddUint(uint *, uint);
+        extern long atomicAddLong(long *, long);
+        extern unsigned long atomicAddUlong(unsigned long *, unsigned long);
+        extern int64_t atomicAddInt64(int64_t *, int64_t);
+        extern uint64_t atomicAddUint64(uint64_t *, uint64_t);
+        extern long atomicSetLong(long *, long);
+        extern long atomicClearLong(long *, long);
+        extern int atomicSetInt(int *, int);
+        extern int atomicClearInt(int *, int);
+        extern uint atomicSetUint(uint *, uint);
+        extern uint atomicClearUint(uint *, uint);
+        extern unsigned long atomicSetUlong(unsigned long *, unsigned long);
+        extern unsigned long atomicClearUlong(unsigned long *, unsigned long);
+        extern uint_t   bitlock_clr(uint_t bits*, uint_t lockbit, uint_t clr);
+        extern uint_t   bitlock_set(uint_t bits*, uint_t lockbit, uint_t set);
+        extern int      test_and_set_int(int * loc, int new);
+        extern long     test_and_set_long(long * loc, long new);
+        extern void *   test_and_set_long(long * loc, long new);
+        extern int      compare_and_swap_int(int *, int old, int new);
+        extern int      compare_and_swap_long(long *, long old, long new);
+        extern int      compare_and_swap_ptr(void **, void *old, void *new);
+
+    the callback function will be executing at spl7, which is
+    higher than splhi.  none of the standard kernel facilities
+    will work from this processor level. so the deck control
+    driver's callback function may not:
+
+    - make any call that would cause the routine to sleep
+    - attempt to spin waiting for the user process or another
+      interrupt.  this would spin forever.
+    - do anything that would generate a page fault
+    - acquire, release, or test any locks, mutexes, or semaphores
+    - allocate memory
+    - schedule an itimeout/dtimeout
+    - use any other standard kernel facility documented in a D2 man page
+
+int tsio_uart_read(unsigned char *buf, int atmost);
+
+  - this function may only be called from the callback function described
+    above.  it reads bytes from the serial port whose minor device
+    number is specified in the callback's 'minor' argument.
+
+  - the function will return >=0 and <='atmost', indicating the
+    number of bytes actually read.  <'atmost' means that there was
+    no more data to be read from the port.
+    
+  - Mountaingate will always empty the serial port on each callback.
+    this means that Mountaingate's callback function will call 
+    tsio_uart_read() until it returns <'atmost'.
+
+  - the bytes read in each callback arrived at the electrical jack
+    between the current time and the entry time of the last callback
+    on that minor device.
+
+  - this function cannot be used to detect framing, parity, or overrun
+    errors on the serial line.  SGI assumes that the sony checksums
+    will be sufficient to detect electrical problems with the serial 
+    connection.
+
+int tsio_uart_write(unsigned char *buf, int atmost);
+
+  - this function may only be called from the callback function described
+    above.  it enqueues bytes for transmission out the serial port 
+    whose minor device number is specified in the callback's 
+    'minor' argument.
+
+  - the function will return >=0 and <='atmost', indicating the
+    number of bytes actually written.  <'atmost' means that there was
+    no more space to enqueue data to the port.
+
+  - the port has en enormous upper limit on the number of bytes
+    which can be queued up for output (ie, it is unlikely that
+    you will ever get a return value of <'atmost').  it is the 
+    responsibility of Mountaingate's callback to make sure that 
+    it doesn't enqueue too many bytes at a time on the port and 
+    thus operate with a large latency.
+
+  - if there are currently no bytes queued for transmission, a byte
+    enqueued via tsio_uart_write() will go out the electrical
+    jack within 1ms of the return from tsio_uart_write().
+
+- Mountaingate's deck control driver will communicate with Mountaingate's
+application via a means of their own choosing.
+
+- Mountaingate's deck control driver will not call any functions of
+the video driver or any driver other than tserialio.  Mountaingate's
+application will bring video vertical sync timing information to
+their deck control driver by sending video UST/MSC pairs to the
+driver (perhaps through shared memory).
+
+- when the connection needs to be shut down, Mountaingate's deck control
+driver will first call tsio_register_callback with NULL to deactivate
+the callback, and then mountaingate's application will close the TSport.
+
+
+--- Future "Equivalent" Support in IRIX
+
+SGI will add "equivalent" functionality to that described above as a
+supported IRIX feature.  "equivalent" may mean:
+
+- the reliable 1ms event may occur in user-mode instead of in a driver
+in the future support.  it may not be available from a driver.
+
+- the means of opening, reading to, and writing from the serial port
+may or may not be via the tserialio API.  but the timeliness
+characteristics (ie, how code can detect when a byte came in / will go
+out, how quickly software can respond to an incoming byte by
+outputting a different byte) will be the same as described above.
+
+- if the 1ms event occurs in user-mode, Mountaingate will use
+dmGetUST() to get the UST clock.  if it remains in kernel-mode, SGI
+will provide an officially supported, machine-independent "get ust"
+call as part of the DDK of that release.
+
+- if the 1ms event occurs in user-mode, Mountaingate will use one of
+the currently supported user-mode atomic operations (see man
+test_and_set(3P)) or write their own to run in user-mode.  if it
+remains in kernel-mode, SGI will provide some way for Mountaingate to
+accomplish all of the atomic operations in test_and_set(3P), but the
+way may be machine-dependent (it depends on what SGI hardware
+platforms Mountaingate needs to support, and on whether SGI chooses to
+add these operations to the DDK).
+
+- if the 1ms event remains in kernel mode, SGI will provide some way
+for Mountaingate to allocate properly colored kernel pages for
+their user mapping.  the way may be machine dependent (see above).
+
+- therefore, mountaingate may have to move their driver code into
+user mode between the demo and product versions.
+
+
+--- Revision History
+
+This revision scheme is used both for this document
+and for the software SGI provides to Mountaingate.
+
+1.0 original
+1.1 fixed typo in tsio_uart_read description
+    "second argument" -> "'minor' argument"
+1.2 fixed typo in baud rate statement
+    fixed typo in eqivalent section
+    clarify timeliness guarantee for "equivalent" future support
+    added info about currently unsupported UST and atomic op functions
+    add note that agreement is pending coordination with PCI 32/64
+       support from Ted Wilcox and Eric Lin
+1.3 provide first software to Mountaingate
+    add note about page color and allocation
+    add note about only opening a port once for each direction
+    add non-exclusive note
+

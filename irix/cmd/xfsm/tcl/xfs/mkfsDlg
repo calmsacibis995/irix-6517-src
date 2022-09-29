@@ -1,0 +1,919 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	mkfsDlg
+# Version:	$Revision: 1.9 $
+# Synopsis:	Encapsulates the dialog that allows the user to create a
+#		filesystem.
+# Functions:	mkfsDlg:realize
+#		mkfsDlg:manage
+#		mkfsDlg:fill
+#		mkfsDlg:setData
+#		mkfsDlg:getData
+#		mkfsDlg:_create
+#		mkfsDlg:_createGeneralArea
+#		mkfsDlg:_createAdvArea
+#		mkfsDlg:_dialogCb
+#		mkfsDlg:_accept
+#		mkfsDlg:_doAccept
+#		mkfsDlg:_save
+#		mkfsDlg:_rsrcClassCb
+#		mkfsDlg:_rsrcClass
+#		mkfsDlg:_advancedCb
+#		mkfsDlg:_comboActivateCb
+#		mkfsDlg:_comboSelectCb
+#		mkfsDlg:_comboAction
+#		mkfsDlg:_searchActoin
+#		mkfsDlg:_newHostName
+#		mkfsDlg:_newFsName
+#		mkfsDlg:_newFsType
+#		mkfsDlg:_withdrawPanel
+#%COMMENT_END
+
+global	G_data
+foreach item {mntPtPnl advEfsPnl advXfsPnl exportPnl fsSrchVpDlg} {
+	if {! [info exists G_data(source,$item)]} {
+		source $G_data(sourcedir)/$item
+		set G_data(source,$item) true
+	}
+}
+
+#########################################
+#		Public			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	mkfsDlg:realize
+# Synopsis:	Creates an instance of the dialog.  On the first call, any
+#		class-wide data is initialized.  If an instance of this
+#		dialog already exists for the given handle, no action is taken.
+# Arguments:	- handle	An identifier that is used as a key for storing
+#				(and later retrieving) the created widgets and
+#				any instance specific data.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc mkfsDlg:realize { handle parent } \
+{
+	global		_GW_mkfs _GD_mkfs
+	set name	mkfsDlg
+
+	####	One time initialization
+	if {! [info exists _GD_mkfs(initialized)]} {
+		set _GD_mkfs(buttons)	{accept apply cancel help}
+		set _GD_mkfs(advopts)	{fs export}
+		set _GD_mkfs(labels)	{XFS_FS_HOST}
+		set _GD_mkfs(radios)	{XFS_FS_TYPE}
+		set _GD_mkfs(XFS_FS_TYPE,opts)	{XFS EFS}
+		set _GD_mkfs(RSRC_CLASS,opts)	{VOL PART}
+		set _GD_mkfs(combos)	{XFS_FS_NAME}
+		set _GD_mkfs(btns)	{SEARCH}
+	}
+
+	####	Per instance initialization / creation
+	if {! [info exists _GW_mkfs($handle,dialog)]} {
+
+		set _GD_mkfs($handle,type)	XFS
+		set _GD_mkfs($handle,class)	""
+		set _GD_mkfs($handle,confirm)	false
+		trace variable _GD_mkfs($handle,confirm) w $name:_doAccept
+
+		set _GW_mkfs($handle,dialog) [$name:_create $handle $parent]
+
+		####	Volume/Partition Search
+		vpSrch:realize $handle $_GW_mkfs($handle,dialog)
+		vpSrch:registerSearchExecute $handle mkfsDlg:_searchAction
+
+		####	This must happen after the dialog is realized
+		$_GW_mkfs($handle,dialog) realizeWidget
+                $_GW_mkfs($handle,dialog) getValues \
+				-height _GD_mkfs(default,min,height) \
+				-width _GD_mkfs(default,min,width)
+		xfs:setDialogMinMax $_GW_mkfs($handle,dialog) \
+				$_GD_mkfs(default,min,height) \
+				$_GD_mkfs(default,min,height) \
+				$_GD_mkfs(default,min,width)
+
+		####	Panes
+		$_GW_mkfs($handle,ga) getValues -height height
+		$_GW_mkfs($handle,ga) setValues -paneMinimum $height
+		$_GW_mkfs($handle,aa) getValues -height height
+		$_GW_mkfs($handle,aa) setValues \
+				-paneMinimum $height \
+				-paneMaximum $height
+		$_GW_mkfs($handle,buttons) getValues -height height
+		$_GW_mkfs($handle,buttons) setValues \
+				-paneMinimum $height \
+				-paneMaximum $height
+
+		####	Initialize widget values
+		$_GW_mkfs($handle,XFS-tb) setValues -set true
+
+		set host [fsSrch:getHost fs]
+		set _GD_mkfs($handle,hfn) [fsSrch:getHost fs]
+		$_GW_mkfs($handle,XFS_FS_HOST) setValues \
+				-labelString [hu:getHostPlusDom $host]
+		$name:_newHostName $handle $host
+
+		$name:_newFsType $handle XFS
+		$name:_rsrcClass $handle $_GW_mkfs($handle,VOL) VOL
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	mkfsDlg:manage
+# Synopsis:	Manages an instance of the dialog and sets the value of the
+#		trace variable to false.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc mkfsDlg:manage { handle } \
+{
+	global	_GW_mkfs _GD_mkfs
+
+	if {[info exists _GW_mkfs($handle,dialog)]} {
+		mntPt:manage $handle
+		$_GW_mkfs($handle,dialog) manageChild
+		set _GD_mkfs($handle,accept) false
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	mkfsDlg:fill
+# Synopsis:	Sets the hostname for the dialog and executes
+#		mkfsDlg:_searchAction() which will fill the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc mkfsDlg:fill { handle } \
+{
+	global	_GW_mkfs
+
+	$_GW_mkfs($handle,dialog) defineCursor watch
+	set host [fsSrch:getHost fs]
+	if {! [vpSrch:setHost $handle $host]} {
+		$_GW_mkfs($handle,dialog) defineCursor ""
+		return -1
+	}
+	if {! [vpSrch:volSearch $handle]} {
+		set error true
+	}
+	if {! [vpSrch:partSearch $handle]} {
+		set error true
+	}
+	if {[info exists error]} {
+		####	TODO:	Need to do anything here?
+	}
+
+	mkfsDlg:_searchAction $handle
+	
+	lappend data "XFS_FS_HOST:$host"
+	mkfsDlg:setData $handle $data
+
+	$_GW_mkfs($handle,dialog) defineCursor ""
+}
+
+#%COMMENT_BEGIN
+# Function:	mkfsDlg:setData
+# Synopsis:	Currently sets the hostname and calls mkfsDlg:_newHostName()
+# Arguments:	- handle	The identifier for the desired instance.
+#		- lst		A list of keyword/value pairs.  Only XFS_FS_HOST
+#				is recognized, all others are ignored.
+#%COMMENT_END
+proc mkfsDlg:setData { handle lst } \
+{
+	global		_GW_mkfs _GD_mkfs
+
+	foreach item $lst {
+		set x   [split $item ":"]
+		set key [string trim [lindex $x 0]]
+		set val [string trim [lindex $x 1]]
+
+		switch $key {
+			XFS_FS_HOST {
+				$_GW_mkfs($handle,$key) setValues \
+					-labelString [hu:getHostPlusDom $val]
+				mkfsDlg:_newHostName $handle $val
+				set _GD_mkfs($handle,hfn) $val
+			}
+		}
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	mkfsDlg:getData
+# Synopsis:	Reads the data from the dialog and stores it in keyword/value
+#		pair format.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- data		A reference to a variable in which to store
+#				the data.
+#		- check		An optional parameter that indicates whether
+#				or not to check the data for completeness.
+#				(default value: true)
+#%COMMENT_END
+proc mkfsDlg:getData { handle data {check true} } \
+{
+	global		_GW_mkfs _GD_mkfs
+	upvar $data	dat
+	set rval	1
+
+	set key XFS_FS_HOST
+	lappend dat "$key:$_GD_mkfs($handle,hfn)"
+	lappend dat "XFS_FS_TYPE:$_GD_mkfs($handle,type,curr)"
+	if {$_GD_mkfs($handle,class) == "VOL"} {
+		lappend dat "XFS_XLV_DEVICE_NAME:true"
+	} else {
+		lappend dat "XFS_XLV_DEVICE_NAME:false"
+	}
+
+	foreach key $_GD_mkfs(combos) {
+	    set val [string trim [combo:getValue $_GW_mkfs($handle,$key)]]
+	    if {[cequal $val ""]} {
+		if {[cequal $check "true"]} {
+		    $_GW_mkfs($handle,$_GD_mkfs($handle,class)) getValues \
+				-labelString str
+		    lappend errs $str
+		}
+	    } else {
+		lappend dat "$key:$val"
+	    }
+	}
+
+	if {[info exists errs]} {
+		em:storeMsg fs error \
+		"The following fields are required:\n\t[join $errs "\n\t"]"
+		set rval 0
+	}
+	if {! [mntPt:getData $handle dat $check]} {
+		set rval 0
+	}
+	if {! [exPnl:getData $handle dat $check]} {
+		set rval 0
+	}
+	switch $_GD_mkfs($handle,type,curr) {
+		XFS {
+			if {! [advXfs:getData $handle dat $check]} {
+				set rval 0
+			}
+		}
+		EFS {
+			if {! [advEfs:getData $handle dat $check]} {
+				set rval 0
+			}
+		}
+	}
+
+	return $rval
+}
+
+#########################################
+#		Private			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	mkfsDlg:_create
+# Synopsis:	Creates an instance of the dialog.
+# Arguments:	- handle	The identifier for the new instance.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc mkfsDlg:_create { handle parent } \
+{
+	global		_GW_mkfs _GD_mkfs
+	set name	mkfsDlg
+
+	set dialog [xmFormDialog $parent.$name]
+	set pane [xmPanedWindow $dialog.$handle \
+			-sashWidth 1 \
+			-sashHeight 1 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form]
+
+	set _GW_mkfs($handle,ga) [$name:_createGeneralArea $handle $pane]
+	set _GW_mkfs($handle,aa) [$name:_createAdvArea $handle $pane]
+	set _GW_mkfs($handle,EFS) [advEfs:realize $handle $pane]
+	set _GW_mkfs($handle,XFS) [advXfs:realize $handle $pane]
+	set _GW_mkfs($handle,export) [exPnl:realize $handle $pane]
+
+	set _GW_mkfs($handle,buttons) \
+		[xfs:createDialogButtons $pane $_GD_mkfs(buttons)]
+	foreach i $_GD_mkfs(buttons) {
+		$_GW_mkfs($handle,buttons).$i \
+				activateCallback "$name:_dialogCb $handle $i"
+	}
+
+	$_GW_mkfs($handle,ga) manageChild
+	$_GW_mkfs($handle,aa) manageChild
+	$_GW_mkfs($handle,buttons) manageChild
+	$pane manageChild
+
+	return $dialog
+}
+
+#%COMMENT_BEGIN
+# Function:	mkfsDlg:_createGeneralArea
+# Synopsis:	Creates the data entry fields for the basic part of the dialog.
+#		This includes the hostname, filesystem type, resource class,
+#		and filesystem name / volume name.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- parent	The parent for the created widgets.
+#%COMMENT_END
+proc mkfsDlg:_createGeneralArea { handle parent } \
+{
+	global		_GW_mkfs _GD_mkfs
+
+	set container [xmForm $parent.ga]
+
+	set grid1 [sgiGrid $container.grid1 -numRows 5 -numColumns 2 \
+			-defaultSpacing 2 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_none \
+			-bottomAttachment attach_none]
+	set _GW_mkfs($handle,mkfsMntPt) \
+			[mntPt:realize $handle $container true]
+	$_GW_mkfs($handle,mkfsMntPt) setValues \
+			-topAttachment attach_form \
+			-leftAttachment attach_widget \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none \
+			-leftWidget $grid1 \
+			-leftOffset 10]
+
+	set row 0; set item XFS_FS_HOST
+	xmLabel $grid1.$item-label managed -row $row -column 0
+	set _GW_mkfs($handle,$item) [xmLabel $grid1.$item managed \
+			-row $row -column 1 \
+			-alignment alignment_beginning \
+			-marginHeight 4]
+
+	incr row; set item XFS_FS_TYPE
+	xmLabel $grid1.$item-label managed -row $row -column 0
+	set rc [xmRowColumn $grid1.$item-rc managed -row $row -column 1 \
+			-orientation horizontal \
+			-radioBehavior true \
+			-radioAlwaysOne true \
+			-marginHeight 0 \
+			-spacing 20]
+	foreach opt $_GD_mkfs($item,opts) {
+		set _GW_mkfs($handle,$opt-tb) [xmToggleButton $rc.$opt managed \
+				-indicatorType one_of_many]
+		$_GW_mkfs($handle,$opt-tb) valueChangedCallback \
+				"mkfsDlg:_newFsType $handle $opt"
+	}
+
+	incr row; set item RSRC_CLASS
+	set _GW_mkfs($handle,$item-pd) [xmPulldownMenu $grid1.$item-pd]
+	foreach opt $_GD_mkfs($item,opts) {
+		set _GW_mkfs($handle,$opt) \
+			[xmPushButton $_GW_mkfs($handle,$item-pd).$opt-pb \
+				 managed \
+				-marginWidth 0 \
+				-marginHeight 0]
+		$_GW_mkfs($handle,$opt) activateCallback \
+				"mkfsDlg:_rsrcClassCb $handle %w $opt"
+	}
+        set _GW_mkfs($handle,$item-om) [xmOptionMenu $grid1.$item-om managed \
+			-row $row -column 0 \
+                        -spacing 0 \
+                        -marginWidth 0 \
+                        -marginHeight 0 \
+                        -subMenuId $_GW_mkfs($handle,$item-pd)]
+
+
+	set item XFS_FS_NAME
+	set _GW_mkfs($handle,$item) [dtDropDownComboBox $grid1.$item \
+			 managed \
+			-row $row -column 1 \
+			-columns 20]
+	$_GW_mkfs($handle,$item) selectionCallback \
+		"mkfsDlg:_comboSelectCb $handle $item %w %item_or_text"
+	$_GW_mkfs($handle,$item) activateCallback \
+		"mkfsDlg:_comboActivateCb $handle $item %w"
+
+	incr row; set item SEARCH
+	set _GW_mkfs($handle,SEARCH) [xmPushButton $grid1.$item managed \
+			-row $row -column 1 \
+			-resizeHorizontal false \
+			-gravity 5]
+	$_GW_mkfs($handle,SEARCH) activateCallback "vpSrch:manage $handle"
+
+	$grid1 columnResizable 0 false
+	$grid1 manageChild
+	mntPt:manage $handle
+
+	return $container
+}
+
+#%COMMENT_BEGIN
+# Function:	mkfsDlg:_createAdvArea
+# Synopsis:	Creates the labels and arrow buttons that allow access to
+#		the advanced features panels.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- parent	The parent for the created widgets.
+#%COMMENT_END
+proc mkfsDlg:_createAdvArea { handle parent } \
+{
+	global		_GW_mkfs _GD_mkfs
+
+	set container [xmRowColumn $parent.aa \
+			-orientation horizontal \
+			-spacing 20]
+
+	set label [xmLabel $container.advoptions-label managed]
+
+	foreach item $_GD_mkfs(advopts) {
+		set rc [xmRowColumn $container.rc managed \
+				-orientation horizontal]
+		set _GW_mkfs($handle,arrow,$item) \
+				[xmArrowButton $rc.adv$item managed \
+				-width 22 -height 22 \
+				-arrowDirection arrow_down]
+		set _GW_mkfs($handle,arrow,$item-label) \
+				[xmLabel $rc.adv$item-label managed]
+
+		$_GW_mkfs($handle,arrow,$item) activateCallback \
+				"mkfsDlg:_advancedCb $handle %w $item"
+	}
+
+	return $container
+}
+
+#########################################
+#	Dialog Callbacks		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	mkfsDlg:_dialogCb
+# Synopsis:	The callback function defined on the dialog buttons.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- op		Indicates which button the user selected.
+#%COMMENT_END
+proc mkfsDlg:_dialogCb { handle op } \
+{
+	global		_GW_mkfs _GD_mkfs
+
+	switch $op {
+		accept { set _GD_mkfs($handle,unmanage) true
+			 mkfsDlg:_accept $handle }
+		apply  { set _GD_mkfs($handle,unmanage) false
+			 mkfsDlg:_accept $handle }
+		cancel { $_GW_mkfs($handle,dialog) unmanageChild }
+		save {
+			svTmpl:realize $handle $_GW_mkfs($handle,dialog)
+			svTmpl:fill $handle FS mkfsDlg:_save
+			svTmpl:manage $handle
+		}
+		help   { sgiHelpMsg $_GW_mkfs($handle,dialog) }
+	}
+}
+
+#########################################
+#	Callback Utilities		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	mkfsDlg:_accept
+# Synopsis:	This is called when the user presses the "Accept" dialog
+#		button.  It creates a confirmation dialog (if one does not
+#		already exist), fills the dialog, and stores the list of
+#		objects for use after the user has confirmed the action.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc mkfsDlg:_accept { handle } \
+{
+	global          _GW_mkfs _GD_mkfs _GD_fsmCfrm
+
+	if {! [mkfsDlg:getData $handle data true] ||
+	      [em:outstandingMsgs $handle]} {
+		return 0
+	}
+	set o_host [join [lassign [split [lmatch $data XFS_FS_HOST:*] :] key] :]
+	set o_nm   [join [lassign [split [lmatch $data XFS_FS_NAME:*] :] key] :]
+	set o_type [join [lassign [split [lmatch $data XFS_FS_TYPE:*] :] key] :]
+
+	set _GD_mkfs(confirm,handle) $handle
+	set _GD_mkfs(confirm,data)   $data
+	set _GD_mkfs(confirm,o_host) $o_host
+	set _GD_mkfs(confirm,o_nm)   $o_nm
+	set _GD_mkfs(confirm,o_type) $o_type
+
+	if {! [info exists _GW_mkfs($handle,confirm)]} {
+		set _GW_mkfs($handle,confirm) [xmQuestionDialog \
+				$_GW_mkfs($handle,dialog).confirm \
+				-messageAlignment alignment_center \
+				-okLabelString Yes \
+				-cancelLabelString No \
+				-dialogStyle dialog_full_application_modal \
+				-noResize true]
+		$_GW_mkfs($handle,confirm) okCallback \
+			"set _GD_mkfs($handle,confirm) true"
+		$_GW_mkfs($handle,confirm) cancelCallback \
+			"set _GD_mkfs($handle,confirm) false"
+	}
+	
+	set msg [format $_GD_fsmCfrm(mkfs,msg) $_GD_mkfs($handle,type,curr) $o_host]
+	$_GW_mkfs($handle,confirm) setValues -messageString $msg
+
+	$_GW_mkfs($handle,confirm) manageChild
+}
+
+#%COMMENT_BEGIN
+# Function:	mkfsDlg:_doAccept
+# Synopsis:	This is called when the user confirms the accept action.  It
+#		is called by setting a trace on a variable which is updated
+#		when the user presses a dialog button in the confirmation
+#		dialog.  If the user accepts the action, the filesystem is
+#		created.
+#		If there is no icon in the icon panel representing the newly
+#		created filesystem, then one is created.  It also sets the
+#		display name for the icon to be the mount point if the user
+#		chose to mount the filesystem.
+# Arguments:	- vname		The name of the traced variable.
+#		- element	The variables element name if it is an array
+#				element, otherwise an empty string.
+#		-op		"r" for read, "w" for write, "u" for unset.
+#%COMMENT_END
+proc mkfsDlg:_doAccept { vname element op } \
+{
+	global          _GW_mkfs _GD_mkfs
+
+	if {$element != ""} {
+		set vname ${vname}($element)
+	}
+	upvar $vname x
+
+	if {$x} {
+	    set handle	$_GD_mkfs(confirm,handle)
+	    $_GW_mkfs($handle,dialog) defineCursor watch
+	    $_GW_mkfs($handle,confirm) defineCursor watch
+
+	    set data	$_GD_mkfs(confirm,data)
+	    set o_host	$_GD_mkfs(confirm,o_host)
+	    set o_nm	$_GD_mkfs(confirm,o_nm)
+	    set o_type	[string tolower $_GD_mkfs(confirm,o_type)]
+
+	    set object "$o_host FS $o_nm $o_type"
+
+	    set query "NAME_TO_DEVICE:$o_nm"
+	    if {[catch {set device [fsInfoCmd simple $object $query]} error]} {
+		regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		em:setMessageString fs \
+		    "An error occured while creating the filesystem."
+		em:storeMsg fs error "Unable to create $o_nm:\n\t$nerror"
+		$_GW_mkfs($handle,confirm) defineCursor ""
+		$_GW_mkfs($handle,dialog) defineCursor ""
+		return
+	    }
+	    set object "$o_host FS $device $o_type"
+
+	    if {[catch {set ec [fsCmd create $object [join $data \n]]} error]} {
+		regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		em:storeMsg $handle error \
+		"Unable to create filesystem on $o_nm.\n\t$nerror"
+	    } else {
+		####	Signal success
+		set _GD_mkfs($handle,accept) true
+
+		####	Check to see if the object already exists
+		if {! [fsSrch:objectExists fs $object real_obj]} {
+			set real_obj $object
+
+			####	Add the object to the icon panel
+			fsSrch:addObjects fs [list $object]
+		}
+
+		####	If mounted, reset the display name of the icon
+		set domnt [lindex [split [lmatch $data XFS_MOUNT_FS:*] :] 1]
+		set mntpt [lindex [split [lmatch $data XFS_MNT_DIR:*] :] 1]
+		fsSrch:setMountPoint fs $real_obj $mntpt $domnt
+
+		####	Unmanage the dialog
+		if {$_GD_mkfs($handle,unmanage)} {
+			$_GW_mkfs($handle,dialog) unmanageChild
+		}
+	    }
+
+	    $_GW_mkfs($handle,confirm) defineCursor ""
+	    $_GW_mkfs($handle,dialog) defineCursor ""
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	mkfsDlg:_save
+# Synopsis:	This is called when the user presses the "Save" dialog
+#		button.  It gets the data from the dialog, creates an object
+#		signature and writes out the information to the given file
+#		name in the template directory.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- nm		The file name chosen by the user in which
+#				to store the template.
+#		- unique	Whether or not this template already exists
+#				in the template directory.
+#%COMMENT_END
+proc mkfsDlg:_save { handle nm unique } \
+{
+	set rval 1
+	mkfsDlg:getData $handle data false
+	set type [string tolower [lindex [split [lmatch $data XFS_FS_TYPE:*] :] 1]]
+	if {$data != ""} {
+		set obj [list [list _TEMPLATE_ FS $nm $type]]
+
+		if {[tu:write FS $nm $obj [join $data \n]]} {
+			if {$unique} {
+				ip:fillPanel fs $obj
+			}
+		} else {
+			set rval 0
+		}
+	}
+	return $rval
+
+}
+
+#########################################
+#	Other Callbacks			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	mkfsDlg:_rsrcClassCb
+# Synopsis:	This is called when an item from the "resource class" option
+#		menu is chosen.  The two classes are: partition, volume.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- w		The widget id of the chosen item.
+#		- op		Indicates which button the user selected
+#				(the resource class).
+#%COMMENT_END
+proc mkfsDlg:_rsrcClassCb { handle w op } \
+{
+	global		_GW_mkfs _GD_mkfs
+
+	if {$op != $_GD_mkfs($handle,class)} {
+		mkfsDlg:_rsrcClass $handle $w $op
+		mkfsDlg:_searchAction $handle
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	mkfsDlg:_rsrcClass
+# Synopsis:	This changes the current resource class.  The two classes
+#		are: partition, volume.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- w		The widget id of the chosen item.
+#		- op		Identifies the resource class.
+#%COMMENT_END
+proc mkfsDlg:_rsrcClass { handle w op } \
+{
+	global		_GW_mkfs _GD_mkfs
+
+	$w getValues -labelString val
+	$_GW_mkfs($handle,SEARCH) setValues -labelString "$val Search ..."
+	vpSrch:setClass $handle $op
+	advXfs:setClass $handle $op
+
+	set _GD_mkfs($handle,class) $op
+}
+
+#%COMMENT_BEGIN
+# Function:	mkfsDlg:_advancedCb
+# Synopsis:	This is called when the user chooses one of the advanced
+#		features arrow buttons.  It either displays or hides the
+#		panel based upon the XmNarrowDirection resource for the arrow.
+#		If a panel other than the one corresponding to the chosen
+#		arrow button is currently displayed, it is withdrawn.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- w		The widget id for the arrow button.
+#		- op		A key indicating which type panel the arrow
+#				button corresponds to.
+#%COMMENT_END
+proc mkfsDlg:_advancedCb { handle w op } \
+{
+	global		_GW_mkfs _GD_mkfs
+
+	xfs:setDialogMinMax $_GW_mkfs($handle,dialog) \
+			$_GD_mkfs(default,min,height) 32767
+
+	$w getValues -arrowDirection dir
+	if {$dir == "arrow_up"} {
+		mkfsDlg:_withdrawPanel $handle
+	} else {
+		if {[info exists _GD_mkfs($handle,adv,arrow)]} {
+			if {$w == $_GD_mkfs($handle,adv,arrow)} {
+				return
+			}
+			$_GD_mkfs($handle,adv,arrow) setValues \
+					-arrowDirection arrow_down
+		}
+		$w setValues -arrowDirection arrow_up
+
+		set _GD_mkfs($handle,adv,arrow) $w
+		if {$op == "fs"} {
+			set op $_GD_mkfs($handle,type,curr)
+		}
+
+		if {[info exists _GD_mkfs($handle,adv,panel)]} {
+			$_GD_mkfs($handle,adv,panel) unmanageChild
+		}
+		set _GD_mkfs($handle,adv,panel) $_GW_mkfs($handle,$op)
+
+		$_GW_mkfs($handle,$op) manageChild
+
+		if {! [info exists _GD_mkfs($op,min,width)]} {
+			$_GW_mkfs($handle,dialog) getValues \
+					-width _GD_mkfs($op,min,width) \
+					-height _GD_mkfs($op,min,height)
+		}
+		xfs:setDialogMinMax $_GW_mkfs($handle,dialog) \
+				$_GD_mkfs($op,min,height) \
+				$_GD_mkfs($op,min,height)
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	mkfsDlg:_comboActivateCb
+# Synopsis:	This is called when the user enters a <CR> in the combo-box.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- item		A key that identifies the combo-box.
+#		- w		The widget id for the combo-box.
+#%COMMENT_END
+proc mkfsDlg:_comboActivateCb { handle item w } \
+{
+	set value [combo:getValue $w]
+	if {$value != ""} {
+		mkfsDlg:_comboAction $handle $item $w $value
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	mkfsDlg:_comboSelectCb
+# Synopsis:	This is called when the user selects an item in the
+#		combo-box list.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- item		A key that identifies the combo-box.
+#		- w		The widget id for the combo-box.
+#		- value		The selected value.
+#%COMMENT_END
+proc mkfsDlg:_comboSelectCb { handle item w value } \
+{
+	mkfsDlg:_comboAction $handle $item $w $value
+}
+
+#%COMMENT_BEGIN
+# Function:	mkfsDlg:_comboAction
+# Synopsis:	This is called by both mkfsDlg:_comboActivateCb() and
+#		mkfsDlg:_comboSelectCb().  It provides a central place from
+#		which to deal with changes to the combo-box.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- item		A key that identifies the combo-box.
+#		- w		The widget id for the combo-box.
+#		- value		The current value of the combo-box.
+#%COMMENT_END
+proc mkfsDlg:_comboAction { handle item w value } \
+{
+	global		_GD_mkfs
+
+	if {[info exists _GD_mkfs($handle,cvalue,$item)] &&
+	    $value == $_GD_mkfs($handle,cvalue,$item)} {
+		return
+	}
+	set _GD_mkfs($handle,cvalue,$item) $value
+
+	if {$item == "XFS_FS_NAME"} {
+		mkfsDlg:_newFsName $handle $value
+	}
+}
+
+#########################################
+#		Actions			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	mkfsDlg:_searchAction
+# Synopsis:	This gets first item in the list of items found in the
+#		fsSrchVpDlg.  It sets the value of the combo-box and
+#		calls mkfsDlg:_newFsName() to take any necessary actions.
+#		This is called both directly and as a result of a search
+#		being executed in the fsSrchVpDlg (by registering this
+#		function with vpSrch:registerSearchExecute())
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc mkfsDlg:_searchAction { handle } \
+{
+	global	_GW_mkfs _GD_mkfs
+
+	set items [vpSrch:getItems $handle]
+	set item [lindex $items 0]
+	combo:setItems $_GW_mkfs($handle,XFS_FS_NAME) $items
+	combo:selectItem $_GW_mkfs($handle,XFS_FS_NAME) $item
+
+	mkfsDlg:_newFsName $handle $item
+	set _GD_mkfs($handle,cvalue,XFS_FS_NAME) $item
+}
+
+
+#########################################
+#		Utilities		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	mkfsDlg:_newHostName
+# Synopsis:	This currently sets the host name value in the exportPnl panel.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- host		The new hostname.
+#%COMMENT_END
+proc mkfsDlg:_newHostName { handle host } \
+{
+	exPnl:setData $handle "XFS_FS_HOST:$host"
+
+	####	TODO:	Search in fsSrchVpDlg
+
+}
+
+#%COMMENT_BEGIN
+# Function:	mkfsDlg:_newFsName
+# Synopsis:	This is called when the value of the "Filesystem" combo-box
+#		is changed.  It calls advXfs:setResource() with the value
+#		of the current resource class (VOL/PART) and the new fs name.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- resource	The filesystem name.
+#%COMMENT_END
+proc mkfsDlg:_newFsName { handle resource } \
+{
+	global		_GD_mkfs
+
+	if {$resource == ""} {
+		return 1
+	}
+	return [advXfs:setResource $handle $_GD_mkfs($handle,class) $resource]
+}
+
+#%COMMENT_BEGIN
+# Function:	mkfsDlg:_newFsType
+# Synopsis:	This is called when the user chooses one of the filesystem
+#		type XmToggleButtons.  It stores the value so that it can
+#		display the correct "Advanced" features panel.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- type		A key indicating which type was selected.
+#%COMMENT_END
+proc mkfsDlg:_newFsType { handle type } \
+{
+	global		_GW_mkfs _GD_mkfs
+
+	if {[info exists _GD_mkfs($handle,type,curr)]} {
+		if {$type == $_GD_mkfs($handle,type,curr)} {
+			return
+		}
+
+		####	If the advanced fs panel is currently managed,
+		####	unmanage the old one and manage the new one
+		set fs_old $_GD_mkfs($handle,type,curr)
+		if {[$_GW_mkfs($handle,$fs_old) isManaged]} {
+			xfs:setDialogMinMax $_GW_mkfs($handle,dialog) \
+					$_GD_mkfs(default,min,height) 32767
+			$_GW_mkfs($handle,$fs_old) unmanageChild
+			$_GW_mkfs($handle,$type) manageChild
+
+			set _GD_mkfs($handle,adv,panel) $_GW_mkfs($handle,$type)
+
+			if {! [info exists _GD_mkfs($type,min,width)]} {
+				$_GW_mkfs($handle,dialog) getValues \
+					-width _GD_mkfs($type,min,width) \
+					-height _GD_mkfs($type,min,height)
+			}
+			xfs:setDialogMinMax $_GW_mkfs($handle,dialog) \
+					$_GD_mkfs($type,min,height) \
+					$_GD_mkfs($type,min,height)
+		}
+	}
+
+	####	Set the label for the advanced option arrow button
+	$_GW_mkfs($handle,arrow,fs-label) setValues -labelString $type
+
+	set _GD_mkfs($handle,type,curr) $type
+}
+
+#%COMMENT_BEGIN
+# Function:	mkfsDlg:_withdrawPanel
+# Synopsis:	Unmanages one of the advanced features panels and sets
+#		the corresponding arrow button XmNarrowDirection resource.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc mkfsDlg:_withdrawPanel { handle } \
+{
+	global	_GW_mkfs _GD_mkfs
+
+	if {[info exists _GD_mkfs($handle,adv,arrow)]} {
+		$_GD_mkfs($handle,adv,arrow) setValues \
+				-arrowDirection arrow_down
+		unset _GD_mkfs($handle,adv,arrow)
+	}
+
+	if {[info exists _GD_mkfs($handle,adv,panel)]} {
+		xfs:setDialogMinMax $_GW_mkfs($handle,dialog) \
+				$_GD_mkfs(default,min,height) \
+				$_GD_mkfs(default,min,height)
+		$_GD_mkfs($handle,adv,panel) unmanageChild
+		unset _GD_mkfs($handle,adv,panel)
+	}
+}

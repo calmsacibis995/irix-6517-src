@@ -1,0 +1,168 @@
+---------------------------------------------------------------------------
+
+				 PROM LOG
+			     Rev. 1.1 96-06-06
+
+1. Overview
+2. Log Format
+3. Reserved Keys
+
+---------------------------------------------------------------------------
+
+				 Overview
+
+    The top two 64k sectors (sectors 14 and 15) of the 1 MB PROM form a
+128k log area.	The prom log code will be modular and applicable to both
+IP27 and IO6 PROMs.
+
+    At any given time, only one of the two sectors is "active."	 When the
+active sector fills up (not enough room to add an entry), a garbage
+collection swap occurs.	 The other sector is flashed clean and becomes the
+active sector. After the sector is flashed, data that should be kept
+(persistent) is copied from the previously active sector to the new active
+sector.	 New log entries and variables start going into the new active
+sector.	 In practice it should be a quite long (months of abnormal
+activity) before a sector fills up.  Only variables in the active sector
+are valid.  Log entries are valid in both sectors.
+
+    The validity of the sector header indicates which sector is active.	 If
+both headers are valid, the one with the larger sequence number is the
+active one.  When a sector is flashed, the data is written before the
+header, so if something happens while copying the information, the header
+won't be mistaken for valid.  The last four bytes in both sectors are
+always guaranteed to be 0xff.
+
+    If a problem is detected while reading or writing the prom log, such as
+a wild pointer or log full, the operation fails and a message is displayed
+on whichever console is active.	 In these cases the PROM must be flashed
+clean from the command prompt, or some automatic recovery must be done.
+
+    There are three basic types of log entries, each having a key portion
+and a value portion:
+
+	Variable entries, which are persistent and have unique keys
+	List entries, which are persistent but may share the same key
+	Log entries, which are not persistent and may share keys.
+
+    IP27PROM will have commands for managing this area, with support for
+running them on a remote node or IO6 card PROM, possibly including:
+
+	Print information about number of entries, space used/free
+	Print individual variables or list entries
+	Print log entries (last N entries, M through N, etc)
+	Manually set variable, or make a log entry (for debugging)
+	Delete variables
+	Delete all log entries except the last N (see KeepLog variable)
+	Clean the log -- force garbage collection and sector swap
+	Flash the whole thing to initial empty state (mfg)
+
+---------------------------------------------------------------------------
+
+				Log Format
+
+Header
+	Bytes 0x00-0x0f		Reserved (all 0xff) for future jump vector
+	Bytes 0x10-0x13		Big-endian magic number (PROMLOG_MAGIC)
+	Bytes 0x14-0x17		Big-endian version number
+	Bytes 0x18-0x1b		Sequence number (increased on each swap)
+	Bytes 0x1c-0xff		Reserved (all 0xff)
+
+	The header is always at offset 0 in the active sector and is
+	followed by the list of entries beginning at offset 0x100.
+
+Entry (NOTE: Byte 0 always falls on an offset that's a multiple of 4).
+
+	Byte 0	7   status	1 for valid, 0 for cancelled
+		6:5 type
+			11	Marks end of log
+			10	Log entry (non-unique, non-persistent)
+			01	List entry (non-unique, persistent)
+			00	Variable entry (unique, persistent)
+		4   cpu_num	CPU which logged the entry (0 or 1)
+		3:0 key_len	Number of bytes in Key (0 to 15)
+	Byte 1	7   reserved	Zero
+		6:0 value_len	Number of bytes in Value (0 to 127)
+	Bytes 2 through 2+key_len-1: ASCII code 1 to 127
+	Bytes 2+key_len through 2+key_len+value_len-1: ASCII code 1 to 127
+
+	Plus 0 to 3 padding bytes so the next entry falls on an offset
+	that's a multiple of 4.
+
+	Total entry size is: (2+key_len+value_len+3)&~3
+
+By convention, in Log entries the first part of the value consists of the
+date in local time, formatted in ASCII as follows: "YY/MM/DD hh:mm:ss ".
+This applies only if the date is available when the entry is made.  The
+PROM may not have a real-time clock, but the kernel may.
+
+---------------------------------------------------------------------------
+
+			       Reserved Keys
+
+1. Log Keys
+
+    Log entries are to be used very sparingly to avoid filling up the log.
+Any given message should generally not be logged more than once per reboot.
+Additional message types may be added later.
+
+	Key		Value
+	------------	------
+	Fatal		STRING		Fatal error
+	Error		STRING		Non-fatal error
+	Info		STRING		Important info message
+
+2. List keys
+
+	Key		Value
+	------------	------
+	Alias		NAME=COMMAND	Define a macro to IP27prom POD
+	DisableRouter	NIC		Disable router with specified NIC
+
+3. Variable keys
+
+    Variable keys and values must use only ASCII codes 1 to 127.  The maximum
+length of a variable name is 15 characters and string value is 127 characters.
+Where the value field is numeric, it is always an unprefixed ASCII hex string.
+The word NUMBER appears where the data is numeric.
+
+	Key		Value
+	------------	------
+	DisableA			CPU A disabled if variable defined
+	DisableB			CPU B disabled if variable defined
+	DisableNode			Node disabled if true; system
+					behaves as if it's not plugged in
+	DisableMem	NUMBER		Mask of mem. banks to disable
+					Note: banks can be enabled without
+					writing a new log entry.
+	DisableBTE			BTE disabled if present.
+					Set if PROM BTE test fails.
+	DisableIO			I/O probing disabled if present
+	SwitchOn	NUMBER		Mask of dip sw. overridden to ON
+	SwitchOff	NUMBER		Mask of dip sw. overridden to OFF
+	BootCount	NUMBER		Counter incremented on Unix boot
+	DiagLevel	normal		Always run normal diags
+	DiagLevel	heavy		Always run heavy diags
+	DiagLevel	mfg		Always run manufacturing diags
+	DiagLevel	install		On next boot, run heavy diags, and
+					set DiagLevel to normal if they pass.
+	SwapBank	NUMBER		Alternate bank swapped with bank 0
+	BootLevel	dex		Stop boot ASAP in DEX POD mode
+	BootLevel	pod		Stop boot ASAP in memory POD mode
+	LoadSegment	segname		Segment to load, default io6prom
+	OverrideNIC	NUMBER		Override NIC, useful if NIC broken
+	OverrideNASID	NUMBER		Dangerous, but useful in bringup
+	GlobalMaster			Force node to be global master (if
+					multiple uave this, use lowest NIC)
+	ModuleNumber	NUMBER		Module number (small) associated
+					with ModuleNIC.
+	LastSlot	NUMBER		Last slot plugged into
+	LastModule	NUMBER		NIC of last module plugged into.
+
+ModuleNIC and ModuleNumber form the basis for persistent module numbering.
+On boot, the actual module NIC is read and compared with ModuleNIC.  If
+it's different, both ModuleNIC and ModuleNumber are updated; other CPUs in
+the same module are consulted to determine what the module number should
+be.  If there are no other CPUs in the module, the module number is left
+alone unless it conflicts with the number assigned to some other module in
+the system, in which case the the smallest module number not currently in
+use is selected.

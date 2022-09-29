@@ -1,0 +1,442 @@
+#!/bin/sh
+
+# "$Revision: 1.5 $"
+
+# Synopsis:
+# -v		be verbose
+# -t		test; generate new files but do not install them
+# -d domain	choose a NIS domain other than the current NIS domain
+# -i file	use the contents of 'file' instead of `ypcat hosts`
+#			/etc/hosts is the most likely file.
+# -n nets	blank separated, quoted list of network numbers to generate
+#		    .rev files, even if no host of the target domain is on
+#		    them.  For example, -n "192.26.81 192.99.44"
+# -N nets	blank separated, quoted list of networks to exclude
+#		    from .rev files
+# -m first-last,mask	first and last IP addresses of subnet with mask
+# -h hosts	blank separated, quoted list of hosts on which
+#		    'rsh host -l guest ypcat hosts' will produce  interesing
+#		    hostnames.
+# -H name	hostname of this machine, if not available by the
+#		    hostname command.
+# -A ouraddr	IP address of this machine, if not available by looking
+#		    up the hostname of this machine in /etc/hosts.
+# -s prf	MX preference for ourself
+# -x 'prf xchg'	a pair of MX exchanger and preference, as in
+#			-x '10 foo.foo.com.'
+#		    additional pairs can be given with additional occurances
+#		    of -x
+# -O dir	save previous versions of data files in this directory
+
+
+# This script generates data files for the BIND DNS nameserver, named, from
+# a file (e.g. /etc/hosts) or a NIS hostname database.  Because it can use
+# NIS to obtain the data, the DNS master need not run on the same machine
+# as the NIS master.
+
+# This script is usually run from cron if it is generating the DNS database
+# files from /etc/hosts.  If cooperating with NIS, it is usually run
+# from /var/yp/local.make.script.  A sample local.make.script can
+# be found in /var/named/mkdns.
+
+# It uses two prototype SOA files, domain.soa (where "domain" is the NIS
+# domain) and hosts.soa, to generate SOA records.  It modifies the words
+# SERIALNUMBER, HOSTNAME, and HOSTADDR in the prototypes, so that the
+# prototypes can serve for more than one domain.  Sample SOA prototype
+# files are also in the examples directory.
+
+# Besides generating the hosts data file and the reverse map data file, it
+# also modifies the named.boot file to point to the other files.  These
+# modifications of the named.boot file are delimited by a pair of lines,
+# allowing this script to modify only the part of named.boot that it owns.
+
+# "Foreign" DNS hosts that happen to be in the the NIS or /etc/hosts input
+# can be excluded from the results, even if the foreigners have aliases in
+# the target domain.  This is the purpose of the -N arg.
+
+# Much of the complexity of this script comes from generating CNAME
+# records and the reverse maps.  Both are done with awk scripts.  The
+# difficulty with the CNAME records is recognizing only those aliases that
+# should appear in the DNS database.  The difficulty with the reverse maps
+# is generating separate files for each of the IN-ADDR.ARPA domains implied
+# by the set of host numbers present in the input data.
+
+# When new versions of the files have been generated, this script
+# installs them only if they differ substantitively.  If it does install
+# new files, it signals the nameserver daemon.
+
+
+
+USAGE="`basename $0`: [-vt] [-d domain] [-i file] [-n nets] [-N nets] [-h hosts] [-H ourname] [-A ouraddr] [-s prf] [-x 'prf xchg'] "
+
+if [ -x /usr/bin/domainname ]
+then
+	domain=`domainname`
+fi
+
+name=`hostname | sed -e "s/^[^.]*$/&.$domain/"`
+olddir=old
+
+while getopts "vtd:i:n:N:m:h:H:A:s:x:O:" c; do
+    case $c in
+    v) set -x;;
+    t) dotest="y";;
+    d) domain=`echo "$OPTARG" | tr '[A-Z]' [a-z]'`;;
+    i) ifile="$OPTARG"
+	if test ! -f $ifile; then
+	    echo "`basename $0`: $OPTARG: no such file"
+	    exit 1
+	fi
+	;;
+    n) nets="$nets "`echo "$OPTARG" | sed -e 's@[^ ]*@/^&./bprint@g'`;;
+    N) nets="$nets "`echo "$OPTARG" | sed -e 's@[^ ]*@/^&./d@g'`;;
+    m) if test -z "$masks"; then
+	    masks="$OPTARG"
+	else
+	    masks="$masks $OPTARG"
+	fi
+	;;
+    h) hosts="$hosts $OPTARG";;
+    H) name="$OPTARG";;
+    A) addr="$OPTARG";;
+    s) mypref="$OPTARG";;
+    x) mxs="$mxs\t\t\t MX  `echo $OPTARG | sed 's/  */ \\\t/'`\n";;
+    O) olddir="$OPTARG"
+	if test ! -d "$olddir"; then
+	    echo "`basename $0`: $OPTARG: no such directory"
+	    exit 1
+	fi
+	;;
+    \?) echo $USAGE; exit 1;;
+    esac
+done
+
+if [ -z "$domain" ]
+then
+	echo "please used -d option to specify domain name"
+	exit
+fi
+
+shift `expr $OPTIND - 1`
+if test "$#" != 0; then
+    echo $USAGE
+    exit 1
+fi
+
+if test -n "$dotest"; then
+    tmpfile="/tmp/mkdns.tmp"
+    tmp2file="/tmp/gen2n"
+    tmp3file="/tmp/gen3n"
+    tmpsoa="/tmp/gensoa"
+    tmpsed="/tmp/gensed"
+    testdir=/tmp/
+else
+    tmpfile="/tmp/mkdns$$"
+    tmp2file="/tmp/gen2n$$"
+    tmp3file="/tmp/gen3n$$"
+    tmpsoa="/tmp/gensoa$$"
+    tmpsed="/tmp/gensed$$"
+    testdir=""
+    rem="$tmpfile $tmp2file $tmp3file $tmpsoa $tmpsed"
+    trap "/bin/rm -f $rem" 0 1 2 15
+fi
+
+cd /var/named
+
+# chose short version of domain name
+subdomain=`expr "$domain" : '\([^.]*\)\..*'`
+
+# literalized version
+litdomain=`echo ".$domain" | sed 's/\./\\\./g'`
+
+# find our network address, the addresss of the server
+if test "$addr" = ""; then
+    addr=`egrep "^[0-9.]*[ 	][ 	]*$name[. 	]|^[0-9.]*[ 	][ 	]*[ 	]$name'$'" /etc/hosts \
+		| sed -e '2,$d' -e "s/[ 	].*//"`
+fi
+new="new"
+hostfile="$subdomain.hosts"
+revfile="$subdomain.%s.rev"
+nboot="named.boot"
+nnboot="$testdir$nboot.$new"
+soa="$subdomain.soa"
+
+if test -f $testdir${subdomain}*.$new $nnboot $rem; then
+    # remove previous crop of new files
+    rm -f $testdir${subdomain}*.$new $nnboot $rem
+fi
+
+
+# generate a sed script to find network numbers and hostnames for the
+# interesting networks.
+echo "s/ \{2,\}/ /g" > $tmpsed
+echo "/^[0-9]\{1,\}\.[0-9]\{1,\}\.[0-9]\{1,\}\.[0-9]\{1,\} [^ ]/!d" >> $tmpsed
+echo "s/^\([^.]*\).\([^.]*\).\([^.]*\).\([^ ]*\) \([^ ]*\).*/\1 \2 \3 \4 \5/" >> $tmpsed
+echo "$nets" | tr ' ' '\12' | sed -e '/^$/d' -e 's/\./ /g'  >> $tmpsed
+
+
+if test ! -s "$soa"; then
+    echo "`basename $0`: $soa is missing"
+    exit 1
+fi
+serial=`date '+%y%j%H%M'`
+sed -e "s/SERIALNUMBER/$serial/g" \
+	-e "s/HOSTNAME/$name/g" -e "s/HOSTADDR/$addr/g" $soa > $tmpsoa
+
+if test ! -s "$nboot"; then
+    echo "`basename $0`: $nboot is missing"
+    exit 1
+fi
+fline="; do not delete this 1st line--generated by mkdns"
+lline="; do not delete this 2nd line--generated by mkdns"
+sed -e "/^$fline/,"'$d' $nboot > $nnboot
+echo "$fline" >> $nnboot
+
+# Generate the SOA records.
+cp $tmpsoa $testdir$hostfile.$new
+if test -s ${subdomain}.hosts.soa; then
+    sed -e "s/SERIALNUMBER/$serial/g" \
+	    -e "s/HOSTNAME/$name/g" -e "s/HOSTADDR/$addr/g" \
+		${subdomain}.hosts.soa >> $testdir$hostfile.$new
+fi
+
+
+# Get the data from NIS
+
+if test $ifile; then
+    cat $ifile | tr '[A-Z]	' '[a-z] ' > $tmpfile
+else
+    #it seems to take more than one try to get a server
+    ypcat -d $domain hosts.byaddr 2>/dev/null \
+		| tr '[A-Z]	' '[a-z] ' >$tmpfile
+    # it sometimes takes a while to find a server
+    if test ! -s "$tmpfile"; then
+	sleep 5
+	ypcat -d $domain hosts.byaddr | tr '[A-Z]	' '[a-z] ' >$tmpfile
+	if test ! -s "$tmpfile"; then
+	    echo "`basename $0`: unable to obtain NIS host information"
+	    exit 1
+	fi
+    fi
+fi
+
+cp $tmpfile $tmp3file
+for nm in $hosts; do
+    rsh $nm -n -l guest ypcat hosts > $tmp2file
+    if test ! -s $tmp2file; then
+	echo "`basename $0`: no hosts from $nm"
+	exit 1
+    fi
+    cat $tmp2file | tr '[A-Z]	' '[a-z] ' >> $tmp3file
+done
+
+
+# Delete non-host lines, add a trailing blank, and remove extra blanks.
+#	Delete hosts at least one of whose names does not include the
+#	    target domain.
+#	Delete aliases with the wrong domain name.
+#	Remove the domain from all names.
+#	Remove domain-names of the wrong domain.
+#	Then replace the periods in the address with blanks.
+sed -e "/^[0-9]\{1,\}\.[0-9]\{1,\}\.[0-9]\{1,\}\.[0-9]\{1,\} /!d" \
+	    -e "s/.*/& /" -e "s/ \{2,\}/ /g" \
+	    -e "/ [^.]*$litdomain /!d" \
+	    -e "s/$litdomain / /g" \
+	    -e "s/ [^ ]*\.[^ ]*//g" \
+	    -e "/^[0-9.]*  *$/d" \
+	    -e "s/^\([^.]*\).\([^.]*\).\([^.]*\)./\1 \2 \3 /" \
+	    -e "s/ \{2,\}/ /g" \
+	$tmp3file \
+    | sort -u -n +1n -2 +2n -3 +3n -4 \
+    | nawk 'BEGIN {
+	    new = "'"$new"'"
+	    hostfile = "'"$hostfile"'"
+	    newhostfile = "'"$testdir$hostfile.$new"'"
+	    domain = "'"$domain"'"
+	    newnboot = "'"$nnboot"'"
+	    tmpsed = "'"$tmpsed"'"
+	    mypref = "'"$mypref"'"
+	    mxs = "'"$mxs"'"
+
+	    printf "primary   %-30s %s\n",
+		    domain, hostfile >> newnboot
+	}
+
+	{
+	    host = $5
+
+	    printf "%-23s IN   A      %s\n", host,
+		    ($1 "." $2 "." $3 "." $4) >> newhostfile
+	    if (mypref != "") {
+		printf "\t\t\t MX  %-2d \t%s\n",
+			mypref, host >> newhostfile
+	    }
+	    printf mxs >> newhostfile
+	    for (i = 6; i <= NF; i++) {
+		for (j = 5; j < i; j++) {
+		    if ($i == $j)
+			break
+		}
+		if (j >= i) {
+		    printf "%-23s  IN  CNAME\t%s\n", $i,
+				host >> newhostfile
+		}
+	    }
+
+	    newpat = "/^" $1 " "
+	    if ($1 >= 128) {
+		newpat = newpat $2 " "
+		if ($1 >= 192) {
+		    newpat = newpat $3 " "
+		}
+	    }
+	    if (newpat != pat) {
+		pat = newpat
+		print (pat "/bprint") >> tmpsed
+	    }
+	}'
+
+
+echo "d\n:print" >> $tmpsed
+sed -f $tmpsed $tmp3file \
+    | sort -u -n +1n -2 +2n -3 +3n -4 \
+    | nawk 'BEGIN {
+	    OFMT = "%10.0f"
+
+	    new = "'"$new"'"
+	    testdir = "'"$testdir"'"
+	    revfile = "'"$revfile"'"
+	    domain = "'"$domain"'"
+	    newnboot = "'"$nnboot"'"
+	    tmpsoa = "'"$tmpsoa"'"
+	    net = -1
+	    maskz = 256*256*256*256
+	    maska = 256*256*256
+	    maskb = 256*256
+	    maskc = 256
+
+	    split("'"$masks"'", t, " ")
+	    for (i in t) {
+		split(t[i], m, ",")
+		if (m[1] ~ /\./) {
+		    split(m[1], a, ".")
+		    m[1] = ((a[1] * 256 + a[2]) * 256 + a[3]) * 256 + a[4]
+		}
+		if (m[2] ~ /\./) {
+		    split(m[2], a, ".")
+		    m[2] = ((a[1] * 256 + a[2]) * 256 + a[3]) * 256 + a[4]
+		}
+		if (m[3] ~ /\./) {
+		    split(m[3], a, ".")
+		    m[3] = ((a[1] * 256 + a[2]) * 256 + a[3]) * 256 + a[4]
+		}
+		m[3] = maskz - m[3]
+		masks[m[1]] = m[3]
+		hi[m[1]] = m[2]
+	    }
+	}
+
+	func revhost(n,mask) {
+	    n %= mask
+	    r = n%256
+	    n = int(n/256)
+	    if (mask > maskc) {
+		r = r "." (n%256)
+		n = int(n/256)
+		if (mask > maskb) {
+		    r = r "." (n%256)
+		    n = int(n/256)
+		    if (mask > maska) {
+			r = r "." (n%256)
+		    }
+		}
+	    }
+	    return r
+	}
+
+	{
+	    host = $5
+	    addr = (($1 * 256 + $2) * 256 + $3) * 256 + $4
+
+	    if ($1 == "127" && $2 == "0" && $3 == "0") {
+		netmask = maskc
+	    } else {
+		if (host !~ /\./) host = host "." domain
+		if ($1 < 128) {
+		    netmask = maska
+		} else if ($1 < 192) {
+		    netmask = maskb
+		} else {
+		    netmask = maskc
+		}
+		for (lo in masks) {
+		    if (addr >= lo && addr <= hi[lo]) {
+			netmask = masks[lo]
+			break
+		    }
+		}
+	    }
+
+	    newnet = int(addr/netmask)
+	    if (newnet != net) {
+		if (curfile != "") {
+		    close(curfile)
+		}
+		net = newnet
+		revnet = revhost(net,int(maskz/netmask))
+		curfile = sprintf(revfile,revnet)
+		printf "primary   %-30s %s\n",
+			(revnet ".IN-ADDR.ARPA"), curfile >> newnboot
+		curfile = (testdir curfile "." new)
+		system("cp " tmpsoa " " curfile)
+	    }
+	    printf "%-10s IN     PTR      %s.\n",
+			revhost(addr,netmask), host >> curfile
+	}'
+
+echo "$lline" >> $nnboot
+sed -e "1,/^$lline/d" $nboot >> $nnboot
+
+if test "$dotest"; then
+    exit 0
+fi
+
+
+# do not stop now
+trap "" 1 2 15
+
+# delete obsolete files
+if test -d "$olddir" -a -n "$dotest"; then
+    for oldnm in ${subdomain}*.hosts ${subdomain}*.rev $nboot; do
+	if test -f $oldnm -a ! -f $oldnm.$new; then
+	    oldnms="$oldnms $oldnm"
+	    rm -f $olddir/$oldnm
+	    mv $oldnm $olddir/$oldnm
+	fi
+    done
+fi
+
+# install new versions
+for newnm in ${testdir}${subdomain}*.new $nnboot; do
+    oldnm=`expr $newnm : '\(.*\)\.'"$new"`
+    if cmp -s $newnm $oldnm; then
+	rm -f $newnm
+    elif test ! -f $oldnm; then
+	mv -f $newnm $oldnm
+    elif test 0 -ne `diff $newnm $oldnm \
+		| sed -e '/^[-0-9]/d' -e '/^[<>][0-9; 	]*Serial$/d' \
+		| wc -l`; then : ;
+	if test -d "$olddir"; then
+	    rm -f $olddir/$oldnm
+	    ln $oldnm $olddir/$oldnm
+	fi
+	mv -f $newnm $oldnm
+    else
+	rm -f $newnm
+    fi
+done
+
+rm -f $oldnms
+
+killall 1 named
+exit 0

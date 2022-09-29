@@ -1,0 +1,134 @@
+#! /usr/sgitcl/bin/expect
+
+# This script sources script.exp and setup.exp to install an OS
+# on a system connected via a serial cable.  It was written by
+# Jason Hunter.
+#
+# It takes three parameters: target-name filesystem-type distribution-location
+#
+# Things to be sure of:
+# blana needs the selections file in the proper scripts subdir
+# nslookup must be working on the local machine
+#
+# 4/05/96	Some comments added
+# 4/11/96	Looks for "bonsai" to run different setup
+
+log_file -a load.log.[exec date +%y.%m.%d-%H%M]
+
+# USER-CUSTOMIZABLE DATA LOCATIONS
+set datamach blana.engr
+set datapath "/var/www/htdocs/SQA/xperform/scripts"  ;# OS to be appended
+
+# check we have 3 parameters
+set argc [llength $argv]
+if {$argc < 3} {
+    send_error "Example usage: load.exp zazu xfs dist:/test/bonsai-apr01.NR\n"
+    exit
+}
+
+# Data Setup
+
+set arg0 [lindex $argv 0]
+set arg1 [lindex $argv 1]
+set arg2 [lindex $argv 2]
+
+set dataaddr [string trim [lindex [split [exec nslookup $datamach] ":"] end]]
+send_error "datamach: $datamach\n"
+send_error "dataaddr: $dataaddr\n"
+send_error "datapath: $datapath\n"
+send_error "\n"
+
+set targmach $arg0
+set targaddr [string trim [lindex [split [exec nslookup $targmach] ":"] end]]
+send_error "targmach: $targmach\n"
+send_error "targaddr: $targaddr\n"
+send_error "\n"
+
+if {[string first "bonsai" $arg2] >= 0} {
+  set opsys bonsai
+} else {
+  set opsys banyan
+}
+set datapath $datapath/$opsys
+send_error "opsys: $opsys\n"
+send_error "datapath: $datapath\n"
+send_error "\n"
+
+set fstype $arg1
+send_error "fstype: $fstype\n"
+send_error "\n"
+
+set distall $arg2
+set distmach [lindex [split $arg2 ":"] 0]
+set distaddr [string trim [lindex [split [exec nslookup $distmach] ":"] end]]
+set distname [string trim [lindex [split $distall "/"] end]]
+send_error "distmach: $distmach\n"
+send_error "distaddr: $distaddr\n"
+send_error "distname: $distname\n"
+send_error "\n"
+
+
+# load libraries
+
+source script.exp
+source setup.exp
+
+# begin action
+
+set timeout -1
+for {} {1} {} {
+  spawn cu -l /dev/ttyd2
+  expect {
+      "Connect failed: DEVICE LOCKED" {sleep 60}
+      "Connected" {break}
+      default {break}
+  }
+}
+set timeout 60
+
+
+# if we're in PROM, stay there
+# otherwise, get there
+checkinprom
+if {$inprom != 1} {
+    2u_root
+    u_root2p_mon
+}
+
+load_mr_rdisk $distall $distmach $distaddr $targmach $targaddr "IP22" ;# load sash
+
+inst_cmd {sh echo "netmask 0xffffff00" > /etc/config/ifconfig-1.options}
+inst_cmd {sh /etc/init.d/network stop}
+inst_cmd {sh /etc/init.d/network start}
+
+# mkfs
+clean_inst $fstype
+
+# load distribution
+from_dist $distall $distmach $distaddr $targmach $targaddr
+
+# load selections
+inst_cmd "admin load $dataaddr:$datapath/selections"
+
+# go
+choice_inst
+
+# get root prompt
+i_top2u_root
+
+# turn on networking
+xp_setup1 "$targmach" "$targaddr"
+reboot
+
+# make performance test user
+if {[string compare $opsys "banyan"] == 0} {
+  xp_setup2 "$dataaddr" "$datapath" "$targmach" "$distname"
+} 
+if {[string compare $opsys "bonsai"] == 0} {
+  xp_setup3 "$dataaddr" "$datapath" "$targmach" "$distname"
+}
+
+reboot
+
+2u_root
+

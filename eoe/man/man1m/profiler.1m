@@ -1,0 +1,222 @@
+'\"!  tbl | mmdoc
+'\"macro stdmacro
+.if n .pH g1a.profiler @(#)profiler	30.2 of 12/25/85
+.nr X
+.if \nX=0 .ds x} PROFILER 1M "Performance Measurement Utilities" "\&"
+.if \nX=1 .ds x} PROFILER 1M "Performance Measurement Utilities"
+.if \nX=2 .ds x} PROFILER 1M "" "\&"
+.if \nX=3 .ds x} PROFILER "" "" "\&"
+.TH \*(x}
+.SH NAME
+profiler: prfld, prfstat, prfdc, prfsnap, prfpr \- \s-1UNIX\s+1 system profiler
+.SH SYNOPSIS
+.B prfld
+[ system_namelist ]
+.br
+\f3prfstat\fP [ range [ domain ] ]
+.br
+.B prfdc
+file
+[ period [ off_hour ] ]
+.br
+.B prfsnap
+file
+.br
+.B prfpr
+file [ cutoff [ system_namelist ] ]
+.SH DESCRIPTION
+.IR Prfld ,
+.IR prfstat ,
+.IR prfdc ,
+.IR prfsnap ,
+and
+.I prfpr\^
+form a system of programs
+to facilitate an activity study of the
+.SM UNIX
+operating system.
+.PP
+.I Prfld\^
+is used to initialize the recording
+mechanism in the system.
+It generates a table
+containing the starting address of each
+system subroutine as extracted from
+.IR system_namelist .
+.PP
+\fIPrfstat\fP is used to enable or disable the sampling mechanism.  The
+\fIrange\fP parameter selects what values will be sampled at the sampling
+points.  The current choices for \fIrange\fP are \fBpc\fP to select PC-style
+sampling, \fBstack\fP to sample stack backtraces, and \fBoff\fP to disable
+profile sampling.  The \fIdomain\fP parameter selects when the sample values
+will be collected and defaults to \fBtime\fP which uses a 1ms sampling
+clock.  The current choices for \fIdomain\fP are:
+.sp
+.TS
+center;
+l l.
+domain	description
+_
+\fBtime\fP	time
+\fBswitch\fP	context switches
+\fBipl\fP	non-zero interrupt priority level
+
+\fBcycles\fP	instruction cycles
+\fBdcache1\fP	primary data cache misses
+\fBdcache2\fP	secondary data cache misses
+\fBicache1\fP	primary instruction cache misses
+\fBicache2\fP	secondary instruction cache misses
+\fBscfail\fP	failed store conditional instructions
+\fBbrmiss\fP	mispredicted branch instructions
+\fBupgclean\fP	exclusive upgrades on clean secondary cache lines
+\fBupgshared\fP	exclusive upgrades on shared secondary cache lines
+.TE
+.P
+All platforms support the \fBtime\fP, \fBswitch\fP, and \fBipl\fP domains
+but only platforms based on the R10K CPU and its successors support the
+other domains.  Samples which occur while executing user code will be
+attributed to the synthetic function \fIuser_code\fP.
+.P
+The \fBtime\fP and \fBcycles\fP domains produce time-based samplings but are
+different.  The \fBcycles\fP domain can be useful when you believe that the
+activity of the kernel may be correlated with the \fBtime\fP domain
+sampling.  Such correlations can occur when application activity is
+triggered by clock timeouts, etc.
+.P
+The \fBswitch\fP domain allows profiling to be done in performance situations
+where MP contention is causing processes to be constantly descheduled
+resulting in an idle system.  Trying to profile such a problem in the
+\fBtime\fP domain would show most of the system's time being spent under the
+kernel idle() routine with a smattering of time elsewhere \(em basically not
+very useful.  Profiling in the \fBswitch\fP domain allows you to determine
+what the common code paths are leading up to the context switch.
+.P
+The \fBipl\fP domain is a special subset of the \fBtime\fP domain.  It
+produces a time-based sampling but only those samples which occur when the
+interrupt priority level is non-zero are taken.  All other samples are
+attributed to \fIuser_code\fP or \fIlow_ipl\fP depending on whether the
+interrupt occurred while executing user code or executing kernel code at
+IPL0, respectively.  This allows one to rapidly find where interrupts are
+being held off by code holding non-zero interrupt priority levels.
+.P
+For PC sampling, profiler overhead is less than 1% as calculated for 500
+text addresses.  For stack sampling profiling overhead is less than 10% of
+run time.  Without any arguments,
+.I prfstat\^
+will display the current sampling mode.
+.I Prfstat\^
+will also reveal the number of text addresses being measured.
+.PP
+.I Prfdc\^
+and
+.I prfsnap\^
+perform the PC sampling data collection function of the profiler
+by copying the current value of all the text address counters
+to a file where the data can be analyzed.
+.I Prfdc\^
+will store the counters into
+.I file\^
+every
+.I period\^
+minutes and will turn off at
+.I off_hour
+(valid values for
+.I off_hour
+are
+.BR 0 \- 24 ).
+.I Prfsnap\^
+collects data at the time of invocation only,
+appending the counter values to
+.IR file .
+.PP
+.I Prfpr\^
+formats the data collected by
+.I prfdc\^
+or
+.IR prfsnap .
+Each text address is converted to the nearest text symbol
+(as found in
+.IR system_namelist )
+and is printed if the percent activity
+for that range is greater than
+.IR cutoff .
+.I cutoff
+may be given as a floating-point number >= 0.01.
+If 
+.I cutoff
+is zero, then all samples collected are printed, even if
+their percentage is less than 0.01%.
+.PP
+For stack sampling, the SpeedShop
+.IR kernprof\^ (1)
+special executable and the
+.IR rtmond\^ (1M)
+kernel data transport are used to collect the stack trace data.  This data
+can then be analyzed with SpeedShop tools like
+.IR prof\^ (1)
+to produce a performance profile which provides far more information
+than that offered by PC sampling.  The data may be collected on the machine
+being profiled or an any machine that can be reached via the network.  See
+.IR kernprof\^ (1)
+for a description of all the options it supports.
+.SH EXAMPLE
+PC sampling:
+.PP
+.RS
+.Ex
+# prfld
+# prfstat pc
+PC profiling enabled
+9055 kernel text addresses
+# prfsnap /tmp/P;find /usr/bin -name xxx -print; prfsnap /tmp/P
+# prfpr /tmp/P .3
+IRIX anchor 6.2 03131015 IP22
+
+03/17/96 20:36
+03/17/96 20:36
+
+CPU 0 - 1253 total samples; cutoff 0.300000
+wait_for_interrupt        51.1572
+bzero                     0.4789
+bcopy                     0.4789
+get_buf                   1.4366
+bflush                    0.3990
+syscall                   0.3192
+idle                      37.1907
+dnlc_search               0.3192
+efs_dirlookup             0.3192
+iget                      0.3192
+user                      0.7981
+Total                    93.22
+# prfstat off
+profiling disabled
+9055 kernel text addresses
+.Ee
+.RE
+.PP
+Stack sampling on machine \f3alpha\fP and collecting data on machine
+\f3beta\fP:
+.PP
+.RS
+.Ex
+alpha# prfld <kernel-file>
+alpha# prfstat stack
+STACK profiling enabled
+9055 kernel text addresses
+alpha# /usr/etc/rtmond
+
+    ...
+
+beta% ssrun -usertime /usr/bin/kernprof -t 5 -p 0 alpha
+beta% prof -gprof <alpha's-kernel> kernprof.usertime.<pid>.cpu0
+.Ee
+.RE
+(This assumes that
+.IR rtmond\^ (1M)
+is not
+.IR chkconfig\^ (1M)'ed
+on on the machine alpha and thus needs to be started manually.)
+.SH FILES
+/dev/prf	interface to profile data and text addresses
+.br
+/unix		default for system namelist file

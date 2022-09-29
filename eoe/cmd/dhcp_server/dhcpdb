@@ -1,0 +1,730 @@
+#!/usr/bin/perl5
+
+# Manipulate ndbm database for DHCP
+
+use Getopt::Std;
+use Fcntl;
+use NDBM_File;
+use Socket;
+use POSIX;
+
+# globals
+$dhcpDBFilename = "/var/dhcp/etherToIP";
+
+sub lockDHCPdb {
+    if (flock LOCKDB, $LOCK_EX != 0) {
+	print "Can't lock file\n";
+    }
+}
+
+sub unlockDHCPdb {
+    if (flock LOCKDB, $LOCK_UN != 0) {
+	print "Can't unlock file\n";
+    }
+}
+
+
+sub usage {
+    print "Entry mode usage: $0 -a | -d | -u | -p [-r] [-X]\n";
+    print "\t-C cid -M mac_address -I ip_address -H qualified_hostname \n";
+    print "\t-T lease_secs|INF|STATIC [-f dbm_database]\n";
+    print "File mode usage: $0 -D | -L [-f dbm database]\n";
+    print "Use in entry mode with the following options:-\n";
+    print  "\t-a add an entry - specify the -C -M -I -H and -T options\n";
+    print  "\t-d delete an entry - specify -C|-M|-I|-H\n";
+    print  "\t-u update lease time - specify -C|-M|-I|-H\n";
+    print  "\t-p print entry - specify -C|-M|-I|-H\n";
+    print  "\t-r replace mode for add (replace existing entry or create new)\n";
+    print  "\t-X print and accept client identifiers as hex_string\n";
+    print  "\t-T lease time can be specified with print option to print\n";
+    print  "\t\t leases expiring in less than (<value) or greater than(>value)\n";
+    print  "\t\t seconds. For example, dhcpdb -p -T <1000\n";
+    print  "\t All fields should be provided to add entries. To update or delete\n";
+    print  "\t a single key (cid, mac address, ip address, or hostname) is required.\n";
+    print  "\nUse in file mode with the following options:-\n";
+    print  "\t-D dump to text file (stdout is output)\n";
+    print  "\t-L load from text file to database (stdin is input)\n";
+    exit();
+}
+
+# get a cid external form from a string
+sub cid_stoa {
+    my $val = $_[0];
+    my $optX = $_[1];
+    my ($len, $cid, $cidout, @cid);
+    $len = length($val);
+    @cid = unpack("C$len", $val);
+    $cidout = "";
+    if ($optX eq "") {
+	$cidout = pack("C$len", @cid);
+    } 
+    else {
+	foreach $cid (@cid) {
+	    $cidout .= sprintf "%x:", $cid;
+	}
+    }
+    $cidout =~ s/:$//;
+    $cidout;
+}
+
+# convert cid to internally stored form (opaque string)
+sub cid_atos {
+    my (@cid, $len, $cid);
+    my $optX = $_[1];
+    if ($optX eq "") {
+	return $_[0];
+    }
+    else {
+	@cid = split(/[;:]/, $_[0]);
+  	$len = $#cid + 1;
+	for ($i = 0; $i < $len; $i++) {
+	    $cids[$i] = hex($cid[$i]);
+	}
+	$cid = pack("C$len", @cids);
+	return $cid;
+    }
+}
+
+# prints an ethernet address as a string of hex bytes
+
+sub ether_ntoa {
+    my $ether, $byte;
+    foreach $byte (@_) {
+	$ether .= sprintf "%x:", $byte;
+    }
+    $ether =~ s/:$//;
+    $ether;
+}
+
+sub ether_aton {
+    my @ether, $ether, @eth;
+    @ether = split(":", $_[0]);
+    for ($i = 0; $i <= $#ether; $i++) {
+	$eth[$i] = hex($ether[$i]);
+    }
+    @eth;
+}
+
+# create Keys
+
+sub crEtherKey {
+    my $opt = $_[0];
+    my @ether, $len, $keyM;
+    @ether = ether_aton($opt);
+    $len = $#ether + 1;
+    $keyM = pack("a C$len", 0, @ether);
+}
+
+sub crHostNameKey {
+    my $opt = $_[0];
+    my $len, $keyH;
+    $len = length($opt);
+    $keyH = pack("a A$len", (1, $opt));
+}
+
+sub crIpaddrKey {
+    my $opt = $_[0];
+    my $ipaddr, $len, @ipaddr, $keyI;
+    $ipaddr = inet_aton("$opt");
+    $len = length($ipaddr);
+    @ipaddr = unpack("C4", $ipaddr);
+    $keyI = pack("a C4", (2, @ipaddr));
+}
+
+# always takes input in internal form
+
+sub crCidKey {
+    my $opt = $_[0];
+    my $len, $keyC;
+    $len = length($opt);
+    $keyC = pack("a A$len", (3, $opt));
+}
+
+sub getKeyCfromM {
+    my $opt = $_[0];
+    my $keyM, $cid, $keyC;
+    $keyM = crEtherKey($opt);
+    if ($DHCPDB{$keyM} eq undef) {
+	print "Entry with key $opt_M not found.\n";
+	return undef;
+    }
+    else {
+	$cid = $DHCPDB{$keyM};
+	$keyC = crCidKey($cid);
+    }
+    return $keyC;
+}
+
+sub getKeyCfromH {
+    my $opt = $_[0];
+    my $keyH, $cid, $keyC;
+    $keyH = crHostNameKey($opt);
+    if ($DHCPDB{$keyH} eq undef) {
+	print "Entry with key $opt_H not found.\n";
+	return undef;
+    }
+    else {
+	$cid = $DHCPDB{$keyH};
+	$keyC = crCidKey($cid);
+    }
+    return $keyC;
+}
+
+sub getKeyCfromI {
+    my $opt = $_[0];
+    my $keyI, $cid, $keyC;
+    $keyI = crIpaddrKey($opt);
+    if ($DHCPDB{$keyI} eq undef) {
+	print "Entry with key $opt_I not found.\n";
+	return undef;
+    }
+    else {
+	$cid = $DHCPDB{$keyI};
+	$keyC = crCidKey($cid);
+    }
+    return $keyC;
+}
+
+# add an entry to the DHCP database
+sub addDHCPdb {
+    my $dh_obj;
+    my $keyM, $keyH, $keyI, $keyC, $data, $err, $valC, @optT, $optT;
+    if ( ($opt_M eq "") || ($opt_C eq "") || ($opt_I eq "") || 
+	 ($opt_H eq "") || ($opt_T eq "") ) {
+	print  "Must specify the -C, -M, -I, -H, and -T options to add\n";
+	usage();
+    }
+    
+    @optT = split / /, $opt_T;
+    if (@optT > 1) {
+	$optT = mktime(@optT);
+	if ($optT ne undef) {
+	    $opt_T = $optT;
+	}
+	else {
+	    print "Time should be entered in time() or mktime() format\n";
+	    usage();
+	}
+    }
+
+    if ($opt_T eq "INF") {
+        $opt_T = -1;
+    }
+    if ($opt_T eq "STATIC") {
+	$opt_T = -3;
+    }
+    if (($opt_T == 0) || ($opt_T < -3)) {
+	print "Lease time should be positive.\n";
+	untie %DHCPDB;
+	return -1;
+    }
+
+    $keyM = crEtherKey($opt_M);
+
+    $keyH = crHostNameKey($opt_H);
+
+    $keyI = crIpaddrKey($opt_I);
+
+    $valC = cid_atos($opt_C, $opt_X);
+    $keyC = crCidKey($valC);
+
+    $data = sprintf "%s\t%s\t%s\t%s\0", $opt_M, $opt_I, $opt_H, $opt_T;
+
+    $db_obj = tie(%DHCPDB, "NDBM_File", $dhcpDBFilename, 
+		  O_RDWR|O_CREAT, 0604);
+
+    if ($db_obj eq undef) {
+	die "Could not open $dhcpDBFilename.\n";
+	exit();
+    }
+
+    # before adding this record make sure that its not already
+    # in there.
+    $err = 0;
+    if ($opt_r == 0) {
+	if  ($DHCPDB{$keyM} ne undef) {
+	    $keyC = getKeyCfromM($opt_M);
+	    print "Duplicate for Mac $opt_M: $DHCPDB{$keyC} exists.\n";
+	    $err = 1;
+	}
+	if ($DHCPDB{$keyH} ne undef) {
+	    $keyC = getKeyCfromH($opt_H);
+	    print "Duplicate for Hostname $opt_H: $DHCPDB{$keyC} exists.\n";
+	    $err = 1;
+	}
+	if ($DHCPDB{$keyI} ne undef) {
+	    $keyC = getKeyCfromI($opt_I);
+	    print "Duplicate for IP address $opt_I: $DHCPDB{$keyC} exists.\n";
+	    $err = 1;
+	}
+	if ($DHCPDB{$keyC} ne undef) {
+	    print "Duplicate for Cid $opt_C: $DHCPDB{$keyC} exists.\n";
+	    $err = 1;
+	}
+	if ($err == 1) {
+	    untie %DHCPDB;
+	    return -1;
+	}
+    }
+    
+
+    lockDHCPdb();
+    $DHCPDB{$keyM} = $valC;
+    $DHCPDB{$keyH} = $valC;
+    $DHCPDB{$keyI} = $valC;
+    $DHCPDB{$keyC} = $data;
+    unlockDHCPdb();
+
+    untie %DHCPDB;
+    return 0;
+}
+
+# delete an entry from the DHCP database
+sub deleteDHCPdb {
+    my $dh_obj, $selections, $delete, $keyC, $keyI, $data, $keyH, $keyM;
+    my $M, $I, $H, $lease, $cid;
+
+    if ( ($opt_M eq "") && ($opt_C eq "") && ($opt_I eq "") && ($opt_H eq "") ) {
+	print  "Must specify the -C, -M, -I, or -H options to delete\n";
+	usage();
+    }
+
+    $selections = ($opt_M ne undef) + ($opt_C ne undef) + 
+      ($opt_I ne undef) + ($opt_H ne undef);
+    if ($selections > 1) {
+	print "Deletion can be done on one key only.\n";
+	return -1;
+    }
+
+    $delete = 0;
+    $db_obj = tie(%DHCPDB, "NDBM_File", $dhcpDBFilename, 
+		  O_RDWR|O_CREAT, 0604);
+
+    if ($db_obj eq undef) {
+	die "Could not open $dhcpDBFilename.\n";
+	exit();
+    }
+    
+    if ($opt_C ne "") {
+        $cid = cid_atos($opt_C, $opt_X);
+	$keyC = crCidKey($cid);
+	if ($DHCPDB{$keyC} eq undef) {
+	    print "Entry with key $opt_C not found.\n";
+	}
+	else {
+	    $data = $DHCPDB{$keyC};
+	    ($M, $I, $H, $lease) = split(/[\t ]/, $data);
+	    $keyH = crHostNameKey($H);
+	    $keyI = crIpaddrKey($I);
+	    $keyM = crEtherKey($M);
+	    $delete = 1;
+	}
+    }
+    elsif ($opt_M ne "") {
+        $opt_M =~ tr/A-Z/a-z/;
+	$keyC = getKeyCfromM($opt_M);
+	if ($keyC) {
+	    $data = $DHCPDB{$keyC};
+	    ($M, $I, $H, $lease) = split(/[\t ]/, $data);
+ 	    $M =~ tr/A-Z/a-z/;
+	    if ($opt_M ne $M) {
+		print "Inconsistent data $opt_M != $M .\n";
+		untie %DHCPDB;
+		return -1;
+	    }
+	    $keyH = crHostNameKey($H);
+	    $keyI = crIpaddrKey($I);
+	    $delete = 1;
+	}
+    }
+    elsif ($opt_H ne "") {
+	$keyC = getKeyCfromH($opt_H);
+	if ($keyC) {
+	    $data = $DHCPDB{$keyC};
+	    ($M, $I, $H, $lease) = split(/[\t ]/, $data);
+	    if ($opt_H ne $H) {
+		print "Inconsistent data $opt_H != $H .\n";
+		untie %DHCPDB;
+		return -1;
+	    }
+	    $keyI = crIpaddrKey($I);
+	    $keyM = crEtherKey($M);
+	    $delete = 1;
+	}
+    }
+    elsif ($opt_I ne "") {
+	$keyC = getKeyCfromI($opt_I);
+	if ($keyC ne undef) {
+	    $data = $DHCPDB{$keyC};
+	    ($M, $I, $H, $lease) = split(/[\t ]/, $data);
+	    if ($opt_I ne $I) {
+		print "Inconsistent data $opt_I != $I .\n";
+		untie %DHCPDB;
+		return -1;
+	    }
+	    $keyM = crEtherKey($M);
+	    $keyH = crHostNameKey($H);
+	    $delete = 1;
+	}
+    }
+    else {
+	print "What option is this ?\n";
+	untie %DHCPDB;
+	return -1;
+    }
+    
+    if ($delete == 1) {
+	lockDHCPdb();
+	
+	delete $DHCPDB{$keyC};
+	delete $DHCPDB{$keyM};
+	delete $DHCPDB{$keyH};
+	delete $DHCPDB{$keyI};
+	
+	unlockDHCPdb();
+    }
+    untie %DHCPDB;
+}
+
+# update a lease
+
+sub updateDHCPdb {
+    my $dh_obj, $selections, $update, $keyC, $keyI, $data, $keyH, $keyM;
+    my $M, $I, $H, $lease, $cid, @optT, $optT;
+
+    if ( ($opt_M eq "") && ($opt_C eq "") && ($opt_I eq "") && ($opt_H eq "") ) {
+	print  "Must specify the -C, -M, -I, or -H options to update\n";
+	usage();
+    }
+    elsif ($opt_T eq "") {
+	print  "Must specify the lease value to update\n";
+	usage();
+    }
+
+    if ($opt_T eq "INF") {
+        $opt_T = -1;
+    }
+    if ($opt_T eq "STATIC") {
+	$opt_T = -3;
+    }
+    if (($opt_T == 0) || ($opt_T < -3)) {
+	print "Lease must be positive or -1(static allocation).\n";
+	return -1;
+    }
+
+    @optT = split / /, $opt_T;
+    if (@optT > 1) {
+	$optT = mktime(@optT);
+	if ($optT ne undef) {
+	    $opt_T = $optT;
+	}
+	else {
+	    print "Time should be entered in time() or mktime() format\n";
+	    usage();
+	}
+    }
+
+    $selections = ($opt_M ne undef) + ($opt_C ne undef) + 
+      ($opt_I ne undef) + ($opt_H ne undef);
+    if ($selections > 1) {
+	print "Update can be done on one key only.\n";
+	return -1;
+    }
+
+    $update = 0;
+
+    $db_obj = tie(%DHCPDB, "NDBM_File", $dhcpDBFilename, 
+		  O_RDWR|O_CREAT, 0604);
+    if ($db_obj eq undef) {
+	die "Could not open $dhcpDBFilename.\n";
+	exit();
+    }
+    if ($opt_M ne "") {
+        $opt_M =~ tr/A-Z/a-z/;
+	$keyC = getKeyCfromM($opt_M);
+	if ($keyC) {
+	    $data = $DHCPDB{$keyC};
+	    ($M, $I, $H, $lease) = split(/[\t ]/, $data);
+ 	    $M =~ tr/A-Z/a-z/;
+	    if ($opt_M ne $M) {
+		print "Inconsistent data $opt_M != $M .\n";
+		untie %DHCPDB;
+		return -1;
+	    }
+	    $update = 1;
+	}
+    }
+    elsif ($opt_C ne "") {
+        $cid = cid_atos($opt_C, $opt_X);
+	$keyC = crCidKey($opt_C);
+	if ($DHCPDB{$keyC} eq undef) {
+	    print "Entry with key $opt_C not found.\n";
+	}
+	else {
+	    $data = $DHCPDB{$keyC};
+	    ($M, $I, $H, $lease) = split(/[\t ]/, $data);
+	    $update = 1;
+	}
+    }
+    elsif ($opt_H ne "") {
+	$keyC = getKeyCfromH($opt_H);
+	if ($keyC ne undef) {
+	    $data = $DHCPDB{$keyC};
+	    ($M, $I, $H, $lease) = split(/[\t ]/, $data);
+	    if ($opt_H ne $H) {
+		print "Inconsistent data $opt_H != $H .\n";
+		untie %DHCPDB;
+		return -1;
+	    }
+	    $update = 1;
+	}
+    }
+    elsif ($opt_I ne "") {
+	$keyI = getKeyCfromI($opt_I);
+	if ($keyC ne undef) {
+	    $data = $DHCPDB{$keyC};
+	    ($M, $I, $H, $lease) = split(/[\t ]/, $data);
+	    if ($opt_I ne $I) {
+		print "Inconsistent data $opt_I != $I .\n";
+		untie %DHCPDB;
+		return -1;
+	    }
+	    $update = 1;
+	}
+    }
+    else {
+	print "What option is this ?\n";
+	untie %DHCPDB;
+	return -1;
+    }
+
+    if ($update == 1) {
+	lockDHCPdb();
+	
+	$data = sprintf "%s\t%s\t%s\t%s\0", $M, $I, $H, $opt_T;
+	$DHCPDB{$keyC} = $data;
+	
+	unlockDHCPdb();
+    }
+    untie %DHCPDB;
+    
+}
+
+
+# print database entries
+
+sub printDHCPdb {
+
+    my $val, $print, $keyC, $keyM, $keyH, $keyI, $M, $H, $I, $lease;
+    my $op, $secs, $time, $key, $val, $type, @keybuf, $cid, $please;
+    if ( ($opt_M eq "") && ($opt_C eq "") && ($opt_I eq "") && 
+	 ($opt_H eq "") && ($opt_T eq "") ) {
+	print  "Must specify the -C, -M, -I, -H, or -T options to print\n";
+	usage();
+    }
+
+    dbmopen %DHCPDB, $dhcpDBFilename, undef
+      or die "Can't open $dhcpDBFilename: $!\n";
+
+    $print = 0;
+    if ($opt_M ne "") {
+        $opt_M =~ tr/A-Z/a-z/;
+	$keyC = getKeyCfromM($opt_M);
+	if ($keyC ne undef) {
+	    $data = $DHCPDB{$keyC};
+	    ($M, $I, $H, $lease) = split(/[\t ]/, $data);
+ 	    $M =~ tr/A-Z/a-z/;
+	    if ($opt_M ne $M) {
+		print "Inconsistent data $opt_M != $M .\n";
+		dbmclose %DHCPDB;
+		return -1;
+	    }
+	    $print = 1;
+	}
+    }
+    elsif ($opt_C ne "") {
+	$cid = cid_atos($opt_C, $opt_X);
+	$keyC = crCidKey($cid);
+	if ($DHCPDB{$keyC} eq undef) {
+	    print "Entry with key $opt_C not found.\n";
+	}
+	else {
+	    $data = $DHCPDB{$keyC};
+	    ($M, $I, $H, $lease) = split(/[\t ]/, $data);
+	    $print = 1;
+	}
+    }
+    elsif ($opt_H ne "") {
+	$keyC = getKeyCfromH($opt_H);
+	if ($keyC ne undef) {
+	    $data = $DHCPDB{$keyC};
+	    ($M, $I, $H, $lease) = split(/[\t ]/, $data);
+	    if ($opt_H ne $H) {
+		print "Inconsistent data $opt_H != $H .\n";
+		dbmclose %DHCPDB;
+		return -1;
+	    }
+	    $print = 1;
+	}
+    }
+    elsif ($opt_I ne "") {
+	$keyC = getKeyCfromI($opt_I);
+	if ($keyC ne undef) {
+	    $data = $DHCPDB{$keyC};
+	    ($M, $I, $H, $lease) = split(/[\t ]/, $data);
+	    if ($opt_I ne $I) {
+		print "Inconsistent data $opt_I != $I .\n";
+		dbmclose %DHCPDB;
+		return -1;
+	    }
+	    $print = 1;
+	}
+    }
+    elsif ($opt_T ne "") {
+	$op = substr($opt_T, 0, 1);
+	if (($op eq "<") || ($op eq ">")) {
+	    $secs = substr($opt_T, 1);
+	}
+	else {
+	    $op = ">";
+	    $secs = $opt_T;
+	}
+	$time = time();
+	while (($key,$val) = each %DHCPDB) {
+	    ($type, @keybuf) = unpack("a C*", $key);
+	    if ($type == 3) {	# cid is the key
+		($M, $I, $H, $lease) = split(/[\t ]/, $val);
+		if ($lease <= 0) {
+		    $please = $lease . "\n";
+		} else {
+		    $please = ctime($lease);
+		}
+		if ($op eq ">") {
+		    if ( ($lease - $time)  >= $secs ) {
+			$cid = pack("C*", @keybuf);
+			printf "%s :- %s\t%s\t%s\t%s", cid_stoa($cid, $opt_X), $M, $I, $H, 
+			$please;
+		    }
+		}
+		else {
+		    if ( ($lease - $time)  < $secs ) {
+			$cid = pack("C*", @keybuf);
+			
+			printf "%s :- %s\t%s\t%s\t%s", cid_stoa($cid, $opt_X), $M, $I, $H, 
+			$please;
+		    }
+		}
+	    }
+	}
+    }
+    else {
+	print "What option is this ?\n";
+	dbmclose %DHCPDB;
+	return -1;
+    }
+
+    if ($print == 1) {
+	printf "%s :- %s\n", cid_stoa($cid, $opt_X), $data;
+    }
+    dbmclose %DHCPDB;
+}
+
+
+# dump the database entries
+
+sub dumpDHCPdb {
+    my $key, $val, $type, @keybuf, $cid;
+
+    dbmopen %DHCPDB, $dhcpDBFilename, undef
+      or die "Can't open $dhcpDBFilename: $!\n";
+
+    while (($key,$val) = each %DHCPDB) {
+	($type, @keybuf) = unpack("a C*", $key);
+	
+	if ($type == 3) {	# cid is the key
+	    $cid = pack("C*", @keybuf);
+            chop $val if ($val =~ /\0$/);
+	    printf "%s\t%s\n", cid_stoa($cid, $opt_X), $val;
+	}
+    }
+    dbmclose %DHCPDB;
+}
+
+#load entries into the database
+    
+sub loadDHCPdb {
+    my $dh_obj;
+    my $key, $M, $H, $I, $lease, $keyM, $keyC, $keyH, $keyI, $data, $valC;
+
+    $db_obj = tie(%DHCPDB, "NDBM_File", $dhcpDBFilename, 
+		  O_RDWR|O_CREAT, 0604);
+
+    while (<>) {
+	chop $_ if ($_ =~ /\n$/);
+	($key, $M, $I, $H, $lease) = split(/[ \t]/, $_);
+	$valC = cid_atos($key,$opt_X);
+	$keyC = crCidKey($valC);
+	if ($DHCPDB{$keyC} ne "") {
+	    print "Updating entry for $_\n";
+	}
+	$keyM = crEtherKey($M);
+
+	$keyH = crHostNameKey($H);
+
+	$keyI = crIpaddrKey($I);
+	$data = sprintf "%s\t%s\t%s\t%s\0", $M, $I, $H, $lease;
+
+	lockDHCPdb();
+	$DHCPDB{$keyM} = $valC;
+	$DHCPDB{$keyH} = $valC;
+	$DHCPDB{$keyI} = $valC;
+	$DHCPDB{$keyC} = $data;
+	unlockDHCPdb();
+    }
+    untie %DHCPDB;
+}
+	
+sub main {
+    if (getopts('haduprXLDC:M:H:I:T:f:') == 0) {
+	usage();
+    }
+    if ($opt_h) {
+	usage();
+    }
+    if ($opt_f) {
+	$dhcpDBFilename = $opt_f;
+    }
+
+    sysopen(LOCKDB, "$dhcpDBFilename" . ".lock", O_RDONLY|O_CREAT, 0604)
+      or die "Can't open lock file: $!";
+
+    if (($opt_a == 1) || ($opt_r == 1)) {
+	$opt_a = 1;
+	addDHCPdb();
+    }
+    elsif ($opt_d == 1) {
+	deleteDHCPdb();
+    }
+    elsif ($opt_u == 1) {
+	updateDHCPdb();
+    }
+    elsif ($opt_p == 1) {
+	printDHCPdb();
+    }
+    elsif ($opt_D == 1) {
+	dumpDHCPdb();
+    }
+    elsif ($opt_L == 1) {
+	loadDHCPdb();
+    }
+    else {
+	print  "Must specify add/delete/update/print/replace\n\n";
+	usage();
+    }
+    close(LOCKDB);
+}
+
+
+main();
+
+

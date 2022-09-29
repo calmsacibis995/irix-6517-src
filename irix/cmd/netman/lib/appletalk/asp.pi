@@ -1,0 +1,247 @@
+/*
+ * Copyright 1991, Silicon Graphics, Inc.
+ * All Rights Reserved.
+ *
+ * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Silicon Graphics, Inc.;
+ * the contents of this file may not be disclosed to third parties, copied or
+ * duplicated in any form, in whole or in part, without the prior written
+ * permission of Silicon Graphics, Inc.
+ *
+ * RESTRICTED RIGHTS LEGEND:
+ * Use, duplication or disclosure by the Government is subject to restrictions
+ * as set forth in subdivision (c)(1)(ii) of the Rights in Technical Data
+ * and Computer Software clause at DFARS 252.227-7013, and/or in similar or
+ * successor clauses in the FAR, DOD or NASA FAR Supplement. Unpublished -
+ * rights reserved under the Copyright Laws of the United States.
+ *
+ * $Revision: 1.12 $
+ */
+
+/*
+ * AppleTalk Session Protocol
+ */
+
+import elap, ddp, atp;
+
+protocol asp "AppleTalk Session Protocol" (0) : atp
+{
+    cache	func_cache;
+
+    enum spfunction {
+	UnknownResponse=0,
+	CloseSession=1, Command=2, GetStatus=3, OpenSession=4,
+	Tickle=5, Write=6, WriteContinue=7, Attention=8
+    };
+
+    enum sperror {
+	NoError, NoAck=0xfbcd, TooManyClients, SizeErr, SessCloseed,
+	ServerBusy, ParamErr, NoServers, NoMoreSessions, BufTooSmall,
+	BadVersNum
+    };
+
+    enum cmderror {
+	NoErr, ObjectLocked=0xffffec58, VolLocked, IconTypeError,
+	DirNotFound, CantRename, ServerGoingDown, TooManyFilesOpen,
+	ObjectTypeErr, CallNotSupported, UserNotAuth, SessClosed,
+	Rangeoverlap, RangeNotLocked, ParamError, ObjectNotFound,
+	ObjectExists, NoServer, NoMoreLocks, MiscErr, LockErr,
+	ItemNotFound, FlatVol, FileBusy, EOFErr, DiskFull, DirNotEmpty,
+	DenyConflict, CantMove, BitmapErr, BadVerNum, BadUAM,
+	AuthContinue, AccessDenied
+    };
+
+    switch (atp.func) {
+      case atp.TReq:
+	/* Interpret request */
+	spfunction	func "ASP Function Code" : 8;
+
+	/* Save func indexed by TID and source address for recognizing TResp */
+	aspfunc_cache_enter(func_cache, atp.tid,
+			    (ddp.srcnetnum<<8)|ddp.srcnodeid, elap.srcnodeid,
+			    func);
+
+	switch (func) {
+	  case OpenSession:
+	    u_char	wss "Workstation Session Socket";
+	    u_short	vnum "ASP Version Number";
+
+	    nest asp : atp(ddp.type:(((ddp.srcnetnum<<8)|ddp.srcnodeid)<<8)
+					| wss);
+	    nest asp : atp(ddp.type:((elap.srcnodeid<<8) | wss));
+
+	  case CloseSession:
+	  case Tickle:
+	    u_char	sid "Session ID";
+	    u_char	pad "Padding" [2] -vv;
+
+	  case GetStatus:
+	    u_char	pad [3] -vv;
+
+	  case Command:
+	  case Write:
+	    u_char	sid "Session ID";
+	    u_short	seqnum "Sequence Number";
+
+	  case WriteContinue:
+	    u_char	sid "Session ID";
+	    u_short	seqnum "Sequence Number";
+	    u_short	bufsize "Available Buffer Size";
+
+	  case Attention:
+	    u_char	sid "Session ID";
+	    u_short	attncode "Attention Code";
+	}
+      case atp.TResp:
+	/* find function code indexed by TID and destination address */
+	spfunction	func : 8 = (u_char)
+			  aspfunc_cache_match(func_cache, atp.tid,
+					      (ddp.dstnetnum<<8)|ddp.dstnodeid,
+					      elap.dstnodeid);
+
+	/* interprete responses */
+	switch (func) {
+	  case OpenSession:
+	    u_char	sss "Server Session Socket";
+	    u_char	sid "Session ID";
+	    sperror	err "Error Code" : 16;
+	    nest asp : atp(ddp.type:(((ddp.srcnetnum<<8)|ddp.srcnodeid)<<8)
+				    |sss);
+	    nest asp : atp(ddp.type:((elap.srcnodeid<<8) | sss));
+
+	  case CloseSession:
+	  case Attention:
+	    u_char	pad [4] -vv;
+
+	  case GetStatus:
+	    u_char	pad [4] -vv;
+//	    opaque	status "Status Block" [];
+	    u_char	status "Status Block" [];
+
+	  case Command:
+	  case Write:
+	    cmderror	result "Command Result" : 32;
+
+	  case WriteContinue:
+	    u_char	pad [4] -vv;
+//	    opaque	wdata "Write Data" [];
+	    u_char	wdata "Write Data" [] -vv;
+	}
+
+	/* remove tid from cache if appropriate */
+      case atp.TRel:
+	u_char	treldata "TRel Data" [4];
+    }
+}
+
+// Include cache code here as pass through
+%{
+#include <rpc/types.h>
+#include <rpc/xdr.h>
+#include <net/raw.h>
+
+struct aspfunc_cache_key {
+	u_int	tid;		/* atp transaction identifier */
+	u_int	addr;		/* ddp long header address or elap nodeid */
+};
+
+struct aspfunc_cache_value {
+	u_short	refcount;	/* reference count */
+	u_char	func;		/* asp request function code */
+};
+
+#define ACK(p)  ((struct aspfunc_cache_key *)(p))
+#define	ACV(p)	((struct aspfunc_cache_value *)(p))
+
+static unsigned int
+aspfunc_cache_hash(void *key)
+{
+	return ACK(key)->tid ^ ACK(key)->addr;
+}
+
+static int
+aspfunc_cache_cmpkeys(void *key1, void *key2)
+{
+	return ACK(key1)->tid != ACK(key2)->tid
+	    || ACK(key1)->addr != ACK(key2)->addr;
+}
+
+static bool_t
+xdr_aspfunc_cache_value(XDR *xdr, void **valp, void *key)
+{
+	struct aspfunc_cache_value *acv;
+
+	switch (xdr->x_op) {
+	  case XDR_DECODE:
+		acv = *valp;
+		if (acv == 0) {
+			*valp = acv = new(struct aspfunc_cache_value);
+			acv->refcount = 1;
+		}
+		/* FALL THROUGH */
+	  case XDR_ENCODE:
+		return xdr_u_char(xdr, &acv->func);
+	  case XDR_FREE:
+		acv = *valp;
+		if (--acv->refcount == 0)
+			delete(acv);
+		*valp = 0;
+	}
+	return TRUE;
+}
+
+static void
+aspfunc_cache_dump(void *key, void *value, long exptime)
+{
+	printf("tid %u addr %#x -> func %u\n",
+		ACK(key)->tid, ACK(key)->addr, ACV(value)->func);
+}
+
+static struct cacheops aspfunc_cache_ops = {
+	{ aspfunc_cache_hash, aspfunc_cache_cmpkeys, xdr_aspfunc_cache_value },
+	0, aspfunc_cache_dump
+};
+
+static void
+aspfunc_cache_create(Cache **self)
+{
+	c_create("aspfunc", 64, sizeof(struct aspfunc_cache_key), 2 MINUTES,
+		 &aspfunc_cache_ops, self);
+}
+
+static void
+aspfunc_cache_enter(Cache *c, u_short tid, u_long addr, u_int node, u_char func)
+{
+	struct aspfunc_cache_key key;
+	struct aspfunc_cache_value *acv;
+
+	key.tid = tid;
+	key.addr = addr;
+	acv = new(struct aspfunc_cache_value);
+	acv->refcount = 2;
+	acv->func = func;
+	c_enter(c, &key, acv);
+	key.addr = node;
+	c_enter(c, &key, acv);
+}
+
+#define	aspUnknownResponse	0
+
+static u_char
+aspfunc_cache_match(Cache *c, u_short tid, u_long addr, u_int node)
+{
+	struct aspfunc_cache_key key;
+	struct aspfunc_cache_value *acv;
+	u_long curseq;
+
+	key.tid = tid;
+	key.addr = addr;
+	acv = c_match(c, &key);
+	if (acv == 0) {
+		key.addr = node;
+		acv = c_match(c, &key);
+		if (acv == 0)
+			return aspUnknownResponse;
+	}
+	return acv->func;
+}
+%}

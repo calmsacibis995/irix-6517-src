@@ -1,0 +1,338 @@
+'\"! tbl | mmdoc
+'\"macro stdmacro
+.TH PCIBA 7M
+.SH NAME
+pciba \- User level PCI Bus Adapter interface. 
+.SH DESCRIPTION
+.LP
+The 
+.I pciba
+interface provides a mechanism to access
+the PCI bus address spaces,
+route PCI interrupts,
+and obtain PCI addresses for DMA
+from user programs.
+It is intended to provide a convenient
+mechanism for writing user level PCI device drivers.
+.SS "Activating the pciba driver"
+.LP
+The device driver that provides
+.I pciba
+services
+is a loadable device driver, which may or may not
+be automatically loaded during the boot of
+your system.
+The simplest way to find out if this driver is
+active in your system is to check the list of
+currently registered device drivers:
+.IP
+\f4% ml list | grep pciba\fP
+.LP
+If there is no output,
+then the driver is not present and
+must be loaded before use.
+To load the driver:
+.IP
+\f4# lboot -L pciba\fP
+.LP
+If the driver is not active for a while,
+the system will keep it registered but
+remove it from memory, reloading the
+driver when it is again needed.
+You can explicitly remove the driver
+from the system:
+.IP
+\f4# ml list | awk '/pciba/ { printf "lboot -U %d\\n", $2; }' | sh\fP
+.LP
+.SS "Forcing pciba to autoload at boot time"
+.LP
+If the driver is not loading at boot time,
+and you want it to load,
+one way to do this is to add the driver
+directly to the kernel configuration files.
+The simplest way to do this is to create a file
+.IP
+\f4/var/sysgen/system/pciba.sm\f1
+.LP
+This file should contain the single line:
+.IP
+\f4VECTOR: module=pciba\f1
+.LP
+The next time you autoconfig a kernel,
+that kernel will know to automatically
+load the \f4pciba\f1 driver at boot time.
+.SS "Finding your device under /hw"
+.LP
+When the system boots,
+it builds a graph of all devices
+within the system;
+later, that graph is made available
+as a filesystem at the \f4/hw\f1 mount point.
+.LP
+Knowing the PCI ID word from your device,
+you can find where it sits under \f4/hw\f1
+fairly quickly by looking in one central
+location. There is a directory
+.IP
+\f4/hw/.id/pci/\f2IDWORD\f4/\f1
+.LP
+where IDWORD is replaced by the eight-digit
+hexidecimal value from the ID word, arranged
+with the VENDOR ID in the top half and
+the DEVICE ID in the bottom half.
+For instance, look in the directory
+.IP
+\f4/hw/.id/pci/10A90003/\f1
+.LP
+to find all the instances of SGI's standard IOC3 chip,
+which uses VENDOR 0x10A9 and DEVICE 0x0003.
+.LP
+Inside this directory you will find symbolic links
+to the real locations within \f4/hw\f1 where your device
+has been found.
+.SS "IOCTL Services"
+Vertex
+\f4/hw/\f1...\f4/pci/\f1slot\f4/config\f1
+supports the following ioctl commands:
+.IP
+\f4PCIIOCCFGRD\f1(type, register) - read a config register
+.br
+\f4PCIIOCCFGWR\f1(type, register) - write a config register
+.IP
+In these macros, type is the data type being moved around
+(generally char, short or int)
+and register is the byte offset within the configuration space,
+generally obtained by using a macro supplied from
+the \f4<sys/PCI/PCI_defs.h>\f1 header file.
+Some registers that are commonly accessed
+are wrapped up into single macros:
+.IP
+\f4PCIIOCGETID\f1 - read slot's PCI Identification register. 
+.br
+\f4PCIIOCSETCMD\f1 - write slot's PCI Command register. 
+.br
+\f4PCIIOCGETREV\f1 - read slot's PCI Device Revision register. 
+.br
+\f4PCIIOCGETHTYPE\f1 - read slot's PCI Device Header Type register 
+.br
+\f4PCIIOCGETBASE\f1(n) - read slot's PCI BASE(n) register. 
+.LP
+Vertex
+\f4/hw/\f1...\f4/pci/\f1slot\f4/dma\f1
+supports the following ioctl commands:
+.IP
+\f4PCIIOCDMAALLOC\f1 - Allocate a buffer for User DMA. 
+.br
+The parameter should be a pointer to a 64-bit variable
+containing either simply the size of the transfer,
+or the result of packing some PCIIO DMA
+flags with the size using the
+\f4PCIIOCDMAALLOC_REQUEST_PACK\f1(flags, size) macro
+(which just places the flags in the upper 32 bits of the value). 
+All blocks allocated with \f4PCIIOCDMAALLOC\f1 should be
+explicitly released with \f4PCIIOCDMAFREE\f1 before the
+device is closed, after making sure that there is no
+longer any outstanding DMA to the target.
+.IP
+\f4PCIIOCDMAFREE\f1 - Destroy a User DMA buffer.
+.br
+The parameter is a pointer to a 64-bit variable
+containing the PCI address of a DMA buffer
+previously allocated by a \f4PCIIOCDMAALLOC\f1 request. 
+.LP
+Vertex
+\f4/hw/\f1...\f4/pci/\f1slot\f4/intr\f1
+supports the following ioctl commands:
+.IP
+\f4PCIIOCSETULI\f1(n) - set up a ULI 
+.br
+The value n in the command is a
+bitmap of which interrupts are to be routed from the board,
+formed as the inclusive-or of one or more PCIIO_INTR_LINE macros.
+The parameter is a pointer to a \f4struct uliargs\f1 appropriately filled in. 
+.SS "Memory Mapping Services"
+.LP
+Memory mapping vertex
+\f4/hw/\f1...\f4/pci/\f1slot\f4/base/\f1bar
+returns a pointer that can be used to initiate
+PIO access to the PCI space and offset
+that the system expects the PCI device
+in \f2slot\f1 to decode with its BASE address register \f2bar\f1.
+One such node is created for each BASE register that the system observes
+and sets up. 
+.LP
+.B NOTE:
+This driver adopts the convention commonly used in
+the computer world of numbering things starting
+with zero. Thus, the registers on a board that
+are decoded with the
+.B first
+base register can be found bvia
+\f4/hw/\f1...\f4/pci/\f1slot\f4/base/0\f1;
+conversely,
+\f4/hw/\f1...\f4/pci/\f1slot\f4/base/2\f1;
+will get you to whatever the board is decoding
+using its
+.B third
+base register.
+.LP
+Memory mapping vertex
+\f4/hw/\f1...\f4/pci/\f1slot\f4/mem\f1
+returns a pointer similar to the \f2bar\f1 case above
+for the first BASE register that decodes PCI MEM space.
+If no BASE registers on this device decode PCI MEM space,
+this vertex will not be present.
+.LP
+Memory mapping vertex
+\f4/hw/\f1...\f4/pci/\f1slot\f4/io\f1
+returns a pointer similar to the \f2bar\f1 case above
+for the first BASE register that decodes PCI I/O space.
+If no BASE registers on this device decode PCI I/O space,
+this vertex will not be present.
+.LP
+Memory mapping vertex
+\f4/hw/\f1...\f4/pci/\f1slot\f4/rom\f1
+returns a pointer that can be used to initiate
+PIO access to the PCI space and offset
+that the system expects the PCI device
+in \f2slot\f1 to decode with its Expansion Rom BASE address register.
+If the card does not advertise an Expansion Rom, then
+this vertex will not be present.
+.LP
+Memory mapping vertex
+\f4/hw/\f1...\f4/pci/\f1slot\f4/dma\f1
+using as offset the PCI address retured by an
+\f4PCIIOCDMAALLOC\f1 ioctl command will provide
+an appropriate user mapping into the memory
+allocated for user-initiated DMA.
+Any mmap request that does not precisely match
+the PCI address and size of an allocated User DMA
+block will fail.
+Each such mmap call needs to be matched with
+a corresponding munmap call before the block is
+returned using \f4PCIIOCDMAFREE\f1 or the device
+is explicitly closed.
+.LP
+Memory mapping vertex
+\f4/hw/\f1...\f4/pci/mem\f1
+provides a PIO pointer that resolves
+to any arbitrary location within the PCI MEM address space.
+.LP
+Memory mapping vertex
+\f4/hw/\f1...\f4/pci/io\f1
+provides a PIO pointer that resolves
+to any arbitrary location within the PCI I/O address space.
+.SH "BYTE SWAPPING ISSUES"
+.LP
+MIPS processors and the PCI bus disagree on the relative
+significance of the individual bytes in a multiple-byte
+data item.
+Like many modern RISC processors,
+the MIPS chips prefer to store the
+most significant byte at the first
+address in memory, with bytes of lower
+significance following it.
+The PCI bus follows the convention that
+the lowest-numbered byte has the lowest
+significance, and it is followed by bytes
+in increasing significance order.
+.LP
+The upshot of this is,
+hardware implementers have a choice over
+how to interconnect the byte lanes of
+the PCI bus to the byte lanes of the
+system native bus.
+Do they connect them up by bits, so that
+data items the width of the PCI bus come
+across with the correct values, or
+do they connect them so that the address
+of each individual byte is invariant?
+.LP
+In a configuration where 32-bit word values
+are preserved across the interface, the host
+processor must modify addresses for items
+smaller than a 32-bit word. Specifically,
+to access bytes, the address (or the byte
+offset from an aligned address, which is
+usually easier) must be XORed with 3,
+and to access 16-bit data, the address
+must be XORed with 2.
+SGI's PCI support codde gives this byte lane
+configuration the name WORD_VALUES.
+.LP
+In a configuration where each byte's address
+is precisely maintained, every data item is
+at its correct address; and, unless the device
+is one of the rare big-endian PCI devices,
+the bytes of any multibyte quantity are
+in reversed significance and must be reversed
+before storing or after reading.
+SGI's PCI support codde gives this byte lane
+configuration the name BYTE_STREAM.
+.LP
+When this driver is asked for mappings to devices
+using the verticies described above,
+it provides mappings using WORD_VALUES,
+since it is more efficient to adjust the
+byte addresses of items than to swap bytes
+when accessing two and four byte quantities.
+.LP
+Callers may explicitly request that the byte
+swappers be set for little-endian or big-endian
+devices by applying mmap to the verticies whose
+names end in \f4_le\f1 and \f4_be\f1.
+.\" **********************
+.\" .SH EXAMPLES
+.\" **********************
+.\" **********************
+.SH NOTES
+.\" **********************
+.LP
+If the system does not support ULI, the
+\f4/hw/\f1...\f4/pci/\f1slot\f4/intr\f1
+vertex will not be present.
+.LP
+If a boot prom allocates PCI space and sets up a
+device's BASE registers, and the values are not
+page aligned, pciba is unable to provide direct
+mmap service for those windows, and the corresponding
+\f4/hw/\f1...\f4/pci/\f1slot\f4/base/\f1bar,
+\f4/hw/\f1...\f4/pci/\f1slot\f4/mem\f1
+and \f4/hw/\f1...\f4/pci/\f1slot\f4/io\f1
+verticies will not exist.
+.LP
+Such missing windows can still be accessed,
+as can any area decoded by a BASE register,
+by the longer method of using a
+\f4PCIIOCGETBASE\f1(n) ioctl command on the
+\f4/hw/\f1...\f4/pci/\f1slot\f4/config\f1 vertex
+to get the content of the BASE(n) register.
+If this value is odd, mask off the last two bits
+and use the resulting value as the offset for mmap
+of the \f4/hw/\f1...\f4/pci/io\f1 vertex.
+If the value was even, mask off the last four bits
+and use the resulting value as the offset for mmap
+of the \f4/hw/\f1...\f4/pci/mem\f1 vertex.
+.SS "Changes from the usrpci driver"
+.LP
+The most obvious change from the \f4usrpci\f1 driver is that the location
+of nodes in the hardware graph have changed.  A device on an IRIX 6.4 or older
+system that could be accessed using:
+.IP
+\f4/hw/module/..../pci/<slot>/usrpci\f1
+.LP
+will now be found at:
+.IP
+\f4/hw/module/..../pci/<slot>\f1
+.LP
+The \f4mem32\f1 and \f4mem64\f1 nodes have been renamed \f4mem\f1.
+.LP
+The map size in the usrpci driver was either a big or little window space
+(16 or 128 MB) but the pciba interface checks the size argument to the mmap
+call against the addressable size set up by the card in the Base Address
+Register that defines a particular space.
+
+.\" **********************
+
+.\" .SH "SEE ALSO"
+.\" **********************

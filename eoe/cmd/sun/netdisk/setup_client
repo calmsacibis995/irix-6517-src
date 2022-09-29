@@ -1,0 +1,527 @@
+#! /bin/sh
+#
+#  setup_client : script written to add/remove a client
+#
+#	@(#)setup_client	1.1 88/06/08 4.0NFSSRC; from 1.27 88/03/11 D/NFS
+#       @(#)  from setup_client 1.15 88/02/08
+#
+#  	Copyright (c) 1987 by Sun Microsystems, Inc.
+#
+
+HOME=/; export HOME
+PATH=/bin:/usr/bin:/etc:/usr/etc:/usr/bsd:/usr/etc/netdisk
+
+CMDNAME=$0
+MYPATH="/usr/etc/netdisk"
+INSTALLPATH="/tmp"
+TFTPBOOTPATH="/usr/etc/boot"
+YPMASTERPATH="/var/yp"
+
+USAGE="usage: 
+${CMDNAME} op name yp size rootpath swappath dumppath
+	homepath execpath sharepath arch
+where:
+	op	    = \"add\" or \"remove\"
+	name	    = name of the client machine
+	yp	    = \"master\" or \"slave\" or \"client\" or \"none\"
+	size        = size for swap 
+		      (e.g. 16M or 16m ==> 16 * 1048576 bytes
+			    16K or 16k ==> 16 * 1000 bytes
+			    16B or 16b ==> 16 * 512 bytes
+			    16         ==> 16 bytes )
+	rootpath    = pathname of root (e.g. /export/root )
+        swappath    = pathname of swap (e.g. /export/swap )
+        dumppath    = pathname of dump (e.g. /export/dump ) or \"none\"
+	homepath    = pathname of home (e.g. /home or homeserver:/home)
+		      or \"none\"
+	execpath    = full pathname of exec directory (e.g. /export/exec/sun3 )
+	sharepath   = full pathname of shared files (e.g. /export/exec/share )
+		      or \"none\"
+	arch        = \"sun2\" or \"sun3\" or \"sun4\" etc
+"
+
+#
+# Verify number of arguments and initialize
+#
+case $# in
+11)
+	;;
+*)
+	echo "${CMDNAME}: incorrect number of arguments."
+        echo "${USAGE}"
+        exit 1 ;;
+esac
+OP=${1};	shift		# 1
+NAME=${1};	shift		# 2
+YP=${1};	shift		# 3
+SWAPSIZE=${1};	shift		# 4
+ROOTPATH=${1};	shift		# 5
+SWAPPATH=${1};	shift		# 6
+DUMPPATH=${1};	shift		# 7
+HOMEFULLPATH=${1};  shift	# 8
+EXECPATH=${1};	shift		# 9
+SHAREPATH=${1};	shift		# 10
+ARCH=${1}			# 11
+#
+# Get name info
+#
+SERVER=`hostname`
+DOMAIN=`domainname`
+# 
+# Verify operation
+#
+case "$OP" in
+"add" | "remove" )
+	YPUPDATE=yes
+        break ;;
+"add/noYP" )
+	# used by INSTALL
+	OP=add
+	YPUPDATE=no
+	break ;;
+*)
+        echo "${CMDNAME}: invalid operation type \"${OP}\"."
+        exit 1 ;;
+esac
+#
+# Verify YP mode
+#
+case "$YP" in
+"master" | "slave" | "client" | "none" )
+        break ;;
+*)
+        echo "${CMDNAME}: invalid YP mode \"${YP}\"."
+        exit 1 ;;
+esac
+#
+# Pathnames
+#
+case "$OP" in
+"add" )
+	case "$ROOTPATH" in
+	"none" )
+		echo "${CMDNAME}: rootpath must not be \"none\" for client add"
+		exit 1 ;;
+	esac
+
+	case "$SWAPPATH" in
+	"none" )
+		echo "${CMDNAME}: swappath must not be \"none\" for client add"
+		exit 1 ;;
+	esac
+	;;
+esac
+if [ "$ROOTPATH" != "none" -a ! -d $ROOTPATH ]; then
+	mkdir -p -m 755 $ROOTPATH
+	if [ ! -d $ROOTPATH ]; then
+		echo "${CMDNAME}: can't make directory $ROOTPATH"
+		exit 1
+	fi
+	chmod 700 $ROOTPATH
+fi
+if [ "$SWAPPATH" != "none" -a ! -d $SWAPPATH ]; then 
+        mkdir -p -m 755 $SWAPPATH
+	if [ ! -d $SWAPPATH ]; then
+		echo "${CMDNAME}: can't make directory $SWAPPATH"
+		exit 1
+	fi
+	chmod 700 $SWAPPATH
+fi
+if [ "$DUMPPATH" != "none" -a ! -d $DUMPPATH ]; then 
+        mkdir -p -m 755 $DUMPPATH
+	if [ ! -d $DUMPPATH ]; then
+		echo "${CMDNAME}: can't make directory $DUMPPATH"
+		exit 1
+	fi
+fi
+case "$HOMEFULLPATH" in
+"none" | *:*)
+	# if server:path, then HOMEFULLPATH is all we need
+	HOMEPATH=none
+	;;
+* )
+	HOMEPATH=$HOMEFULLPATH
+	if [ ! -d $HOMEPATH/$SERVER ]; then
+		mkdir -p -m 755 $HOMEPATH/$SERVER
+		if [ ! -d $HOMEPATH/$SERVER ]; then
+			echo "${CMDNAME}: ATTENTION: can't make directory $HOMEPATH/$SERVER"
+		fi
+	fi
+	;;
+esac
+#
+# Verify architecture name, exec pathname and root pathname
+#
+if [ ! -d $EXECPATH/boot -a "$OP" = "add" ]; then
+	echo "${CMDNAME}: can't set up client \"${NAME}\"."
+       	echo "${CMDNAME}: $EXECPATH/boot doesn't exist."
+       	echo "ATTENTION: You must load the \"${ARCH}\" architecture."
+       	exit 1
+fi
+if [ -d $ROOTPATH/$NAME -a "$OP" = "add" ]; then
+	echo "${CMDNAME}: $ARCH client \"${NAME}\" already exists."
+	exit 1
+elif [ ! -d $ROOTPATH/$NAME -a "$OP" = "remove" ]; then
+	echo "${CMDNAME}: $ARCH client \"${NAME}\" does not exist."
+        exit 1
+fi
+#
+#  Make sure proto tree exists. 
+#
+if [ ! -d $MYPATH/proto/etc -a "$OP" = "add" ]; then
+	echo
+	echo "${CMDNAME}: can't set up client \"${NAME}\"."
+	echo "${CMDNAME}: prototype root not found in $MYPATH/proto."
+       	echo "ATTENTION: You must load the \"${ARCH}\" architecture."
+	exit 1
+fi
+#
+# Verify ip address
+#
+rm -rf /tmp/ipaddr
+if [ "$DOMAIN" = "noname" -o "$DOMAIN" = "" ]; then
+	grep "[	 ]$NAME[	 ]" /etc/hosts | grep -v "^#"
+else
+	ypmatch $NAME hosts
+fi | awk '{ print $1 }' >> /tmp/ipaddr
+IPADDR=`cat /tmp/ipaddr`
+rm -rf /tmp/ipaddr
+case "$IPADDR" in
+"")
+	echo "${CMDNAME}: can't find ip address in /etc/hosts for \"${NAME}\" !"
+	exit 1
+	;;
+esac
+#
+# Convert ipaddr to hex
+# Note that convert_to_hex adds a newline to end of string, so $HEXADDR
+# will have a space at the end of it.  This is important if $HEXADDR is
+# used to construct other strings.
+#
+HEXADDR=`convert_to_hex $IPADDR`
+#
+#  Create the symlink name to the boot file.  Sun3 symlink names are
+#  merely the 8 character uppercase IP address, while all others
+#  have ".arch" appended, where "arch" is the uppercase architecture
+#  name of the client.
+#
+case "$ARCH" in
+sun3)
+	BOOTSYMLINK=$HEXADDR
+	;;
+sun386)
+	BOOTSYMLINK=`echo "$HEXADDR." | tr -d " "`S386
+	;;
+*)
+	# Get rid of spaces in $HEXADDR and make $ARCH uppercase
+	BOOTSYMLINK=`echo "$HEXADDR." | tr -d " "``echo "$ARCH" \
+		| tr '[a-z]' '[A-Z]'`
+	;;
+esac
+#
+# Verify ethernet address
+#
+rm -rf /tmp/etheraddr
+if [ "$DOMAIN" = "noname" -o "$DOMAIN" = "" ]; then
+        grep "[	 ]$NAME[	 ]" /etc/ethers | grep -v "^#"
+else
+        ypmatch $NAME ethers
+fi | awk '{ print $1 }' >> /tmp/etheraddr
+ETHERADDR=`cat /tmp/etheraddr`
+rm -rf /tmp/etheraddr
+case "$ETHERADDR" in
+"")
+        echo "${CMDNAME}: can't find address in /etc/ethers for \"${NAME}\" !"
+        exit 1    
+	;;
+esac
+echo
+#
+# Start add/remove a nfs client
+#
+case "$OP" in
+add)
+	echo "Start creating $ARCH client \"${NAME}\" :"
+	echo
+	# 
+	# Update bootparams
+	# 
+	echo "Updating bootparams ..."
+	if [ -f /etc/bootparams ]; then
+		grep "[	 ]$NAME[	 ]" /etc/bootparams >/dev/null 2>&1
+		case $? in
+		0)
+			fix_bootparams remove $NAME
+			;;
+		esac
+	fi
+	fix_bootparams $OP $NAME $ROOTPATH $SWAPPATH $DUMPPATH
+	case "$YPUPDATE" in
+	yes)
+		if [ "$DOMAIN" != "noname" -a "$DOMAIN" != "" -a -f ${YPMASTERPATH}/bootparams.time ]; then
+			cd ${YPMASTERPATH}
+			make bootparams
+		elif [ "$DOMAIN" != "noname" -a "$DOMAIN" != "" -a ! -f ${YPMASTERPATH}/bootparams.time ]; then
+			if [ ! -f ${YPMASTERPATH}/bootparams.time- ]; then
+				echo "ATTENTION: /etc/bootparams on the yp master needs to be updated."
+			fi
+		fi ;;
+	esac
+	#
+	# Setup root
+	#
+	echo
+	echo "Creating root for client \"${NAME}\"."
+	create_root $NAME $YP $ROOTPATH $HOMEFULLPATH $EXECPATH \
+	    $SHAREPATH $SERVER "$DOMAIN"
+	cd $EXECPATH/boot
+	tar cf - init sh mount ifconfig hostname \
+	  | (cd ${ROOTPATH}/${NAME}/sbin; tar xpf -)      
+	cp $EXECPATH/boot/vmunix ${ROOTPATH}/${NAME}
+	if [ -f $EXECPATH/boot/kadb ]; then
+		cp $EXECPATH/boot/kadb ${ROOTPATH}/${NAME}
+	fi
+	#
+	# Setup swap
+	#
+	echo
+	echo "Creating $SWAPSIZE bytes of swap for client \"${NAME}\"."
+	cd $SWAPPATH
+	if [ -f /usr/etc/mkfile ]; then
+		/usr/etc/mkfile $SWAPSIZE $NAME
+	elif [ -f /etc/mkfile ]; then
+		/etc/mkfile $SWAPSIZE $NAME
+	else
+		echo "ATTENTION: /usr/etc/mkfile does not exist."
+		echo "ATTENTION: $SWAPSIZE bytes of swap for \"${NAME}\" not created."
+	fi
+	#
+	# Setup dump
+	#
+	case "$DUMPPATH" in
+	"none" )
+	    ;;
+	* )
+	    echo
+	    echo "Creating dump for client \"${NAME}\"."
+	    cd $DUMPPATH
+	    touch $NAME
+	    chmod 666 $NAME
+	    ;;
+	esac
+	#
+	# Setup ${TFTPBOOTPATH} directory
+	#
+	echo
+	echo "Setting up ${TFTPBOOTPATH} directory."
+	if [ ! -d ${TFTPBOOTPATH} ]; then
+		mkdir -p -m 755 ${TFTPBOOTPATH}
+	fi
+	cd ${TFTPBOOTPATH}
+	#
+	#  Create the symlink to the boot file.
+	#
+	case $ARCH in
+	sun386 )
+		BOOTARCH=S386
+		;;
+	* )
+		BOOTARCH=$ARCH
+		;;
+	esac
+	rm -rf $BOOTSYMLINK
+	if [ -f boot.${BOOTARCH} ]; then
+		ln -s boot.${BOOTARCH} $BOOTSYMLINK
+	elif [ -f $EXECPATH/stand/boot.${BOOTARCH} ]; then
+		cp $EXECPATH/stand/boot.${BOOTARCH} .
+		ln -s boot.${BOOTARCH} $BOOTSYMLINK
+	else
+		echo "ATTENTION: ${TFTPBOOTPATH}/boot.${BOOTARCH} doesn't exist."
+		echo "ATTENTION: $BOOTSYMLINK -> boot.${BOOTARCH} not created."
+	fi
+	case "$ARCH" in
+	sun2)
+		if [ ! -f sun2.bb ]; then
+			if [ -f $EXECPATH/stand/sun2.bb ]; then
+				cp $EXECPATH/stand/sun2.bb .
+			else
+				echo "
+ATTENTION: $EXECPATH/stand/sun2.bb doesn't exist.
+ATTENTION: Can't create sun2 bootblock ${TFTPBOOTPATH}/sun2.bb"
+			fi
+		fi ;;
+	esac
+	#
+	# Fix /etc/exports on server
+	#
+	if [ ! -f /etc/exports ]; then
+		> /etc/exports
+		chmod 644 /etc/exports
+	fi
+	RUN_EXPORTFS=no
+	case $HOMEPATH in
+	none )
+		;;
+	* )
+		egrep "${HOMEPATH}[ 	]|${HOMEPATH}$" /etc/exports >/dev/null
+		case $? in
+		1)
+			echo
+			echo "Updating /etc/exports to export \"$HOMEPATH\"."
+			echo "#" >> /etc/exports
+			echo "$HOMEPATH" >> /etc/exports
+			RUN_EXPORTFS=yes
+			;;
+		esac
+		;;
+	esac
+	egrep "/${NAME}[ 	]|/${NAME}$" /etc/exports >/dev/null
+	case $? in
+	1)
+		echo
+		echo "Updating /etc/exports to export \"$NAME\" info."
+		echo "#" >> /etc/exports
+		echo "$ROOTPATH/$NAME -root=$NAME,access=$NAME" >> /etc/exports
+		echo "$SWAPPATH/$NAME -root=$NAME,access=$NAME" >> /etc/exports
+		case "$DUMPPATH" in
+		"none" )
+			;;
+		* )
+			echo "$DUMPPATH/$NAME -root=$NAME" >> /etc/exports
+			;;
+		esac
+		RUN_EXPORTFS=yes
+		;;
+	esac
+	case "$RUN_EXPORTFS" in
+	yes)
+		if [ -f /usr/etc/exportfs ]; then
+			/usr/etc/exportfs -a
+			case $? in
+			0)
+				;;
+			*)
+				echo "ATTENTION: /etc/exports needs attention !"
+				echo "ATTENTION: fix /etc/exports and rerun exportfs !"
+				;;
+			esac
+		else
+			echo "ATTENTION: /usr/etc/exportfs does not exist !"
+		fi ;;
+	esac
+
+	echo
+	echo "Completed creating $ARCH client \"$NAME\"."
+	case "$ARCH" in
+	sun2)
+		echo "
+ATTENTION: /usr/etc/ndbootd must be running on server before
+  bringing up \"$NAME\"."
+		;;
+	esac
+	;;
+remove)
+	echo "Start removing $ARCH client \"$NAME\" :"
+	echo
+	#
+	# Update bootparams
+	#
+	if [ -f /etc/bootparams ]; then
+		grep "[	 ]$NAME[	 ]" /etc/bootparams >/dev/null 2>&1
+		case $? in
+		0)
+			echo "Updating bootparams ..."
+			fix_bootparams remove $NAME
+			;;
+		esac
+	fi
+	case "$YPUPDATE" in
+	yes)
+		if [ "$DOMAIN" != "noname" -a "$DOMAIN" != "" -a -f ${YPMASTERPATH}/bootparams.time ]; then
+			cd ${YPMASTERPATH}
+			make bootparams
+		elif [ "$DOMAIN" != "noname" -a "$DOMAIN" != "" -a ! -f ${YPMASTERPATH}/bootparams.time ]; then
+			if [ ! -f ${YPMASTERPATH}/bootparams.time- ]; then
+				echo "ATTENTION: /etc/bootparams on the yp master needs to be updated."
+			fi
+		fi ;;
+	esac
+	# 
+        # Clean nfsroot 
+        # 
+	case "$ROOTPATH" in
+	none)
+		;;
+	*)
+		echo
+		echo "Removing root for client \"${NAME}\"."
+        	cd $ROOTPATH
+        	rm -rf $NAME
+		;;
+	esac
+        #
+        # Clean nfsswap
+        #
+	case "$SWAPPATH" in
+	none)
+		;;
+	*)
+		echo
+		echo "Removing swap for client \"${NAME}\"."
+        	cd $SWAPPATH
+		rm -rf $NAME
+		;;
+	esac
+        #
+        # Clean nfsdump
+        #
+	case "$DUMPPATH" in
+	none)
+		;;
+	*)
+		echo
+		echo "Removing dump for client \"${NAME}\"."
+        	cd $DUMPPATH
+		rm -rf $NAME
+		;;
+	esac
+	#
+	# Remove link in ${TFTPBOOTPATH}
+	#
+	if [ -d ${TFTPBOOTPATH} ]; then
+		cd ${TFTPBOOTPATH}
+		rm -rf $BOOTSYMLINK
+	fi
+	#
+	# Fix /etc/exports on server
+	#
+	grep ${NAME} /etc/exports >/dev/null 2>&1
+	case $? in
+	0)
+		ed - /etc/exports <<END
+g,/${NAME}[ 	],d
+g,/${NAME}\$,d
+w
+q
+END
+		if [ -f /usr/etc/exportfs ]; then
+			exportfs -a
+			case $? in
+			0)
+				;;
+			*)
+				echo "ATTENTION: /etc/exports needs attention !"
+				echo "ATTENTION: fix exports and rerun exportfs !"
+				;;
+			esac
+		else
+			echo "ATTENTION: /usr/etc/exportfs does not exist !"
+		fi
+		;;
+	esac
+
+	echo
+	echo "Completed removing $ARCH client \"$NAME\"."
+	;;
+esac
+exit 0

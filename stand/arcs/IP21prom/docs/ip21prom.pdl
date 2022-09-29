@@ -1,0 +1,776 @@
+/***********************************************************************\
+*	File:		entry.s						*
+*									*
+*	This file contains the exception vectors and startup code for	*
+*	the Blackbird CPU.  Among other things, this file initializes	*
+*	the registers and the caches, sets up the CC functions and uart *
+*	and arbitrates for the status of the Boot Master.		*
+*									*
+\***********************************************************************/
+/*
+ * The power-on vector table starts here.  It is important to ensure
+ * that this file is loaded at 0x900000001fc00000 so that the vectors
+ * appear in the memory locations expected by the TFP.
+ * The new CC chip allows a jump makde to 0x900000004fc00008 which
+ * access the next location in the Prom without some cache aliasing
+ * effects.
+ */
+/*
+ * entry -- When the CPU begins executing it jumps
+ *	through the power-on vector to this point.
+ *	This routine initializes the processor and starts 
+ *	basic system configuration.
+ */
+	. Check to see if we got an NMI.  If so, jump to the NMI (bev_nmi)
+
+	 . Init TrapBase register 
+
+	 . Put status register into known state
+
+	 . Set the CC LEDS to PLED_STARTUP
+
+	 . Invalidate Icache and Dcache by call pon_invalidate_IDcaches
+
+	 . Perform Icache test (pon_test_Icaches)
+
+	 . Switch go Chandra Mode (GOTO_CHANDRA_MODE), use 0x8xxxxxxxxxxxxxxx
+	   address. This should speed up the code
+
+	 . Clear all pending interrupts, read ERTOIP and store
+	   in some FP register for later usage.
+	
+	 . Clear all pending interrupts
+
+	 . Set led value to PLED_CHKSCACHESIZE,Calculate scache tag ram size
+
+	 . Get slot and proc number then call init_cpu, setup main processor
+
+	 . Basic check on fp register.
+	   Make sure that cop1 is working well enough to store stuff in it.
+   	   Pick an arbitrary value(0xa5a5a5a5a5a5a5a5 and 0xa65a5a5a5a5a5a5a)
+	   Stuff it into the FPGR $f5, Get value back (from $f5),IF 
+	   values don't match THEN Flash a death message else invert 
+	   pattern for another test
+
+	 . Set led to PLED_CLEARTAGS and invalidate dcache tags
+
+	 . Initialize the local processor resource register.
+	   test CC local registers, (pod_check_cclocal)
+	   Writes to CC local registers and reads them back.  Minimally 
+	   tests interrupt handling registers, and makes sure the RTSC 
+	   is ticking.  
+	   Turn off all Interrupt Groups(store zero to EV_IGRMASK)
+	   Disable interrupts(store zero to EV_ILE)
+	   Clear pending interrupt at level 1,2,4,5 (store zero to
+	   EV_CIPL124)
+	   Clear any error states(store zero to EV_CERTOIP).
+
+         . Set up the local CC chip's configuration registers-
+	   (pod_check_ccconfig).  
+	   Writes to several CC chip config registers and reads them back.
+	   Senses system configuration and makes sure its CPU board is 
+	   listed.  Because a number of these values are sensitive to the 
+	   processor and bus speed, we pull the appropriate values out of 
+	   the EAROM- (check_earom), does earom contain reasonable data?
+	   if not, init it
+
+         . Set piggyback read enable
+ 
+	 . Configure CC UART (ccuart_init)
+	   If we are in bring-up mode, we will display informational
+	   messages, otherwise we will talk to the System Controller.
+
+	 . As soon as uart is initialized ok,
+	   Print PROM header, "BB_EVEREST IP21 BRINGUP PROM .." to uart 
+	   port.
+
+	 . Check and do initial configuration of the A chip.
+	   Call the A chip diagnostic (pod_check_achip)
+	   In order to avoid conflicts between the processors as they
+           test their connection with the A chip, we introduce a delay.
+	   Get the processor SPNUM,Load slot and processor number
+	   Mask out the slot inf,Multiply slot number by 2048,
+	   Initializing A chip EV_A_ERROR_CLEAR,EV_A_RSC_TIMEOUT,
+	   and EV_A_URGENT_TIMEOUT registers.
+
+	 . Check system ebus (pod_check_ebus1) sending interrupt to
+	   processor itself.
+	 
+	 . After we check all the fp chip, cc chip, achip, and ebus, 
+	   we are ready for arbitrate for bootmaster. 
+	   Only one processor can intialize the shared system resources
+	   such as memory and I/O boards, so we select a "bootmaster"
+	   Tell the System Controller that it needs to rearbitrate
+	   for the boot master.Perform Boot master arbitration. 
+	   
+	   <Boot master selection is based on a time delay scacled by
+	   the board(slot) number, and proc (slice) number. The 
+	   active processor in the lowest numbered slice of the lowest 
+	   numbered slot becomes master. For example, if there
+	   are processors in board 2 slice 1 and 3, and board 4 slice 
+	   0,1 and 2. The processor in slot 2 slice 1 becomes the 
+	   bootmaster.>
+   
+	   If this processor is the Boot Master, jump to the master processor 
+	   thread of execution.  Otherwise, jump to the slave thread 
+	   of execution (arb_bootmaster).
+/*
+ * Routine init_cpu
+ * 	Set up the TFP's basic control registers and TLB.
+ *
+ *	For TFP, may need to add code for initializing Icache,
+ *	Dcache, COP0 registers, SAQs, and Gcache.
+ */
+	 . Initialize COP0 registers(C0_TBLSET, 0_TLBLO, C0_UBASE,
+	   C0_BADVADDR, C0_COUNT, C0_TLBHI, C0_CAUSE, C0_EPC,
+	   C0_WORK0, C0_WORK1, C0_PBASE, C0_GBASE, C0_WIRED,
+	   C0_DCACHE, C0_ICACHE). No need to init Config reg.  It is
+	   initialized by hardware at reset.
+	 . flush tlb
+	 . invalidate Icache and Dcache (pon_invalidate_IDcaches)
+	 . flush store address queue (flush_SAQueue)
+	 . calculate scache size and store value into gcache 
+	   register (check_scachesize)
+	 . clear BSR, fault exception reg, asmfault exception reg and
+	   EPC DUART base address register.  
+/*
+ * Routine bev_nmi
+ *	If the CC_UART has been initialized, jump to POD MODE
+ *	(for now).  Otherwise, just jump back to initialize and
+ *	redo all of the system initialization.
+ */
+	. Make sure the floating point processor is active so
+	  we can store our fault vectors in the FP registers.
+	  
+        . Setup the asm fault handler so that we can deal with a
+          bad address error if memory isn't configured (which we
+          expect in some cases) or some other exception (which we
+          don't expect but might happen anyway).Jump to pod_wrapper on
+	  exception.
+
+	. Try loading the NMI Vector from main memory.  This
+          may very well lead to an exception, but since we've
+          installed the fault handler, we don't care!
+	  check magic number from glocal data area, if it does not
+ 	  work go to pod_handler else reload GDA address, load NMI 
+	  vecotre, compute nmi handler address. 
+
+	. Delay a bit so that we don't clobber the thing before
+	  someone else jumps through it.ReReload GDA address,
+	  Jump to the NMI vector
+
+	. Zap the nofault stuff, memory is ok. Check whether we are 
+	  master or slaver. If it's master, reload GDA address,
+	  Load the debug settings, If manumode is on (ie. in manufacturing 
+	  mode) use CC UART.  When we're not in manufacturing mode, 
+	  use the EPC UART jump to pod_handler.  if it's slave, jump to 
+	  prom_slave.
+
+
+/*
+ * bev_panic -- General exception handler.  Most of the exception handlers
+ * call this when problems occur.
+ */
+  	. Check to see if the nofault vector is non-zero
+	  and jump to the user-specified exception vector 
+	  We didn't have any handlers in place, so just do the 
+	  normal exception handling.  We just assume that the
+	  UART is working.  If it doesn't, too bad.
+
+	. Call pod_handler
+
+/*
+ * reinitialize
+ *	Reinitializes the basic system state.
+ */
+
+	. Reinitialize the cpu registers (init_cpu)
+
+	. Reset the boot status register to ZERO.
+
+	. Clear the PD Cache (pon_invalidate_dcache)
+
+	. Set up the basic processor local resource registers,
+	  EV_IGRMASK, EV_ILE, EV_CIPL124, EV_CERTOIP
+
+/*
+ * ip21prom_restart
+ *	Called from the kernel when the system wants to 
+ *	reboot or return the PROM monitor.  This routine
+ *	sets up a stack and calls the restart C routine.
+ *	It assumes that we don't want to rearbitrate for
+ * 	boot mastership, that no diags should be run, and
+ *	that memory is already initialized.
+ */
+	. Reset the basic IP21 registers (reinitialize)
+	
+	. Reinit cache stuff
+	  pod_setup_scache, pon_invalidate_icache,pon_invalidate_dcache
+	  and pon_initialize_scache
+
+	. Reinit bus tags (pod_check_bustags)
+
+	. Set up the stack in cache
+
+	. Reinit IO4 (io4_initmaster)
+
+	. Reinitialize the EPC (init_epc_uart)
+
+	. load IO4 (load_io4prom)
+
+
+/*
+ * ip21prom_reslave
+ *	Reinitializes a couple parts of the system and then
+ *	switches into slave mode.  Called by non-bootmaster
+ *	processors when the kernel is shutting down.
+ */
+
+	. Reset the basic IP21 registers (reinitialize)
+
+	. Jump back to the slave loop (prom_slave)
+
+
+
+/*
+ * ip21prom_podmode
+ *	Reinitializes the prom and jumps to podmode.  Allows code
+ *	like symmon or the secondary prom to get back to home base.
+ */
+
+	. Reinitialize the basic IP21 registers (reinitialize)
+
+	. Jump back to POD mode (pod_handler)
+
+
+
+
+trap_table:				/* must be page aligned */
+LEAF(bev_tlbrefill)			/* TrapBase + 0x000 */
+LEAF(bev_ktlbrefill)			/* TrapBase + 0x400 */
+LEAF(bev_general)			/* TrapBase + 0xc00 */
+
+
+/***********************************************************************\
+*	File:		bmarb.s						*
+*									*
+*	This file contains the code which performs various types of	*
+*	arbitrations.  Among other things it includes the code to	*
+*	have the processors arbitrate for the role of the system's	*
+*	Boot Master.  It also includes the code non-bootmaster 		*
+*	processors execute.						*
+*									*
+\***********************************************************************/
+/*
+ * Routine arb_bootmaster
+ * Arguments:
+ * 	None.
+ * Returns:
+ *	v0 -- If v0 == 1, processor is the boot master.
+ *	      If v0 == 0, processor is a slave.	
+ */
+ LEAF(arb_bootmaster)
+	 . Get all of the processors in sync by waiting for the
+	   RTC to reach a specific value. This avoids problems in
+	   systems in which some processors are much faster than
+	   others.
+
+rearb_bootmaster:	 
+	 . Now that everything is quiescent, clear out
+	   interrupts(pod_clear_ints). 
+
+	 . flush ccuart - ccuart_flush
+
+	 . If we are not the master processor,
+	   check interrupt pending mask from EV_IP0 to see whether
+	   interrupt BOOT_LEVEL arrived, loop until interrupt or 
+	   timer expired then jump to prom_slave. 
+
+	   If we are the master, calculate the time period during 
+	   which the processor will wait for someone else to claim 
+	   the role of boot master.
+	   Now we hang out in a loop waiting for either an interrupt
+	   to come in or for the RTC to creep past the timeout period.
+
+	   When timer expired or interrupt arrived, someone
+	   else has claimed the role of Boot Master. jump to 
+	   prom_slave.
+
+	   If no one has assumed boot master responsibility,
+	   add this processor to the Master Processor group, 
+	   (store IGR_MASTER to EV_IGRMASK), broadcast 
+	   a notification interrupt to all procs, 
+	   turn off the slave bit in Boot status register.
+
+	.  flush ccuart again.
+
+	.  Wait for the SysCtrlr to talk to us, ie. Check to see if a 
+	   char is available (ccuart_poll), when a char arrives, read it
+	   from the CC UART (ccuart_getc), if we get an '@'. Do the right
+	   thing, write a response char (ccuart_putc) 'K' into a0, 
+	   give Sysctlr 40 ms to react then jump to prom_master.
+	   We didn't get an '@'. Check to see if it was a 'P'
+	   If not a 'P' go back to poll loop. 
+	   Set a bit indicating that we're talking directly to a user
+	   rather than the SysCtlr, make it known that we are serving as 
+	   the boot master call prom_master.
+
+
+/***********************************************************************\
+*	File:		master.s					*
+*									*
+*	This file contains the code which is executed exclusively	*
+*	by the Boot Master processor.  It completes the power-on	*
+*	boot sequence by configuring the IO4 NVRAM and serial port,	*
+*	running additional diagnostics, configuring memory, and 	*
+*	downloading the IO4 prom.					*
+*									*
+\***********************************************************************/
+/*
+ * Routine prom_master
+ *	Executed by the Boot Master processor.
+ *	Performs rest of power-on startup.
+ *
+ * Arguments:
+ *	None.
+ * Returns:
+ * 	Never returns.	
+ */
+
+LEAF(prom_master)
+	. Announce our presence as the boot master 
+	  DPRINT "I am the Boot Master"
+
+	. Check cc joint counter register call pod_check_ccjoint
+
+	. Do secondary cache test pod_check_scache1
+
+	  perform gcache address test for tag itself (scache_tag_addr)
+	  write data to 0x9000000018080000, ... etc. Do the
+	  test twice in two differnt regions. The first test ignore
+	  the checking from the first test code region which maps to 
+	  some s3 tags area. The second test ignore the checking from 
+	  the second test code region which map to some s3 tags.
+
+	  perform gcache data test for tag itself (scache_tag_data)
+	  similar as the above, except the data patterns are 
+	  different.
+
+	  First Initialize gcache tag, bind 0x041cc00000, .. 0x041fc00000
+	  into gcache tag (scache_init1) 
+
+	  gcache address test (scache_addr1), write various address
+	  pattern -  could be neg. value of address 0x041cc000000, ...
+	  etc -  into 0x041cc00000, ... and then read back the value
+	  and compare.
+
+	  gcache data test (scache_data1), select some data patterns
+	  write to 0x041cc00000, .. 0x041fc00000 and then read back.
+          (The above 3 steps, state should set as EXCLUSIVE)
+	
+          Second Initialize gcache tag, bind 0x041cc00000, .. 0x041fc00000
+          into gcache tag (scache_init1)     
+
+          Second gcache data test (scache_data1), select some data patterns
+          write to 0x041cc00000, .. 0x041fc00000 and then read back.
+          (The above 3 steps, state should set as EXCLUSIVE)
+
+	  zero gcache data, ie. write zeros into a800000041cc0000..
+
+	  Make dcache line state invalid.
+
+	. if scache test failed, Abdicate bootmastership.  Send the 
+	  diagnostic code as the reason for abdicating(prom_abdicate).
+	 
+	. test dcache tag - dcache_tag()
+	  if scache test failed, Abdicate bootmastership.  Send the 
+	  diagnostic code as the reason for abdicating(prom_abdicate).
+
+	. invalidate dcache and scache
+
+ 	. Set up a stack in the primary dcache so that we can 
+	  execute C code (pon_fix_dcache_parity). This implies
+	  the third intialization of gcache.
+
+	. clear all pending interrupt
+
+	. set IE on SR.
+
+	. Force set 3 OFF and Writeback Disable OFF. From now on
+	  all loads will access values coherent with main memory
+	  and all stores will change main memory.
+
+	. Jump to main
+
+
+
+/***********************************************************************\
+*	File:		slave.s						*
+*									*
+*	This file contains the code which is executed by all of  	*
+*	the slave processors in the system.  It contains the 		*
+*	idle loop which the slave processors spin in awaiting 		*
+*	interrupts, as well as the code which implements the other	*
+*	in which slave processors can find themselves.			*
+*									*
+\***********************************************************************/
+/*
+ * Routine prom_slave
+ *	Spins waiting for interrupts from the Boot Master.
+ *	If we get a REARB interrupt, we jump back to the
+ * 	arbitration loop and try to become the boot master.
+ * Arguments:
+ *	None.
+ * Returns:
+ *	Never returns.
+ */
+
+LEAF(prom_slave)
+
+ 	 . Make sure that our interrupt mask is clear (pod_clear_ints)
+
+	 . Initialize dcache and scache (pon_invalidate_IDcaches
+	   and pon_initialize_scache)
+           We marked the master's stack as dirty exclusive
+	   during our initialization (because we didn't know
+	   we are the slave), so init it again as invalid now.
+
+	 . Put us in the slave processor group,store 1 (IGR_SLAVE)
+	   in EV_EV_IGRMASK.
+
+	 . Tell the Boot master processor that this processor
+	   lives, sending interrupt to Master processor.
+	   (store interrupt number 1, interrupt id PGRP_MASTER 64 
+	   containing bootmaster, to EV_SENDINT).
+
+	 . Get into main Interrupt polling loop
+	   check EV_IP0, first interrupt for mpconf_init is received
+	   initialize MPCONF for the slave processor (init prom rev,
+	   scache size, processor rate, cpu type, error field,
+	   launch vector, rendezvous field, Store ertoip contents at
+	   reset, init earom checksum, store magic number, vpid etc)
+	   perform dcache test and in polling loop again. 
+
+	. If LAUNCH interrupt is received, intialize scache and dcache
+	  we examine this processor's segment of the MPCONF block and 
+	  jump to the address specified. After that, disable TFP 
+	  interrupt, clear EV_ILE vector. go back to main slave loop.
+
+/* 
+ * get_cpuinfo
+ *	Returns the address of the evcfginfo cpu information structre
+ *	in v0.
+ *	Uses registers t0, t1, t2, v0.
+ */
+	# offset1 = proc# * CPU_INFO size
+	multu   t1, t0		    	# offset2 = slot# * BRDINFO_SIZE
+/*
+ * get_mpconf
+ *	Returns the address of this processor's MPCONF block in v0.
+ */
+/*
+ * Routine change_leds
+ *	Delays for a period of time and then changes the LEDs
+ *	If an interrupt comes in while we are delaying, break  
+ *	out of the delay loop and set the value immediately.
+ * Parameters:
+ *	a0 -- value to set the leds to.
+ */
+
+LEAF(pod_check_cclocals)
+
+	. Check EV_WGDST register.
+	  write 000000ffffffff00 to EV_WGDST(0x9000000018000300), read it
+	  back and compare.
+	  write 000000aaaaaaaa00 to EV_WGDST(0x9000000018000300), read it
+	  back and compare.
+	  write 0000005555555500 to EV_WGDST(0x9000000018000300), read it
+	  back and compare.
+	  write 0 to EV_WGDST(0x9000000018000300), read it back and compare.
+
+	. Check EV_EP0 register
+	  write ffffffffffffffff to EV_IP0(0x9000000018000800), read it
+	  back and compare.
+	  write aaaaaaaaaaaaaaaa to EV_IP0(0x9000000018000800), read it
+	  back and compare.
+	  write 5555555555555555 to EV_IP0(0x9000000018000800), read it
+	  back and compare.
+	  write 0 to EV_IP0(0x9000000018000800), read it back and compare.
+
+	. clear interrupts
+
+	. Check EV_EP1 register
+	  write ffffffffffffffff to EV_IP1(0x9000000018000808), read it
+	  back and compare.
+	  write aaaaaaaaaaaaaaaa to EV_IP1(0x9000000018000808), read it
+	  back and compare.
+	  write 5555555555555555 to EV_IP1(0x9000000018000808), read it
+	  back and compare.
+	  write 0 to EV_IP1(0x9000000018000808), read it back and compare.
+
+
+	. Check EV_IGRMASK register
+	  write ffff to EV_IGRMASK(0x9000000018000838), read it back 
+	  and compare.
+	  write aaaa to EV_IGRMASK(0x9000000018000838), read it back 
+	  and compare.
+	  write 5555 to EV_IGRMASK(0x9000000018000838), read it back 
+	  and compare.
+	  write 0 to EV_IGRMASK(0x9000000018000838), read it back 
+	  and compare.
+
+	. Check EV_ILE register
+	  write 1 to EV_IGRMASK(0x9000000018000838), read it back 
+	  and compare.
+	  write 0 to EV_IGRMASK(0x9000000018000838), read it back 
+	  and compare.
+
+	. Clear error interrupt
+	  store 7ff to EV_CERTOIP(0x9000000018000908). read back from
+	  EV_ERTOIP(0x9000000018000840), value should be zero.
+
+	END(pod_check_cclocals)
+
+
+LEAF(pod_check_ccconfig)
+
+	. Check EV_SENDINT register
+	  write SYNC_DEST (0x50) to EV_SENDINT(0x9000000018000100)
+	  get value from proper system configruation register.
+	  compare result.
+
+	. Make sure clock is running
+	  read from EV_RTC register. do a few instruction, read from EV_RTC
+	  register again. The value should be changed.
+
+	. Test Timer configuration register.
+	  store 0x78 to 0x9000000018008080,  
+	  store 0x56 to 0x9000000018008088,
+	  store 0x34 to 0x9000000018008090,
+	  store 0x12 to 0x9000000018008098,
+	  read from EV_RO_COMPARE (0x9000000018000a00) the value should
+	  be 0x0000000012345678.
+
+	END(pod_check_ccconfig)
+
+
+LEAF(pod_check_achip)
+
+	. Check EV_A_URGENT_TIMEOUT register
+	  store ffff to current slot/slice EV_A_URGENT_TIMEOUT
+	  and read back to compare.
+	  store aaaa to current slot/slice EV_A_URGENT_TIMEOUT
+	  and read back to compare.
+	  store 5555 to current slot/slice EV_A_URGENT_TIMEOUT 
+	  and read back to compare.
+	  store 0 to current slot/slice EV_A_URGENT_TIMEOUT 
+	  and read back to compare.
+
+	. Check EV_A_RSC_TIMEOUT register
+	  store ffff to current slot/slice EV_A_RSC_TIMEOUT
+	  and read back to compare.
+	  store aaaa to current slot/slice EV_A_RSC_TIMEOUT
+	  and read back to compare.
+	  store 5555 to current slot/slice EV_A_RSC_TIMEOUT 
+	  and read back to compare.
+	  store 0 to current slot/slice EV_A_RSC_TIMEOUT 
+	  and read back to compare.
+
+	END(pod_check_achip)
+
+
+/**************************************************************************
+ * pod_check_ebus1 is called by all processors.  It will run more or less
+ * concurrently but not in lock step so we must keep in mind that parts
+ * of the test may run on one CPU while another one runs different parts.
+
+**************************************************************************/
+LEAF(pod_check_ebus1)
+
+        . Make sure the IE bit is off in SR status register.
+ 	  (currently SR content is 0x 0000002224000000 has FR
+	  and FU on)
+
+        . Disable interrupts on the IP21 level by load 127 into EV_CEL
+	  (0x9000000018000828) (current execution level register, 
+	  which content is zero at reset).
+
+        . Enable level 0 interrupt by load value 1 to EV_ILE 
+	  (9000000018000840) (level 0 interrupt is Bus error interrupt)
+
+	. Read from EV_HPIL register (9000000018000820) which indicates 
+	  the highest priority interrupt level on the system. If the 
+	  value is not zero, report HPIL register stuck to diagval.
+
+	. Clear all interrupts. This is done by loading 127, 126,...
+	  and 0 into EV_CIPL0 Clear level 0 interrupt pending register
+	  (0x9000000018000830)
+
+	. Check Slave and Processor number register EV_SPNUM
+	  (0x9000000018000008) bit 1-5. Store this value to EV_SENDINT
+	  send interrupt register, ie, send interrupt to it's own 
+	  processor. Get the slot number from EV_SPNUM bit 2-5. use the
+	  slot number to calculate onfiguration register and store 
+	  proper configuration register value.
+	  
+	  Read from EV_HPIL, if the interrupt level value is not zero, 
+	  report diagval.
+	  
+	. Clear all the interrupts again
+	  Add us to interrupt group 15. This is done by store 0x8000
+	  into EV_IGRMASK register (0x9000000018000838).
+ 	  Interrupt ID is Group 15 (+ 64 = group interrupt),
+	  Interrupt number is Level 127, store interrupt id and 
+	  interrrupt number into EV_SENDINT register.
+	  store proper configuration register value. Now read data
+	  back from EV_HPIL, if value is not level 127, report diagval.
+
+	. Clear all the interrupts again
+	  Remove us from group 15, this is done by store zero to 
+	  EV_IGRMASK (0x9000000018000838). 
+          Enable level 0 interrupt by load value 1 to EV_ILE 
+	  (9000000018000840) (level 0 interrupt is Bus error interrupt)
+	  Send interrupt level 0, interrupt id 0 to EV_SENDINT.
+	  Read from EV_IP0 (0x9000000018000800) interrupt pending 
+	  register. Check CAUSE register, it should indicate interrupt
+	  pending occurs, otherwise report diagval. 
+
+	. Clear all interrupts again
+	  store zero to EV_ILE (turn level zero interrupts back off).
+
+
+
+/***********************************************************************\
+*	File:		main.c						*
+*									*
+*	Contains the main-line code which configures the major 		*
+*	boards in the system and brings up the heart of the IP21	*
+*	PROM.								*
+*									*
+\***********************************************************************/
+extern void	run_uncached(void (*function)(uint), uint);
+/*
+ * main()
+ * 	The PROM main-line code, called only by the Boot Master
+ *	processor once a stack in the primary d cache has been
+ *	constructed (see entry.s and master.s for more info).
+ *
+ */
+main()
+	. print "Welcome to Everest manufacturing mode"
+
+	. init_cfginfo(&cfginfo), 
+
+    	. set_timeouts(&cfginfo)
+	
+	. check whether any io board exist, if not, report error
+	  and don't use EPCUART, set this in SR. if io board exists,
+	  init master IO4, io4_initmaster(&cfginfo)
+
+	. If io4 is ok, init EPC UART, call init_epc_uart()
+	  If debug switch set BS_MANUMODE (manufacture mode)
+	  then send output to EPC UART.
+	  if debug switch set BS_POD_MODE (pod mode) then
+	  call pod_handler()
+
+	. print "IP21 PROM ...." header information with debug
+	  switch setting info.
+	
+	. initialize hardware inventory (init_inventory)
+
+	. configure cpus (configure_cpus), check whether any 
+	  memory board is configured, (call any_mc_boards)
+	  if no report diagval and jump to POD.
+
+	. configure memory - mc3_config(&cfginfo).
+	  if failed, report diagval and jump to POD.
+
+     	. Transfer the evcfginfo data structure into memory. 
+	  oprintf "Writing cfginfo to memory"
+
+	. Initialize the Everest MPCONF blocks - init_mpconf()
+	  which send a interrupt to slave processor, slave does
+	  it's own mpconf initialization. After that master
+	  processor does it's MPCONF init.
+	 
+	. Perform CC join register diag, pod_check_ccjoin()
+
+	. Perform CC write gatherer register diag, pod_check_wg()
+
+	. Perform FPU functionality test, fputest()
+
+        . Put stack in _uncached_ memory. 
+	  run test_master in uncached address space.
+
+/***********************************************************************\
+*       File:           pod_master.c                                    *
+*                                                                       *
+\***********************************************************************/
+test_master()
+	. get current slot and slice number
+	. check EAROM stored checksum and calaculated checksum.
+	  if mismatch, report bootmaster diag failed.
+	  and rearbitrating... (prom_abdicate)
+	. Initialize IDcaches
+	. check current slot, slice, and nvram variables.
+	. Check slave processor diag result check_slaves(slot,slice)
+	  set cpu prom revision numberr. 
+	  check whether all processors are alive update_boot_stat(),
+	  set ERTOIP at rest - set_ertoip_at_reset()
+	  if debug switch set MS_MANUMODE, then dump ERTOIP contents
+	. query_evcfg(), report which CPUs are enabled, which Memory 
+	  board is configured properly
+
+	. clear all interrupts
+	. reset EV_CIL124, EV_CERTOIP, and EV_ERTOIP register
+	. if debug switch set VDS_PODMODE, jump to POD mode.
+	. if debug switch VDS_NO_DIAGS is not set, hard diable CPU
+	  send LAUNCH_LEVEL interrupt to slave processor.
+
+	. if you want to run POD with cache in memory, call
+	  run_cached(pod_loop)
+	. check memory board has more than 32 MB.
+	. download IO4 prom - load_io4prom()
+
+
+/*
+ * pod_check_ccjoint
+ * 
+ * There are two ways to test the CC joint counter register
+ * 1) for each processor, set it's proc group mask, get the proc
+ *    interrupt number, from there, calculdate the associated
+ *    cc joint counter register addr:
+ *    CC joint counter addr = 0x41a000100 +(interrupt group number << 20)
+ *    write 0x8000 to RESET the counter. read back the value from addr
+ *    only take data bit<63:56>, compare it.
+ *    write 0xC000 to INCREMENT the counter. read back the value from addr
+ *    only take data bit<63:56>, compare it.
+ *
+ * 2) Send interrupt to itself, this is done by store 0x8040 into
+ *    EV_SENDINT, it should reset the counter, read back the register
+ *    value and compare.
+ *    Send interrupt to itself, store 0xffff to interrupt group mask (make
+ *    every cpu interruptable),store 0xc040 into EV_SENDINT(ie. bit 14 
+ *    and 15 must be set), then read the cc joint register from any
+ *    cpu. The counter should be incremented.
+ */
+LEAF(pod_check_ccjoint)
+
+
+/*
+ * pod_check_wg
+ * This routine checks the write gatherer control/status registers in
+ * CC chip and write gatherer buffer in DB chip.
+ * the purpose of write gatherer is to store the block uncached load for
+ * graphics interface. Write gatherer buffer is little endian format
+ */
+
+LEAF(pod_check_wg)
+	
+	- setup write gatherer address to EV_WGDST
+	- flush wg buffer first
+	- select a target memory and clear out it
+	- dump test pattern into write gatherer buffer
+	- verify test pattern from target memory
+
+	

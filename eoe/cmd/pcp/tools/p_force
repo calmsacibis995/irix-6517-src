@@ -1,0 +1,349 @@
+#!/bin/sh
+#
+# p_force local_census remote signature
+#
+# remote_signature is assumed to have been created by p_signature
+# from the census file on the remote system
+#
+# $Id: p_force,v 1.11 1997/12/19 03:13:31 markgw Exp $
+#
+
+tmp=/var/tmp/$$
+
+status=1
+trap "cd /; rm -rf $tmp.* $tmp; exit \$status" 0 1 2 3 15
+MSG="rv: kenmcd@engr pv: 484961 - sync up common source from pcp to kudzu isms"
+
+# needed to make ptools (and in particular p_tupdate -o) behave in the
+# presence of possible file name clashes in /var/tmp
+#
+rm -rf $tmp
+mkdir $tmp
+if [ ! -d $tmp ]
+then
+    echo "Warning: failed to make private temporary directory \"$tmp\", reverting to the default"
+else
+    TMPDIR=$tmp
+    export TMPDIR
+fi
+
+# set MAGIC in the environment to turn on -x tracing for hard to
+# debug problems in this script
+#
+[ ! -z "${MAGIC+x}" ] && set -x
+
+_ans()
+{
+    if $default_ans
+    then
+	ans=""
+	echo ""
+    else
+	read ans </dev/tty
+    fi
+}
+
+_usage()
+{
+    echo "Usage: p_force [options] local_census remote_signature"
+    echo "Options:"
+    echo "	-d	automatically take default responses to all questions"
+    echo "	-N	show me, don't change anything"
+    echo "	-V	more verbose output"
+}
+
+# would not be necessary if they had a useful exit status!
+_check_ptools()
+{
+    if grep ERROR $1 >/dev/null 2>&1
+    then
+	echo "Error: you must fix the ptools failure and try again"
+	exit
+    fi
+}
+
+# serious error, give user chance to abort or continue
+_err()
+{
+    echo "Skip this file (s), or abort p_force (a)? [s] \c"
+    _ans
+    case "$ans"
+    in
+	""|s)
+	    ;;
+	*)
+	    exit
+	    ;;
+    esac
+}
+
+_p_signature()
+{
+    # ignore the rcs ident strings, they are often wrong!
+    # use the checksum to see if the source we have here is the same
+    # as expected ... note, use the same rcs ident dodging scheme
+    # dodge non-ascii files as special case bullets
+    # ... all of this has to match p_signature
+    case $1
+    in
+	*.rgb|*.gif|*.jpg|*.sc|*.0|*.index|*.meta|*.pag|*.dir)
+	    chk=`sum <$1`
+	    ;;
+	*)
+	    if [ `(cat $1;echo "") | wc -c | sed -e 's/ //g'` = `(cat $1;echo "") | sed -n p | wc -c | sed -e 's/ //g'` ]
+	    then 
+		chk=`(cat $1;echo "") \
+		| sed \
+		    -e '/\$Id/d' \
+		    -e '/\$Header/d' \
+		    -e '/\$Revision/d' \
+		| sum`
+	    else
+		chk=`sum <$1`
+	    fi
+	    ;;
+    esac
+}
+
+_grind()
+{
+    rev=`p_tupdate -o $1 2>&1 | tee $tmp.tmp | nawk '{print $NF}'`
+    if [ -z "$rev" ]
+    then
+	echo "Error: failed to extract revision from \"p_tupdate -o $1\"" >$tmp.err
+	cat $tmp.tmp >>$tmp.err
+	echo failed
+	exit
+    fi
+    if [ -f ${1}${rev} ]
+    then
+	_p_signature ${1}${rev}
+	rm -f ${1}${rev}
+	if [ "$chk" = "$2 $3" ]
+	then
+	    echo "same"
+	    return
+	fi
+    else
+	echo "Error: failed to checkout file from \"p_tupdate -o $1\"" >$tmp.err
+
+	echo "       or bogus revision \"$rev\"" >>$tmp.err
+	cat $tmp.tmp >>$tmp.err
+	echo failed
+	exit
+    fi
+    echo "different"
+}
+
+ECHO=":"
+FINAL="p_finalize"
+INTEG="p_integrate"
+STATE="p_state"
+UNMOD="p_unmodify"
+UNINTEG="p_unintegrate"
+TUPDATE="p_tupdate"
+EXIT_ERR="_err"
+BUGMAIL=true
+default_ans=false
+
+while getopts 'dNV?' c
+do
+    case $c
+    in
+	d)	# take defaults
+		default_ans=true
+		;;
+
+	N)	# show-me
+		FINAL="echo + p_finalize"
+		INTEG="echo + p_integrate"
+		UNMOD="echo + p_unmodify"
+		UNINTEG="echo + p_unintegrate"
+		TUPDATE="echo + p_tupdate"
+		EXIT_ERR="echo + _err"
+		BUGMAIL=false
+		;;
+
+	V)	# verbose
+		ECHO="echo"
+		;;
+
+	\?)	_usage
+		exit
+		;;
+    esac
+done
+shift `expr $OPTIND - 1`
+
+if [ $# -ne 2 ]
+then
+    _usage
+    exit
+fi
+
+if [ ! -f $1 ]
+then
+    echo "p_force: cannot open local_census \"$1\""
+    exit
+fi
+if [ ! -f $2 ]
+then
+    echo "p_force: cannot open remote_signature \"$2\""
+    exit
+fi
+
+# Note: skip FORMAT and non-PCP lines
+#
+sed -n <$1 \
+    -e '/^FORMAT/d' \
+    -e 's/|.*//' \
+    -e 's/%.*%/ /' \
+    -e '/eoe\/cmd\/pcp\/pmdas\/irix/{
+/root_irix/p
+d
+}' \
+    -e '/eoe\/cmd\/pcp/p' \
+    -e '/eoe\/lib\/libpcp/p' \
+    -e '/eoe\/lib\/libpcp_dev/p' \
+    -e '/eoe\/lib\/libpcp_pmda/p' \
+    -e '/eoe\/man\/man1/p' \
+    -e '/eoe\/man\/man4/p' \
+    -e '/eoe\/man\/man5/p' \
+| sort -u > $tmp.old
+
+# go to base of the kudzu tree
+#
+cd $WORKAREA
+HOME=`pwd`
+echo "=== relocate to $HOME ==="
+
+if $BUGMAIL
+then
+    echo "+" >>$WORKAREA/final.$USER
+    echo "+PARTIAL TAKE 484961 - reconcile differences between kudzu and pcp isms"  >>$WORKAREA/final.$USER
+    echo "+`date`" >>$WORKAREA/final.$USER
+    eval `sed -e 's/[ 	]*:[ 	]*/ : /' $WORKAREA/.workarea | awk '
+/^workarea.sm_machine/	{ host=$3; next }
+/^workarea.sm_location/	{ loc=$3; next }
+END			{ print "where=" host ":" loc }'`
+    echo "+The following file(s) were checked into $where" >>$WORKAREA/final.$USER
+    echo "+to sync up this source tree with the remote PCP source tree" >>$WORKAREA/final.$USER
+    echo "+" >>$WORKAREA/final.$USER
+    echo '+! vi(1) instructions to cleanup take mail' >>$WORKAREA/final.$USER
+    echo '+! :1,/vi(1)/' >>$WORKAREA/final.$USER
+    echo '+! :.,$v/^+/d' >>$WORKAREA/final.$USER
+    echo '+! :1,$s/^+//' >>$WORKAREA/final.$USER
+    echo '+! :g/^!/d' >>$WORKAREA/final.$USER
+fi
+
+join -a1 -a2 -e \#  -o 1.1,2.1,1.2,2.2,2.3,2.4 $tmp.old $2 \
+| while read f_old f_new v_old v_new chk_1 chk_2
+do
+    $ECHO $f_old $f_new $v_old $v_new $chk_1 $chk_2
+    if [ "$f_new" = "#" ]
+    then
+	# normally do not care about this
+	$ECHO "$f_old: Warning: file missing, needs p_remove or p_source_tree_remove?"
+    else
+	if [ ! -f $f_new ]
+	then
+	    # this is fatal
+	    echo "$f_new: Error: file expected, and not here"
+	    $EXIT_ERR
+	    continue
+	fi
+	_p_signature $f_new
+
+	if [ "$chk" != "$chk_1 $chk_2" ]
+	then
+	    # this is fatal
+	    echo "$f_new: Error: checksum here [$chk], expected [$chk_1 $chk_2]"
+	    $EXIT_ERR
+	    continue
+	fi
+
+	if [ "$f_old" = "#" ]
+	then
+	    grind=`_grind $f_new $chk_1 $chk_2`
+	    if [ "$grind" = same ]
+	    then
+		echo "$f_new: same as t-o-t, skip new"
+		$UNINTEG $f_old >/dev/null 2>&1
+		$UNMOD $f_old >/dev/null 2>&1
+		$TUPDATE $f_old
+		continue
+	    elif [ "$grind" = failed ]
+	    then
+		echo "$f_new: catastrophe ... abandon this one"
+		cat $tmp.err
+		rm -f $tmp.err
+		continue
+	    fi
+	    echo "$f_new: new $v_new"
+	    # no text as description for new files
+	    $FINAL -B -m "Dummy first version" $f_new 2>&1 | tee $tmp.out
+	    _check_ptools $tmp.out
+	    if [ "$v_new" != "1.1" ]
+	    then
+		# initial version is not 1.1, so force version to right value
+		$INTEG -E $f_new 2>&1 | tee $tmp.out
+		_check_ptools $tmp.out
+		$FINAL -B -m "$MSG" -r$v_new $f_new 2>&1 | tee $tmp.out
+		_check_ptools $tmp.out
+		$BUGMAIL && echo "+ $f_new - $v_new" >>$WORKAREA/final.$USER
+	    else
+		$BUGMAIL && echo "+ $f_new - 1.1" >>$WORKAREA/final.$USER
+	    fi
+	elif [ "$v_new" != "$v_old" ]
+	then
+	    if `echo "$v_new" "$v_old" \
+		| sed -e 's/\./ /g' \
+	        | awk '{ if (0+$1 > 0+$3 || (0+$1 == 0+$3 && 0+$2 > 0+$4)) exit(1) }'`
+	    then
+		# this is fatal
+		echo "$f_old: Error: version regressed from $v_old to $v_new!"
+		$EXIT_ERR
+		continue
+	    else
+		grind=`_grind $f_new $chk_1 $chk_2`
+		if [ "$grind" = same ]
+		then
+		    echo "$f_old: same as t-o-t, skip update $v_new"
+		    $UNINTEG $f_old >/dev/null 2>&1
+		    $UNMOD $f_old >/dev/null 2>&1
+		    $TUPDATE $f_old
+		    continue
+		elif [ "$grind" = failed ]
+		then
+		    echo "$f_old: catastrophe ... abandon this one"
+		    cat $tmp.err
+		    rm -f $tmp.err
+		    continue
+		fi
+		echo "$f_old: update $v_new"
+		case `p_state $f_old`
+		in
+		    *"trunk state"*)
+			$INTEG -O -E $f_new 2>&1 | tee $tmp.out
+			_check_ptools $tmp.out
+			;;
+		    *"modified state"*)
+			$INTEG -O $f_new 2>&1 | tee $tmp.out
+			_check_ptools $tmp.out
+			;;
+		esac
+		$FINAL -B -m "$MSG" -r$v_new $f_new 2>&1 | tee $tmp.out
+		_check_ptools $tmp.out
+		$BUGMAIL && echo "+ $f_new - $v_new" >>$WORKAREA/final.$USER
+	    fi
+	else
+	    # wish more of them were like this ...
+	    $ECHO "$f_old: no change"
+	fi
+    fi
+done
+
+$BUGMAIL && echo "+	-$MSG" >>$WORKAREA/final.$USER
+
+status=0
+exit

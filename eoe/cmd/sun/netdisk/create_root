@@ -1,0 +1,195 @@
+#! /bin/sh
+#
+# Create a new root directory from the prototype directory
+#
+#	@(#)create_root	1.1 88/06/08 4.0NFSSRC; from 1.12 88/03/09 D/NFS
+#       @(#)  from create_root 1.13 88/02/08
+#
+#       Copyright (c) 1987 by Sun Microsystems, Inc.
+#
+
+HOME=/; export HOME
+PATH=/bin:/usr/bin:/etc:/usr/etc:/usr/bsd:/usr/etc/netdisk
+
+CMDNAME=$0
+
+case $# in
+8)
+	;;
+*)
+	echo "${CMDNAME}: incorrect number of arguments.  Usage:
+${CMDNAME} hostname yptype rootpath homepath execpath sharepath server domain
+where:
+	hostname    = hostname of client
+	yptype	    = \"master\" or \"slave\" or \"client\" or \"none\"
+	rootpath    = pathname of root (e.g. /export/root )
+	homepath    = pathname of home (e.g. /home or homeserver:/home)
+		      or \"none\"
+	execpath    = pathname of exec directory (e.g. /export/exec/sun3 )
+	sharepath   = pathname of shared files (e.g. /export/exec/share )
+		      or \"none\"
+	server	    = hostname of server
+	domain	    = YP domainname
+"
+	exit 1 ;;
+esac
+
+HOSTNAME=$1
+YP=$2
+ROOTPATH=$3
+HOMEPATH=$4
+EXECPATH=$5
+SHAREPATH=$6
+SERVER=$7
+DOMAIN=$8
+MYPATH="/usr/etc/netdisk"
+
+if [ ! -d $MYPATH/proto ]; then
+	echo "${CMDNAME}: No proto directory ($MYPATH/proto)"
+	exit 1
+fi
+#
+# copy the proto directory
+#
+mkdir -p -m 755 ${ROOTPATH}/$HOSTNAME
+if [ ! -d ${ROOTPATH}/$HOSTNAME ]; then
+	echo "${CMDNAME}: Can't create directory ${ROOTPATH}/$HOSTNAME"
+	exit 1
+fi
+cd $MYPATH/proto
+tar cf - . | (cd ${ROOTPATH}/$HOSTNAME; tar xpf - )
+cd ${ROOTPATH}/$HOSTNAME
+rm -rf tftpboot
+mkdir export
+ln -s /usr/share export/share
+if [ ! -d usr ]; then
+	mkdir usr
+	chmod 755 usr
+fi
+#
+# Make devices.  First we must add groups kmem and operator to the end
+# of our SVR3 /etc/group file, so that MAKEDEV can chgrp certain of Sun's
+# device nodes to be accesible only by kmem and operator.
+#
+grep "^kmem:" /etc/group > /dev/null
+if test $? -eq 1; then
+	echo "kmem:*:2:" >> /etc/group
+fi
+grep "^operator:" /etc/group > /dev/null
+if test $? -eq 1; then
+	echo "operator:*:5:" >> /etc/group
+fi
+cd ${ROOTPATH}/$HOSTNAME/dev
+./MAKEDEV std pty0 pty1 pty2 win0 win1 win2 sd0 xy0 st0
+
+#
+# Fix files in /etc
+#
+cd ${ROOTPATH}/$HOSTNAME/etc
+
+#
+# rc.boot
+#
+ed - rc.boot <<END
+/hostname=/s/^.*$/hostname=$HOSTNAME/
+w
+q
+END
+
+#
+# fstab
+#
+if [ -f fstab ]; then
+	mv fstab fstab.save
+fi
+
+echo "${SERVER}:${ROOTPATH}/${HOSTNAME} / nfs rw 0 0"		>  fstab
+echo "${SERVER}:${EXECPATH} /usr nfs ro 0 0"			>> fstab
+case $SHAREPATH in
+none)
+	echo "#${SERVER}:/export/share /usr/share nfs ro 0 0"	>> fstab
+	;;
+*)
+	echo "${SERVER}:${SHAREPATH} /usr/share nfs ro 0 0"	>> fstab
+	;;
+esac
+case $HOMEPATH in
+none)
+	echo "#${SERVER}:/home/${SERVER} /home/${SERVER} nfs rw 0 0" \
+								>> fstab
+	;;
+*)
+	TMP=`echo $HOMEPATH | awk 'BEGIN {  FS=":"; } { print $2; }'`
+	case "$TMP" in
+	"" )
+		# no explicit server specified, so use main server
+		HOMESERVER=$SERVER
+		;;
+        * )
+		HOMESERVER=`echo $HOMEPATH | \
+		    awk 'BEGIN {  FS=":"; } { print $1; }'`
+		HOMEPATH=$TMP
+		;;
+	esac
+	mkdir -p ${ROOTPATH}/${HOSTNAME}/home/${HOMESERVER}
+	echo \
+    "${HOMESERVER}:${HOMEPATH}/${HOMESERVER} /home/${HOMESERVER} nfs rw 0 0" \
+								>> fstab
+	;;
+esac
+echo "#${SERVER}:/export/crash /var/crash nfs rw 0 0"		>> fstab
+
+#
+# rc.local
+#
+case "$YP" in
+"none")
+	ed - rc.local <<END
+/ypbind/s/^/#/
+/passwd.adjunct/s/^/#/
+/ypbind/s/^/#/
+/else/s/^/#/
+/ypbind/s/^/#/
+/fi/s/^/#/
+/fi/s/^/#/
+w
+/ypserv/s/^/#/
+/ypserv/s/^/#/
+/ypserv/s/^/#/
+/fi/s/^/#/
+w
+q
+END
+	;;
+*)
+	ed - rc.local <<END
+/domainname/s/ [^ ]*\$/ $DOMAIN/
+w
+q
+END
+	case "$YP" in
+	"client")
+		ed - rc.local <<END
+/ypserv/s/^/#/
+/ypserv/s/^/#/
+/ypserv/s/^/#/
+/fi/s/^/#/
+w
+q
+END
+		;;
+	esac
+esac
+
+#
+# hosts
+#
+if [ "$DOMAIN" != "noname" -a "$DOMAIN" != "" ]; then
+	ypmatch $SERVER $HOSTNAME hosts | sed -e 's/   *$//'	>> hosts
+else
+        grep "[	 ]$SERVER[	 ]" /etc/hosts |
+	    sed -e 's/   *$//' >> hosts
+	grep "[	 ]$HOSTNAME[	 ]" /etc/hosts |
+	    sed -e 's/   *$//' >> hosts
+fi
+exit 0

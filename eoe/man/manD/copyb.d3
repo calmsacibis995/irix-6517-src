@@ -1,0 +1,128 @@
+.if n .pH ddi.rm/d3/gen/copyb @(#)copyb	43.12 of 12/9/92
+.\" Copyright 1992, 1991 UNIX System Laboratories, Inc.
+.TH copyb D3
+.IX "\f4copyb\fP(D3)"
+.SH NAME
+\f4copyb\f1 \- copy a message block
+.SH SYNOPSIS
+.nf
+.na
+.ft 4
+#include <sys/stream.h>
+#include <sys/ddi.h>
+.sp 0.4
+mblk_t *copyb(mblk_t *\f2bp\fP);
+.ft 1
+.ad
+.fi
+.SS Arguments
+.RS 0
+.IP "\f2bp\f1" 10n
+Pointer to the message block from which data are copied.
+.RE
+.SH "DESCRIPTION" 
+\f4copyb\f1 allocates a new message block, and
+copies into it the data from the block pointed to by \f2bp\f1.
+The new block will be at least as large as the block being copied.
+The \f4b_rptr\f1 and \f4b_wptr\f1 members of the message block
+pointed to by \f2bp\f1 are used to determine how many bytes to copy.
+.SS "Return Values"
+On success, \f4copyb\f1 returns a pointer to
+the newly allocated message block containing the copied data.
+On failure, it returns a \f4NULL\f1 pointer.
+.SH USAGE
+.SS Level
+Base or Interrupt.
+.SS "Synchronization Constraints"
+Does not sleep.
+.P
+Driver-defined basic locks, read/write locks, and sleep locks
+may be held across calls to this function.
+.SS "Example"
+.P
+This example illustrates how \f4copyb\fP can be used during message retransmission.
+If there are no messages to retransmit, we return (line 18).
+For each retransmission record in the list, we test to see if the downstream
+queue is full with the \f4canput\f1(D3) function (line 21).
+If it is full, we skip the current retransmission record and continue searching the list.
+If it is not full, we use \f4copyb\f1(D3) to copy a header message
+block (line 25), and \f4dupmsg\f1(D3) to duplicate the data to be
+retransmitted (line 28).
+If either operation fails, we clean up and break out of the loop.
+.P
+Otherwise, we update the new header block with the correct destination address
+(line 34), link the message to be retransmitted to it (line 35), and send it
+downstream (line 36).
+At the end of the list, we reschedule a \f4itimeout\fP at the next
+valid interval (line 39) and return.
+.ne 4
+.P
+.nf
+.ft 4
+.ps -1
+.vs -1
+ 1  struct retrns {
+ 2	mblk_t         *r_mp;       /* message to retransmit */
+ 3	long            r_address;  /* destination address */
+ 4	queue_t        *r_outq;     /* output queue */
+ 5	struct retrns  *r_next;     /* next retransmission */
+ 6  };
+ 7  struct protoheader {
+ 8	long            h_address;  /* destination address */
+	...
+ 9  };
+10  mblk_t *header;
+11  struct retrns *rlist;
+    ...
+12  retransmit()
+13  {
+14	mblk_t *bp, *mp;
+15	struct retrns *rp;
+16	struct protoheader *php;
+.sp 0.4
+17	if (!rlist)
+18		return;
+19	rp = rlist;
+20	while (rp) {
+21		if (!canput(rp->r_outq->q_next)) {
+22			rp = rp->r_next;
+23			continue;
+24		}
+25		bp = copyb(header);
+26		if (bp == NULL) 
+27			break;
+28		mp = dupmsg(rp->r_mp);
+29		if (mp == NULL) {
+30			freeb(bp);
+31			break;
+32		}
+33		php = (struct protoheader *)bp->b_rptr;
+34		php->h_address = rp->r_address;
+35		bp->bp_cont = mp;
+36		putnext(rp->r_outq, bp);
+37		rp = rp->r_next;
+38	}
+39	(void) itimeout(retransmit, 0, RETRNS_TIME, plstr);
+40  }
+.vs
+.ps
+.ft 1
+.fi
+.sp 0.4
+.IX "\f4copyb\fP(D3), example"
+.IX "\f4canput\fP(D3), example"
+.IX "\f4dupmsg\fP(D3), example"
+.IX "\f4putnext\fP(D3), example"
+.IX "\f4freeb\fP(D3), example"
+.IX "\f4timeout\fP(D3), example"
+.IX "\f4copyb\fP(D3), example"
+.IX "\f4dupmsg\fP(D3), example"
+.IX "\f4putnext\fP(D3), example"
+.IX "\f4freeb\fP(D3), example"
+.IX "\f4itimeout\fP(D3), example"
+.SH REFERENCES
+.na
+\f4allocb\fP(D3),
+\f4copymsg\fP(D3),
+\f4msgb\fP(D4)
+.ad

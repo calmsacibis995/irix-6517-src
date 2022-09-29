@@ -1,0 +1,417 @@
+.TH satd 1M
+.SH NAME
+satd \- reliably save the system audit trail
+.SH SYNOPSIS
+.nf
+\f3satd\f1 [ \f3\-iov1\f1 ] [ \f3\-f\f1 path ... ] [ \f3\-r\f1 \c
+replacement-mode ]
+.fi
+.SH DESCRIPTION
+.I satd
+saves its input data in the directories and/or files
+named in its path arguments.
+.PP
+When one output path becomes full,
+.I satd
+replaces the current output path with a path that is not full.
+The method of replacement is configurable with the
+.B \-r
+option.
+The output path is also replaced if
+.I satd
+receives a
+.B SIGHUP
+signal, for instance one sent with a
+.B kill -1
+command.
+.PP
+If an output path becomes nearly full,
+warnings are displayed to the system console
+to notify the administrator to move the audit trail to tape.
+If all of the output paths become completely full,
+the system state is changed to single-user mode after a very
+short grace period.
+During the grace period,
+.I satd
+writes its records to
+.IR \f2/sat/satd.emergency-<n> ,
+where
+.I <n>
+is an integer that is incremented for each file created.
+The system uses
+the file \f2/sat/satd.reserve\f1 to maintain space for the emergency files.
+.PP
+See
+.IR audit (1M)
+or the
+\f2IRIX Admin: Backup, Security, and Accounting\f1 guide
+for more information on configuring the audit subsystem.
+.SH OPTIONS
+.TP
+.BI \-f " path"
+Specify an output path, which can be a directory or a file.
+If the output path is a directory,
+.I satd
+creates and fills uniquely named files under that directory.
+(Files are named for the time of their creation.
+For instance, file
+.I sat_9101231636
+was created in 1991, on January 23 at 4:36 p.m.)
+If the output path is a file,
+.I satd
+writes to that file.
+.IP
+When specifying several output paths in the command line,
+precede each one with a
+.B \-f
+(as in example 1)
+or put commas (but no white space) between each pathname.
+Taken together, all of the output paths specified in the command line
+are known as the
+.I path
+.IR list .
+.IP
+If no output paths are specified
+and the
+.B \-o
+option is not specified,
+the audit trail records are not saved anywhere, and the system is halted.
+.IP
+If a path given as a command line parameter
+is invalid for any reason,
+a warning is printed,
+that path is omitted from the path list,
+and
+.I satd
+continues operating with whatever specified paths are valid.
+.IP
+If the specified path does not already exist,
+.I satd
+creates a file with that name.
+.IP
+.\" A device is full when its storage medium is completely consumed.
+A file or directory is full when the filesystem on which it resides
+has no more available space.
+If a directory is specified as an output path,
+an audit file is constructed under that directory.
+When the audit file is filled to an internally specified maximum size,
+it is closed and a new audit file is created under that directory.
+.TP
+.B \-i
+Input audit records from standard input
+instead of obtaining them from the kernel audit subsystem.
+.TP
+.B \-o
+Output audit records to standard output as well as
+to the output paths specified with the
+.B \-f
+option.
+Use this option to pipe the audit trail to audit tools from
+.IR satd .
+.IP
+If the
+.B \-o
+option is given in the command line,
+and no output paths are specified,
+the audit trail is copied to standard output,
+but it is not saved to a mass storage device.
+If the
+.B \-o
+option is absent from the command line,
+and no output paths are specified,
+.I satd
+takes records from the kernel audit subsystem,
+but discards them unused.
+.TP
+.BI \-r " replacement-mode"
+The replacement mode can be either
+.BR preference ,
+.BR rotation ,
+or
+.BR onepass .
+The default replacement mode is
+.BR preference .
+If the replacement mode option appears
+more than once in the command line,
+.I satd
+prints an error message and exits.
+.IP
+If the replacement mode is
+.BR rotation ,
+.I satd
+replaces output paths in a circular order.
+When the current output path is full,
+.I satd
+writes records to the next path in the list.
+When the last output path is full,
+.I satd
+writes records to the first path again.
+If at any time
+.I satd
+receives a
+.B SIGHUP
+signal,
+.I satd
+replaces the current output path
+with the next path in the order of rotation.
+.IP
+If the replacement mode is
+.BR preference ,
+.I satd
+always uses the available output path
+closest to the beginning of the path list.
+When the current output path is full,
+.I satd
+tries to write records to the first path again.
+.I satd
+only writes records to a path if all of the paths
+preceding it in the list are full.
+If at any time
+.I satd
+receives a
+.B SIGHUP
+signal,
+.I satd
+replaces the current output path
+with the next path in the order of preference.
+.IP
+If the replacement mode is
+.BR onepass ,
+.I satd
+replaces output paths in a linear order.
+It uses the output paths in the order
+they are specified in the command line.
+If a
+.B SIGHUP
+signal is sent to
+.I satd
+before the end of the path list is reached,
+.I satd
+starts again from the beginning of the list.
+If
+.I satd
+reaches the end of the path list before receiving a
+.B SIGHUP
+signal,
+it halts the system immediately.
+.TP
+.B \-v
+Verbose indications of activity are printed to standard error.
+.TP
+.B \-1
+Input data is consumed until the first time a
+.I satread
+system call returns with less data read than requested.
+When the first partial buffer is read,
+.I satd
+exits.
+The
+.B \-1
+option is used in debug and testing to flush the kernel audit buffers.
+.SH FILES
+.ta \w'/etc/config/sat.options\ \ \ \ \ 'u
+.nf
+/sat/satd.emergency\-0	"emergency" audit file, \-0 through \-9
+/sat/satd.reserve	file to reserve 250,000 bytes for above
+/etc/init.d/audit	system audit startup script
+/etc/config/audit	configuration file, \f3on\f1 if auditing is enabled
+/etc/config/sat.options	optional file for site-dependent satd options
+/var/adm/sat		default directory, specified in 
+	\f2/etc/init.d/audit\f1
+.fi
+.SH DIAGNOSTICS
+.TP
+\f7satd - ignoring path\f1 \f2<pathname>\f1
+The specified output path doesn't exist or is not usable.
+.I satd
+ignores it and trying the next entry in the path list.
+.TP
+\f7path is neither directory, nor disk file\f1
+The specified output path can't be used because it isn't one of the
+object types understood by
+.IR satd .
+.I satd
+ignores the path and tries the next entry in the path list.
+.TP
+\f7Onepass path search complete\f1
+All the entries in the output path have been used.
+Since
+.I satd
+has nowhere to put its audit records, it exits.
+.TP
+\f7Preference path search fails\f1
+None of the entries in the output path are available for use.
+Since
+.I satd
+has nowhere to put its audit records, it exits.
+.TP
+\f7Rotation path search fails\f1
+None of the entries in the output path are available for use.
+Since
+.I satd
+has nowhere to put its audit records, it exits.
+.TP
+\f7can't fstatfs\f1 \f2<pathname>\f1
+The specified output path doesn't exist or is in an unreadable directory.
+.I satd
+ignores it and tries the next entry in the path list.
+.TP
+\f7path N percent full\f1
+The auditor is advised to prepare to move the output file
+to permanent storage, because the output path will become full soon.
+.TP
+\f7can't open\f1 \f2<pathname>\f1
+The specified output path can't be opened for write access,
+either because it doesn't exist, or because it has restrictive permissions.
+.TP
+\f7opening path\f1 \f2<pathname>\f1
+The specified output path is being opened for use.
+This message is only seen if
+.I satd
+was invoked with the
+.B \-v
+option (verbose mode).
+.TP
+\f7closing directory file\f1 \f2<pathname>\f1
+The filenamed in this message is being closed.
+If room remains in the filesystem,
+a new file is opened in the same directory.
+The auditor is advised to move the output file to permanent storage.
+.TP
+\f7null path pointer\f1
+An internal error has been encountered in
+.I satd.
+.TP
+\f7opened full path\f1 \f2<pathname>\f1
+The specified output path was opened,
+but it cannot be written because there is no space on the device.
+It is closed, and the next entry in the path list is tried.
+.TP
+\f7Valid directory path but can't open file\f1
+An internal error has been encountered in
+.I satd.
+.TP
+\f7satd - sighup received\f1
+A
+.B SIGHUP
+signal was caught, informing
+.I satd
+to replace the current output path
+with another path from the list.
+The new path is chosen in accordance with the replacement strategy
+specified by the auditor with the
+.B \-r
+command line option.
+This message is only seen if
+.I satd
+was invoked with the
+.B \-v
+option (verbose mode).
+.TP
+\f7satd - X asked but Y written\f1
+Although
+.I satd
+tried to write X bytes of data,
+it succeeded in writing only Y bytes.
+.TP
+\f7Only use one replacement strategy at a time\f1
+More than one
+.B \-r
+option was provided as a command line option.
+The three replacement strategies
+(onepass, preference, and rotation)
+are mutually exclusive.
+Reinvoke
+.I satd
+with consistent command line arguments.
+.TP
+\f7Can't read sat buffer\f1
+Audit records can't be obtained from the kernel sat subsystem,
+probably due to insufficient privilege or access rights.
+.TP
+\f7Can't write sat buffer\f1
+Even though
+.I satd
+was invoked with the
+.B \-o
+command line option,
+it cannot write audit records to standard output.
+.TP
+\f7Can't send sat buffer\f1
+Even though the output path has been opened successfully and is not full,
+.I satd
+cannot write audit records to the path.
+.\"224555".SH EXAMPLES
+.\"224555".PP
+.\"224555"An Auditor has a bank of three audit disks.
+.\"224555"He wants them filled one at a time, and he instructs the system
+.\"224555"administrator to copy the contents to tape when a disk gets full.
+.\"224555"The administrator has plenty of time to move one disk while
+.\"224555"the other two are filling.
+.\"224555"On this site, the security policy permits audit records to be discarded
+.\"224555"rather than shutting the system down,
+.\"224555"so if for some reason the administrator fails to clean the disks,
+.\"224555"audit records are discarded - the records get sent to /dev/null.
+.\"224555"When the administrator finally replaces the full disks,
+.\"224555"he can use
+.\"224555".B kill -1
+.\"224555"to send
+.\"224555".I satd
+.\"224555"the signal that will cause it to rotate back to its first output path
+.\"224555"(disk #1).
+.\"224555"This command is issued:
+.\"224555".sp
+.\"224555".RS
+.\"224555"satd -r rotation -f /sat1 -f /sat2 -f /sat3 -f /dev/null
+.\"224555".RE
+.\"224555".sp 1
+.\"224555".PP
+.\" A second Auditor at this site wants to conserve her mass storage medium
+.\" by compressing the audit trail.  She lets one instance of
+.\" .I satd
+.\" collect audit records,
+.\" pipes its output to
+.\" .B compress(1),
+.\" and pipes the output of
+.\" .B compress(1)
+.\" to a second instance of
+.\" .I satd,
+.\" which saves the audit records to disk files under the directory she specifies.
+.\" She has set up procedures for archiving her audit files to tape periodically.
+.\" This command is issued:
+.\" .sp
+.\" .RS
+.\" satd -o \||\| compress \||\| satd -i -f /var/adm/sat
+.\" .RE
+.\" .PP
+.\"224555"Another auditor saves the audit trail in disk files under
+.\"224555"the directory she specifies.
+.\"224555"She needs her audit files only for a short period of time,
+.\"224555"so she periodically removes old files.
+.\"224555".PP
+.\"224555"She also happens to be particularly concerned about
+.\"224555"an unscrupulous user named
+.\"224555".I aaron,
+.\"224555"and she wants to see if
+.\"224555".I aaron
+.\"224555"will engage in suspicious activity between 1:00 am and 5:00 am tonight.
+.\"224555"She pipes audit records to the audit tools
+.\"224555".I sat_reduce
+.\"224555"and
+.\"224555".I sat_summarize.
+.\"224555"This command is issued:
+.\"224555".sp 1
+.\"224555".RS
+.\"224555"satd -f /usr/tmp/auditdir -o \||\| sat_reduce -u aaron
+.\"224555"-A 04010100 -a 04010500 \||\| sat_summarize -e
+.\"224555".RE
+.\"224555".PP
+.SH "SEE ALSO"
+kill(1),
+mkdir(1),
+mknod(1M),
+sat_interpret(1M),
+sat_reduce(1M),
+sat_select(1M),
+sat_summarize(1M),
+satread(2).

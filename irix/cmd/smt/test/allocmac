@@ -1,0 +1,111 @@
+#!/bin/sh
+
+# "$Revision: 1.9 $"
+
+# allocate an FDDI MAC address
+
+
+USAGE="$0: [-v] [-d database] [-t board-type] [-o oldmac] user serialnum"
+
+LCKDIR=/tmp
+DBFILE=$HOME/fddimacs
+TYP=ipg
+
+#preserve error messages
+exec 2>&1
+
+while getopts "vd:t:o:" c; do
+    case $c in
+    v) if test -n "$verbose"; then
+	    verbose="$verbose"v
+	else
+	    verbose=-v
+	fi
+	if test x"$verbose" = "x-vv"; then
+	    set -x
+	fi
+	;;
+    d) DBFILE="$OPTARG";;
+    t) TYP="$OPTARG";;
+    o) OLDMAC="$OPTARG";;
+    \?) echo $USAGE; exit 1;;
+    esac
+done
+shift `expr $OPTIND - 1`
+if test "$#" != 2; then
+    echo $USAGE
+    exit 1
+fi
+
+WHO="$1"
+SNUM=`expr "$2" : '0*\(.*.\)'`
+WHERE=`expr $REMOTEHOST : '\(.*\).sgi.com'`
+
+DB=`basename $DBFILE`
+PADTYP=`expr "$TYP      " : '\(....\).*'`
+
+
+if test ! -w $DBFILE; then
+    echo "FAILED $DBFILE is not writable."
+    exit 1
+fi
+
+LCKFILE="$LCKDIR/$DB"
+MYLCKFILE="$LCKFILE.$$"
+echo $$ > $MYLCKFILE
+trap "/bin/rm -f $MYLCKFILE; exit 1" 0 1 2 15
+
+limit=1
+while true; do
+    if test "$limit" -gt 5; then
+	echo "FAILED to lock to the database"
+	exit 1
+    fi
+    limit=`expr $limit + 1`
+    /bin/ln $MYLCKFILE $LCKFILE 2>/dev/null
+
+    other=`cat $LCKFILE`
+    if test "$other" = $$; then
+	break;
+    fi
+
+    if kill -0 "$other" 2>/dev/null; then : ;
+    else
+	logger -i "FDDI allocmac removing old lock file: `ls -l $LCKFILE`"
+	rm -f $LCKFILE
+    fi
+
+    logger -i "FDDI allocmac lock conflict: `ls -l $LCKFILE`"
+    sleep 1
+done
+trap "/bin/rm -f $MYLCKFILE $LCKFILE; exit 1" 0 1 2 15
+
+# try to allocate the number already in use by the board
+new=`grep "^$OLDMAC$" $DBFILE`
+if test -z "$new"; then
+    new=`egrep "^8:0:69:[0-9a-fA-F:]*=[a-z]*  *$SNUM	" $DBFILE \
+	| sed -e '2,$d' -e 's/=.*//'`
+fi
+# then look for a new one
+if test -z "$new"; then
+    new=`sed -n -e '/^8:0:69:[0-9a-fA-F:]*$/!d' -e p -e q $DBFILE`
+fi
+if test -z "$new"; then
+    echo "FAILED No numbers available."
+    exit 1
+fi
+
+# officially allocate the number, ignoring any blanks after the number
+ed - $DBFILE << __JUNK__
+/^$new/s/\([^ 	]*\).*/\1=$PADTYP $SNUM	by $WHO, $REMOTEUSER@$WHERE at `date '+%m\/%d\/%y %H:%M'/`
+w
+q
+__JUNK__
+
+if test $? != 0; then
+    echo FAILED to allocate address
+    exit 1
+fi
+
+echo $new
+exit 0

@@ -1,0 +1,97 @@
+/*
+ * Copyright 1992 Silicon Graphics, Inc.  All rights reserved.
+ *
+ *	Rlogin
+ *
+ *	$Revision: 1.2 $
+ *	$Date: 1992/09/25 00:32:39 $
+ *
+ * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Silicon Graphics, Inc.;
+ * the contents of this file may not be disclosed to third parties, copied or
+ * duplicated in any form, in whole or in part, without the prior written
+ * permission of Silicon Graphics, Inc.
+ *
+ * RESTRICTED RIGHTS LEGEND:
+ * Use, duplication or disclosure by the Government is subject to restrictions
+ * as set forth in subdivision (c)(1)(ii) of the Rights in Technical Data
+ * and Computer Software clause at DFARS 252.227-7013, and/or in similar or
+ * successor clauses in the FAR, DOD or NASA FAR Supplement. Unpublished -
+ * rights reserved under the Copyright Laws of the United States.
+ */
+%{
+/*
+ * Handcraft Reminder:
+ * 	Pidl is not fixed, the following has to be done to the end
+ *	of rlogin_decode for a variable to be decoded properly:
+ *	    In rlogin_decode add the line "int tmp = ds->ds_count;"
+ *			before the line "_renew".
+ *	    Change "MIN(ds->ds_count, ds->ds_count)" to "tmp");
+ *	    Change all "ds->ds_count" to "tmp" on the "pv_showvarfield" line.
+ *			Find in 2 places.
+ *
+ *	    The following is an example:
+ *
+ *              } else {
+ *                    int tmp = ds->ds_count;
+ *                    rlogin->data = _renew(rlogin->data, HOWMANY(ds->ds_count,
+ *					1) * sizeof(char));
+ *                    if (rlogin->data == 0) goto out;
+ *                    if (!ds_bytes(ds, rlogin->data, tmp))
+ *                              ds->ds_count = 0;
+ *                    pv_showvarfield(pv, &rlogin_fields[13], rlogin->data, tmp,
+ *                                      "%.*s", tmp, rlogin->data);
+ *              }
+ *
+ *
+ *	Comment out 4 lines after "if (runix_continue(ds)) {"
+ *	in rlogin_decode:
+ *		{ int tell = ds_tellbit(ds);
+ *		if (!ds_u_short(ds, &rlogin->cookie))
+ *		        return;
+ *		ds_seekbit(ds, tell, DS_ABSOLUTE); }
+ */
+%}
+
+//
+// Remote Login/Shell protocol
+//
+
+import tcp;
+
+protocol rlogin "Remote Login/Shell Protocol" : tcp(513)
+{
+    enum bitval {False, True};
+
+    if (tcp.urp)
+    {
+	bitval	clnwin	"Send Current Window Size" : 1;
+	u_char	bpad1	"Bit Padding" : 1 -vv;
+	bitval	resumef "Resume Interception and Flow Control" : 1;
+	bitval	rawmode "Switch to Raw Mode" : 1;
+	u_char	bpad2	"Bit Padding" : 2 -vv;
+	bitval	discard "Discard All Buffered Data" : 1;
+	u_char	bpad3	"Bit Padding" : 1 -vv;
+    }
+    if (runix_continue($ds))
+    {
+	if (cookie == 0xffff)
+	{
+	    u_short	cookie	"Magic Cookie" -v expect 0xffff;
+	    char	fixval	"2 Bytes of 's'" [2] -v;
+	    u_short	nrow	"Number of Char Rows";
+	    u_short	nchar	"Number of Char Per Row";
+	    u_short	npixx	"Number of Pixels in X direction";
+	    u_short	npixy	"Number of Pixels in Y direction";
+	}
+	else
+	    char	data	"Data" [] -v;
+    }
+}
+
+%{
+static int
+runix_continue(DataStream *ds)
+{
+    return ds->ds_count > 0;
+}
+%}

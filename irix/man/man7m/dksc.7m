@@ -1,0 +1,276 @@
+.nr X
+.if \nX=0 .ds x} dks 7M "" "\&"
+.TH \*(x}
+.SH NAME
+dks \- dksc (SCSI) disk driver
+.SH SYNOPSIS
+.nf
+\f3/dev/dsk/dks*
+/dev/rdsk/dks*
+/dev/dsk/\f2nodename\f3/lun*/c*p*
+/dev/rdsk/\f2nodename\f3/lun*/c*p*
+.fi
+.SH DESCRIPTION
+The \f3dksc\f1 driver supports all disk types that use a SCSI command
+set.  This includes traditional parallel SCSI as well as Fibre Channel
+Arbitrated Loop and Fibre Channel Fabric devices (devices connected
+through a Fibre Channel switch).  Currently, 8 bit parallel SCSI (also
+called narrow SCSI) allows
+up to seven SCSI drives attached per SCSI bus, 16 bit parallel SCSI
+(also called wide SCSI) allows 15 drives.  Fibre Channel Arbitrated
+Loop (FC-AL) allows up to 125 drives (some implementations limit the
+number to 110).  The maximum number addressable through Fibre Channel
+Fabric has no theoretical limit.  However, practical considerations
+do limit the number to 252 drives for current adapters.
+Each drive (a RAID controller is considered a "drive" for these purposes)
+can support a number of logical units (luns).
+The current limit depends on the host adapter.  It varies from 8 to 64.
+Each unit (or lun) can have up to
+16 partitions in use, three of which (8, 9, and 10) are special (see below).
+.PP
+Disk devices are named according to the following formats (jaguar drives
+are no longer supported):
+.P
+.B Parallel SCSI and FC-AL
+.Ex
+\f3/dev/rdsk/dks\f1\f2controller#\f1\f3d\f1\f2drive#\f1{\f3s\f1\f2partition#\f1|\f3vh\f1|\f3vol\f1}
+\f3/dev/rdsk/dks\f1\f2controller#\f1\f3d\f1\f2drive#\f1\f3l\f1\f2lun#\f1{\f3s\f1\f2partition#\f1|\f3vh\f1|\f3vol\f1}
+\f3/dev/dsk/dks\f1\f2controller#\f1\f3d\f1\f2drive#\f1\f3s\f1\f2partition#\f1
+\f3/dev/dsk/dks\f1\f2controller#\f1\f3d\f1\f2drive#\f1\f3l\f1\f2lun#\f1\f3s\f1\f2partition#\f1
+.Ee
+.P
+.B Fibre Channel Fabric
+.Ex
+\f3/dev/rdsk/\f1\f2nodename\f1\f3/lun\f1\f2lun#\f1{\f3s\f1\f2partition#\f1|\f3vh\f1|\f3vol\f1}\f3/c\f1\f2controller#\f1\f3p\f1\f2port#
+\f3/dev/dsk/\f1\f2nodename\f1\f3/lun\f1\f2lun#\f1\f3s\f1\f2partition#\f1\f3/c\f1\f2controller#\f1\f3p\f1\f2port#
+.Ee
+Note that the Fabric device names always specify the \f2lun#\f1, even
+if it is zero.
+The \f3rdsk\f1 devices use a raw interface to communicate with the
+disk, while the \f3dsk\f1 devices use a block interface.
+The
+\f2controller#\f1, \f2drive#\f1, and \f2lun#\f1 are used
+to indicate SCSI controller number, target ID, and logical unit number,
+respectively.
+The \f2nodename\f1 and \f2port#\f1 are used to indicate the Fibre Channel
+world wide name (WWN) and the device port number (normal Fibre Channel
+disks have two ports).
+\f3s\f1\f2partition#\f1, \f3vh\f1, and \f3vol\f1 indicate
+a partition of the disk.
+The \f3vh\fP and \f3vol\fP devices are only in the \f3rdsk\fP directory,
+since they are normally used only for \f3ioctl\fP and raw access.
+.PP
+The standard partition allocation by Silicon Graphics has
+.I root
+on partition 0,
+.I swap
+on partition 1, and (optionally)
+.I /usr
+on partition 6.
+Some systems, such as the Indy, are shipped from the
+factory with a single filesystem on the system disk for ease of administration.
+In this case, partition 6 is not used.
+Partition 7 (when present), normally maps the entire
+.I usable
+portion of the disk (excluding the volume header).
+Partition 8 (\f3vh\fP) maps the volume header (see
+.IR prtvtoc (1M),
+.IR dvhtool (1M)).
+Partition 10 (\f3vol\fP) maps the entire drive.
+Partition 9 is reserved, but is not used for disks with the \f3dksc\fP driver.
+.PP
+In current releases, these devices are
+part of the hardware graph hwgfs(4), and are
+created dynamically as the disk partitions are
+changed. Therefore \f3MAKEDEV\f1 no longer needs to be run, nor
+does it need to be modified to create additional partition devices.
+The partitions will
+be created/updated whenever a disk is opened, such as when a filesystem is
+mounted, or when programs such as \f3fx(1M)\f1 and \f3prtvtoc(1M)\f1
+access the disk.
+For devices that are hot-plugged, the bus that they are plugged into
+must be reprobed and reconfigured (see \f3scsiha(1m)\f1 and
+\f3ioconfig(1M)\f1) in order for the partitions to be created.
+.PP
+For removeable media devices, \f3mediad(1M)\f1, if running, will cause
+these updates to occur after media changes. In the absense of
+mediad, the user will need to run code or execute commands that will
+cause an open against the volume header. \f3fx(1M)\f1 or \f3prtvtoc(1M)\f1
+are two examples of commands that will do this, as well as the
+\f3DIOCGETVH ioctl\f1 (see below) issued by a program.
+.PP
+The standard configuration has
+.I /dev/root
+linked to partition 0 of the system disk, with
+.I /dev/swap
+linked to partition 1 of the system disk, and
+.I /dev/usr
+linked to partition 6 of the system disk.
+Systems that do not
+use partition 6 as shipped, instead using just the s0 and s1 partitions,
+still have a link made.
+There is no attempt to make the link to
+the device used for the \f3/usr\fP filesystem in the
+.IR fstab (4)
+file, if present, even if it uses a different device.
+Option disks normally use the s7 partition as a single filesystem,
+containing the whole usable portion of the disk.
+.SH IOCTL FUNCTIONS
+As well as normal read and write operations, the driver supports a number
+of special
+.IR ioctl (2)
+operations when opened via the character
+special file in
+.IR /dev/rdsk .
+Command values for these are defined in the system
+include file
+.RI < sys/dkio.h >,
+with data structures in
+.RI < sys/dksc.h >.
+.br
+These
+.I ioctl
+operations are intended for the use of special-purpose disk
+utilities.
+Many of them can have drastic or even fatal effects on disk
+operation if misused;
+they should be invoked only by the knowledgeable and with extreme caution!
+.PP
+A list of the
+.I ioctl
+commands supported by the
+.I dks
+driver is given below.
+.TP
+DIOCADDBB
+Adds a block to the badblock list.
+The argument is the logical block number
+(not a pointer) on the drive.
+For some makes of drives, the spared
+block must be written before the sparing takes effect.
+Only programs running
+with superuser permissions can use this ioctl.
+.TP
+DIOCDRIVETYPE
+The first
+.B SCSI_DEVICE_NAME_SIZE
+bytes (currently 28) of the SCSI inquiry data for the drive is returned to the caller.
+The argument is a pointer to a char array of at least this size.
+This contains vendor and drive specific information such as the drive name
+and model number.
+See a SCSI command specification for details on the structure of this buffer.
+.TP
+DIOCFORMAT
+Formats the entire drive.
+Any information on the drive is lost.
+The grown
+defect list (blocks spared with DIOCADDBB) is empty after formatting is
+complete, blocks previously in the grown defect list are no longer spared.
+.TP
+DIOCGETVH
+Reads the disk volume header from the driver into a buffer in the calling
+program.
+The argument in the ioctl call must point to a buffer of size
+at least 512 bytes.
+The structure of the volume header is defined in the include file
+\f2<sys/dvh.h>\f1.
+The corresponding call DIOCSETVH sets the drivers idea of the volume header;
+in particular, the drivers idea of the partition sizes and offsets is
+changed.
+.TP
+DIOCPREVREM
+Issues a PREVENT ALLOW MEDIA REMOVAL command to the opened device.
+The
+first bit of the arg is or'd into byte 4 of the SCSI command.
+See a SCSI command specification for details on this command.
+.TP
+DIOCRDEFECTS
+The argument is a pointer to a struct dk_ioctl_data.
+The i_addr field
+points to a structure like:
+.IP
+.RS
+.nf
+	structure defect_list {
+		struct defect_header defhdr;
+		struct defect_entry defentry[NENTS];
+	};
+.fi
+.RE
+.IP
+The i_len field is set to the total length of the structure, which must
+be less than NBPP from \f2<sys/param.h>\f1;
+at most NENTS defects are returned.
+The actual number of defects can be determined by examining the
+defhdr.defect_listlen value, which is the number of bytes returned.
+This
+must be divided by the size of the applicable data structure for the type
+requested.
+The i_page field should be
+set to the bits identifying the badblock reporting type.
+These bits
+request the combination of manufacturer's and grown defects; and one
+of bytes from index, physical cyl/head/sec, vendor unique.
+The only
+combination that works with all currently supported SCSI disks is
+type cyl/head/sec; and either combined manufacturer's and grown defects,
+or just manufacturer's defects.
+.TP
+DIOCREADCAPACITY
+The arg is a pointer to an unsigned integer.
+The value returned is the
+number of usable sectors on the drive (as read from the drive).
+.TP
+DIOCSCSIINQ
+The arg is a pointer to a char array at least SCSI_INQUIRY_LEN bytes long.
+The SCSI inquiry data from the device is copied to this buffer.
+See a SCSI command specification for details on the structure of this buffer.
+.TP
+DIOCSENSE / DIOCSELECT
+The argument is a pointer to a struct dk_ioctl_data.
+This allows sending
+SELECT and SENSE commands to the drive.
+See the ANSI SCSI specification
+and individual manufacturer's manuals for allowed page numbers and
+valid values.
+Only programs running with superuser permissions can use the
+DIOCSELECT ioctl.
+.TP
+DIOCSTARTSTOP
+This command issues a SCSI STARTSTOP command to the opened device.
+The first two bits of the arg are or'd into byte 4 of the SCSI command.
+See a SCSI command specification for details on this command.
+.TP
+DIOCTEST
+issues the SCSI "Send Diagnostic" command to the drive.
+The exact tests
+done are manufacturer specific.
+The
+.I ioctl
+call returns 0 upon success,
+or sets
+.I errno
+to EIO and returns \-1 upon failure.
+.SH NOTES
+Fibre Channel fabric device names are meant to separate three concepts;
+device specification, portion of device, and path to device.  Thus the
+\f2nodename\f1 specifies a unique device, such as a disk drive or a
+RAID controller.  The \f2lun#\f1 and \f2partition#\f1 specify which portion
+of the disk or RAID is accesses, and the \f2controller#\f1 and \f2port#\f1
+specify the path the data and commands travel to and from the device.
+.SH FILES
+.nf
+/dev/dsk/dks*
+/dev/rdsk/dks*
+/dev/dsk/*/lun*/c*p*
+/dev/rdsk/*/lun*/c*p*
+/dev/root
+/dev/usr
+/dev/swap
+.fi
+.SH SEE ALSO
+dvhtool(1M),
+fx(1M),
+prtvtoc(1M),
+scsiha(1M),
+ioconfig(1M).

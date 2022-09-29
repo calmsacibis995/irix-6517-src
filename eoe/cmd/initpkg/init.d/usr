@@ -1,0 +1,80 @@
+#! /sbin/sh
+#Tag 0x00000f00
+
+# (u)mount the /usr filesystem (if necessary)
+# "$Revision: 1.16 $"
+
+cd /
+
+MESSAGE='\07/usr failed to mount; may be unable to reach multiuser state'
+
+case $1 in
+'start')
+	#
+	# Mount only the /usr filesystem, and only if neccesary.
+	#
+	# This is done so that unbundled products must have initialization
+	# code run between mounting /usr (where their binaries probably live)
+	# and mounting the rest of the filesystems.
+	#
+	# On Indy (single partition) systems (and possibly others) /usr does
+	# not normally exist, so we must be able to just exit.  The below
+	# test looks for "@/usr@" or "@/usr/@" in /etc/fstab where @ is
+	# white space defined by a space or tab.  Lines beginning with a #
+	# are excluded as well as comments.
+	#
+	if test -z "`grep -v '^\#' /etc/fstab | sed 's/#.*//' | grep '[ 	]/usr[/]*[ 	]' `"; then
+		exit 0
+	fi
+
+	#
+	# If we don't have any products that require initialization code
+	# to be run between mounting /usr and mounting the rest of the
+	# filesystems, then we shouldn't mount /usr now.  The serialization
+	# will slow booting.
+	#
+	# We test for this by looking for anything in the boot sequence
+	# between mounting /usr (executing "/etc/rc2.d/S02usr") and mounting
+	# the other filesystems (executing "/etc/rc2.d/S12filesystems").
+	#
+	if test -n "`/sbin/ls /etc/rc2.d | sed '/S04usr/,/S12filesystems/!d' | \
+			  sed -e '/S04usr/d' -e '/S12filesystems/d'`"; then
+		# if /usr is already listed in mtab then it's already mounted
+		# no reason to try mounting again
+		if grep '^[^ ]* /usr ' /etc/mtab > /dev/null 2>&1
+		then
+			exit 0
+		fi
+
+		if /sbin/chkconfig verbose
+		then
+			echo "Mounting /usr:"
+		fi
+
+		#
+		# Check and mount /usr.
+		#
+		if /sbin/suattr -C CAP_MOUNT_MGT+ip -c "/sbin/mount -c /usr" > /etc/fscklogs/rusr 2>&1
+		then
+			cat /etc/fscklogs/rusr
+		else
+			cat /etc/fscklogs/rusr
+			echo $MESSAGE
+			sleep 5
+		fi
+	fi
+	;;
+
+'stop')
+	#
+	# Unmount /usr.
+	#
+	# We use "-k" here because we know that this operation is late in
+	# the game and we don't want to fail because of running processes.
+	#
+	;;
+
+*)
+	echo "usage: /etc/init.d/usr {start|stop}"
+	;;
+esac

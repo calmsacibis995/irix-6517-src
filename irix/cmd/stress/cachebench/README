@@ -1,0 +1,250 @@
+TABLE OF CONTENTS
+
+This document is divided into the following sections.
+
+  THE BENCHMARK
+  MANIFEST
+  RUNNING THE BENCHMARK
+  BENCHMARK DATA
+  VISUALIZING THE DATA
+  ADDING A NEW OPERATION TO THE BENCHMARK
+  ADDING A NEW VISUALIZATION METRIC TO THE BENCHMARK
+
+
+THE BENCHMARK
+
+This benchmark tests the performance of the hardware cache coherency
+under varying levels of memory contention and using different
+shared-memory operations.
+
+The test method is to have a number of processors contending for a
+single cache line by applying one of the following shared-memory
+operations:
+
+   fetch_add		- 64bit atomic increment using load-linked/store-cond
+   fetchop_fetch_add	- 64bit atomic increment using SN0 fetchop memory
+   load			- load 64bit word
+   store		- store 64bit word
+
+Each processor applies the shared memory operation to a shared variable
+and then spins on locally cached memory (simulating parallel work).
+
+The benchmark collects data for a varying number of processors and a
+varying parallel workload.  The data contains per-processor values of
+the total wall, user, and system times elapsed, number of successful
+operations (nops), number of failed operations (fops), wall, user, and
+system time per successful operation, number of page faults and page
+reclaims, and voluntary and involuntary context switches.
+
+The raw output of time per operation includes the time spent in the
+parallel work loop.  See `VISUALIZING' below for ways to convert the
+data into more reasonable formats.
+
+MANIFEST
+
+startup*	- prepare a machine to run benchmark
+cleanup*	- release a machine after running benchmark
+config.example  - example benchmark configuration file
+cycle.c		- sgi cycle counter front-end
+cycle.h		- sgi cycle counter front-end
+data/		- data collected from previous runs
+gen_charts*	- generate ASCII charts of benchmark data
+gen_composite*	- generate composite images from single images
+gen_everything*	- generate a full set of charts and images from data
+gen_single*	- generate single images from benchmark data
+rescale*        - match the scale of two ASCII charts, to compare graphs
+lat_op.c	- benchmark source code (framework)
+lat_op.h	- benchmark source code
+lat_op_asm.s	- benchmark source code (shared-memory ops)
+makechart.scz	- generate an image from ASCII chart (Wingz macro)
+procs_vs_workload* - massage data into an ASCII chart
+run_it*		- run the benchmark given a configuration file
+savechart.scz	- save a generated chart (Wingz macro)
+toggle.scz	- switch between contour and surface view (Wingz macro)
+readyprint.scz  - (partially) prepare an ASCII chart for printing (Wingz macro)
+
+RUNNING THE BENCHMARK
+
+Lines beginning with '$' are commands to be executed as is, except as
+noted below.  Lines beginning with '#' must be run as root.  BENCH is
+the benchmark source directory; RUN is your private data directory.
+
+$ cd BENCH
+$ make go
+$ cp go RUN
+$ make clean
+
+$ cp BENCH/config.example RUN/config
+
+Edit "RUN/config" to suit your needs.
+
+Replace <my-email-address> with your email address, s.t. people who
+try to log in will see that you've reserved the machine for the
+benchmark.
+
+# BENCH/startup <my-email-address>
+
+The machine is now more or less reserved for the cache contention
+benchmark.
+
+$ cd RUN
+$ BENCH/run_it
+
+Approximate run time in seconds = `time' * ( `maxnthr' / `delnthr' )
+	* ( `maxwork' / `delwork' ) * number of `ops'
+
+A typical run takes 6 - 8 hours.
+
+# BENCH/cleanup
+
+The machine should be back to its original state now.
+
+BENCHMARK DATA
+
+The benchmark will have placed its data in the directories
+<arch>.<hostname>.<date>/{op1,op2,...} (one directory per shared
+memory operation tested).
+
+Each directory will contain the following files:
+
+   data-<hostname>-w<work>-t<nthr>*
+	- data for <work> parallel workload and <nthr> threads (processors)
+
+   hinv-<hostname>
+	- the output of hinv(1M) at the time the benchmark was run
+
+   uname-<hostname>
+	- the output of "uname -a" at the time the benchmark was run
+
+   errors-<hostname>
+	- the stderr output of the various runs (should be empty)
+
+   mpadmin-<hostname>
+	- the output of "mpadmin -s" at the time the benchmark was run
+	  (all of the processors which you're working with should be
+	  isolated and preferably non-preemptive; see mpadmin(1))
+
+   ticks-<hostname>
+	- the calibrated ``nop-timer'' number of ticks per microsecond
+          (for some amount of repeatability, you can run "go -z<ticks>")
+
+VISUALIZING THE DATA
+
+[N.B. You have to have Wingz installed on your machine to run
+gen_single, which is called by gen_everything to create 3D graphs of
+the data.  You have to have netpbm installed to run gen_composite,
+which is called by gen_everything to put two graphs into one image
+file.]
+
+$ gen_everything RUN/charts RUN1 [RUN2]
+
+This will take a while.  While gen_single is running, Wingz will take
+over control of your display (for ~5 minutes).
+
+gen_everything will generate the following:
+
+    charts/RUN1_<op>_<metric>.{txt,gif}
+    charts/cmp__<op>_<metric>.gif
+
+where <op> is a shared-memory operation in the cache benchmark
+and <metric> is one of the following:
+
+   o "absolute" - time in usecs per shared-memory operation
+   o "failed" - number of failed operations
+   o "fairness_progress" - fairness of successful operations
+   o "slowdown" - slowdown of one processor with N others vs. alone
+
+Currently the measure of "fairness" is the difference between the
+maximum and minimum number of operations completed by all N CPUs.
+Another metric of fairness is the variance or standard deviation of
+the number of completed operations per processor; this can be viewed
+by changing the "fairness" variable in gen_charts.
+
+For a qualitative view of the difference between two architectures,
+look at charts/cmp_*.gif.
+
+
+ADDING A NEW OPERATION TO THE BENCHMARK
+
+Let's say you wanted to add an operation called "myop" to the
+benchmark.  Following these steps should suffice to add a simple
+assembly operation.  Anything more complicated is left as an exercise
+for the reader.  I apologize in advance for some of the code you'll
+have to deal with.
+
+1. In lat_op.c, "Operation definitions" section, add the following
+prototypes (macros):
+
+    decl_op_init(myop);
+    decl_op(myop);
+
+2. In lat_op.c, "Operation definitions" section, add the following to
+the "ops" array:
+
+    ops_op(myop),
+
+3. In lat_op.c, "Operation routines" section, add the following code:
+
+    decl_op_init(myop)
+    {
+       /* ... myop initialization code goes here ... */
+    }
+
+    void use_myop_asm(volatile uint64_t *sharedp, uint64_t *failp,
+                      uint64_t *sucp,
+                      uint64_t *work_ticks, volatile uint64_t *counterp);
+
+    decl_op(myop)
+    {
+        use_myop_asm(sharedp, &this_thread->fops, &this_thread->nops,
+               this_thread->work_ticks_jittered, counter);
+    }
+
+4. For the operation routine, you'll probably want to add some
+assembly code to lat_op_asm.s.  Something like the following should
+do:
+
+    LEAF(use_myop_asm)
+        .set noreorder
+
+        TIMING_BEGIN
+
+	/* ... myop assembly code here ... */
+
+        TIMING_END
+
+        .set reorder
+        END(use_myop_asm)
+
+(Note that copying and modifying use_fetch_add_asm is probably your
+best bet for correctness.)
+
+Recompiling at this point should provide you with an executable which
+can handle "myop", e.g. "go -o myop ..." will run with your operation.
+
+To perform a full run of the benchmark for some set of datapoints, edit
+the config file (copy config.example if necessary) and add "myop" to
+the "ops" variable, then run the benchmark as above (see ``RUNNING THE
+BENCHMARK'').
+
+gen_charts, etc. should work with your new operation's data.
+
+
+ADDING A NEW VISUALIZATION METRIC TO THE BENCHMARK
+
+All of the metrics for visualization are loosly defined in gen_charts.
+
+Let's assume that you wanted to visualize the maximum number of failed
+store conditionals normalized to the 1 processor case.  Adding the
+following line to the ``METRICS FOR VISUALIZATION'' section of
+gen_charts would work:
+
+	$gen -t "$dirbase $test failure ratio" -d $dir/*/$test \
+		-n fops max \
+		> $charts/${dirbase}_${test}_failure_ratio.txt
+
+After adding that line to gen_charts, the rest of the graph generation
+code should oblige and generate 3D graphs for you.
+
+Run "procs_vs_workload -h" for more information on the flags which can
+be applied when generating charts.

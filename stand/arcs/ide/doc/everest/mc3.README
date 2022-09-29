@@ -1,0 +1,310 @@
+MC3 IDE Guide
+-------------
+
+1. boot ide
+
+2. The default report level is 2. Set the report level by typing the following:
+	report=#
+
+	level 5 : debugging messages displayed. Don't need this much detail.
+	level 4 : prints out memory locations as they are written. Will 
+		  slow down testing time.
+	level 3 : prints out 1-line functional descriptions within tests. This
+		  is probably the most useful level for general use.
+	level 2 : prints out only errors and titles.
+	level 1 : prints out only titles and pass/fail.
+
+	level n will print out all messages for level n and below.
+
+3. Quickmode. You set quick mode like this:
+
+	qmode on | off
+
+	For the memory tests, quick mode will test every nth byte instead of
+	every byte, where n varies from 96 to 7680 depending upon the test.
+	The goal in quick mode is to test 16GB in about 10 minutes-- and this
+	is accomplished by testing every nth byte. n varies depending upon
+	how fast or slow a test was timed to run. 
+
+4. continue-on-error. You set this mode like this:
+
+	c_on_error on | off
+
+	For the memory tests, this will continue the test even when an error
+	has been encountered. Normally, the tests will stop after the first
+	error.
+
+5. memall and memfast. These are 2 defined commands. Each can be run in quick
+	mode or in normal mode. The command, memall, will take a lot longer
+	to run than the command, memfast. Running in normal mode also takes
+	much longer than running in quick mode. 
+
+	memall: mem2, mem3, mem4, mem5, mem7, mem8, mem9, mem10, mem13, mem16
+	memfast: mem3, mem5, mem8, mem9, mem10, mem16
+
+6. There are currently 18 memory commands, mem1-mem18. They are detailed 
+	below:
+
+
+-----------------------------------------------------------------------------
+mem1 - Read the mc3 configuration registers (real fast)
+
+The following registers are probed:
+
+	reg  test description
+	---  -----------------------------------------------------
+	00 Read the BankEnable
+	01 Read BoardType
+	02 Read RevLevel
+	03 Read AccessControl: endianness, subBlockOrder, ebus=64bitsOrNot
+	04 Read MemoryErrorInterrupt 	
+	05 Read EBUSErrorInterrupt
+	06 Read BIST result 
+	07 Read DRSC timeout
+	0a Read LeafControlEnable
+	Read leaf regs 10-24, 30-33 (leaf0), 50-64, 70-73 (leaf1)
+
+mem1 is very similar to mem14 which is the pod-mode dmc command.
+
+-----------------------------------------------------------------------------
+mem2 - Memory sockets connection test (similar to IP17's mem1) (real fast)
+
+The memory sockets connection test writes patterns to the first 2Kbytes
+of each configured leaf and then reads them back. By writing 2Kbytes,
+all simms are ensured of being written to regardless of the interleaving factor
+specified. 
+
+If the pattern read back does not match, the socket is assumed to have a
+connection problem.
+
+Possible error:
+
+0303003: Addr: 0x%llx, Expected: 0x%x, Actual: 0x%x
+
+-----------------------------------------------------------------------------
+mem3 - Walking address test (similar to IP17's mem2) (real fast)
+
+This is a traditional test that checks for shorts and opens on the address
+lines. Address lines that are greater or equal to the most significant
+address lines of the memory bounds are not tested.  Testing is done by byte
+read/writes from first_address up to last_address.
+
+Possible errors:
+
+0301002: CPU interrupt during memory write to 0x%llx
+030300a: Addr: 0x%llx, Expected: 0x%x, Actual: 0x%x
+030300b: Address line 0x%x might be bad
+
+-----------------------------------------------------------------------------
+mem4 - Write/read data patterns (similar to IP17's mem3) (slow)
+
+This test does word read/writes of all-1's and all-0's patterns.
+It shows if all addresses appear to be writable, and that all bits may
+be set to both 1 and 0.  However, it provides no address error or
+adjacent-bits-shorted detection. The flow is as follows:
+
+(w0), u(r0,w1), d(r1,w5a), u(r5a,ra5), d(ra5) -- word and byte
+(read as: write 0 to all locations, read 0 and write 1 to all locations in 
+ascending order, read 1 
+and write 5a to all locations in descending order, read 5a and write a5 to 
+all locations in 
+ascending order, read a5 from all locations in descending order)
+
+Possible error:
+
+0303009: Addr: 0x%llx, Expected: 0x%x, Actual: 0x%x
+
+-----------------------------------------------------------------------------
+mem5 - Address in address memory test (slow)
+
+This is a traditional, hueristic, rule-of-thumb, "address-in-address"
+memory test.  It also puts the complement of the address in the address,
+and makes passes in both ascending and descending addressing order.
+There are both full memory store then check passes, as well as read-
+after-write passes (with complementing). 
+
+Possible error:
+
+0303001: Addr: 0x%llx, Expected: 0x%x, Actual: 0x%x
+
+-----------------------------------------------------------------------------
+mem6 - walking 1/0 memory test (very slow)
+
+Another traditional test - walking 1's and walking 0's through memory.
+This is a whole-memory test that is very good at shaking out shorted
+data bits, but provides little protection for addressing errors.
+
+Possible error:
+
+0303008: Addr: 0x%llx, Expected: 0x%x, Actual: 0x%x
+
+-----------------------------------------------------------------------------
+mem7 - MarchX  (slow)
+
+Described in van de Goor's book, "Testing Semiconductor Memories" and has the
+following flow:
+
+(w0), u(r0,w1), d(r1,w0), (r0) 
+
+Will detect address decoder faults, stuck-at-faults, transition faults, 
+coupling faults, and inversion coupling faults(see van de Goor for definitions)
+
+Possible error:
+
+0303004: Addr: 0x%llx, Expected: 0x%x, Actual: 0x%x
+
+-----------------------------------------------------------------------------
+mem8 - MarchY (slow)
+
+Described in van de Goor's book, "Testing Semiconductor Memories" and has the
+following flow:
+
+(w0), u(r0,w1,r1), d(r1,w0,r0), (r0)
+
+Will detect address decoder faults, stuck-at-faults, transition faults, 
+coupling faults, and linked transition faults(see van de Goor for definitions)
+
+Possible error:
+
+0303005: Addr: 0x%llx, Expected: 0x%x, Actual: 0x%x
+
+-----------------------------------------------------------------------------
+mem9 - Memory with ecc test (similar to IP17's mem6) (slow)
+
+This test  writes to memory via uncached space and reads back through
+cached space (ECC exceptions enabled). Although it provides a simple
+level of ECC checking, its main function is to verify that cached and
+uncached memory addresses are accessing the same area of physical
+memory.  The test values used are address-in-address and inverted address-
+in-address patterns, so a certain amount of address uniqueness checking
+is done as well.
+
+Possible error:
+
+0303006: Addr: 0x%llx, Expected: 0x%x, Actual: 0x%x
+
+-----------------------------------------------------------------------------
+mem10 - Cache write-through memory test (similar to IP17's mem9)(slow)
+
+This is a traditional, hueristic, rule-of-thumb, "address-in-address"
+memory test.  It also puts the complement of the address in the address,
+making passes in ascending order only. All of memory is stored and then
+checked.  All reads and writes are made through K0 seg, so the the reads
+and writes are cached. However, since the size of main memory exceeds
+the cache sizes, all data will be written to main memory and then read
+back.
+This is not a particularly thorough test, and it depends upon a good
+cache to function correctly, but it is fast, at least compared to the
+other full-memory tests.
+
+Possible errors:
+
+0301002: CPU interrupt during memory write to 0x%llx
+0303002: Addr: 0x%llx, Expected: 0x%x, Actual: 0x%x
+
+-----------------------------------------------------------------------------
+mem11 - User-specified patter/location write/read test(similar to IP17's mem7)
+
+type "mem11" without any arguments to see the usage.
+Usage: mem11 [-b|h|w] [-r] [-l] [-c] [-v 0xpattern] RANGE
+
+This test allows the technician to fill a range of memory with a specified
+test value and read it back, done as a series of byte (-b), half-word (-h),
+or word (-w) writes and reads.  If the -v option is not used to select the
+test pattern, an address-in-address pattern is used instead. (-r) will do read
+only and will not do any writes. (-l) will loop forever. (-c) will run in
+cached memory space - the default is to run in uncached space.
+
+Possible errors:
+
+0301002: CPU interrupt during memory write to 0x%llx
+0303007: Virtual Addr: 0x%x, Expected: 0x%x, Actual: 0x%x
+
+-----------------------------------------------------------------------------
+mem12 - Decode a bad address into slot, leaf, bank, simm
+
+Usage: mem12 [-a 0xaddress] [-b xxxxx] [-s x]
+           -b expects a hex number showing which bits are bad.
+              e.g. If bits 0 and 2 are bad, enter: -b 0x5
+           -s 1, 2, or 4 for byte, half-word or word
+           -b defaults to 0x0 and -s defaults to 4
+
+        For example, to decode address 0x4000 with bad bits 0 and 2 and it's 
+	a word, type:
+
+        mem12 -a 0x4000 -b 0x5 -s 4
+
+-----------------------------------------------------------------------------
+mem13 - byte read / write (slow: 15 minutes/32 MBytes)
+
+mem13 does byte read/writes in the same fashion as mem4. The tests were 
+separated out since the byte read/writes take a long time.
+
+Possible errors:
+
+030300f: Addr: 0x%x, Expected: 0x%x, Actual: 0x%x
+
+-----------------------------------------------------------------------------
+mem14 - Read the mc3 config register
+
+This is the same as the dmc command from pod mode. See also mem1
+
+-----------------------------------------------------------------------------
+mem15 - Double word MarchY pattern test (4 min / 128 MB)
+
+Same as mem8 but does double word writes/reads instead of word writes/reads.
+
+Possible errors:
+
+0303010: Addr: 0x%x, Expected: 0x%x, Actual: 0x%x
+
+-----------------------------------------------------------------------------
+mem16 - Knaizuk Hartmann Memory Test (3 min/ 128 MB)
+
+This algorithm is used to perform a fast but non-exhaustive memory test.
+It will test a memory subsystem for stuck-at faults in both the address
+lines as well as the data locations. The algorithm breaks up the memory
+to be tested into 3 partitions. Partition 0 consists of memory locations
+0, 3, 6, ... partition 1 consists of memory locations 1, 4, 7, ... and
+partition 2 consists of locations 2, 5, 8, ... .  The partitions are filled
+with either an all ones pattern or an all zeros pattern. By varying the
+order in which the partitions are filled and then checked, this algorithm
+manages to check all combinations of possible stuck at faults.
+
+Possible errors:
+
+0303011: Virtual Addr: 0x%x, Expected: 0x%x, Actual: 0x%x
+
+-----------------------------------------------------------------------------
+mem17 - Three Bit Memory Test (12 min/ 128 MB)
+
+This algorithm is designed as a pattern sensitivity test. The intent is to 
+surround a given cell of memory on both sides with cells in the opposite
+state. To do all possible combinations of ones surrounding zeros, and zeros
+surrounding ones, it is necessary to run six patterns. The test writes all
+of memory from low address to high address memory, then reads back the data
+from low to high.
+
+Possible Error:
+
+Test Error 1 (or 2 or 3)
+Failing address %x
+expected %x, actual %x, Xor %x
+
+-----------------------------------------------------------------------------
+mem18 - Double Word Knaizuk Hartmann Memory Test (1 1/2 min/ 128 MB)
+
+Same as test 16 except memory reads and writes are done in 64 bits at a time
+using the store/load double word instruction.
+
+Possible errors:
+
+0303011: Virtual Addr: 0x%x, Expected: 0x%x, Actual: 0x%x
+
+-----------------------------------------------------------------------------
+ena_bnk, dis_bnk - enable / disable one bank at a time
+
+Interactively asks the user for slot, leaf, and bank to act on. Do not run 
+dis_bnk unless you know unless you know what you are doing. Otherwise, you
+will most likely hang the system.
+-----------------------------------------------------------------------------

@@ -1,0 +1,226 @@
+#ident "ide/godzilla/x_test/README file: Revision: 1.1 $"
+
+	Xtalk/widget tests
+	==================
+
+11-11-96 preamble: I don't think these were ever run as the hardware was 
+too delayed. Consider this a *dead* directory.
+
+
+I/ USING A NEW BOARD DESIGN WITH HEART/MEMORY/R10K
+==================================================
+(removed as we decided to go ahead with the Linc based card;
+it can be recovered from earlier versions)
+
+
+
+II/ USING AN EXISTING BOARD DESIGN BASED ON LINC IC
+===================================================
+
+
+Objective:
+----------
+Use boards to test the xtalk connection, the arbitration mechanism
+and evaluate the xtalk bus and crossbow arbitration performances
+for only 8 bit transfers.
+Transfers can be set-up between test boards or between test boards and ip30
+main memory.
+
+
+Hardware:
+---------
+The tests uses a product test board, based on using the Linc IC and 
+taking advantage of its 2 DMA engines.
+Actually 3 boards use this chip: ATM, HIPPI, and digital video (last).
+The difference between these boards resides in what's connected 
+to the CPCI side of Linc.
+Linc is expected to be available late May.
+Software for HIPPI is being developed with the help of simulators.
+Each board has *two* Linc IC's connected to bridge (one for receive, 
+one for xmit) that can be both configured for receive and xmit, 
+hence generating double the traffic at that widget link (2x90-100MB/sec).
+
+As many boards as there are available Xtalk slots can be plugged
+in and tested simultaneously.
+Each board basically has 1 bridge, and 2 complete Linc circuits 
+(1 R4k + 4-64MB memory + Linc).
+Each Linc has 2 DMA engines that can be programmed by the host through
+Xbow with PIO writes to xfer data from/to memory to/from another peer.
+ 
+Prefetching must be set on each Linc card bridge.
+
+Linc spec at;
+	http://www-ssd/doc/chips/linc/linc.book.html
+
+
+Software:
+---------
+Each board runs its own prom (Tom Skibo) for power-up and initialization:
+I don't believe we need to modify it, unless we want for instance to avoid
+a PIO write for each page to minimize overhead.
+The source for the LINC PROM is in:
+	florida.engr:/disk2/skibo/linc/lincprom
+
+Besides, there are four pieces of software we still need to worry about:
+- ide [anouchka]: I plan to first write the xbow utilities, 
+		then the test sequence.
+- unix [stchang]: the HIPPI driver could be used as is but may not 
+			be ready much before FCS (Sept 96)
+- prom [stojanof]: minor T5 (the master) prom code changes to 
+		make sure the link card(s) came up
+
+As software is developped, we may be able to use the hcmd buffer to 
+program the card for our own purpose (ready in June??): 
+at first, direct DMA programming is enough (however there won't be any
+error recovery as there is no intr handler).
+
+The host fills the Linc Buffer with data (faster at 64 bits, 
+vs 32 bits from PCI side).
+
+
+Initialization:
+---------------
+The Linc boards comes up (with its own R4k's and Flash Prom).
+Its status can be polled by the host like any PCI device.
+
+The host comes up independently.
+
+
+Shared code between ide and unix:
+---------------------------------
+Mostly low level modules. For example:
+	- setup of the arbitration situation (how many widgets at
+		what arbitration level etc.)
+	- setup of what performance data is to be collected
+	- setup of a xfer
+	- verification of data
+	- extraction of the performance data
+	- etc.
+All software in kudzu tree, in the stand-alone area for now:
+	stand/arcs/ide/godzilla/x_test
+
+
+They can both use the heart timer to work within a "window":
+	1/ set-up xfer parameters
+	2/ send a "go" & reset timer (or take note of it)
+	3/ take a snapshot after a certain time has elapsed
+		and/or when the xfers are completed or exceed
+		their bandwidth allocation.
+
+They also share the firmware code running in the Linc boards.
+
+
+Bring-up:
+---------
+Get one test board up first and debug data xfers between the card BUFMEM
+and the host memory. Then add another card and implement 
+peer-to-peer xfers.
+
+
+
+III/ STATUS & SUMMARY, as of 4 April 1996
+=========================================
+
+hardware
+--------
+hippi card with 1 bridge and 2 Linc chips.
+At least one board is allocated to us: should be powered-up in NSD on June 1.
+
+
+how much of Chuck's code can be lifted?
+---------------------------------------
+we could use some of their software: the prom at least.
+
+from
+platte.asd:/view/narad_platte_vu/sn0/sn0_src/verif/diags/hub/asm/linc_sys (or
+the latest software he has):
+- init routine for the Linc card (bridge_init, linc_init)
+- some functions:
+	rand (to generate random data),
+	compare to compare the data after it has been through the xbow and back
+
+On the card, we can use the "standard" firmware at first.
+
+The card DMA programming could be inspired from whatever C.Narad is doing too.
+
+
+contacts in NSD
+----------------
+- Thomas Skibo (skibo): firmware (start-up prom)
+- Chuck Narad (narad@asd): system
+- Jim Pinkerton (jimp): card higher level firmware
+- Ken Powell (kenp): hardware
+
+
+software I have written
+-----------------------
+in ide tree for now, in stand/arcs/ide/godzilla/x_test directory
+
+xbow_arb.c: actual C code
+d_x_test.h: header file
+test_xbow_arb.c: only to test out xbow_arb.c.
+		it shows how the input parameters must first be set-up.
+
+functions that ide or unix can call:
+	xbow_perf_mon_set: to set what's to be monitored
+	xbow_arb_set: to set the xbow arbitration
+	xbow_perf_results: to get the performance results
+These can be shared by ide and Unix.
+
+
+what still needs to be done for the ide/stress/mfg test
+-------------------------------------------------------
+This code is currently part of ide but could be stand-alone
+(only needs some i/o utilities).
+
+code the following sequence:
+0- initialization: enable prefetching on Hippi card bridge,
+	call bridge_init and linc_init (Chuck's)
+1- write block of random data in main memory
+	(use "rand" to generate random patterns)
+2- set-up the xbow arbitration and performance registers
+	(are done/debugged)
+3- program the DMA engine to xfer from main memory to the card's BUFMEM memory
+4- do a "go" to the DMA engine
+5- wait for the "DMA xfer done"
+6- verify data integrity (use compare, from linc_sys.c)
+7- collect performance data (module is done/debugged)
+
+next levels of complexity:
+- program xfers on both DMA engines of the Hippi card
+- use 2 Hippi cards
+
+
+questions and answers:
+----------------------
+1/ How does the host know that it is a Hippi card that is connected at that
+widget?
+
+xtalk cards are identified via a serial PROM on the bridge that carries
+board ID info.  This tells us everything we need to know
+about the card.
+
+2/ how much firmware on the hippi card is needed?
+
+We may not have to have any firmware at all.  All the DMA engines in the
+LINC are accessible through the PPCI.  We could just leave the R4650 in
+reset mode and program the DMA engines (and all the other LINC registers
+for that matter) directly from the host with PIO writes.
+Refer to the Linc specs about DMA.
+
+
+open questions
+--------------
+1/ development environment:
+
+if we used sable, all we'd need as a Hippi card model is a range of R/W memory
+for DMA programming and a "DMA xfer complete" feature. There may be a model
+already (see jimp).
+
+2/ hardware:
+
+ultimately and as soon as the software is running on one card, we'll need a
+second one to do simultaneous xfers between widgets.
+Also, I suppose George and Steve will share the bring-up hardware.
+
+

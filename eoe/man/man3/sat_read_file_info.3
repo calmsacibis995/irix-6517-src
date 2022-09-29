@@ -1,0 +1,184 @@
+'\"macro stdmacro
+.if n .pH g3C.sat_eventtostr
+.nr X
+.if \nX=0 .ds x} SAT_READ_FILE_INFO 3C "" "\&"
+.if \nX=1 .ds x} SAT_READ_FILE_INFO 3C ""
+.if \nX=2 .ds x} SAT_READ_FILE_INFO 3C "" "\&"
+.if \nX=3 .ds x} SAT_READ_FILE_INFO "" "" "\&"
+.TH \*(x}
+.SH NAME
+sat_read_file_info, sat_write_file_info, sat_free_file_info \- Portable interfaces to read audit file headers
+.SH SYNOPSIS
+.B #include <sat.h>
+.HP
+.B int sat_read_file_info (FILE *in, FILE *out,
+.B struct sat_file_info *fheader, int mask);
+.HP
+.B int sat_write_file_info (FILE *out,
+.B struct sat_file_info *fheader);
+.HP
+.B void sat_free_file_info (struct sat_file_info *fheader);
+.br
+.SH DESCRIPTION
+.PP
+.B sat_read_file_info
+reads an audit file header into a convenient struct
+for examining its contents.  Translation from older versions of audit
+files is handled transparently by the library routines.  The file header
+is read from file descriptor
+.I in
+and processed into the 
+.I fheader
+struct.  If
+.I out
+is non-NULL, the data read from
+.I in
+is written back to
+.IR out .
+The data written is the disk image, not a processed struct.
+.PP
+The
+.B sat_file_info
+structure pointed to by fheader includes the following fields:
+.PP
+.RS
+.nf
+.ft 3
+.ta 8n 28n 36n
+.nf
+int	sat_major;	/* version of audit data */
+int	sat_minor;
+time_t	sat_start_time;	/* time header written */
+time_t	sat_stop_time;	/* time file closed */
+long	sat_host_id;	/* host id */
+int	sat_mac_enabled;	/* boolean: ignore mac fields? */
+char	*sat_timezone;	/* "TZ=(timezone)" */
+char	*sat_hostname;	/* hostname */
+char	*sat_domainname;	/* domainname */
+int	sat_fhdrsize;	/* no. of bytes in disk image */
+char	*sat_buffer;	/* buffer w/disk image of header */
+int	sat_user_entries;	/* number of sat_list_ent structs */
+int	sat_group_entries;	/* in the user, group, and */
+int	sat_host_entries;	/* the hostid <-> name list */
+struct sat_list_ent **sat_users;	/* user entries */
+struct sat_list_ent **sat_groups;	/* group entries */
+struct sat_list_ent **sat_hosts;	/* hostid entries */
+.ft 1
+.fi
+.RE
+.PP
+Due to the format that the file header is read from disk, several fields
+in the file header require extra computation and memory.  To allow the
+user to select only the fields they are interested in, there is a
+.I mask
+which specifies which fields to include.  These are:
+.PP
+.RS
+.IP SFI_NONE 15
+Include none of the extra fields.
+.IP SFI_TIMEZONE 15
+Include sat_timezone from the file header.
+.IP SFI_HOSTNAME 15
+Include sat_hostname from the file header.
+.IP SFI_DOMNAME 15
+Include sat_domainname from the file header.
+.IP SFI_USERS 15
+Include an array of sat_list_ent structs containing user name <-> user id
+mappings.
+.IP SFI_GROUPS 15
+Above, for group name <-> group id mappings.
+.IP SFI_HOSTS 15
+Above, for host name <-> host id mappings.
+.IP SFI_BUFFER 15
+Include the original disk image of the file header.
+.IP SFI_ALL 15
+Include everything.
+.RE
+.PP
+Note that the timezone field has TZ= prepended to make a call to 
+.BR putenv (3C).
+If this is not the intended use of the string, remember to account for the
+extra three characters.
+.PP
+The user and group lists in particular require a fair amount of
+computation and memory allocation to provide.  If a field is not
+requested in the mask, the value in fheader will be NULL.  To specify
+combinations of the above masks, simply "or" them together, like so:
+.PP
+.RS
+.B (SFI_TIMEZONE | SFI_HOSTNAME | SFI_DOMNAME)
+.RE
+.PP
+There are three ways to write out a file header that has been read in.
+The first and easiest is to specify a file descriptor
+.I out
+in the
+.B sat_read_file_info
+call.  If output is not required, use NULL for this
+value.  The second method is to ask for the disk image using
+.B SFI_BUFFER
+in the mask.  When output is desired, use
+.BR fwrite (3C)
+to write the contents of
+.B sat_buffer
+to disk.  The length of the data in
+.B sat_buffer
+is in
+.BR sat_fhdrsize .
+The third method is to call
+.BR sat_write_file_info ,
+which is more computationally expensive, and can only be used for the most
+current file version.  Calling
+.B sat_write_file_info
+is only advisable if some data in the header has been changed.
+.PP
+.B sat_free_file_info
+is used to free any data that
+.B sat_read_file_info
+allocated while constructing a
+.B sat_file_info
+struct.  It does not free
+the struct itself, only certain fields within the struct.  To make sure
+the struct isn't used afterwards, it is zeroed after all the fields
+are freed.
+.PP
+.SH DIAGNOSTICS
+.B sat_read_file_info
+returns
+.B SFI_OKAY
+on success,
+.B SFI_WARNING
+if there was no file header to be read, or
+.B SFI_ERROR
+if any errors were detected.
+.PP
+.BR sat_write_file_info
+returns
+.B SFI_OKAY
+on success, or
+.B SFI_ERROR
+if any errors were detected.
+.PP
+Error messages are also written to stderr.  If an error occurrs, it may
+be useful to check
+.BR feof (3S)
+and
+.BR ferror (3S)
+on the file descriptors for further diagnostics.
+.PP
+.SH NOTE
+If
+.I out
+is specified to
+.BR sat_read_file_info ,
+no checks are done on the write performed.  It is recommended that the user
+check
+.BR ferror (3S)
+on the file descriptor to make sure it was written successfully.  Output
+error checking is performed for
+.BR sat_write_file_info .
+.PP
+.SH SEE ALSO
+.BR fopen "(3S), " fclose "(3S), " feof "(3S), " ferror (3S),
+.BR sat_read_header_info "(3C), " sat_free_header_info (3C),
+.BR sat_intrp_pathname (3C).

@@ -1,0 +1,985 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	vmAttDlg
+# Version:	$Revision: 1.9 $
+# Synopsis:	Encapsulates the dialog that allows the user to attach a
+#		plex/ve to a volume or a ve to a stand-alone plex.
+# Functions:	vmAtt:realize
+#		vmAtt:manage
+#		vmAtt:fill
+#		vmAtt:getData
+#		vmAtt:chkData
+#		vmAtt:_create
+#		vmAtt:_setMode
+#		vmAtt:_dialogCb
+#		vmAtt:_accept
+#		vmAtt:_doAccept
+#		vmAtt:_cancel
+#		vmAtt:_subvCb
+#		vmAtt:_textFieldCb
+#		vmAtt:_attachObjCb
+#		vmAtt:_attachLocCb
+#		vmAtt:_graphicSelect
+#		vmAtt:_refreshCombos
+#		vmAtt:_startDrop
+#		vmAtt:_doTransfer
+#%COMMENT_END
+
+global	G_data
+if {! [info exists G_data(source,vmPlxGraphPnl)]} {
+	source $G_data(sourcedir)/vmPlxGraphPnl
+	set G_data(source,vmPlxGraphPnl) true
+}
+if {! [info exists G_data(source,vmPlxSumPnl)]} {
+	source $G_data(sourcedir)/vmPlxSumPnl
+	set G_data(source,vmPlxSumPnl) true
+}
+if {! [info exists G_data(source,vmVolSumPnl)]} {
+	source $G_data(sourcedir)/vmVolSumPnl
+	set G_data(source,vmVolSumPnl) true
+}
+
+#########################################
+#		Public			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vmAtt:realize
+# Synopsis:	Creates an instance of the dialog.  On the first call, any
+#		class-wide data is initialized.  If an instance of this
+#		dialog already exists for the given handle, no action is taken.
+# Arguments:	- handle	An identifier that is used as a key for storing
+#				(and later retrieving) the created widgets and
+#				any instance specific data.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc vmAtt:realize { handle parent } \
+{
+	global		_GW_att _GD_att
+
+	####	One time initialization
+	if {! [info exists _GD_att(initialized)]} {
+		####	Make sure we don't go through this again
+		set _GD_att(initialized) true
+
+		set _GD_att(buttons)		{accept cancel help}
+		set _GD_att(labels)		{XFS_HOST XLV_VOL_NAME}
+		set _GD_att(subvs)		{data log rt}
+		set _GD_att(type)		{plex ve}
+		set _GD_att(texts)		{plex ve}
+		set _GD_att(ATTACH_OBJ,opts)	{plex ve}
+		set _GD_att(ATTACH_LOC,opts)	{last before}
+	}
+
+	if {! [info exists _GW_att($handle,dialog)]} {
+		set _GD_att($handle,confirm) 	false
+		trace variable _GD_att($handle,confirm) w vmAtt:_doAccept
+
+		set _GD_att($handle,ATTACH_OBJ,val) plex
+		set _GD_att($handle,ATTACH_LOC,val) last
+
+		set _GD_att($handle,mode) ""
+		set _GD_att($handle,obj,class) ""
+		set _GD_att($handle,obj,hfn) ""
+		set _GD_att($handle,obj,hpd) ""
+		set _GD_att($handle,obj,nm) ""
+		set _GD_att($handle,obj,type) ""
+
+		set _GD_att($handle,type) data
+
+		set _GW_att($handle,dialog) [vmAtt:_create $handle $parent]
+		set item plex
+		$_GW_att($handle,$item)-label getValues \
+				-labelString _GD_att($item,baselabel)
+
+		####    This must happen after the dialog is realized
+		$_GW_att($handle,dialog) realizeWidget
+		$_GW_att($handle,dialog) getValues -height height -width width
+		set gw(current) [plxGrph:getWidth $handle current]
+		set gw(desired) [plxGrph:getWidth $handle desired]
+		plxGrph:setWidth $handle $gw(desired)
+		set width [expr $width + ($gw(desired) - $gw(current))]
+
+		.$_GW_att($handle,dialog) setValues \
+				-minHeight [expr $height + 20] \
+				-minWidth $width
+
+		$_GW_att($handle,buttons) getValues -height height
+		$_GW_att($handle,buttons) setValues \
+				-paneMinimum $height \
+				-paneMaximum $height
+
+		####    Register for Drag and Drop
+		$_GW_att($handle,dialog) dropSiteRegister -dropProc \
+				"vmAtt:_startDrop $handle %dragContext \
+						$_GW_att($handle,dialog)" \
+				-numImportTargets 1 \
+				-importTargets "COMPOUND_TEXT"
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	vmAtt:manage
+# Synopsis:	Manages an instance of the dialog and re-fetches the list
+#		of stand-alone plexes/ves.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vmAtt:manage { handle } \
+{
+	global	_GW_att _GD_att
+
+	if {[info exists _GW_att($handle,dialog)]} {
+		vmAtt:_attachObjCb $handle $_GD_att($handle,ATTACH_OBJ,val)
+		$_GW_att($handle,dialog) manageChild
+		$_GW_att($handle,ATTACH_OBJ) processTraversal current
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	vmAtt:fill
+# Synopsis:	Validates that the object that this dialog is to operate on
+#		is either a volume or a plex.  It then gathers information
+#		about the object and displays that information in the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vmAtt:fill { handle obj_list } \
+{
+	global		_GW_att _GD_att _GD_resources
+
+	set obj [lindex $obj_list 0]
+	obj:parse $obj o_class o_host o_nm o_type
+
+	####
+	####	Validate the object
+	####
+	if {$o_class != "VOL"} {
+		em:simpleMsg $handle error \
+		"Only volumes or plexes are valid for the attach operation."
+		return 0
+	} elseif {$o_host == "_TEMPLATE_"} {
+		em:simpleMsg $handle error \
+		"Templates cannot be used for the attach operation."
+		return 0
+	} elseif {$o_type == "VE"} {
+		em:simpleMsg $handle error \
+		"Only volumes or plexes are valid for the attach operation."
+		return 0
+	}
+
+	####
+	####	Get the information for the object
+	####
+	if {[catch {set objdata [xlvCmd objInfo $obj]} error]} {
+		if {$o_type == "VOL"} {
+			set str volume
+		} else {
+			set str plex
+		}
+		regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		em:storeMsg $handle warning \
+			"Could not get $str data for $o_nm.\n\t$nerror"
+		return 0
+	}
+
+	if {[catch {set synopsis [xlvCmd synopsis $obj]} error]} {
+		if {$o_type == "VOL"} {
+			set str volume
+		} else {
+			set str plex
+		}
+		regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		em:storeMsg $handle warning \
+			"Could not get $str data for $o_nm.\n\t$nerror"
+		return 0
+	}
+	if {[llength $synopsis] == 1} {
+		set synopsis [lindex $synopsis 0]
+	}
+
+	####
+	####	Set global variables
+	####
+	if {[hu:getIpAddress $o_host hfn hpd hip _GD_resources(hostsFile)]} {
+		set o_host $hfn
+	}
+	set curr_host $_GD_att($handle,obj,hfn)
+	set _GD_att($handle,obj) $obj
+	set _GD_att($handle,obj,class) $o_class
+	set _GD_att($handle,obj,hfn) $hfn
+	set _GD_att($handle,obj,hpd) $hpd
+	set _GD_att($handle,obj,nm) $o_nm
+	set _GD_att($handle,obj,type) $o_type
+
+	####
+	####	Fill in the dialog
+	####
+	vmAtt:_refreshCombos $handle $_GD_att($handle,obj,hfn)
+
+	vmAtt:_setMode $handle $o_type
+	vmAtt:_attachObjCb $handle $_GD_att($handle,ATTACH_OBJ,val)
+
+	$_GW_att($handle,XFS_HOST) setValues \
+			-labelString $hpd
+	$_GW_att($handle,XLV_VOL_NAME) setValues \
+			-labelString $o_nm
+
+	foreach item $_GD_att(texts) {
+		$_GW_att($handle,$item) setString ""
+	}
+	plxGrph:deselect $handle
+
+	####	Fill in the summary and graphic panels
+	set s_plexes [lassign $synopsis s_name s_type]
+	set _GD_att($handle,data,plexes) ""
+	set _GD_att($handle,log,plexes) ""
+	set _GD_att($handle,rt,plexes) ""
+	set _GD_att($handle,plex,plexes) ""
+	foreach item $s_plexes {
+		lappend _GD_att($handle,[lindex $item 0],plexes) $item
+	}
+	
+	if {$o_type == "VOL"} {
+		volSum:setData $handle $synopsis [split $objdata \n]
+		vmAtt:_subvCb $handle $_GD_att($handle,type) true
+	} else {
+		plxSum:setData $handle $synopsis [split $objdata \n]
+		plxGrph:fillPlexes $handle $_GD_att($handle,plex,plexes) blocks
+	}
+
+	return 1
+}
+
+#%COMMENT_BEGIN
+# Function:	vmAtt:getData
+# Synopsis:	Reads the data from the dialog and stores it in keyword/value
+#		pair format.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- data		A reference to a variable in which to store
+#				the data.
+#		- check		An optional parameter that indicates whether
+#				or not to check the data for completeness.
+#				(default value: true)
+#%COMMENT_END
+proc vmAtt:getData { handle data {check true} } \
+{
+	global		_GW_att _GD_att
+	upvar $data	dat
+
+	if {$check} {
+		if {! [vmAtt:chkData $handle]} {
+			return 0
+		}
+	}
+
+	if {$_GD_att($handle,mode) == "vol"} {
+		lappend dat SVOL:$_GD_att($handle,type)
+
+		set item ATTACH_LOC
+		if {[$_GW_att($handle,$item-om) isSensitive]} {
+			lappend dat LOCATION:$_GD_att($handle,ATTACH_LOC,val)
+		}
+
+		if {[$_GW_att($handle,plex) isSensitive]} {
+			set val [$_GW_att($handle,plex) getString]
+			if {$val != ""} {
+				lappend dat PLEX:$val
+			}
+		}
+	}
+
+	####	The type of the object that we are attaching
+	lappend dat ATTACH_TYPE:[string toupper $_GD_att($handle,ATTACH_OBJ,val)]
+
+	set nm [combo:getValue $_GW_att($handle,ATTACH_OBJ)]
+	lappend dat NAME:$nm
+
+	if {[$_GW_att($handle,ve) isSensitive]} {
+		set val [$_GW_att($handle,ve) getString]
+		if {$val != ""} {
+			lappend dat VE:$val
+		}
+	}
+
+	set _GD_att($handle,attach,obj) [obj:unparse \
+			VOL \
+			$_GD_att($handle,obj,hfn) \
+			$nm \
+			[string toupper $_GD_att($handle,ATTACH_OBJ,val)]]
+
+	return 1
+}
+
+#%COMMENT_BEGIN
+# Function:	vmAtt:chkData
+# Synopsis:	Ensures that the entered data is valid and complete.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vmAtt:chkData { handle } \
+{
+	global		_GW_att _GD_att
+	set rval	1
+
+	foreach item $_GD_att(texts) {
+		set data($item) [$_GW_att($handle,$item) getString]
+	}
+	set item ATTACH_OBJ
+	set data($item) [combo:getValue $_GW_att($handle,$item)]
+
+	if {$data($item) == ""} {
+		$_GW_att($handle,$item-om) getValues -labelString s
+		em:storeMsg $handle error "\"$s\" is a required field."
+		set rval 0
+	}
+
+	foreach item $_GD_att(texts) {
+	    if {[$_GW_att($handle,$item) isSensitive] == "true" && \
+		[$_GW_att($handle,$item) isManaged] == "true"} {
+		if {[$_GW_att($handle,$item) getString] == ""} {
+		    $_GW_att($handle,$item)-label getValues -labelString s
+		    em:storeMsg $handle error "\"$s\" is a required field."
+		    set rval 0
+		}
+	    }
+	}
+
+	if {$rval == 0} {
+		return $rval
+	}
+
+	if {$_GD_att($handle,ATTACH_LOC,val) != "last" && \
+	    $_GD_att($handle,ATTACH_OBJ,val) != "plex"} {
+	    if {$_GD_att($handle,mode) == "vol" && \
+		! ($data(plex) == "" || $data(ve) == "")} {
+		if {! [plxGrph:validSelection $handle $data(plex) $data(ve)]} {
+		    em:storeMsg $handle error \
+		    "Plex \"$data(plex)\" VE \"$data(ve)\" does not exist."
+		    set rval 0
+		}
+	    } elseif {$data(ve) != ""} {
+		if {! [plxGrph:validSelection $handle 0 $data(ve)]} {
+		    em:storeMsg $handle error "VE \"$data(ve)\" does not exist."
+		    set rval 0
+		}
+	    }
+	}
+
+	if {! $rval} {
+		em:setMessageString $handle "Unable to execute attach."
+	}
+
+	return $rval
+}
+
+#########################################
+#		Private			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vmAtt:_create
+# Synopsis:	Creates an instance of the dialog.
+# Arguments:	- handle	The identifier for the new instance.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc vmAtt:_create { handle parent } \
+{
+	global		_GW_att _GD_att
+	set name	vmAtt
+
+	set dialog [xmFormDialog $parent.$name]
+	set pane [xmPanedWindow $dialog.$handle \
+			-sashWidth 1 \
+			-sashHeight 1 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form]
+
+	set form1 [xmForm $pane.form]
+	set form2 [xmForm $form1.form2 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_none \
+			-bottomAttachment attach_form]
+	set plxpnl [plxGrph:realize $handle $form1]
+	$plxpnl setValues \
+			-topAttachment attach_form \
+			-leftAttachment attach_widget \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form \
+			-leftWidget $form2
+	plxGrph:registerPlexAction $handle vmAtt:_graphicSelect
+	plxGrph:registerVeAction $handle vmAtt:_graphicSelect
+
+	set grid1 [sgiGrid $form2.grid1 -numRows 2 -numColumns 2 \
+			-defaultSpacing 2 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none \
+			-leftOffset 5 \
+			-rightOffset 5]
+
+	set form2a [xmForm $form2.form2a \
+			-topAttachment attach_widget \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none \
+			-topWidget $grid1 \
+			-topOffset 10]
+
+	set _GW_att($handle,volsum) [volSum:realize $handle $form2a]
+	$_GW_att($handle,volsum) setValues \
+			-mappedWhenManaged false \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none
+	foreach item $_GD_att(subvs) {
+		volSum:addSubvTbCallback $handle $item vmAtt:_subvCb
+	}
+	set _GW_att($handle,plxsum) [plxSum:realize $handle $form2a]
+	$_GW_att($handle,plxsum) setValues \
+			-mappedWhenManaged false \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_none \
+			-bottomAttachment attach_none \
+			-leftOffset 20
+
+	set grid2 [sgiGrid $form2.grid2 managed -numRows 4 -numColumns 2 \
+			-defaultSpacing 2 \
+			-topAttachment attach_widget \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none \
+			-topWidget $form2a \
+			-topOffset 20 \
+			-leftOffset 5 \
+			-rightOffset 5]
+	set row 0
+	foreach item $_GD_att(labels) {
+		xmLabel $grid1.$item-label managed \
+				-column 0 -row $row \
+				-alignment alignment_beginning
+		set _GW_att($handle,$item) [xmLabel $grid1.$item managed \
+				-column 1 -row $row \
+				-alignment alignment_beginning]
+		
+		incr row
+	}
+
+	set row 0; set item ATTACH_OBJ
+	set _GW_att($handle,$item-pd) [xmPulldownMenu $grid2.$item-pd]
+	foreach opt $_GD_att($item,opts) {
+		set pb [xmPushButton \
+				 $_GW_att($handle,$item-pd).$opt \
+				 managed \
+				-marginWidth 0 \
+				-marginHeight 0]
+		$pb activateCallback "vmAtt:_attachObjCb $handle $opt"
+	}
+	set _GW_att($handle,$item-om) [xmOptionMenu $grid2.$item-om \
+			 managed \
+			-row $row -column 0 \
+			-marginWidth 0 \
+			-marginHeight 0 \
+			-subMenuId $_GW_att($handle,$item-pd)]
+	set _GW_att($handle,$item) [dtDropDownComboBox $grid2.$item managed \
+			-row $row -column 1 \
+			-maxLength 32]
+	$_GW_att($handle,$item).Edit modifyVerifyCallback \
+			"xlv:validNameCb %doit %ptr %length"
+
+	incr row; set item ATTACH_LOC
+	xmLabel $grid2.$item-om-label managed \
+			-row $row -column 0 \
+			-alignment alignment_beginning
+	set _GW_att($handle,$item-pd) [xmPulldownMenu $grid2.$item-pd]
+	foreach opt $_GD_att($item,opts) {
+		set pb [xmPushButton \
+				 $_GW_att($handle,$item-pd).$opt \
+				 managed \
+				-marginWidth 0 \
+				-marginHeight 0]
+		$pb activateCallback "vmAtt:_attachLocCb $handle $opt"
+	}
+	set _GW_att($handle,$item-om) [xmOptionMenu $grid2.$item-om \
+			 managed \
+			-row $row -column 1 \
+			-spacing 0 \
+			-marginWidth 0 \
+			-marginHeight 0 \
+			-subMenuId $_GW_att($handle,$item-pd)]
+
+	incr row
+	foreach item $_GD_att(texts) {
+		xmLabel $grid2.$item-label managed \
+				-row $row -column 0 \
+				-alignment alignment_beginning
+		set _GW_att($handle,$item) [xmTextField $grid2.$item managed \
+				-row $row -column 1 \
+				-resizeHorizontal false \
+				-columns 3 -maxLength 3 \
+				-marginHeight 3]
+		$_GW_att($handle,$item) activateCallback \
+				"vmAtt:_textFieldCb $handle"
+		$_GW_att($handle,$item) losingFocusCallback \
+				"vmAtt:_textFieldCb $handle"
+		incr row
+	}
+	$_GW_att($handle,plex) modifyVerifyCallback \
+		"tfu:onlyIntsCb %w %ptr %length %startPos %endPos %doit 0 3"
+	$_GW_att($handle,ve) modifyVerifyCallback \
+		"tfu:onlyIntsCb %w %ptr %length %startPos %endPos %doit 0 127"
+
+	####	Dialog buttons
+	set _GW_att($handle,buttons) \
+		 [xfs:createDialogButtons $pane $_GD_att(buttons)]
+	foreach i $_GD_att(buttons) {
+		$_GW_att($handle,buttons).$i \
+				activateCallback "vmAtt:_dialogCb $handle $i"
+	}
+
+	$plxpnl manageChild
+	$grid1 manageChild
+	$_GW_att($handle,volsum) manageChild
+	$_GW_att($handle,plxsum) manageChild
+	$form2a manageChild
+	$grid2 manageChild
+
+	$_GW_att($handle,buttons) manageChild
+	$form2 manageChild
+	$form1 manageChild
+	$pane manageChild
+
+	$grid1 columnResizable 0 false
+	$grid2 columnResizable 0 false
+
+	return $dialog
+}
+
+#%COMMENT_BEGIN
+# Function:	vmAtt:_setMode
+# Synopsis:	Sets the mode for the dialog depending upon the type of object
+#		being operated on (volume or plex).
+# Arguments:	- handle	The identifier for the new instance.
+#		- mode		The type of object.  Valid values are the
+#				strings "plex" or "vol".
+#%COMMENT_END
+proc vmAtt:_setMode { handle mode } \
+{
+	global		_GW_att _GD_att
+
+	set mode [string tolower $mode]
+
+	if {$mode == $_GD_att($handle,mode)} {
+		return
+	}
+	set _GD_att($handle,mode) $mode
+
+	if {$mode == "plex"} {
+		$_GW_att($handle,volsum) unmapWidget
+		$_GW_att($handle,plxsum) mapWidget
+
+		$_GW_att($handle,XLV_VOL_NAME)-label setValues \
+				-labelString "Plex Name:"
+
+		$_GW_att($handle,plex)-label unmanageChild
+		$_GW_att($handle,plex) unmanageChild
+		$_GW_att($handle,ve)-label setValues -row 2
+		$_GW_att($handle,ve) setValues -row 2
+
+		set item ATTACH_OBJ
+		$_GW_att($handle,$item-om) setValues \
+				-menuHistory $_GW_att($handle,$item-pd).ve
+		$_GW_att($handle,$item-pd).plex setSensitive false
+		vmAtt:_attachObjCb $handle ve
+
+	} elseif {$mode == "vol"} {
+		$_GW_att($handle,plxsum) unmapWidget
+		$_GW_att($handle,volsum) mapWidget
+
+		$_GW_att($handle,XLV_VOL_NAME)-label setValues \
+				-labelString "Volume Name:"
+
+		$_GW_att($handle,ve)-label setValues -row 3
+		$_GW_att($handle,ve) setValues -row 3
+		$_GW_att($handle,plex)-label manageChild
+		$_GW_att($handle,plex) manageChild
+
+		$_GW_att($handle,ATTACH_OBJ-pd).plex setSensitive true
+	}
+}
+
+#########################################
+#	Dialog Callbacks		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vmAtt:_dialogCb
+# Synopsis:	The callback function defined on the dialog buttons.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- op		Indicates which button the user selected.
+#%COMMENT_END
+proc vmAtt:_dialogCb { handle op } \
+{
+	global		_GW_att _GD_att
+
+	switch $op {
+		accept { vmAtt:_accept $handle }
+		cancel { vmAtt:_cancel $handle }
+		help   { sgiHelpMsg $_GW_att($handle,dialog) }
+	}
+}
+
+#########################################
+#	Callback Utilities		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vmAtt:_accept
+# Synopsis:	This is called when the user presses the "Accept" dialog
+#		button.  It creates a confirmation dialog (if one does not
+#		already exist), fills the dialog, and stores the data gathered
+#		from the "Attach" dialog for use after the user has confirmed
+#		the action.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vmAtt:_accept { handle } \
+{
+	global  	_GW_att _GD_att _GD_vmmCfrm _GD_resources
+
+	if {! [vmAtt:getData $handle data]} {
+		return
+	}
+
+	if {! [info exists _GW_att($handle,confirm)]} {
+		set _GW_att($handle,confirm) [xmQuestionDialog \
+				$_GW_att($handle,dialog).confirm \
+				-messageAlignment alignment_beginning \
+				-okLabelString Yes \
+				-cancelLabelString No \
+				-dialogStyle dialog_full_application_modal \
+				-noResize true]
+		$_GW_att($handle,confirm) okCallback \
+			"set _GD_att($handle,confirm) true"
+		$_GW_att($handle,confirm) cancelCallback \
+			"set _GD_att($handle,confirm) false"
+	}
+
+	set idx [lsearch $data "NAME:*"]
+	set nm [lindex [split [lindex $data $idx] :] 1]
+	set idx [lsearch $data "PLEX:*"]
+	set plex [lindex [split [lindex $data $idx] :] 1]
+	set idx [lsearch $data "VE:*"]
+	if {$idx != -1} {
+		set ve [lindex [split [lindex $data $idx] :] 1]
+	} else {
+		set ve ""
+	}
+
+	if {$_GD_att($handle,mode) == "vol"} {
+		if {$_GD_att($handle,ATTACH_OBJ,val) == "plex"} {
+			set msg [format $_GD_vmmCfrm(vattach,msg,plex) \
+				$_GD_att($handle,obj,hpd) \
+				$_GD_att($handle,obj,nm) \
+				$_GD_resources($_GD_att($handle,type),string) \
+				$nm]
+		} else {
+			set msg [format $_GD_vmmCfrm(vattach,msg,ve) \
+				$_GD_att($handle,obj,hpd) \
+				$_GD_att($handle,obj,nm) \
+				$_GD_resources($_GD_att($handle,type),string) \
+				$nm $plex]
+		}
+	} else {
+		set msg [format $_GD_vmmCfrm(pattach,msg,ve) \
+			$_GD_att($handle,obj,hpd) \
+			$_GD_att($handle,obj,nm) \
+			$nm]
+	}
+
+	$_GW_att($handle,confirm) setValues -messageString $msg
+
+	$_GW_att($handle,confirm) manageChild
+
+	set _GD_att(confirm,handle) $handle
+	set _GD_att(confirm,data) $data
+}
+
+#%COMMENT_BEGIN
+# Function:	vmAtt:_doAccept
+# Synopsis:	This is called when the user confirms the accept action.  It
+#		is called by setting a trace on a variable which is updated
+#		when the user presses a dialog button in the confirmation
+#		dialog.  If the user accepts the action, the attach is
+#		performed.
+#		The icon representing the object that was attached is removed
+#		from the icon panel.
+# Arguments:	- vname		The name of the traced variable.
+#		- element	The variables element name if it is an array
+#				element, otherwise an empty string.
+#		-op		"r" for read, "w" for write, "u" for unset.
+#%COMMENT_END
+proc vmAtt:_doAccept { vname element op} \
+{
+	global	_GW_att _GD_att
+
+	if {$element != ""} {
+		set vname ${vname}($element)
+	}
+	upvar $vname x
+
+	if {$x} {
+	    set handle	$_GD_att(confirm,handle)
+	    set data	$_GD_att(confirm,data)
+
+	    $_GW_att($handle,dialog) defineCursor watch
+	    $_GW_att($handle,confirm) defineCursor watch
+
+	    if {[catch {set ec [xlvCmd attach $_GD_att($handle,obj) \
+					[join $data \n]]} error]} {
+
+		regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		em:setMessageString $handle "Unable to execute attach."
+		em:storeMsg $handle error \
+			"Unable to attach object to [obj:getName $_GD_att($handle,obj)].\n\t$nerror"
+	    } else {
+		####	Remove the newly attached object
+		####	from the icon panel
+		vmSrch:delObjects vm [list $_GD_att($handle,attach,obj)]
+		$_GW_att($handle,dialog) unmanageChild
+	    }
+	    $_GW_att($handle,confirm) defineCursor ""
+	    $_GW_att($handle,dialog) defineCursor ""
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	vmAtt:_cancel
+# Synopsis:	This is called when the user presses the "Cancel" dialog
+#		button.  It currently unmanages the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vmAtt:_cancel { handle } \
+{
+	global	_GW_att; $_GW_att($handle,dialog) unmanageChild
+}
+
+#########################################
+#	Other Callbacks			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vmAtt:_subvCb
+# Synopsis:	This is called when the user presses one of the toggle buttons
+#		in the volume summary representing a sub-volume.  It updates
+#		the sub-volume graphic with the information from the chosen
+#		sub-volume.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- type		Identifies the selected subvolume.
+#		- set		The value of the XmNset resource.
+#		- w		An optional parameter that is the widget id of
+#				the selected toggle button.
+#%COMMENT_END
+proc vmAtt:_subvCb { handle type set {w ""} } \
+{
+	global	_GW_att _GD_att _GD_resources
+
+	if {$set == "true" } {
+		set item plex
+		set lbl "$_GD_resources($type,string) $_GD_att($item,baselabel)"
+		$_GW_att($handle,$item)-label setValues -labelString $lbl
+
+		plxGrph:fillPlexes $handle $_GD_att($handle,$type,plexes) blocks
+
+		set _GD_att($handle,type) $type
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	vmAtt:_textFieldCb
+# Synopsis:	This is called when the user (a) enters a <CR> in one of the
+#		text fields or (b) the focus leaves one of the text fields.
+#		It is used to ensure that the highlighted plex/ve in the
+#		sub-volume/plex graphic remains consistent with what is entered
+#		in the text fields.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vmAtt:_textFieldCb { handle } \
+{
+	global	_GW_att
+
+	set plex [$_GW_att($handle,plex) getString]
+	set ve [$_GW_att($handle,ve) getString]
+
+	if {! [cequal $plex ""]} { set plex [int $plex] }
+	if {! [cequal $ve ""]} { set ve [int $ve] }
+
+	if {$plex == ""} {
+		plxGrph:deselect $handle
+	} elseif {$ve == ""} {
+		plxGrph:selectPlex $handle $plex
+	} else {
+		plxGrph:selectVe $handle $plex $ve
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	vmAtt:_attachObjCb
+# Synopsis:	This is called when the value of the "Attach" option menu
+#		is changed.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- opt		The new type of object that is to be attached
+#				(this is either "plex" or "ve").
+#%COMMENT_END
+proc vmAtt:_attachObjCb { handle opt } \
+{
+	global	_GW_att _GD_att
+
+	if {$opt == "plex"} {
+		set sensitive false
+	} else {
+		set sensitive true
+	}
+	combo:setItems $_GW_att($handle,ATTACH_OBJ) $_GD_att($handle,$opt,list)
+
+	$_GW_att($handle,ATTACH_LOC-om) setSensitive $sensitive
+	$_GW_att($handle,ATTACH_LOC-om)-label setSensitive $sensitive
+	$_GW_att($handle,plex) setSensitive $sensitive
+	$_GW_att($handle,plex)-label setSensitive $sensitive
+
+	if {$sensitive == "false" ||
+	    $_GD_att($handle,ATTACH_LOC,val) == "last"} {
+		set sensitive false
+	}
+	$_GW_att($handle,ve) setSensitive $sensitive
+	$_GW_att($handle,ve)-label setSensitive $sensitive
+
+	set _GD_att($handle,ATTACH_OBJ,val) $opt
+}
+
+#%COMMENT_BEGIN
+# Function:	vmAtt:_attachLocCb
+# Synopsis:	This is called when the value of the "Attach Location" option
+#		menu is changed.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- opt		The new type of object that is to be attached
+#				(this is either "last" or "before").
+#%COMMENT_END
+proc vmAtt:_attachLocCb { handle opt } \
+{
+	global	_GW_att _GD_att
+
+	if {$opt == "last"} {
+		set sensitive false
+	} else {
+		set sensitive true
+	}
+	$_GW_att($handle,ve) setSensitive $sensitive
+	$_GW_att($handle,ve)-label setSensitive $sensitive
+
+	set _GD_att($handle,ATTACH_LOC,val) $opt
+}
+
+#########################################
+#	Plex Graph Panel Actions	#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vmAtt:_graphicSelect
+# Synopsis:	This is called when a plex or ve is selected in the sub-volume/
+#		plex graphic.  It updates the text fields in the dialog to
+#		contain the information describing the selected item.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- plex		The number of the plex selected.
+#		- ve		An optional argument representing the number
+#				of the ve selected.
+#%COMMENT_END
+proc vmAtt:_graphicSelect { handle plex {ve ""} } \
+{
+	global	_GW_att
+
+	$_GW_att($handle,plex) setString $plex
+	$_GW_att($handle,ve) setString $ve
+}
+
+#########################################
+#	Miscellaneous			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vmAtt:_refreshCombos
+# Synopsis:	Fetches the list of stand-alone plexes/ves from the named host.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- host		The host on which to search for plexes/ves.
+#%COMMENT_END
+proc vmAtt:_refreshCombos { handle host } \
+{
+	global		_GW_att _GD_att
+
+	set xobjs(PLEX) ""; set xobjs(VE) ""; set xobjs(VOL) ""
+	foreach item [vmSrch:getObjList vm] {
+		obj:parse $item o_class o_host o_nm o_type
+		lappend xobjs($o_type) $o_nm
+	}
+	set _GD_att($handle,plex,list) [lsort $xobjs(PLEX)]
+	set _GD_att($handle,ve,list) [lsort $xobjs(VE)]
+}
+
+#########################################
+#	Drag and Drop			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vmAtt:_startDrop
+# Synopsis:	This is called when icons are dropped on the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- dragContext	The Motif drag context widget id.
+#		- w		The widget id for the matrix.
+#%COMMENT_END
+proc vmAtt:_startDrop { handle dragContext w } \
+{
+	$dragContext dropTransferStart \
+		-dropTransfers {{COMPOUND_TEXT .vmAtt}} \
+		-numDropTransfers 1 \
+		-transferProc "vmAtt:_doTransfer $handle %closure {%value}"
+}
+
+#%COMMENT_BEGIN
+# Function:	vmAtt:_doTransfer
+# Synopsis:	The function that is called when the drop transfer is
+#		completed.  It converts the information to the proper internal
+#		format and then calls vmAtt:fill() to fill the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- destination	Unused
+#		- value		The data for the dropped objects.
+#%COMMENT_END
+proc vmAtt:_doTransfer { handle destination value } \
+{
+	if {! [ip:uniqueToObject [lindex $value 0] obj]} {
+	    set errmsg "An Illegal icon was dropped on this dialog."
+	} elseif {[llength $value] == 1} {
+	    if {! [obj:isXfsmObject [lindex $obj 0] VOL VOL] &&
+	        ! [obj:isXfsmObject [lindex $obj 0] VOL PLEX]} {
+		set errmsg "An Illegal icon was dropped on this dialog."
+	    } else {
+		set no_msg 1
+		set rval [vmAtt:fill $handle $obj]
+	    }   
+	}
+
+	if {! [info exists no_msg]} {
+	    set rval 0
+	    set msg "Only one volume/plex icon may be dropped on this dialog."
+	    if {[info exists errmsg]} {
+		set msg "$errmsg @n @n $msg"
+	    }
+	    em:simpleMsg $handle error $msg
+	}
+
+	return $rval
+}

@@ -1,0 +1,518 @@
+#!/bin/sh
+#
+# For PTG use ... run before p_finalize into kudzu source tree
+#
+# $Id: pre-checkin,v 1.8 1998/11/04 23:24:34 tes Exp $
+
+status=1
+tmp=/tmp/$$
+trap "rm -f $tmp.*; exit \$status" 0 1 2 3 15
+
+default_ans=false
+
+# Directories and Files
+#
+IRIX=irix/lib/libirixpmda
+IDB=irix/build/idb
+OURIDB=irix/lib/libirixpmda/irixidb
+PCP=eoe/cmd/pcp
+LIB=eoe/lib
+LIBS="$LIB/libpcp $LIB/libpcp_dev $LIB/libpcp_pmda"
+DIRS="$IRIX $PCP $LIBS"
+PCP_DIRS="$PCP $LIBS"
+IDB="irix/build/idb"
+PTOOLS=/usr/local/bin/ptools
+
+# Environment
+#
+DEFAULT_WORKAREA=/build/tes/kudzu
+DEFAULT_ROOT=/build/tes/kudzu/root_kudzu
+DEFAULT_TOOLROOT=/usr/dist/toolroots/kudzu/latest/ptoolroot
+
+# Utilities
+#
+TUPDATE=$PTOOLS/p_tupdate
+LIST=$PTOOLS/p_list
+CHECK=$PTOOLS/p_check
+
+
+_ans()
+{
+    if $default_ans
+    then
+	ans=""
+	echo ""
+    else
+	read ans </dev/tty
+    fi
+}
+
+_usage()
+{
+    echo "Usage: pre-checkin [options]"
+    echo "Options:"
+    echo "      -d      automatically take default responses to all questions"
+}
+
+
+_update_root()
+{
+    cd $WORKAREA
+    echo "p_tupdate? [y] \c"
+    _ans
+    case "$ans"
+    in
+	""|y)
+	    echo "> p_tupdate $PCP_DIRS"
+	    $TUPDATE $PCP_DIRS
+	    ;;
+    esac
+
+    rm -f $tmp.mod
+    rm -f $tmp.int
+    touch $tmp.mod
+    touch $tmp.int
+
+    for dir in $PCP_DIRS
+    do
+	$LIST -m $dir >> $tmp.mod
+	$LIST -i $dir >> $tmp.int
+    done
+
+    if [ -s $tmp.mod ]
+    then
+	echo "Modified files ..."
+	sed -e 's/^/    /' $tmp.mod
+    fi
+
+    if [ -s $tmp.int ]
+    then
+	echo "Integrate Files ..."
+	sed -e 's/^/    /' $tmp.int
+    fi
+
+    if [ -s $tmp.mod -o -s $tmp.int ]
+    then
+	echo "Continue? [n] \c"
+	_ans
+	case "$ans"
+	in
+	    ""|n)
+		exit
+		;;
+	    *)
+		;;
+	esac
+    fi
+
+    echo "make clobber? [y] \c"
+    _ans
+    case "$ans"
+    in
+    	""|y)
+    	    echo "make clobber: \c"
+
+	    for dir in $PCP_DIRS
+	    do
+	    	rm -f $tmp.make_root_clobber
+	    	cd $WORKAREA/$dir
+		echo "`basename $dir` \c"
+		if smake clobber > $tmp.make_root_clobber 2>&1
+		then
+		    :
+		else
+		    echo
+		    echo "Error: \"cd $dir; make clobber\" failed:"
+		    echo
+		    cat $tmp.make_root_clobber
+		    exit
+		fi
+	    done
+	    echo
+	    ;;
+	*)
+	    ;;
+    esac
+
+    echo "make headers: \c"
+
+    for dir in $PCP_DIRS
+    do
+	rm -f $tmp.make_root_headers
+	cd $WORKAREA/$dir
+	echo "`basename $dir` \c"
+	if smake headers > $tmp.make_root_headers 2>&1
+	then
+	    :
+	else
+	    echo
+	    echo "Error: \"cd $dir; make headers \" failed:"
+	    echo
+	    cat $tmp.make_root_headers
+	    exit
+	fi
+    done
+
+    echo
+    echo "make exports: \c"
+    
+    for dir in $LIBS $PCP
+    do
+	rm -f $tmp.make_root_exports
+	cd $WORKAREA/$dir
+	echo "`basename $dir` \c"
+	if smake exports > $tmp.make_root_exports 2>&1
+	then
+	    :
+	else
+	    echo
+	    echo "Error: \"cd $dir; make exports \" failed:"
+	    echo
+	    cat $tmp.make_root_exports
+	    exit
+	fi
+    done
+    echo 
+}
+
+_virgin_filter()
+{
+    sed \
+    	-e '/\.\/irixidb/d' \
+	-e '/Fake/d' \
+	-e '/\.dbpmdarc/d'
+}
+
+_modified_filter()
+{
+    sed \
+    	-e '/librarydefs/d'
+}
+
+_idb_filter()
+{
+    sed \
+    	-e '/MAN_PCP_EOE/d'
+}
+
+_strain_install()
+{
+    sed \
+    	-e '/etc\/install/d' \
+	-e '/.*pmda_version.*/d' \
+	-e '/usr\/sbin\/tlink/d' \
+	-e '/rm -f .*versiondefs$/d' \
+	-e '/ln -sf .*versiondefs$/d' \
+	-e '/cd help; .*/d' \
+	-e '/cd src; smake/d' \
+	-e '/cd libirixpmda_64; smake/d' \
+	-e '/cd libirixpmda_n32; smake/d' \
+	-e '/^--- /d' \
+	-e '/^[		]*$/d'
+}
+
+_convert_idb()
+{
+    sed -e 's/ *$//' \
+    | nawk '
+	{ save=""
+	  for (i=1; i <= NF; i++) {
+	    if (i == 6)
+		# strip eoe/ prefix
+		sub("^eoe/", "", $6)
+	    if ($i ~ /^PCP_EOE/)
+		save=$i
+	    else
+		printf "%s ", $i
+	  }
+	  printf "%s\n", save
+	}' \
+    | sort \
+    | nawk '
+BEGIN	{ first=1 }
+	{ same=1
+	  for (i=5; i<NF; i++) {
+	    if ($i != last[i]) same=0
+	    last[i] = $i
+	  }
+	  if (same) printf " %s", $NF
+	  else {
+	    if (first)
+		first = 0
+	    else
+		print ""
+	    printf $0
+	  }
+	}
+END	{ print "" }'
+}
+
+_check_idb()
+{
+    SRC=`cd ../..; /bin/pwd`
+    RAWIDB=$tmp.idb
+    export SRC RAWIDB
+    rm -f $RAWIDB
+    if smake install > $tmp.make_install 2>&1
+    then
+	_strain_install < $tmp.make_install > $tmp.strain
+	if [ -s $tmp.strain ]
+	then
+	    echo "Warning: non-install lines from \"make install\""
+	    cat $tmp.strain
+	fi
+    else
+	echo "Error: \"make install\" failed"
+	echo
+	cat $tmp.make_install
+	exit
+    fi
+    _convert_idb < $tmp.idb | sort > $tmp.our.idb
+
+    # check idbs
+    #
+    cd $WORKAREA
+    echo "> cd $WORKAREA; p_tupdate $IDB"
+    $TUPDATE $IDB > /dev/null 2>&1
+    if [ ! -f $IDB ]
+    then
+	echo "Error: cannot update \"$IDB\""
+	exit
+    fi
+    sed -n \
+	-e '/^#/d' \
+	-e '/PCP_EOE/p' $IDB \
+    | sort > $tmp.master.idb
+    
+    echo "--- Check dup PCP_EOE lines in $IDB \c"
+    uniq -c $tmp.master.idb | nawk '$1 > 1 { print $2 }' > $tmp.uniq
+    if [ -s $tmp.uniq ]
+    then
+	echo
+	echo "Error: duplicate lines:"
+	cat $tmp.uniq
+    else
+	echo "---"
+    fi
+
+    echo "--- Lines in Makefiles, not in $IDB \c"
+    comm -23 $tmp.our.idb $tmp.master.idb > $tmp.comm_23
+    if [ -s $tmp.comm_23 ]
+    then
+	echo
+	echo "Error: missing lines from $IDB"
+	cat $tmp.comm_23
+    else
+	echo "---"
+    fi
+
+    echo "--- Lines in $IDB, not in Makefiles \c"
+    comm -13 $tmp.our.idb $tmp.master.idb | _idb_filter > $tmp.comm_13
+    if [ -s $tmp.comm_13 ]
+    then
+	echo
+	echo "Error: extra lines in $IDB"
+	cat $tmp.comm_13
+    else
+	echo "---"
+    fi
+
+    echo "--- Save our idb lines in \"$OURIDB\" ---"
+    sort +4 -6 -u $tmp.our.idb > $OURIDB
+}
+
+_build_pmda()
+{
+    cd $WORKAREA
+    echo "p_tupdate? [y] \c"
+    _ans
+    case "$ans"
+    in
+	""|y)
+	    echo "> p_tupdate $IRIX"
+	    $TUPDATE $IRIX
+	    ;;
+    esac
+
+    cd $IRIX
+    echo "Remove trash? [y] \c"
+    _ans
+    case "$ans"
+    in
+    	""|y)
+	    if smake clobber > $tmp.clobber 2>&1
+	    then
+	    	:
+	    else
+	        echo
+		echo "Error: \"make clobber\" failed:"
+		echo
+		cat $tmp.clobber
+		exit
+	    fi
+	    $CHECK -s > $tmp.in
+	    if [ -s $tmp.in ]
+	    then
+	        p_purge -yiq < $tmp.in > $tmp.out 2>&1
+		if [ -s $tmp.out ]
+		then
+		    echo
+		    echo "Error: \"p_check -s | p_purge -yiq\" produced errors or warnings:"
+		    echo
+		    cat $tmp.out
+		    exit
+		fi
+	    fi
+	    ;;
+    esac
+
+    echo "Check for virgins? [y] \c"
+    _ans
+    case "$ans"
+    in
+    	""|y)
+	    $CHECK -w > $tmp.virgin 2>&1
+	    if [ -s $tmp.virgin ]
+	    then
+		_virgin_filter < $tmp.virgin > $tmp.virgin.filtered
+		if [ -s $tmp.virgin.filtered ]
+		then
+		    echo "Virgin files ..."
+		    fmt $tmp.virgin.filtered | sed -e 's/^/    /'
+		    echo "Continue? [y] \c"
+		    _ans
+		    case "$ans"
+		    in
+			n)
+			    exit
+			    ;;
+		    esac
+		fi
+	    fi
+    esac
+
+    echo "make default? [y] \c"
+    _ans
+    case "$ans"
+    in
+   	""|y)
+	    if smake default > $tmp.make_irix 2>&1
+	    then
+	    	:
+	    else
+	        echo "Error: \"make default\" failed:"
+		echo
+		cat $tmp.make_irix
+		exit
+	    fi
+	    ;;
+    esac
+
+    echo "make and check rawidb? [y] \c"
+    _ans
+    case "$ans"
+    in
+    	""|y)
+	    _check_idb
+	    ;;
+    esac
+}
+
+while getopts 'd?' c
+do
+    case $c
+    in
+	d)	# take defaults
+		default_ans=true
+		;;
+	\?)	_usage
+		exit
+		;;
+    esac
+done
+shift `expr $OPTIND - 1`
+
+HOME=`pwd`
+
+echo "=== Setup Environment ==="
+WORKAREA=${WORKAREA:-$DEFAULT_WORKAREA}
+echo "\$WORKAREA? [$WORKAREA] \c"
+_ans
+[ ! -z "$ans" ] && WORKAREA="$ans"
+ROOT=${ROOT:-$DEFAULT_ROOT}
+echo "\$ROOT? [$ROOT] \c"
+_ans
+[ ! -z "$ans" ] && ROOT="$ans"
+TOOLROOT=${TOOLROOT:-$DEFAULT_TOOLROOT}
+echo "\$TOOLROOT? [$TOOLROOT] \c"
+_ans
+[ ! -z "$ans" ] && TOOLROOT="$ans"
+
+export WORKAREA ROOT TOOLROOT
+cd $WORKAREA
+
+echo
+echo "=== Update ROOT ==="
+echo "Skip? [n] \c"
+_ans
+case "$ans"
+in
+    ""|n)
+    	_update_root
+    	;;
+esac
+
+echo
+echo "=== Build libirixpmda ==="
+echo "Skip? [n] \c"
+_ans
+case "$ans"
+in
+    ""|n)
+    	_build_pmda
+    	;;
+esac
+
+cd $IRIX
+echo "--- Fetal files \c"
+$LIST -f > $tmp.irix_fetal 2>&1
+if [ -s $tmp.irix_fetal ]
+then
+    echo
+    echo "Warning: fetal files"
+    sed -e 's/^/    /' $tmp.irix_fetal
+else
+    echo "---"
+fi
+
+echo "--- Modified files (ignoring librarydefs) \c"
+$LIST -m > $tmp.irix_mod 2>&1
+if [ -s $tmp.irix_mod ]
+then
+    _modified_filter < $tmp.irix_mod > $tmp.mod_filtered
+    if [ -s $tmp.mod_filtered ]
+    then
+	echo
+	echo "Warning: modified files"
+	sed -e 's/^/    /' $tmp.mod_filtered
+    else
+        echo "---"
+    fi
+else
+    echo "---"
+fi
+
+echo "--- Integrated files \c"
+$LIST -i > $tmp.irix_int 2>&1
+if [ -s $tmp.irix_int ]
+then
+    echo
+    echo "Warning: integrated files"
+    sed -e 's/^/    /' $tmp.irix_int
+else
+    echo "---"
+fi
+
+cd $HOME
+echo "Done"
+status=0

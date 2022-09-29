@@ -1,0 +1,145 @@
+#!/usr/bin/perl5
+#
+# This tests all the possible invocations of crontab
+#
+#
+$| = 1;
+
+# $user MUST be a valid user with a crontab and SHELL=/bin/sh
+$user = 'sys';
+$file = "crontab.test.$$";
+$crontab = './crontab';
+$tempfile = "crontab.tmp.$$";
+$ENV{'EDITOR'} = '/bin/ed';
+$ENV{'SHELL'} = '/bin/sh';
+$CRONDIR = '/usr/spool/cron/crontabs';
+
+chdir('/tmp') || die "cannot chdir /tmp: $!\n";
+
+open(CT, ">$file");
+print CT <<EOF;
+#
+# Just a dummy test file - nothing interesting
+#
+* * * * *	echo crontab test
+EOF
+close(CT);
+
+
+#
+# We have to run all these both as user and as root
+# After creating the test user
+#
+@cmds = (
+	#
+	# Triplets of strings:
+	#	1) Command to execute
+	#		2) Explanation to print to the user
+	#		3) Automatic test to verify that the command succeded
+	#
+	"$crontab < $file",
+		"read from stdin into {U}'s crontab",
+		"cmp $CRONDIR/{U} $file", 
+
+	"$crontab $file",
+		"copy $file into {U}'s crontab",
+		"cmp $CRONDIR/{U} $file",
+
+	"(echo q | $crontab -e) >/dev/null 2>&1",
+		"edit {U}'s crontab",
+		"ls -l $CRONDIR/{U} | grep '^-r' >/dev/null",
+
+	"$crontab -l >$tempfile",
+		"list user's crontab",
+		"cmp $CRONDIR/{U} $tempfile",
+
+	"$crontab -r",
+		"remove {U}'s crontab",
+		"perl -e 'exit(-e \"$CRONDIR/{U}\")'",
+
+	# -- su only
+	"$crontab -l $user >$tempfile",
+		"list $user's crontab (root or $user only)",
+		"grep $user $tempfile >/dev/null",
+
+	"(echo q | $crontab -e {U}) >/dev/null 2>&1",
+		"edit {U}'s crontab (root or {U} only)",
+		"ls -l $CRONDIR/{U} | grep '^-r' >/dev/null",
+
+	"$crontab -r {U}",
+		"remove {U}'s crontab (root or {U} only)",
+		"perl -e 'exit ((\"{U}\" eq \"root\" || \"{U}\" eq \"$user\") ? 0 : 1)'",
+
+	"$crontab -l diag >$tempfile 2>&1",
+		"list diag's crontab (root only)",
+		"grep diag $tempfile >/dev/null || grep 'authorized' $tempfile >/dev/null",
+
+	"$crontab diag gaga >$tempfile 2>&1",
+		"Too many args, should fail",
+		"grep 'proper usage' $tempfile >/dev/null",
+);
+
+if ($< != 0) {
+	die "$0: crontab test script must be run as root\n";
+}
+
+@save_cmds = @cmds;
+
+foreach $u ('root', $user) {
+    ($login,$pass,$uid,$gid) = getpwnam($u);
+    die "$u: no such user. you must create a user $u to run this test\n"
+	unless (!$login);
+
+    if ($u eq 'root') {
+	$prefix = $postfix = '';
+    } else {
+	$prefix = "su $user -c '";
+	$postfix = "'";
+    }
+
+    # save a copy of this user's crontab
+    $saved_ct = "crontab.$u.sav";
+    system("cp $CRONDIR/$u $saved_ct");
+    @cmds = @save_cmds;
+    while (@cmds) {
+	$cmd = shift(@cmds);
+	$cmd =~ s,{U},$u,g;
+	$expected = shift(@cmds);
+	$expected =~ s,{U},$u,g;
+	$checkok = shift(@cmds);
+	$checkok =~ s,{U},$u,g;
+	# print	"---\nUSER=$u\t CMD='$cmd'\n",
+	#	"Expect: $expected\n",
+	#	"Press [RETURN] to execute: ";
+	# <STDIN>;
+
+	$? = 0;
+	# if ($cmd =~ /\b-[el]\b/) {
+		# $postfix .= ' >$tempfile 2>&1';
+	# }
+	$newcmd = "$prefix$cmd$postfix";
+	system($newcmd);
+	$status = $?;
+	# print "Running test: $checkok\n";
+	$? = 0;
+	system("$checkok");
+	if ($?) {
+		print "--- FAILED Test:\n",
+			"\tUSER=$u\n",
+			"\tCMD='$newcmd'\n",
+			"\tExpect: $expected\n",
+			"\tTest: $checkok\n";
+		exit 1;
+		$failures++;
+	} else {
+		print "OK: $newcmd\n";
+		unlink($tempfile);
+	}
+	# restore user's crontab
+    	system("cp $saved_ct $CRONDIR/$u");
+    }
+}
+
+unlink($file);
+unlink($tempfile);
+exit $failures;

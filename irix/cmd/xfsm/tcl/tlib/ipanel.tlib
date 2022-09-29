@@ -1,0 +1,731 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	ipanel.tlib
+# Version:	$Revision: 1.8 $
+# Synopsis:	Functions used to create and interface with icon panels.
+# Packages:	IPanel-Base
+#		IPanel-Util
+#%COMMENT_END
+
+
+#%COMMENT_BEGIN
+# Package:	IPanel-Base
+# Functions:	ip:create
+#		ip:viewCb
+#		ip:registerMVC
+#		ip:getTemplateWid
+#		ip:_setOpt
+#		ip:_setStyle
+#		ip:_renameTemplate
+#
+# Function:	ip:create
+# Synopsis:	Creates a plethora of widgets including:
+#			+ A main icon panel
+#			+ A template icon panel
+#			+ A label/value pair for displaying the current hostname
+#			+ Toggle buttons for changing the icon panel style
+#			+ A toggle button for displaying the template icon panel
+#			+ A thumbwheel for controlling the size of the icons
+#			+ in the main icon panel
+#		In addition two popup menus may be created, one for the
+#		main icon panel and one for the template icon panel.
+#
+# Arguments:	- handle	An identifier that is used as a key for storing
+#				(and later retrieving) the created widgets.
+#		- parent	The parent widget for the created widgets.
+#				This is assumed to be a XmForm widget
+#		- style		The initial style for the icon panel.
+#		- po_panel	A reference to a variable in which to store
+#				the widget id of the popup menu for the
+#				main icon panel.
+#		- po_tmpl	A reference to a variable in which to store
+#				the widget id of the popup menu for the
+#				template icon panel.
+#		- showShelf	An optional argument that, if false, indicates
+#				that we should not manage the Shelf toggle
+#				button.
+#
+# Function:	ip:viewCb
+# Synopsis:	The callback function for the view toggle buttons.
+# Arguments:	- handle	Identifies which panel the action occured in.
+#		- set		Whether or not the toggle button was set.
+#		- item		Identifies the style that the toggle
+#				button represents.
+#
+# Function:	ip:registerMVC
+# Synopsis:	This is used to tie the toggle buttons in the icon panel
+#		area to the toggle buttons in the "View" pulldown menu
+#		of the XmMainWindow menu bar.
+# Arguments:	- handle	Identifies which panel the action occured in.
+#		- item		The string representing the style
+#		- control	The widget id for the toggle button that
+#				represents the "item" argument.
+#
+# Function:	ip:_setOpt
+# Synopsis:	Set the state of the template icon panel (managed or
+#		unmanaged) and modifies the state of the corresponding
+#		toggle button.
+# Arguments:	- handle	Identifies which panel the action occured in.
+#		- set		Whether or not the toggle button was set.
+#		- opt
+#
+# Function:	ip:_setStyle
+# Synopsis:	Sets the main icon panel to the desired style.
+# Arguments:	- handle	Identifies which panel the action occured in.
+#		- set		Whether or not the toggle button was set.
+#		- style		The desired style.
+#
+# Function:	ip:_renameTemplate
+# Synopsis:	Allows the templates to be renamed via the icon rename method.
+# Arguments:	- handle	Identifies which panel the action occured in.
+#		- panel		The widget id of the template icon panel.
+#%COMMENT_END
+
+#@package: IPanel-Base ip:create ip:viewCb ip:registerMVC ip:getTemplateWid
+
+#########################################
+#		Public			#
+#########################################
+proc ip:create { handle parent style po_panel po_tmpl {showShelf true} {noSort false} } \
+{
+	global	_GW_ip _GD_ip
+	upvar	$po_panel	pop
+	upvar	$po_tmpl	pot
+
+	####	Initialization
+	set _GD_ip(view,Icon) {
+			one_of_many,
+			/usr/include/X11/bitmaps/sgidesktop/iconicDirView.bm
+		}
+	set _GD_ip(view,List) {
+			one_of_many,
+			/usr/include/X11/bitmaps/sgidesktop/listDirView.bm
+		}
+	set _GD_ip(view,Column) {
+			one_of_many,
+			/usr/include/X11/bitmaps/sgidesktop/columnDirView.bm
+		}
+	set _GD_ip(view,Shelf) {
+			n_of_many,
+			/usr/include/X11/bitmaps/sgidesktop/shelf.bm
+		}
+
+
+	set _GD_ip(view,styles)	{Icon List Column}
+	set _GD_ip(view,opts)	{Shelf}
+
+	####	Host Label
+	xmLabel $parent.ipHost-label managed \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-leftOffset 26]
+	set _GW_ip($handle,ipHost) [xmLabel $parent.ipHost managed \
+			-labelString "" \
+			-topAttachment attach_form \
+			-leftAttachment attach_widget \
+			-leftWidget $parent.ipHost-label \
+			-leftOffset 10]
+
+	####	Icons
+	set rc [xmRowColumn $parent.rc managed \
+			-marginHeight 4 \
+			-marginWidth 0 \
+			-spacing 0 \
+			-orientation vertical \
+			-adjustLast false \
+			-adjustMargin false \
+			-isAligned false \
+			-packing pack_tight \
+			-topAttachment attach_widget \
+			-leftAttachment attach_form \
+			-topWidget $parent.ipHost-label]
+
+	foreach item $_GD_ip(view,styles) {
+		set _GW_ip($handle,btn,$item) [xmToggleButton $rc.view$item \
+				 managed \
+				-indicatorOn false \
+				-pixmapLocateHighlight true \
+				-shadowThickness 3 \
+				-highlightThickness 0 \
+				-marginWidth 2 \
+				-marginHeight 2 \
+				-labelType pixmap \
+				-labelPixmap [lindex $_GD_ip(view,$item) 1]]
+
+		ip:registerMVC $handle $item $_GW_ip($handle,btn,$item)
+	}
+	$_GW_ip($handle,btn,$style) setValues -set true
+
+	$parent getValues -background background
+	xmDrawingArea $rc.space1 managed -height 12 -background $background
+	
+	set item Shelf
+	set _GW_ip($handle,btn,$item) [xmToggleButton $rc.$item \
+			-indicatorOn false \
+			-pixmapLocateHighlight true \
+			-shadowThickness 3 \
+			-highlightThickness 0 \
+			-marginWidth 2 \
+			-marginHeight 2 \
+			-labelType pixmap \
+			-labelPixmap [lindex $_GD_ip(view,$item) 1]]
+	ip:registerMVC $handle $item $_GW_ip($handle,btn,$item)
+
+	$parent getValues -background background
+	xmDrawingArea $rc.space2 -height 12 -background $background
+
+	if {$showShelf} {
+		$_GW_ip($handle,btn,$item) manageChild
+		$rc.space2 manageChild
+	}
+
+	set _GW_ip($handle,fpanel) $parent.pane.panel
+	set _GW_ip($handle,ftmpl) $parent.pane.tmpl
+	set _GW_ip($handle,panel) $_GW_ip($handle,fpanel).panel
+	set _GW_ip($handle,tmpl) $_GW_ip($handle,ftmpl).panel
+
+	####	ThumbWheel
+	set item scale
+	set _GW_ip($handle,$item) [sgiThumbWheel $rc.$item managed \
+			-processingDirection max_on_top \
+			-minimum 2 \
+			-marginWidth 0 \
+			-marginHeight 0]
+	$_GW_ip($handle,$item) dragCallback \
+				"$_GW_ip($handle,panel) scale %value"
+	$_GW_ip($handle,$item) valueChangedCallback \
+				"$_GW_ip($handle,panel) scale %value"
+
+	####	Icon Panel
+	xmPanedWindow $parent.pane managed \
+			-allowResize true \
+			-topAttachment attach_widget \
+			-leftAttachment attach_widget \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form \
+			-topWidget $parent.ipHost-label \
+			-leftWidget $parent.rc
+
+	if {$pop != ""} {
+		set pop $_GW_ip($handle,fpanel).$pop
+		xmForm $_GW_ip($handle,fpanel) managed -translations "#augment \
+			<Btn3Down>: action(xfs:popupMenu %event $pop)"
+	} else {
+		xmForm $_GW_ip($handle,fpanel) managed
+	}
+	sgiPanel $_GW_ip($handle,panel) managed
+	if {$noSort} {
+		foreach item {Column List Icon} {
+			$_GW_ip($handle,panel) view $item
+			$_GW_ip($handle,panel) sortBy nothing
+		}
+	}
+	$_GW_ip($handle,panel) setValues \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form
+	$_GW_ip($handle,panel) view $style
+	$_GW_ip($handle,panel) renameable false
+
+	if {$pot != ""} {
+		set pot $_GW_ip($handle,ftmpl).$pot
+		xmForm $_GW_ip($handle,ftmpl) managed \
+			-height 125 \
+			-skipAdjust true \
+			-translations "#augment \
+				<Btn3Down>: action(xfs:popupMenu %event $pot)"
+	} else {
+		xmForm $_GW_ip($handle,ftmpl) -height 125 -skipAdjust true
+	}
+	sgiPanel $_GW_ip($handle,tmpl)
+	$_GW_ip($handle,tmpl) setValues \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form
+	$_GW_ip($handle,tmpl) view $style
+	$_GW_ip($handle,tmpl) renameable false
+
+	return $_GW_ip($handle,panel)
+}
+
+proc ip:viewCb { handle set item } \
+{
+	global	_GW_ip _GD_ip
+
+	if {[lsearch -exact $_GD_ip(view,opts) $item] != -1} {
+		ip:_setOpt $handle $set $item
+	} elseif {[lsearch -exact $_GD_ip(view,styles) $item] != -1} {
+		if {$set} {
+			ip:_setStyle $handle $set $item
+		} else {
+			####	Enforce radio behavior
+			foreach w $_GD_ip($handle,$item) {
+				$w setValues -set true
+			}
+		}
+	}
+}
+
+proc ip:registerMVC { handle item control } \
+{
+	global	_GD_ip
+
+	lappend _GD_ip($handle,$item) $control
+
+	$control valueChangedCallback "ip:viewCb $handle %set $item"
+}
+
+proc ip:getTemplateWid { handle } \
+{
+	global	_GW_ip; return $_GW_ip($handle,tmpl)
+}
+
+#########################################
+#		Private			#
+#########################################
+proc ip:_setOpt { handle set opt } \
+{
+	global	_GW_ip _GD_ip
+
+	foreach item $_GD_ip($handle,$opt) {
+		$item setValues -set $set
+	}
+
+	switch $opt {
+		Shelf {
+			if {$set} {
+				$_GW_ip($handle,ftmpl) manageChild
+			} else {
+				$_GW_ip($handle,ftmpl) unmanageChild
+			}
+		}
+	}
+}
+
+proc ip:_setStyle { handle set style } \
+{
+	global	_GW_ip _GD_ip
+
+	if {$set == "false" || ([info exists _GD_ip($handle,style)] && \
+				$_GD_ip($handle,style) == $style)} {
+		return
+	}
+
+	set _GD_ip($handle,style) $style
+	$_GW_ip($handle,panel) view $style
+	$_GW_ip($handle,tmpl) view $style
+
+	foreach s $_GD_ip(view,styles) {
+		if {$s == $style} {
+			set value true
+		} else {
+			set value false
+		}
+		if {[info exists _GD_ip($handle,$s)]} {
+			foreach item $_GD_ip($handle,$s) {
+				$item setValues -set $value
+			}
+		}
+	}
+}
+
+proc ip:_renameTemplate { handle panel } \
+{
+	set selected [$panel selection -encode]
+	set selected [$panel selection]
+	set new_name [$panel getRenameText]
+
+	if {(! [lempty $selected]) && (! [lempty $new_name])} {
+
+		set obj [lindex [lindex $selected 0] 0]
+		set old_name [obj:getName $obj]
+
+		if {$old_name != $new_name && \
+		    [tu:rename $obj $new_name newobj]} {
+if {0 == 0} {
+			$panel rename [list $obj] $new_name
+			$panel render
+} else {
+			$panel remove [list $obj]
+			ip:fillPanel $handle [list $newobj]
+}
+		}
+	}
+	return 1
+}
+#@packend
+
+
+#%COMMENT_BEGIN
+# Package:	IPanel-Util
+# Functions:	ip:setHostName
+#		ip:setObjDisplayName
+#		ip:fillPanel
+#		ip:remove
+#		ip:render
+#		ip:uniqueToObject
+#		ip:objectToUnique
+#		ip:uniqueName
+#		ip:encodeToObject
+#		ip:_mapObjectToIcon
+#		ip:_mapTemplateToIcon
+#		ip:_mapIconTypeToObject
+#
+# Function:	ip:setHostName
+# Synopsis:	Sets the value of the hostname widget label.
+# Arguments:	- handle	Identifies which panel the action occured in.
+#		- host		The value to be displayed as the current host.
+#
+# Function:	ip:setObjDisplayName
+# Synopsis:	Sets the "display name" for a given icon object.
+# Arguments:	- handle	Identifies which panel the action occured in.
+#		- obj		The object signature representing the icon
+#				whose display name is to be changed.
+#		- nm		The value of the new display name.
+#		- render	An optional argument that, if true, indicates
+#				that the render method should be called on the
+#				icon panel if the display name of the icon
+#				was successfully set.
+#
+# Function:	ip:fillPanel
+# Synopsis:	Adds a list of objects to the icon panel.
+# Arguments:	- handle	Identifies which panel the action occured in.
+#		- objs		A list of objects for which to create and
+#				display icons.
+#
+# Function:	ip:remove
+# Synopsis:	Removes a list of objects from the icon panel.
+# Arguments:	- handle	Identifies which panel the action occured in.
+#		- objs		A list of objects which are to be deleted
+#				from the icon panel.
+#
+# Function:	ip:render
+# Synopsis:	Calls the render method for the icon panel.
+# Arguments:	- handle	Identifies which panel the action occured in.
+#		- panel		An optional argument that, if true, indicates
+#				the render should be called for the main icon
+#				panel, and if false should be called for the
+#				template icon panel.
+#
+# Function:	ip:uniqueToObject
+# Synopsis:	Converts from the "UniqueName" format to the object signature
+#		format.
+# Arguments:	- unique_objs	A list of items in "UniqueName" format.
+#		- objs		A reference to a variable in which to store
+#				the list of converted objects.
+#
+# Function:	ip:objectToUnique
+# Synopsis:	Converts from the object signature format to the "UniqueName"
+#		format.
+# Arguments:	- xfs_objs	A list of objects.
+#		- unique_objs	A reference to a variable in which to store
+#				the list of converted objects.
+#
+# Function:	ip:uniqueName
+# Synopsis:	Extracts the full name from a desktop icon.
+# Arguments:	- signature	The icon signature.
+#
+# Function:	ip:encodeToObject
+# Synopsis:	Converts from the "encode" format used by icon panel icons to
+#		the object signature format.
+# Arguments:	- encode_objs	A list of encoded objects.
+#		- objs		A reference to a variable in which to store
+#				the list of converted objects.
+#
+# Function:	ip:_mapObjectToIcon
+# Synopsis:	Return the appropriate icon for a given an object class
+#		and an object type.
+# Arguments:	- class		The object class.
+#		- type		The object type.
+#
+# Function:	ip:_mapTemplateToIcon
+# Synopsis:	Return the appropriate icon for the template of a given
+#		an object class and an object type.
+# Arguments:	- class		The object class.
+#		- type		The object type.
+#
+# Function:	ip:_mapIconTypeToObject
+# Synopsis:	Return the appropriate icon for the template of a given
+#		an object class and an object type.
+# Arguments:	- icon_type	The type of the icon.
+#		- class		A reference to a variable in which to store
+#				the object class for given icon.
+#		- type		A reference to a variable in which to store
+#				the type for the given icon.
+#		- template	A reference to a variable in which to store
+#				a boolean value indicating whether or not
+#				the icon is for a template.
+#%COMMENT_END
+
+#@package: IPanel-Util	ip:setHostName ip:fillPanel ip:remove \
+	ip:uniqueToObject ip:objectToUnique ip:uniqueName ip:encodeToObject
+
+#########################################
+#		Public			#
+#########################################
+proc ip:setHostName { handle host } \
+{
+	global	_GW_ip
+
+	$_GW_ip($handle,ipHost) getValues -labelString current_host
+	if {! [cequal $host $current_host]} {
+		$_GW_ip($handle,ipHost) setValues -labelString $host
+	}
+}
+
+proc ip:setObjDisplayName { handle obj nm {render true} } \
+{
+	global	_GW_ip
+
+	ip:objectToUnique [list $obj] unique_objs
+
+	if {! [catch {set ec [$_GW_ip($handle,panel) rename \
+				[lindex $unique_objs 0] $nm]} error]} {
+		if {$render} {
+			$_GW_ip($handle,panel) render
+		}
+	}
+}
+
+proc ip:fillPanel { handle objs } \
+{
+	global	_GW_ip
+
+	foreach obj $objs {
+		obj:parse $obj class host name type
+		if {[obj:isXfsmTemplate $obj]} {
+			set icon [ip:_mapTemplateToIcon $class $type]
+			$_GW_ip($handle,tmpl) icon "Category:IconType \
+				    Name:$icon \
+				    DisplayName:\"$name\" \
+				    UniqueName:{$host*$class*$name*$type}"
+		} else {
+			####	TODO:	Move this "if" to fsSrchDlg
+			if {$class == "FS"} {
+				if {$type == "ignore"} {
+				    continue
+				} elseif {$type == "nfs"} {
+				    lassign [split $name :] h_fs n_fs
+				    set dname [hu:getHostPlusDom $h_fs]:$n_fs
+				} else {
+				    regsub -- "^/dev/" $name "" dname
+				}
+			} elseif {$class == "DISK"} {
+				regsub -- "^/dev/(rdsk|dsk)/" $name "" dname
+			} else {
+				set dname $name
+			}
+			set icon [ip:_mapObjectToIcon $class $type]
+			$_GW_ip($handle,panel) icon "Category:IconType \
+				     Name:$icon \
+				     DisplayName:\"$dname\" \
+				     UniqueName:{$host*$class*$name*$type}"
+		}
+	}
+
+	$_GW_ip($handle,panel) render
+	$_GW_ip($handle,tmpl) render
+}
+
+proc ip:remove { handle objs } \
+{
+	global	_GW_ip
+
+	ip:objectToUnique $objs unique
+	foreach item $unique {
+		$_GW_ip($handle,panel) remove $item
+	}
+	$_GW_ip($handle,panel) render
+}
+
+proc ip:render { handle {panel true} } \
+{
+	global	_GW_ip
+
+	if {$panel } {
+		$_GW_ip($handle,panel) render
+	} else {
+		$_GW_ip($handle,tmpl) render
+	}
+}
+
+proc ip:uniqueToObject { unique_objs objs } \
+{
+	upvar $objs	xfs_objs
+
+	set xfs_objs ""
+	foreach item $unique_objs {
+		if {[regsub -all -- {\*} $item " " obj]} {
+			lappend xfs_objs $obj
+		}
+	}
+
+	return 1
+}
+
+proc ip:objectToUnique { xfs_objs unique_objs } \
+{
+	upvar $unique_objs	objs
+
+	set objs ""
+	foreach item $xfs_objs {
+		obj:parse $item class host name type
+		lappend objs [format "{$host*$class*$name*$type}"]
+	}
+
+	return 1
+}
+
+proc ip:uniqueName { signature } \
+{
+	if {[set index [string first UniqueName: $signature]] > 0} {
+		if {[scan [crange $signature $index end] \
+		    "UniqueName:%s" name] > 0} {
+			return [string trim $name \}]
+		}
+	}
+	if {[set index [string first Name: $signature]] > 0} {
+		if {[scan [crange $signature $index end] "Name:%s" name] > 0} {
+			return [string trim $name \}]
+		}
+	}
+
+	return $signature
+}
+
+proc ip:encodeToObject { encode_objs objs } \
+{
+	upvar $objs	xfs_objs
+	set rval	1
+
+	set xfs_objs ""
+	foreach item $encode_objs {
+		set err 0
+		set idx [string first "Type:" $item]
+		if {$idx == -1} {
+			set err 1
+		} elseif {[scan [crange $item $idx end] \
+				"Type:%s %s" icon junk] == 0} {
+			set err 1
+		} elseif {! [ip:_mapIconTypeToObject $icon o_class o_type o_tmpl]} {
+			set err 1
+		}
+						
+		if {$err} {
+			set rval 0
+			continue
+		}
+
+		set idx [string first "UniqueName:" $item]
+		if {$idx == -1} {
+			set err 1
+		} elseif {[scan [crange $item $idx end] \
+					"UniqueName:{%s}" obj] == 0} {
+			set err 1
+		} elseif {[lassign [split [string trimright $obj \}] "*"] \
+				o_host x o_name type] != "" || $x == ""} {
+			set err 1
+		}
+		if {$o_type == "-"} {
+			set o_type $type
+		}
+
+		if {! $err} {
+			lappend xfs_objs "$o_host $o_class $o_name $o_type"
+		} else {
+			set rval 0
+		}
+	}
+
+	return $rval
+}
+
+#########################################
+#		Private			#
+#########################################
+proc ip:_mapObjectToIcon { class type } \
+{
+	set class [string toupper $class]
+	set type  [string toupper $type]
+
+	switch $class {
+		DISK	{ return XFSdisk }
+		FS	{ switch $type {
+				NFS	{ return XFSfilesystemRemote }
+				default	{ return XFSfilesystem }
+			}
+		}
+		VOL	{ switch $type {
+				VE	{ return XFSve }
+				PLEX	{ return XFSplex }
+				default	{ return XFSvolume }
+			}
+		}
+	}
+}
+
+proc ip:_mapTemplateToIcon { class type } \
+{
+	set class [string toupper $class]
+	set type  [string toupper $type]
+
+	switch $class {
+		DISK	{ return XFSdiskTemplate }
+		FS	{ switch $type {
+				NFS	{ return XFSfilesystemRemoteTemplate }
+				default	{ return XFSfilesysTemplate }
+			}
+		}
+		VOL	{ switch $type {
+				VE	{ return XFSveTemplate }
+				PLEX	{ return XFSplexTemplate }
+				default	{ return XFSvolumeTemplate }
+			}
+		}
+	}
+}
+
+proc ip:_mapIconTypeToObject { icon_type class type template } \
+{
+	upvar $class	o_class
+	upvar $type	o_type
+	upvar $template	o_template
+
+	if {[string match "*Template" $icon_type]} {
+		set o_template true
+	} else {
+		set o_template false
+	}
+
+	if {[string match "XFSdisk*" $icon_type]} {
+		set o_class DISK; set o_type -
+	} elseif {[string match "XFSfilesystemRemote*" $icon_type]} {
+		set o_class FS; set o_type nfs
+	} elseif {[string match "XFSfilesystem*" $icon_type]} {
+		set o_class FS; set o_type -
+	} elseif {[string match "XFSve*" $icon_type]} {
+		set o_class VOL; set o_type VE
+	} elseif {[string match "XFSplex*" $icon_type]} {
+		set o_class VOL; set o_type PLEX
+	} elseif {[string match "XFSvolume*" $icon_type]} {
+		set o_class VOL; set o_type VOL
+	} else {
+		return 0
+	}
+
+	return 1
+}
+#@packend

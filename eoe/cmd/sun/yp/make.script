@@ -1,0 +1,311 @@
+# make(1) script invoked by ypmake(1M).
+#
+#	@(#)make.script $Revision: 1.27 $"
+
+# Do not change the definitions below -- put changes in
+# /etc/config/ypmaster.options (see ypmake(1M) for details).
+
+DIR	=/etc
+DOM	=`domainname`
+NOPUSH	=""
+TOUCH	=touch
+PATH = /usr/bsd:/bin:/etc:/usr/bin:/usr/sbin:.:
+YPDIR = /var/yp
+YPDBDIR = $(YPDIR)/$(DOM)
+YPPUSH = yppush -v
+YPSET = ypset
+PWFILE =$(DIR)/passwd
+ALIASES = /etc/aliases
+SHELL = /bin/sh
+MAKEDBM=/usr/sbin/makedbm
+# Set the following variable to "-b" to have Sun NIS slave servers 
+# use the DNS resolver for hosts not in the current domain.
+INTERDOMAIN=
+REVNETGROUP=/usr/sbin/revnetgroup
+STDHOSTS=/usr/sbin/stdhosts
+MKNETID=/usr/sbin/mknetid
+MKALIAS=/usr/sbin/mkalias
+
+
+# Used by logging:
+DATEFMT=(%X %x)		# country-specific time & date format
+PUSHFMT=< pushed
+UPDATEFMT=> updated
+
+# Trim comments and blanks
+TRIMPAT='s/\#.*//' -e 's/[	 ]\{1,\}/ /g' -e 's/ *$$//' -e '/^$$/d'
+
+# Generate data for a map by second field
+BYF2=$(TRIMPAT) -e 's/[^ ]* \([^ ]*\)/\1	&/'
+
+# Generate data for a passwd by-name style map
+PWNAM='BEGIN { FS=":"; OFS="\t"; } /^[a-zA-Z0-9_]/ { print $$1, $$0 }'
+# Generate data for a passwd by-number style map
+PWNUM='BEGIN { FS=":"; OFS="\t"; } /^[a-zA-Z0-9_]/ { print $$3, $$0 }'
+
+
+# Optional: put commands to make your site's maps in local.make.script.
+# The first rule in this makefile should be similar to the "all" rule
+# below and it should depend on "all" to update the official maps.
+sinclude local.make.script
+
+all: passwd group hosts ethers networks rpc services protocols \
+	netgroup aliases bootparams netid ypservers
+
+
+aliases bootparams ethers group hosts netgroup netid networks: $$@.time
+passwd protocols rpc services ypservers: $$@.time
+
+
+passwd.time: $(PWFILE)
+	$(TOUCH) $@
+	umask 077; awk $(PWNAM) $(PWFILE) \
+	    | $(MAKEDBM) - $(YPDBDIR)/`ypmapname passwd.byname`
+	umask 077; awk $(PWNUM) $(PWFILE) \
+	    | $(MAKEDBM) - $(YPDBDIR)/`ypmapname passwd.byuid`
+	date "+$(UPDATEFMT) passwd $(DATEFMT)"
+	if [ ! $(NOPUSH) ]; then \
+		$(YPPUSH) passwd.byname; \
+		$(YPPUSH) passwd.byuid; \
+		date "+$(PUSHFMT) passwd $(DATEFMT)"; \
+	fi
+
+group.time: $(DIR)/group
+	$(TOUCH) $@
+	umask 077; awk $(PWNAM) $(DIR)/group \
+	    | $(MAKEDBM) - $(YPDBDIR)/`ypmapname group.byname`
+	umask 077; awk $(PWNUM) $(DIR)/group \
+	    | $(MAKEDBM) - $(YPDBDIR)/`ypmapname group.bygid`
+	date "+$(UPDATEFMT) group $(DATEFMT)"
+	if [ ! $(NOPUSH) ]; then \
+		$(YPPUSH) group.byname; \
+		$(YPPUSH) group.bygid; \
+		date "+$(PUSHFMT) group $(DATEFMT)"; \
+	fi
+
+hosts.time: $(DIR)/hosts
+	$(TOUCH) $@
+	$(STDHOSTS) $(DIR)/hosts | \
+	    awk '{for (i = 2; i <= NF; i++) print $$i, $$0}' \
+	    | $(MAKEDBM) $(INTERDOMAIN) -l - $(YPDBDIR)/`ypmapname hosts.byname`
+	$(STDHOSTS) $(DIR)/hosts | \
+	    awk 'BEGIN { OFS="\t"; } { print $$1, $$0 }' \
+	    | $(MAKEDBM) $(INTERDOMAIN) - $(YPDBDIR)/`ypmapname hosts.byaddr`
+	date "+$(UPDATEFMT) hosts $(DATEFMT)"
+	if [ ! $(NOPUSH) ]; then \
+		$(YPPUSH) hosts.byname; \
+		$(YPPUSH) hosts.byaddr; \
+		date "+$(PUSHFMT) hosts $(DATEFMT)"; \
+	fi
+
+ethers.time: $(DIR)/ethers
+	$(TOUCH) $@
+	sed -e $(TRIMPAT) -e 's/^0\([^:]\)/\1/' -e 's/:0\([^:]\)/:\1/g' \
+		    -e 's/^\([^ ]*\)/& &/' $(DIR)/ethers \
+	    | $(MAKEDBM) -l - $(YPDBDIR)/`ypmapname ethers.byaddr`
+	sed -e $(BYF2) $(DIR)/ethers \
+	    | $(MAKEDBM) - $(YPDBDIR)/`ypmapname ethers.byname`
+	date "+$(UPDATEFMT) ethers $(DATEFMT)"
+	if [ ! $(NOPUSH) ]; then \
+		$(YPPUSH) ethers.byname; \
+		$(YPPUSH) ethers.byaddr; \
+		date "+$(PUSHFMT) ethers $(DATEFMT)"; \
+	fi
+
+networks.time: $(DIR)/networks
+	$(TOUCH) $@
+	sed -e $(TRIMPAT) $(DIR)/networks \
+	    | awk '{print $$1, $$0; for (i = 3;i <= NF;i++) print $$i,$$0}' \
+	    | $(MAKEDBM) - $(YPDBDIR)/`ypmapname networks.byname`
+	sed -e $(BYF2) $(DIR)/networks \
+	    | $(MAKEDBM) - $(YPDBDIR)/`ypmapname networks.byaddr`
+	date "+$(UPDATEFMT) networks $(DATEFMT)"
+	if [ ! $(NOPUSH) ]; then \
+		$(YPPUSH) networks.byname; \
+		$(YPPUSH) networks.byaddr; \
+		date "+$(PUSHFMT) networks $(DATEFMT)"; \
+	fi
+
+services.time: $(DIR)/services
+	$(TOUCH) $@
+	sed -e $(BYF2) $(DIR)/services \
+	    | $(MAKEDBM) - $(YPDBDIR)/`ypmapname services.byname`
+	date "+$(UPDATEFMT) services $(DATEFMT)"
+	if [ ! $(NOPUSH) ]; then \
+		$(YPPUSH) services.byname; \
+		date "+$(PUSHFMT) services $(DATEFMT)"; \
+	fi
+
+rpc.time: $(DIR)/rpc
+	$(TOUCH) $@
+	sed -e $(BYF2) $(DIR)/rpc \
+	    | $(MAKEDBM) - $(YPDBDIR)/`ypmapname rpc.bynumber`
+	date "+$(UPDATEFMT) rpc $(DATEFMT)"
+	if [ ! $(NOPUSH) ]; then \
+		$(YPPUSH) rpc.bynumber; \
+		date "+$(PUSHFMT) rpc $(DATEFMT)"; \
+	fi
+
+protocols.time: $(DIR)/protocols
+	$(TOUCH) $@
+	sed -e $(BYF2) $(DIR)/protocols \
+	    | $(MAKEDBM) - $(YPDBDIR)/`ypmapname protocols.bynumber`
+	sed -e $(TRIMPAT) $(DIR)/protocols \
+	    | awk '{print $$1,$$0; for (i = 3;i <= NF;i++) print $$i, $$0}' \
+	    | $(MAKEDBM) - $(YPDBDIR)/`ypmapname protocols.byname`
+	date "+$(UPDATEFMT) protocols $(DATEFMT)"
+	if [ ! $(NOPUSH) ]; then \
+		$(YPPUSH) protocols.byname; \
+		$(YPPUSH) protocols.bynumber; \
+		date "+$(PUSHFMT) protocols $(DATEFMT)"; \
+	fi
+
+netgroup.time: $(DIR)/netgroup
+	$(TOUCH) $@
+	sed -e $(TRIMPAT) $(DIR)/netgroup \
+	    | $(MAKEDBM) - $(YPDBDIR)/`ypmapname netgroup`
+	$(REVNETGROUP) -u < $(DIR)/netgroup \
+	    | $(MAKEDBM) - $(YPDBDIR)/`ypmapname netgroup.byuser`
+	$(REVNETGROUP) -h < $(DIR)/netgroup \
+	    | $(MAKEDBM) - $(YPDBDIR)/`ypmapname netgroup.byhost`
+	date "+$(UPDATEFMT) netgroup $(DATEFMT)"
+	if [ ! $(NOPUSH) ]; then \
+		$(YPPUSH) netgroup; \
+		$(YPPUSH) netgroup.byuser; \
+		$(YPPUSH) netgroup.byhost; \
+		date "+$(PUSHFMT) netgroup $(DATEFMT)"; \
+	fi
+
+aliases.time: $(ALIASES)
+	$(TOUCH) $@
+	DBNM=$(YPDBDIR)/`ypmapname mail.aliases`; TEMP=$$DBNM.t; \
+	    rm -f $$TEMP $$TEMP.dir $$TEMP.pag; cp $(ALIASES) $$TEMP; \
+	    /usr/lib/sendmail -bi -oA$$TEMP; \
+	    chmod og-w $$TEMP.dir $$TEMP.pag; \
+	    mv -f $$TEMP.dir $$DBNM.dir; \
+	    mv -f $$TEMP.pag $$DBNM.pag; \
+	    rm -f $$TEMP
+	$(MKALIAS) $(YPDBDIR)/`ypmapname mail.aliases` \
+		$(YPDBDIR)/`ypmapname mail.byaddr`
+	date "+$(UPDATEFMT) aliases $(DATEFMT)"
+	if [ ! $(NOPUSH) ]; then \
+		$(YPPUSH) mail.aliases; \
+		$(YPPUSH) mail.byaddr; \
+		date "+$(PUSHFMT) aliases $(DATEFMT)"; \
+	fi
+
+bootparams.time: $(DIR)/bootparams
+	$(TOUCH) $@
+	sed -e $(TRIMPAT) -e 's/^ //' -e 's/[^ ]\\$$/ \\/' $(DIR)/bootparams \
+	    | $(MAKEDBM) - $(YPDBDIR)/bootparams
+	date "+$(UPDATEFMT) bootparams $(DATEFMT)"
+	if [ ! $(NOPUSH) ]; then \
+		$(YPPUSH) bootparams; \
+		date "+$(PUSHFMT) bootparams $(DATEFMT)"; \
+	fi
+
+
+netid.time: $(PWFILE) $(DIR)/group $(DIR)/hosts $(DIR)/netid
+	$(TOUCH) $@
+	$(MKNETID) -q -p $(PWFILE) -g $(DIR)/group -h $(DIR)/hosts \
+		-m $(DIR)/netid \
+	    | $(MAKEDBM) - $(YPDBDIR)/netid.byname
+	date "+$(UPDATEFMT) netid $(DATEFMT)"
+	if [ ! $(NOPUSH) ]; then \
+		$(YPPUSH) netid.byname; \
+		date "+$(PUSHFMT) netid $(DATEFMT)"; \
+	fi
+
+ypservers.time: $(YPDIR)/ypservers
+	$(TOUCH) $@
+	sed -e $(TRIMPAT) $(YPDIR)/ypservers | $(MAKEDBM) - $(YPDBDIR)/ypservers
+	date "+$(UPDATEFMT) ypservers $(DATEFMT)"
+	if [ ! $(NOPUSH) ]; then \
+		$(YPSET) `hostname`; \
+		$(YPPUSH) ypservers; \
+		date "+$(PUSHFMT) ypservers $(DATEFMT)"; \
+	fi
+
+
+#
+# unique to SGI
+# These all use the -s (secure) option of makedbm.
+# ypmake will invoke these as appropriate.
+#
+capability clearance shadow: $$@.time
+
+capability.time: $(DIR)/capability
+	$(TOUCH) $@
+	umask 077; awk $(PWNAM) $(DIR)/capability \
+	    | $(MAKEDBM) -s - $(YPDBDIR)/`ypmapname capability.byname`
+	date "+$(UPDATEFMT) capability $(DATEFMT)"
+	if [ ! $(NOPUSH) ]; then \
+		$(YPPUSH) capability.byname; \
+		date "+$(PUSHFMT) capability $(DATEFMT)"; \
+	fi
+
+clearance.time: $(DIR)/clearance
+	$(TOUCH) $@
+	umask 077; awk $(PWNAM) $(DIR)/clearance \
+	    | $(MAKEDBM) -s - $(YPDBDIR)/`ypmapname clearance.byname`
+	date "+$(UPDATEFMT) clearance $(DATEFMT)"
+	if [ ! $(NOPUSH) ]; then \
+		$(YPPUSH) clearance.byname; \
+		date "+$(PUSHFMT) clearance $(DATEFMT)"; \
+	fi
+
+shadow.time: $(DIR)/shadow
+	$(TOUCH) $@
+	umask 077; awk $(PWNAM) $(DIR)/shadow \
+	    | $(MAKEDBM) -s - $(YPDBDIR)/`ypmapname shadow.byname`
+	date "+$(UPDATEFMT) shadow $(DATEFMT)"
+	if [ ! $(NOPUSH) ]; then \
+		$(YPPUSH) shadow.byname; \
+		date "+$(PUSHFMT) shadow $(DATEFMT)"; \
+	fi
+
+#
+# not used by SGI
+#
+group.adjunct passwd.adjunct netmasks: $$@.time
+
+
+c2secure:
+	-@if [ -f $(DIR)/security/passwd.adjunct ]; then \
+		make NOPUSH=$(NOPUSH) passwd.adjunct.time group.adjunct.time; \
+	fi
+
+passwd.adjunct.time: $(DIR)/security/passwd.adjunct
+	$(TOUCH) $@
+	-@awk $(PWNAM) $(DIR)/security/passwd.adjunct  | \
+	$(MAKEDBM) -s - $(YPDIR)/passwd.adjunct.byname; \
+	chmod 600 $(YPDIR)/passwd.adjunct.byname.dir; \
+	chmod 600 $(YPDIR)/passwd.adjunct.byname.pag; \
+	date "+$(UPDATEFMT) passwd.adjunct $(DATEFMT)"; \
+	if [ ! $(NOPUSH) ]; then \
+		$(YPPUSH) passwd.adjunct.byname; \
+		date "+$(PUSHFMT) passwd.adjunct $(DATEFMT)"; \
+	fi
+
+group.adjunct.time: $(DIR)/security/group.adjunct
+	$(TOUCH) $@
+	-@awk $(PWNAM) $(DIR)/security/group.adjunct  | \
+	$(MAKEDBM) -s - $(YPDIR)/group.adjunct.byname; \
+	chmod 600 $(YPDIR)/group.adjunct.byname.dir; \
+	chmod 600 $(YPDIR)/group.adjunct.byname.pag; \
+	date "+$(UPDATEFMT) group.adjunct $(DATEFMT)"; \
+	if [ ! $(NOPUSH) ]; then \
+		$(YPPUSH) group.adjunct.byname; \
+		date "+$(PUSHFMT) group.adjunct $(DATEFMT)"; \
+	fi
+
+netmasks.time: $(DIR)/netmasks
+	$(TOUCH) $@
+	-@$(MAKEDBM) $(DIR)/netmasks $(YPDIR)/netmasks.byaddr; \
+	chmod 600 $(YPDIR)/netmasks.byaddr.dir; \
+	chmod 600 $(YPDIR)/netmasks.byaddr.pag; \
+	date "+$(UPDATEFMT) netmasks $(DATEFMT)"; \
+	if [ ! $(NOPUSH) ]; then \
+		$(YPPUSH) netmasks.byaddr; \
+		date "+$(PUSHFMT) netmasks $(DATEFMT)"; \
+	fi

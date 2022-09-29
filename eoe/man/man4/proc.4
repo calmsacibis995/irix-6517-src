@@ -1,0 +1,1619 @@
+.\" Copyright 1989 AT&T
+.nr X
+.if \nX=0 .ds x} proc 4 "" "\&"
+.TH proc 4
+.SH NAME
+proc \- process (debug) filesystem
+.SH SYNOPSIS
+.nf
+\f3#include <sys/procfs.h>\f1
+.fi
+.SH DESCRIPTION
+\f2/proc\fP is a filesystem that provides access
+to the image of each active process in the system.
+This was historically mounted as \f2/debug\fP.
+\f2/proc\fP does not consume any disk resources.
+This interface provides a richer set of functionality and replaces
+the now obsolete \f2dbg\f1(4), \f2debug\f1(4) interface.
+The "files" of this filesystem are of the form \f2/proc/nnnnn\f1 and
+\f2/proc/pinfo/nnnnn\f1,
+where \f2nnnnn\f1 is a decimal number corresponding to the process-ID.
+These files actually consume no disk space, and are only convenient handles
+by which a debugger can attach to a process.
+The owner of each ``file'' is determined by the process's user-ID.
+Files of the form \f2/proc/nnnnn\f1 have permission mode 0600 while
+files of the form \f2/proc/pinfo/nnnnn\f1 have permission mode 0444.
+The \f2/proc/pinfo\f1 files are intended for use by unprivileged
+programs that wish to access miscellaneous process information
+such as that provided by \f2ps\fP(1) and \f2top\fP(1).
+.P
+The
+.IR statfs (2)
+system call will return valid information concerning
+the \f3proc\f1 filesystem.
+The total and free blocks as reported by
+.IR df (1)
+respectively represent the total virtual memory (real memory plus swap space)
+available and currently free.
+.PP
+Standard system call interfaces are used to access \f2/proc\fP files:
+\f2open\fP(2), \f2close\fP(2), \f2read\fP(2), \f2write\fP(2),
+and \f2ioctl\fP(2).
+Note that \f2read\fP(2) and \f2write\fP(2) are not allowed
+for \f2/proc/pinfo\f1 files.
+Furthermore only the \f3PIOCACINFO\fP, \f3PIOCPSINFO\fP,
+\f3PIOCUSAGE\fP, \f3PIOCGETPTIMER\fP and \f3PIOCCRED\fP commands may be
+specified to \f2ioctl\fP(2) for \f2/proc/pinfo\f1 files.
+An open for reading and writing enables process control;
+a read-only open allows inspection but not control.
+As with ordinary files, more than one process can open
+the same \f2/proc\fP file at the same time.
+\f2Exclusive open\fP is provided to allow controlling
+processes to avoid collisions:
+an \f2open\fP(2) for writing that specifies O_EXCL
+fails if the file is already open for writing;
+if such an exclusive open succeeds, subsequent attempts to open
+the file for writing, with or without the O_EXCL flag,
+fail until the exclusively-opened file descriptor is closed.
+(Exception: a superuser \f2open\fP(2) that does not specify
+O_EXCL succeeds even if the file is exclusively opened.)
+There can be any number of read-only opens, even when an
+exclusive write open is in effect on the file.
+On a successful open the inherit-on-fork (PR_FORK) and
+run-on-last-close (PR_RLC) flags are set by default, if no other process
+has the file open.
+On the last close for writing, if the kill-on-last-close (PR_KLC)
+or the PR_RLC flags are set, then all the controlling flags are
+cleared and either a SIGKILL is sent to the process or the
+process is set running again.
+If neither of the above two flags are set,
+the controlling flags are not cleared.
+.PP
+Data may be transferred from or to any locations in the
+traced process's address space by applying \f2lseek\fP(2)
+to position the file at the virtual address of interest
+followed by \f2read\fP(2) or \f2write\fP(2).
+The PIOCMAP operation can be applied to determine
+the accessible areas (mappings) of the address space.
+A contiguous area of the address space may appear as
+multiple mappings due to varying read/write/execute permissions.
+I/O transfers may span contiguous mappings.
+An I/O request extending into an unmapped area
+is truncated at the boundary.
+.PP
+Information and control operations are provided through \f2ioctl\fP(2).
+These have the form:
+.Ex
+#include <sys/types.h>
+#include <sys/signal.h>
+#include <sys/fault.h>
+#include <sys/syscall.h>
+#include <sys/procfs.h>
+void *p;
+retval = ioctl(fildes, code, p);
+.Ee
+The argument \f2p\fP is a generic pointer whose type depends
+on the specific \f2ioctl\fP code.
+Where not specifically mentioned below, its value should be zero.
+\f2<sys/procfs.h>\fP contains definitions of \f2ioctl\fP codes
+and data structures used by the operations.
+.PP
+Process information and control operations
+involve the use of sets of flags.
+The set types \f3sigset_t\fP, \f3fltset_t\fP, and \f3sysset_t\fP
+correspond, respectively, to signal, fault, and system call
+enumerations defined in
+\f2<sys/signal.h>\fP, \f2<sys/fault.h>\fP, and \f2<sys/syscall.h>\fP.
+Each set type is large enough to hold flags for its own enumeration.
+Although they are of different sizes, they have a common structure
+and can be manipulated by these macros:
+.PP
+.Ex
+prfillset(&set);			/* turn on all flags in set */
+premptyset(&set);			/* turn off all flags in set */
+praddset(&set, flag);		/* turn on the specified flag */
+prdelset(&set, flag);		/* turn off the specified flag */
+r = prismember(&set, flag);	/* != 0 iff flag is turned on */
+.Ee
+.PP
+One of \f3prfillset\fP() or \f3emptyset\fP() must be used to initialize
+\f3set\fP before it is used in any other operation.
+\f3flag\fP must be a member of the enumeration corresponding to \f3set\fP.
+.SH "IOCTL CODES"
+The allowable \f2ioctl\fP codes follow.
+Certain of these can be used only if the process
+file descriptor is open for writing;
+these include all operations that affect process control.
+Those requiring write access are marked with an asterisk (*).
+Except where noted, an \f2ioctl\fP to a process
+that has terminated elicits the error ENOENT.
+.SS PIOCSTATUS
+PIOCSTATUS returns status information for the process;
+\f2p\fP is a pointer to a \f3prstatus\fP structure
+containing at least the following fields:
+.Ex
+typedef struct prstatus {
+	long	pr_flags;			/* Flags */
+	short	pr_why;		/* Reason for stop (if stopped) */
+	short	pr_what;		/* More detailed reason */
+	short	pr_cursig;	/* Current signal */
+	sigset_t	pr_sigpend;	/* Set of pending signals */
+	sigset_t	pr_sighold;	/* Set of held signals */
+	struct siginfo pr_info;	/* Info associated with signal/fault */
+	struct sigaltstack pr_altstack; /* Alternate signal stack info */
+	struct sigaction pr_action;/* Signal action for current signal */
+	short	pr_syscall;	/* System call # (if in syscall) */
+	short	pr_nsysarg;	/* # of arguments to this syscall */
+	long	pr_errno;			/* Error number from system call */
+	long	pr_rval1;			/* System call return value 1 */
+	long	pr_rval2;			/* System call return value 2 */
+	long	pr_sysarg[PRSYSARGS];	/* Arguments to this syscall */
+	pid_t	pr_pid;		/* Process id */
+	pid_t	pr_ppid;		/* Parent process id */
+	pid_t	pr_pgrp;		/* Process group id */
+	pid_t	pr_sid;		/* Session id */
+	timespec_t	pr_utime;	/* Process user cpu time */
+	timespec_t	pr_stime;	/* Process system cpu time */
+	timespec_t	pr_cutime; /* Sum of children's user times */
+	timespec_t	pr_cstime; /* Sum of children's system times */
+	char	pr_clname[8];		/* Scheduling class name */
+	long	pr_instr;			/* Current instruction */
+	gregset_t	pr_reg;		/* General registers */
+} prstatus_t;
+.Ee
+\f3pr_flags\fP is a bit-mask holding these flags:
+.PP
+.RS
+.TP 16
+\f3PR_STOPPED\fP
+Process is stopped
+.TP
+\f3PR_ISTOP\fP
+Process is stopped on an event of interest (see PIOCSTOP).
+.TP
+\f3PR_DSTOP\fP
+Process has a stop directive in effect (see PIOCSTOP).
+.TP
+\f3PR_STEP\fP
+Process has a single-step directive in effect (see PIOCRUN).
+.TP
+\f3PR_ASLEEP\fP
+Process is in an interruptible sleep within a system call.
+.TP
+\f3PR_PCINVAL\fP
+Process's current instruction (\f3pr_instr\fP) is undefined.
+.TP
+\f3PR_ISSYS\fP
+Process is a system process (see PIOCSTOP).
+.TP
+\f3PR_FORK\fP
+Process has its inherit-on-fork flag set (see PIOCSET).
+.TP
+\f3PR_RLC\fP
+Process has its run-on-last-close flag set (see PIOCSET).
+.TP
+\f3PR_KLC\fP
+Process has its kill-on-last-close flag set (see PIOCSET).
+.TP
+\f3PR_PTRACE\fP
+Process is being traced via \f2ptrace\fP(2).
+.RE
+.PP
+\f3pr_why\fP and \f3pr_what\fP together describe,
+for a stopped process, the reason that the process is stopped.
+Possible values of \f3pr_why\fP are:
+.PP
+.RS
+.TP 16
+\f3PR_REQUESTED\fP
+The stop occurred
+in response to a stop directive, normally because
+PIOCSTOP was applied.
+\f3pr_what\fP is unused in this case.
+.TP
+\f3PR_SIGNALLED\fP
+The process stopped
+on receipt of a signal (see PIOCSTRACE);
+\f3pr_what\fP holds the signal number that caused the stop
+(for a newly-stopped process, the same value is in \f3pr_cursig\fP).
+.TP
+\f3PR_FAULTED\fP
+The process stopped on
+incurring a hardware fault (see PIOCSFAULT);
+\f3pr_what\fP holds the fault number that caused the stop.
+.TP
+\f3PR_SYSENTRY\fP and \f3PR_SYSEXIT\fP
+A stop on entry
+to or exit from a system call (see PIOCSENTRY and PIOCSEXIT);
+\f3pr_what\fP holds the system call number.
+.TP
+\f3PR_JOBCONTROL\fP
+The process stopped due to
+the default action of a job control stop signal (see \f2sigaction\fP(2));
+\f3pr_what\fP holds the stopping signal number.
+.RE
+.PP
+\f3pr_cursig\fP names the current signal, that is,
+the next signal to be delivered to the process.
+\f3pr_sigpend\fP identifies any other signals pending for the process.
+\f3pr_sighold\fP identifies those signals
+whose delivery is being delayed if sent to the process.
+.PP
+\f3pr_info\fP,
+when the process is in a PR_SIGNALLED or PR_FAULTED stop,
+contains additional information pertinent to the particular signal or fault
+(see \f2<sys/siginfo.h>\fP).
+.PP
+\f3pr_altstack\fP contains the alternate signal stack information
+for the process (see \f2sigaltstack\fP(2)).
+\f3pr_action\fP contains the signal action information pertaining
+to the current signal (see \f2sigaction\fP(2));
+it is undefined if \f3pr_cursig\fP is zero.
+.PP
+\f3pr_syscall\fP is the number of the system call,
+if any, being executed by the traced process;
+it is non-zero if the process is stopped
+on PR_SYSENTRY or PR_SYSEXIT,
+is asleep within a system call (PR_ASLEEP is set),
+or is stopped on a watchpoint trap incurred within a system call
+(see PIOCSWATCH).
+If \f3pr_syscall\fP is non-zero,
+\f3pr_nsysarg\fP is the number of arguments to the system call
+and the \f3pr_sysarg\fP array contains the actual arguments;
+\f3pr_errno\fP contains the value of \f3errno\fP returned at the last
+system call; and
+\f3pr_rval1\fP and \f3pr_rval2\fP contain the return values from
+the last system call.
+.PP
+\f3pr_pid\fP, \f3pr_ppid\fP, \f3pr_pgrp\fP, and \f3pr_sid\fP are,
+respectively, the process id, the id of the process's parent,
+the process's process group id,
+and the process's session id.
+.PP
+\f3pr_utime\fP, \f3pr_stime\fP,
+\f3pr_cutime\fP, and \f3pr_cstime\fP are, respectively,
+the user CPU and system CPU time consumed by the process,
+and the cumulative user CPU and system CPU
+time consumed by the process's children,
+in seconds and nanoseconds.
+.PP
+\f3pr_clname\fP contains the name of the process's scheduling class.
+.PP
+\f3pr_instr\fP contains the machine
+instruction to which the program counter refers.
+The amount of data retrieved from the process is machine-dependent;
+on SGI machines, it is a 32-bit word.
+In general, the size is that of the machine's smallest instruction.
+If PR_PCINVAL is set, \f3pr_instr\fP is undefined;
+this occurs whenever the process is not stopped or when
+the program counter refers to an invalid address.
+.PP
+\f3pr_reg\fP is an array holding the contents of the general registers
+for a stopped process.
+For SGI machines the structure \f3gregset_t\fP is
+defined in \f2<sys/ucontext.h>\fP.
+If the process is not stopped, register values are undefined.
+.SS *PIOCSTOP PIOCWSTOP
+PIOCSTOP directs the process to stop and waits until it has stopped;
+PIOCWSTOP simply waits for the process to stop.
+These operations complete when the process stops on an event of interest,
+immediately if already so stopped.
+If \f2p\fP is non-zero it points to an instance of \f3prstatus_t\fP
+to be filled with status information for the stopped process.
+.PP
+An ``event of interest'' is either a PR_REQUESTED stop
+or a stop that has been specified in the process's tracing flags
+(set by PIOCSTRACE, PIOCSFAULT,
+PIOCSENTRY, and PIOCSEXIT).
+A PR_JOBCONTROL stop is specifically not an event of interest.
+(A process may stop twice due to a stop signal, first showing
+PR_SIGNALLED if the signal is traced and again showing
+PR_JOBCONTROL if the process is set running without
+clearing the signal.)
+If the process is controlled by \f2ptrace\fP(2),
+it comes to a PR_SIGNALLED stop on receipt of any signal;
+this is an event of interest only if
+the signal is in the traced signal set.
+If PIOCSTOP is applied to a process that is stopped,
+but not on an event of interest, the stop directive takes
+effect when the process is restarted by the competing mechanism;
+at that time the process enters a PR_REQUESTED
+stop before executing any user-level code.
+.PP
+\f2ioctl\fP()s are interruptible by signals so that, for example,
+an \f2alarm\fP(2) can be set to avoid waiting forever for a process
+that may never stop on an event of interest.
+If PIOCSTOP is interrupted, the stop directive remains
+in effect even though the \f2ioctl\fP() returns an error.
+.PP
+A system process (indicated by the PR_ISSYS flag)
+never executes at user level,
+has no user-level address space visible through \f2/proc\fP,
+and cannot be stopped.
+Applying PIOCSTOP or PIOCWSTOP to a system process
+elicits the error EBUSY.
+.SS *PIOCRUN
+The traced process is made runnable again after a stop.
+If \f2p\fP is non-zero it points to a \f3prrun\fP structure
+describing additional actions to be performed.
+The \f3prrun\fP structure contains at least the following fields:
+.Ex
+typedef struct prrun {
+	long		pr_flags;		/* Flags */
+	sigset_t	pr_trace;		/* Set of signals to be traced */
+	sigset_t	pr_sighold;	/* Set of signals to be held */
+	fltset_t	pr_fault;		/* Set of faults to be traced */
+	caddr_t	pr_vaddr;		/* Virtual address at which to resume */
+} prrun_t;
+.Ee
+\f3pr_flags\fP is a bit-mask describing optional actions;
+the remainder of the entries are meaningful only if the
+appropriate bits are set in \f3pr_flags\fP.
+Flag definitions:
+.PP
+.RS
+.TP 16
+\f3PRCSIG\fP
+Clears the current signal, if any
+(see PIOCSSIG).
+.TP
+\f3PRCFAULT\fP
+Clears the current fault, if any
+(see PIOCCFAULT).
+.TP
+\f3PRSTRACE\fP
+Sets the traced signal set to \f3pr_trace\fP
+(see PIOCSTRACE).
+.TP
+\f3PRSHOLD\fP
+Sets the held signal set to \f3pr_sighold\fP
+(see PIOCSHOLD).
+.TP
+\f3PRSFAULT\fP
+Sets the traced fault set to \f3pr_fault\fP
+(see PIOCSFAULT).
+.TP
+\f3PRSVADDR\fP
+Sets the address at which execution resumes
+to \f3pr_vaddr\fP.
+.TP
+\f3PRSTEP\fP
+Directs the process to single-step, that is,
+to run and to execute a single machine instruction.
+On completion of the instruction, a trace trap occurs.
+If FLTTRACE is being traced, the process stops,
+otherwise it is sent SIGTRAP;
+if SIGTRAP is being traced and not held, the process stops.
+This operation requires hardware and operating system support
+and may not be implemented on all processors.
+It is implemented on SGI machines.
+.TP
+\f3PRCSTEP\fP
+Cancels any outstanding single-step directive
+and any \f3PRSTEP\fP directive set in the current request.
+.TP
+\f3PRSABORT\fP
+Meaningful only if the process is in a PR_SYSENTRY stop
+or is marked PR_ASLEEP;
+it instructs the process to abort execution of the system call
+(see PIOCSENTRY, PIOCSEXIT).
+.TP
+\f3PRSTOP\fP
+Directs the process to stop again as soon
+as possible after resuming execution (see PIOCSTOP).
+In particular if the process is stopped on
+PR_SIGNALLED or PR_FAULTED, the next stop will
+show PR_REQUESTED, no other stop will have intervened,
+and the process will not have executed any user-level code.
+.PP
+PIOCRUN fails (EBUSY) if applied to a process
+that is not stopped on an event of interest.
+Once PIOCRUN has been applied, the process is no longer
+stopped on an event of interest even if, due to a competing
+mechanism, it remains stopped.
+.SS *PIOCSTRACE
+This defines a set of signals to be traced:
+the receipt of one of these signals causes the traced process to stop.
+The set of signals is defined via an instance
+of \f3sigset_t\fP addressed by \f2p\fP.
+Receipt of SIGKILL cannot be traced.
+.PP
+If a signal that is included in the held signal set is sent to
+the traced process, the signal is not received and does not cause a
+process stop until it is removed from the held signal set, either
+by the process itself or by setting the held signal set with
+PIOCSHOLD or the PRSHOLD option of PIOCRUN.
+.SS PIOCGTRACE
+The current traced signal set is returned in an instance
+of \f3sigset_t\fP addressed by \f2p\fP.
+.SS *PIOCSSIG
+The current signal and its associated signal information are
+set according to the contents of the \f3siginfo\fP structure
+addressed by \f2p\fP (see \f2<sys/siginfo.h>\fP).
+If the specified signal number is zero or if \f2p\fP is zero,
+the current signal is cleared.
+Setting the current signal to SIGKILL terminates
+the process immediately, even if it is stopped.  All other signals
+will be sent after the process is made runnable, if it is currently
+stopped.
+.SS *PIOCKILL
+A signal is sent to the process with semantics identical to those of
+\f2kill\fP(2).
+\f2p\fP points to an \f2int\fP naming the signal.
+Sending SIGKILL terminates the process immediately.
+.SS *PIOCUNKILL
+A signal is deleted, that is, it is removed from the set of pending signals.
+The current signal (if any) is unaffected.
+\f2p\fP points to an \f2int\fP naming the signal.
+It is an error to attempt to delete SIGKILL.
+.SS PIOCGHOLD *PIOCSHOLD
+PIOCGHOLD returns the set of held signals
+(signals whose delivery will be delayed if sent to the process)
+in an instance of \f3sigset_t\fP addressed by \f2p\fP.
+PIOCSHOLD correspondingly sets the held signal set but does
+not allow SIGKILL or SIGSTOP to be held.
+.SS PIOCMAXSIG PIOCACTION
+These operations provide information about the signal actions
+associated with the traced process (see \f2sigaction\fP(2)).
+PIOCMAXSIG returns, in the \f2int\fP addressed by \f2p\fP,
+the maximum signal number understood by the system.
+This can be used to allocate storage for use with the
+PIOCACTION operation,
+which returns the traced process's signal actions in an
+array of \f3sigaction\fP structures addressed by \f2p\fP.
+Signal numbers are displaced by 1 from array indices,
+so that the action for signal number \f2n\fP appears
+in position \f2n\fP\-1 of the array.
+.SS *PIOCSFAULT
+This defines a set of hardware faults to be traced:
+on incurring one of these faults the traced process stops.
+The set is defined via an instance
+of \f3fltset_t\fP addressed by \f2p\fP.
+Fault names are defined in \f2<sys/fault.h>\fP
+and include the following.
+Some of these may not occur on all processors;
+there may be processor-specific faults in addition to these.
+.RS
+.TP 16
+.PD 0
+\f3FLTILL\fP
+illegal instruction
+.TP
+\f3FLTPRIV\fP
+privileged instruction
+.TP
+\f3FLTBPT\fP
+breakpoint trap
+.TP
+\f3FLTTRACE\fP
+trace trap
+.TP
+\f3FLTWATCH\fP
+watchpoint trap
+.TP
+\f3FLTKWATCH\fP
+kernel watchpoint trap
+.TP
+\f3FLTACCESS\fP
+memory access fault
+.TP
+\f3FLTBOUNDS\fP
+memory bounds violation
+.TP
+\f3FLTIOVF\fP
+integer overflow
+.TP
+\f3FLTIZDIV\fP
+integer zero divide
+.TP
+\f3FLTFPE\fP
+floating-point exception
+.TP
+\f3FLTSTACK\fP
+unrecoverable stack fault
+.TP
+\f3FLTPAGE\fP
+recoverable page fault
+.PD
+.RE
+.PP
+When not traced, a fault normally results in the posting of
+a signal to the process that incurred the fault.
+If the process stops on a fault, the signal is posted
+to the process when execution is resumed unless the fault is cleared
+by PIOCCFAULT or by the PRCFAULT option of PIOCRUN.
+FLTPAGE and FLTKWATCH\fP are exceptions; no signal is posted.
+There may be additional processor-specific faults like this.
+\f3pr_info\fP in the \f3prstatus\fP structure identifies the
+signal to be sent and contains machine-specific
+information about the fault.
+.SS PIOCGFAULT
+The current traced fault set is returned in an instance
+of \f3fltset_t\fP addressed by \f2p\fP.
+.SS *PIOCCFAULT
+The current fault (if any) is cleared;
+the associated signal is not sent to the process.
+.SS *PIOCSENTRY *PIOCSEXIT
+These operations instruct the process to stop on
+entry to or exit from specified system calls.
+The set of system calls to be traced is defined via an instance
+of \f3sysset_t\fP addressed by \f2p\fP.
+.PP
+When entry to a system call is being traced, the traced process
+stops after having begun the call to the system but before the system
+call arguments have been fetched from the process.
+When exit from a system call is being traced, the traced process
+stops on completion of the system call just prior to checking for
+signals and returning to user level.
+At this point all return values have been stored
+into the traced process's registers.
+.PP
+If the traced process is stopped on entry to a system call
+(PR_SYSENTRY)
+or when sleeping in an interruptible system call
+(PR_ASLEEP is set),
+it may be instructed to go directly to system call exit
+by specifying the PRSABORT flag in a
+PIOCRUN request.
+Unless exit from the system call is being traced the
+process returns to user level showing error EINTR.
+.SS PIOCGENTRY PIOCGEXIT
+These return the current traced system call entry or exit set in an
+instance of \f3sysset_t\fP addressed by \f2p\fP.
+.SS PIOCNWATCH
+PIOCNWATCH returns, in the \f2int\fP addressed by \f2p\fP,
+the number of watched areas supported by the system.
+This can be used to allocate storage for use with the
+PIOCSWATCH and PIOCGWATCH operations,
+each of which must provide an array whose number of elements
+equals the supported number of watched areas.
+.SS *PIOCSWATCH
+PIOCSWATCH establishes or clears a set of watched areas
+in the traced process;
+\f2p\fP points to \f3prwatch\fP structure containing
+at least the following fields:
+.Ex
+typedef struct prwatch {
+	caddr_t	pr_vaddr;	/* Virtual address of watched area */
+	u_long	pr_size;	/* Size of watched area in bytes */
+	long	pr_wflags;	/* Watch type flags */
+} prwatch_t;
+.Ee
+\f3pr_vaddr\fP specifies the virtual address of an area of memory
+to be watched in the traced process.
+\f3pr_size\fP specifies the size of the area, in bytes.
+\f3pr_wflags\fP specifies the type of memory access to be
+monitored as a bit-mask of one or more of the following flags
+(see also PIOCMAP):
+.RS
+.TP 16
+.PD 0
+\f3MA_READ\fP
+read access
+.TP
+\f3MA_WRITE\fP
+write access
+.TP
+\f3MA_EXEC\fP
+execution access
+.PD
+.RE
+.PP
+An entry with a zero value for \f3pr_size\fP
+clears any previously-established watched area
+starting at the specified virtual address.
+An entry with a non-empty \f3pr_wflags\fP bit-mask
+establishes a watched area for the virtual address range
+specified by \f3pr_vaddr\fP and \f3pr_size\fP.
+An entry with an empty \f3pr_wflags\fP bit-mask
+is ignored.
+.\"An entry with a zero value for \f3pr_size\fP marks the end
+.\"of the list; no further watched areas are established or cleared.
+.\"An entry with a non-empty \f3pr_wflags\fP bit-mask
+.\"establishes a watched area for the virtual address range
+.\"specified by \f3pr_vaddr\fP and \f3pr_size\fP.
+.\"An entry with an empty \f3pr_wflags\fP bit-mask
+.\"clears any previously-established watched area
+.\"starting at the specified virtual address;
+.\"\f3pr_size\fP need not match the value used to establish
+.\"the watched area, but it must be non-zero.
+.PP
+A watchpoint is triggered when the traced process makes
+a memory reference that covers at least one byte of a watched area
+and the memory reference is a mode of interest as
+specified in \f3pr_wflags\fP.
+When a watchpoint is triggered, the process incurs a watchpoint trap.
+If FLTWATCH is being traced, the process stops;
+otherwise it is sent SIGTRAP;
+if SIGTRAP is being traced and not held, the process stops.
+If the access is a write access, the memory is not modified.
+If the process stops, its program counter refers to
+the instruction that triggered the watchpoint.
+\f3pr_info\fP in the \f3prstatus\fP structure contains
+information pertinent to the watchpoint trap.
+In particular, the \f3si_addr\fP field contains the
+virtual address of the memory reference that triggered the
+watchpoint and the \f3si_code\fP field contains one of
+\f3MA_READ\fP, \f3MA_WRITE\fP,
+or \f3MA_EXEC\fP,
+indicating read, write or execute access, respectively.
+.PP
+A watchpoint may be triggered while executing a system call
+that makes reference to the traced process's memory.
+Such a system call completes normally; a kernel watchpoint fault
+is taken after the system call completes but
+before the process returns to user level.
+If more than one watchpoint would be triggered by the system call,
+the first one encountered is the one reported.
+.PP
+PIOCSWATCH fails with EINVAL
+if an attempt is made
+to specify overlapping watched areas or
+to specify a watchpoint whose virtual address
+range includes invalid virtual addresses in the traced process.
+PIOCSWATCH fails with E2BIG
+if an attempt is made
+to establish more than the supported number of watched areas and
+with ESRCH if an attempt is made to delete a non-existent watchpoint.
+An attempt to delete watchpoints on a running process
+could result in failure with errno set to EBUSY.
+This is a temporary condition that occurs when the kernel is stepping
+over a watchpoint and a later subsequent attempt
+should succeed.
+This does not happen if the process is stopped.
+.PP
+Access to a process's memory through \f2/proc\fP will not trigger
+a watchpoint,
+even if the access is from the process itself (which must have opened
+its own \f2/proc\fP entry).
+.SS PIOCGWATCH
+PIOCGWATCH returns, in the array of \f3prwatch\fP structures
+addressed by \f2p\fP, the set of watched areas currently in effect.
+Elements beyond the number of actually established watched areas
+are filled with zeros.
+.SS *PIOCSET *PIOCRESET
+PIOCSET sets one or more modes of operation
+for the traced process.
+PIOCRESET resets these modes.
+The modes to be set or reset are specified by
+flags in a \f2long\fP addressed by \f2p\fP:
+.PP
+.RS
+.TP 16
+\f3PR_FORK\fP
+(inherit-on-fork)  When set, the process's tracing flags are inherited
+by the child of a \f2fork\fP(2).
+When reset, child processes start with all tracing flags cleared.
+.TP
+\f3PR_RLC\fP
+(run-on-last-close)  When set and the last writable \f2/proc\fP file descriptor
+referring to the traced process is closed,
+all of the process's tracing flags are cleared,
+any outstanding stop directive is canceled,
+and if the process is stopped, it is
+set running as though PIOCRUN had been applied to it.
+When reset, the process's tracing flags are retained and the process
+is not set running on last close.
+.TP
+\f3PR_KLC\fP
+(kill-on-last-close)  When set and the last writable \f2/proc\fP file descriptor
+referring to the traced process is closed,
+the process is terminated with SIGKILL.
+.RE
+.PP
+It is an error (EINVAL) to specify flags other than those
+described above or to apply these operations to a system process.
+The current modes are reported in the \f3prstatus\fP structure
+(see PIOCSTATUS).
+.PP
+Note that a processes using \f2/proc\fP can not
+assume any default settings
+for these flags, as some other process may have attached to the target
+earlier and reset the flags and then detached.
+.SS PIOCGREG *PIOCSREG
+These operations respectively get and set the process general registers
+into or out of an array addressed by \f2p\fP;
+the array has type \f3gregset_t\fP.
+Register contents are accessible using a set of predefined
+indices (see PIOCSTATUS).
+No bits of the processor-status register (PSR)
+or other privileged registers
+can be modified by PIOCSREG.
+.PP
+PIOCSREG fails (EBUSY) if applied to a process
+that is not stopped on an event of interest.
+If the process is not stopped, the register values
+returned by PIOCGREG are undefined.
+.SS PIOCGFPREG *PIOCSFPREG
+These operations respectively get and set the process floating-point
+registers into or out of a structure addressed by \f2p\fP;
+the structure has type \f3fpregset_t\fP.
+An error (EINVAL) is returned if there is no floating-point
+hardware on the machine.
+PIOCSFPREG fails (EBUSY) if applied to a process
+that is not stopped on an event of interest.
+If the process is not stopped, the register values
+returned by PIOCGFPREG are undefined.
+.SS *PIOCNICE
+The traced process's \f2nice\fP(2) priority is incremented by
+the amount contained in the \f2int\fP addressed by \f2p\fP.
+Only the superuser may better a process's priority in this way,
+but any user may make the priority worse.
+.SS PIOCPSINFO
+This returns miscellaneous process information such
+as that reported by \f2ps\fP(1).
+\f2p\fP is a pointer to a \f3prpsinfo\fP structure
+containing at least the following fields:
+.Ex
+typedef struct prpsinfo {
+	char pr_state;	/* numeric process state (see pr_sname) */
+	char pr_sname;	/* printable character representing pr_state */
+	char pr_zomb;	/* !=0: process terminated but not waited for */
+	char pr_nice;	/* nice for cpu usage */
+	u_long pr_flag;	/* process flags */
+	uid_t pr_uid;	/* real user id */
+	gid_t pr_gid;	/* real group id */
+	pid_t pr_pid;	/* unique process id */
+	pid_t pr_ppid;	/* process id of parent */
+	pid_t pr_pgrp;	/* pid of process group leader */
+	pid_t pr_sid;	/* session id */
+	caddr_t pr_addr;	/* physical address of process */
+	long pr_size;	/* size of process image in pages */
+	long pr_rssize;	/* resident set size in pages */
+	long pr_pagesize;	/* system page size, in bytes */
+	caddr_t pr_wchan;	/* wait addr for sleeping process */
+	timespec_t pr_start;	/* process start time, sec+nsec since epoch */
+	timespec_t pr_time;	/* usr+sys cpu time for this process */
+	long pr_pri;		/* priority, high value is high priority */
+	char pr_oldpri;	/* pre-SVR4, low value is high priority */
+	char pr_cpu;		/* pre-SVR4, cpu usage for scheduling */
+	dev_t pr_ttydev;   /* controlling tty device (PRNODEV if none) */
+	char pr_clname[8];		/* Scheduling class name */
+	char pr_fname[PRCOMSIZ];	/* last component of exec()ed pathname */
+	char pr_psargs[PRARGSZ];	/* initial characters of arg list */
+	u_int pr_pset;		/* associated processor set name */
+	cpuid_t pr_sonproc;	/* processor running on */
+	timespec_t pr_ctime;	/* usr+sys cpu time for all children */
+} prpsinfo_t;
+.Ee
+Some of the entries in \f3prpsinfo\fP, such as \f3pr_state\fP and
+\f3pr_flag\fP, are system-specific and should not be expected to retain
+their meanings across different versions of the operating system.
+\f3pr_addr\fP is a vestige of the past and has no real
+meaning in current systems.
+.PP
+PIOCPSINFO can be applied to a \f2zombie\fP process
+(one that has terminated but whose parent has not yet performed a
+\f2wait\fP(2) on it).
+.SS PIOCNMAP PIOCMAP
+These operations provide information about the memory mappings
+(virtual address ranges) associated with the traced process.
+PIOCNMAP returns, in the \f2int\fP addressed by \f2p\fP,
+the number of mappings that are currently active.
+The PIOCMAP operation may be used to obtain the list of
+currently active mappings, which is an array of structures of type
+\f3prmap_t\fP.
+The PIOCNMAP may be used to determine the minimum amount of storage
+that needs to be allocated to receive these structures, but the
+programmer should not assume that it is the maximum amount needed.
+If the PIOCNMAP and PIOCMAP calls are made on a process that is not
+stopped, the number of maps could change between the two ioctl calls
+and caller could fault if too few maps were allocated to hold the
+results of PIOCMAP.
+Note: for a better interface, see PIOCMAP_SGI below.
+For PIOCMAP, \f2p\fP addresses an array of elements of type
+\f3prmap_t\fP; one array element (one structure) is returned for
+each mapping, plus an additional element containing all zeros
+to mark the end of the list.
+The \f3prmap\fP structure contains at least the following fields:
+.Ex
+typedef struct prmap {
+	caddr_t pr_vaddr;	/* Virtual address */
+	u_long	pr_size;	/* Size of mapping in bytes */
+	off_t	pr_off;	/* Offset into mapped object, if any */
+	long	pr_mflags;	/* Protection and attribute flags */
+} prmap_t;
+.Ee
+\f3pr_vaddr\fP is the virtual address of the
+mapping within the traced process and \f3pr_size\fP is its size in bytes.
+\f3pr_off\fP is the offset within the mapped object (if any)
+to which the virtual address is mapped.
+.PP
+\f3pr_mflags\fP is a bit-mask of protection and attribute flags:
+.RS
+.TP 16
+.PD 0
+\f3MA_READ\fP
+mapping is readable by the traced process
+.TP
+\f3MA_WRITE\fP
+mapping is writable by the traced process
+.TP
+\f3MA_EXEC\fP
+mapping is executable by the traced process
+.TP
+\f3MA_SHARED\fP
+mapping changes are shared by the mapped object
+.TP
+\f3MA_BREAK\fP
+mapping is grown by the \f2brk\fP(2) system call
+.TP
+\f3MA_STACK\fP
+mapping is grown automatically on stack faults
+.TP
+\f3MA_PHYS\fP
+mapping corresponds to a physical device mapping
+.PD
+.RE
+.SS PIOCMAP_SGI
+This operation provides detailed information about the memory mappings
+(virtual address ranges) associated with the traced process.
+PIOCMAP_SGI returns either -1 or the number of of mappings
+that are currently active.
+In effect it performs both a PIOCNMAP
+and a PIOCMAP call (with additional information) with one ioctl.
+The PIOCMAP_SGI operation may be used to obtain the list of
+currently active mappings, which is an array of structures of type
+\f3prmap_sgi_t\fP.
+The user must preallocate an array of the maximum
+number of mapping structures they are willing to receive.
+One array element (one structure) is returned for
+each mapping, plus an additional element containing all zeros
+that also marks the end of the list.
+For PIOCMAP_SGI, \f2p\fP addresses a pointer to a structure called
+\f3prmap_sgi_arg_t\fP.
+It contains the following fields:
+.Ex
+typedef struct prmap_sgi_arg {
+	caddr_t pr_vaddr;	/* Base of map buffer */
+	ulong_t pr_size;	/* Size of buffer in bytes */
+} prmap_sgi_arg_t;
+.Ee
+\f3pr_vaddr\fP is the virtual address of the buffer to hold the mappings
+for the traced process and \f3pr_size\fP is its size in bytes.
+The \f3prmap_sgi_t\fP structure contains at least the following fields:
+.Ex
+typedef struct prmap_sgi {
+	caddr_t pr_vaddr;	/* Virtual base address */
+	ulong_t pr_size;	/* Size of mapping in bytes */
+	off_t	pr_off;	/* Offset into mapped object, if any */
+	ulong_t pr_mflags;	/* Protection and attribute flags */
+	pgno_t	pr_vsize;	/* # valid pages in this segment */
+	pgno_t	pr_psize;	/* # private pages in this segment */
+	pgno_t	pr_wsize;	/* Cost for this proc weighted base 256 */
+	pgno_t	pr_rsize;	/* # referenced pages in this segment */
+	pgno_t	pr_msize;	/* # modified pages in this segment */
+	dev_t	pr_dev;	/* Device # of segment iff mapped */
+	ino_t	pr_ino;	/* Inode # of segment iff mapped */
+} prmap_sgi_t;
+.Ee
+\f3pr_vaddr\fP is the virtual address of the
+mapping within the traced process and \f3pr_size\fP is its size in bytes.
+\f3pr_off\fP is the offset within the mapped object (if any)
+to which the virtual address is mapped.
+\f3pr_vsize\fP, \f3pr_psize\fP, \f3pr_wsize\fP, \f3pr_rsize\fP, \f3pr_msize\fP
+are page counts for the virtual mapping.
+\f3pr_dev\fP and \f3pr_dev\fP identify the filesystem resident object from
+which the mapping originates (if one exists).
+.PP
+\f3pr_mflags\fP is a bit-mask of protection and attribute flags:
+.RS
+.TP 16
+.PD 0
+\f3MA_READ\fP
+mapping is readable by the traced process
+.TP
+\f3MA_WRITE\fP
+mapping is writable by the traced process
+.TP
+\f3MA_EXEC\fP
+mapping is executable by the traced process
+.TP
+\f3MA_SHARED\fP
+mapping changes are shared by the mapped object
+.TP
+\f3MA_BREAK\fP
+mapping is grown by the \f2brk\fP(2) system call
+.TP
+\f3MA_STACK\fP
+mapping is grown automatically on stack faults
+.TP
+\f3MA_PHYS\fP
+mapping corresponds to a physical device mapping
+.TP
+\f3MA_PRIMARY\fP
+mapping is one of the processes core segments
+.TP
+\f3MA_COW\fP
+mapping corresponds to a copy on write segment
+.TP
+\f3MA_NOTCACHED\fP
+mapped address segment is not cached
+.TP
+\f3MA_SHMEM\fP
+mapping corresponds to a shared memory mapping
+.TP
+\f3MA_REFCNT_SHIFT\fP
+amount to shift right mflags to get reference count
+.PD
+.RE
+.SS PIOCPGD_SGI
+This operation provides information about the interior of a memory mappings
+(virtual address ranges) associated with the traced process.
+The PIOCPGD_SGI operation is be used to obtain the list of
+page descriptors, which is an array of structures of type
+\f3pgd_t\fP.
+The PIOCMAP_SGI ioctl may be used to determine the
+amount of storage that needs to be allocated to receive these
+structures.
+For PIOCPGD_SGI, \f2p\fP addresses a pointer to a
+\f3prpgd_sgi_t\fP structure that contains an array of elements of type
+\f3prpgd_t\fP.
+The \f3pgd_t\fP structure contains at least the following fields:
+.Ex
+typedef struct pgd {	/* per-page data */
+	short pr_flags;	/* flags */
+	short pr_value;	/* page count/fault offset */
+} pgd_t;
+.Ee
+The \f3prpgd_sgi_t\fP structure contains at least the following fields:
+.Ex
+typedef struct prpgd_sgi {
+	caddr_t pr_vaddr;	/* virtual base address of region to stat */
+	pgno_t	pr_pglen;	/* number of pages in data list... */
+	pgd_t	pr_data[1]; /* variable length array of page flags */
+} prpgd_sgi_t;
+.Ee
+\f3pr_vaddr\fP is the virtual address of the
+mapping within the traced process and \f3pr_pglen\fP is length of the
+\f3pr_data\fP array.
+.PP
+The \f3pr_flags\fP field for each page contains the following flags:
+.RS
+.TP 16
+.PD 0
+\f3PGF_REFERENCED\fP
+page is currently valid in system page table
+.TP
+\f3PGF_GLOBAL\fP
+page is marked global in system page table
+.TP
+\f3PGF_WRITEABLE\fP
+page is currently writeable in system page table
+.TP
+\f3PGF_NOTCACHED\fP
+page is marked non-cacheable in system page table
+.TP
+\f3PGF_ISVALID\fP
+page is marked valid for this process
+.TP
+\f3PGF_ISDIRTY\fP
+page is marked dirty for this process
+.TP
+\f3PGF_PRIVATE\fP
+page is marked private to this process
+.TP
+\f3PGF_FAULT\fP
+the pr_value field contains a fault offset
+.TP
+\f3PGF_USRHISTORY\fP
+accumulating history flag for caller
+.TP
+\f3PGF_REFHISTORY\fP
+page has been marked referenced
+.TP
+\f3PGF_WRTHISTORY\fP
+page has been marked dirty
+.TP
+\f3PGF_VALHISTORY\fP
+page has been marked valid
+.TP
+\f3PGF_CLEAR\fP
+clear valid & writeable bits in page table
+.PD
+.RE
+.PP
+The \f3pr_value\fP field for each page contains either a reference count
+or a fault offset value if the \f3PGF_CLEAR\fP operation was set on a
+previous call.
+This can be used to determine what function or variable
+inside a page that the process references or writes frequently.
+.PP
+.SS PIOCOPENM
+The return value \f2retval\fP provides a read-only file descriptor
+for a mapped object associated with the traced process.
+If \f2p\fP is zero the traced process's \f2exec\fP(2)ed file is found.
+This enables a debugger to find the object file symbol table
+without having to know the pathname of the executable file.
+If \f2p\fP is non-zero it points to a \f3caddr_t\fP containing a virtual
+address within the traced process and the mapped object, if any,
+associated with that address is found; this can be used to get a
+file descriptor for a shared library that is attached to the process.
+On error (invalid address, physical device mapping,
+or no mapped object for the designated address),
+\-1 is returned and errno is set to EINVAL.
+.SS PIOCCRED
+Fetch the set of credentials associated with the process.
+\f2p\fP points to an instance of \f3prcred_t\fP that is filled
+by the operation.
+The \f3prcred\fP structure contains at least the following fields:
+.Ex
+typedef struct prcred {
+	uid_t	pr_euid;		/* Effective user id */
+	uid_t	pr_ruid;		/* Real user id */
+	uid_t	pr_suid;		/* Saved user id (from exec) */
+	gid_t	pr_egid;		/* Effective group id */
+	gid_t	pr_rgid;		/* Real group id */
+	gid_t	pr_sgid;		/* Saved group id (from exec) */
+	u_int	pr_ngroups;	/* Number of supplementary groups */
+} prcred_t;
+.Ee
+.SS PIOCGROUPS
+Fetch the set of supplementary group IDs
+associated with the process.
+\f2p\fP points to an array of elements of type \f3gid_t\fP,
+that will be filled by the operation.
+PIOCCRED can be applied beforehand
+to determine the number of groups
+(\f3pr_ngroups\fP) that will be returned
+and the amount of storage that should be allocated to hold them.
+.SS PIOCTLBMISS
+Enable special user TLB handling.
+The TLB is a hardware coprocessor that makes virtual-to-physical
+address translations.
+\f2p\fP points to an integer that specifies the handling desired.
+If the value is \f3TLB_COUNT\fP, a record will be kept of every
+virtual-address TLB refill that occurs while the process mapped
+by \f2fildes\fP is running.
+If the value is \f3TLB_STD\fP, counting will be disabled (the default
+mode).
+It is important to note that monitoring TLB efficiency can be a
+useful tool, but the performance of the code that refills the TLB will
+be degraded.
+.PP
+The TLB refill counts can be obtained by \f3PIOCUSAGE\fP.
+The \f3struct prusage\fP field \f3pu_utlb\fP accounts for TLB refills
+that occurred while the process was running in user mode, and the
+field \f3pu_ktlb\fP accounts for refills that occurred while executing
+system calls on behalf of the user or while handling hardware interrupt
+code while the user process was scheduled.
+.SS PIOCUSAGE
+PIOCUSAGE returns process usage information.
+\f2p\fP points to a \f3prusage\fP structure
+that is filled by the operation.
+The fields in a \f3prusage\fP structure are implementation dependent;
+no application can assume portability in this area.
+See \f2<sys/procfs.h>\fP for the exact definition
+for a particular implementation.
+.PP
+The SGI implementation supports the following fields:
+.Ex
+typedef struct prusage {
+	timespec_t  pu_tstamp;	/* time stamp */
+	timespec_t  pu_starttime;	/* process start time */
+	timespec_t  pu_utime;	/* user CPU time */
+	timespec_t  pu_stime;	/* system CPU time */
+	u_long	pu_minf;		/* minor (mapping) page faults */
+	u_long	pu_majf;		/* major (disk) page faults */
+	u_long	pu_utlb;		/* user TLB misses */
+	u_long	pu_nswap;		/* number of swaps */
+	u_long	pu_gbread;	/* gigabytes ... */
+	u_long	pu_bread;		/*		 and bytes read */
+	u_long	pu_gbwrit;	/* gigabytes ... */
+	u_long	pu_bwrit;		/*		 and bytes written */
+	u_long	pu_sigs;		/* signals received */
+	u_long	pu_vctx;		/* voluntary context switches */
+	u_long	pu_ictx;		/* involuntary context switches */
+	u_long	pu_sysc;		/* system calls */
+	u_long	pu_syscr;		/* read() system calls */
+	u_long	pu_syscw;		/* write() system calls */
+	u_long	pu_syscps;	/* poll() or select() system calls */
+	u_long	pu_sysci;		/* ioctl() system calls */
+	u_long	pu_graphfifo;	/* graphics pipeline stalls */
+	u_long	pu_graph_req[8];	/* graphics resource requests */
+	u_long	pu_graph_wait[8];	/* graphics resource waits */
+	u_long	pu_size;		/* size of swappable image in pages */
+	u_long	pu_rss;		/* resident size of swappable image */
+	u_long	pu_inblock;	/* block input operations */
+	u_long	pu_oublock;	/* block output operations */
+	u_long	pu_vfault;	/* total number of vfaults */
+	u_long	pu_ktlb;		/* kernel TLB misses */
+} prusage_t;
+.Ee
+.SS PIOCGETPTIMER
+PIOCGETPTIMER returns an array of timers indicating the amount of time the
+process has spent in each of the following states:
+.Ex
+#include <time.h>
+#include <sys/timers.h>
+
+struct timespec ptime[MAX_PROCTIMER];
+.Ee
+.RS
+.TP 16
+.PD 0
+\f3AS_USR_RUN\fP
+running in user mode
+.TP 16
+\f3AS_SYS_RUN\fP
+running in system mode
+.TP 16
+\f3AS_INT_RUN\fP
+running in interrupt mode
+.TP 16
+\f3AS_BIO_WAIT\fP
+waiting for block I/O
+.TP 16
+\f3AS_MEM_WAIT\fP
+waiting for memory
+.TP 16
+\f3AS_SELECT_WAIT\fP
+waiting in select
+.TP 16
+\f3AS_JCL_WAIT\fP
+stopped because of job control
+.TP 16
+\f3AS_RUNQ_WAIT\fP
+waiting to run on run queue
+.TP 16
+\f3AS_SLEEP_WAIT\fP
+waiting for resource
+.TP 16
+\f3AS_STRMON_WAIT\fP
+waiting for the stream monitor
+.TP 16
+\f3AS_PHYSIO_WAIT\fP
+waiting for raw I/O
+.PD
+.RE
+.PP
+\f2p\fP is a pointer to an array of \f3MAX_PROCTIMER\fP \f3timespec\fP
+structures.
+.SS PIOCOPENPD
+PIOCOPENPD is not currently implemented on SGI machines.
+It is under consideration for future releases.
+.PP
+The return value \f2retval\fP provides a read-only file descriptor
+for a ``page data file'', enabling tracking of address space
+references and modifications on a per-page basis.
+.PP
+A \f2read\fP(2) of the page data file descriptor returns structured page data
+and atomically clears the page data maintained for the file by the system.
+That is to say, each read returns data collected since the last read;
+the first read returns data collected since the file was opened.
+When the call completes, the read buffer contains the following
+structure as its header and thereafter
+contains a number of variable length structures
+that must be accessed by walking linearly through the buffer.
+.PP
+.Ex
+typedef struct prpageheader {
+	timespec_t tstamp;	/* real time time stamp */
+	u_long	nmap;	/* number of address space mappings */
+	u_long	npage;	/* total number of pages */
+} prpageheader_t;
+.Ee
+The header is followed by \f3nmap\fP variable-length
+\f3prasmap\fP structures:
+.PP
+.Ex
+typedef struct prasmap {
+	caddr_t	vaddr;	/* virtual address */
+	u_long	npage;	/* number of pages in mapping */
+	u_char	data[1];	/* referenced, modified, present flags */
+} prasmap_t;
+.Ee
+The \f3data\&[\&]\fP array is of variable length, with one entry
+for each page in the mapping, \f3npage\fP entries altogether,
+rounded up with empty entries at the end so that the structure
+size is an integral numbers of long's.
+\f3data\&[\&]\fP entries may contain these flags:
+.PP
+.RS
+.PD 0
+.TP 16
+\f3PG_PRESENT\fP
+page is resident in memory now
+.TP
+\f3PG_REFERENCED\fP
+page has been referenced since last read
+.TP
+\f3PG_MODIFIED\fP
+page has been modified since last read
+.RE
+.PD
+.PP
+If the read buffer is not large enough to contain all of the page
+data, the read fails with E2BIG and the page data is not cleared.
+The required size of the read buffer can be determined through \f2fstat\fP(2).
+Application of \f2lseek\fP(2) to the page data file descriptor is ineffective.
+Closing the page data file terminates the system overhead
+associated with collecting the data.
+.SS PIOCGETPR PIOCGETU
+These operations copy, respectively, the traced process's \f2proc\fP
+structure and \f2user area\fP into the buffer addressed by \f2p\fP.
+They are provided for completeness
+but it should be unnecessary to access either
+of these structures directly since relevant status information
+is available through other control operations.
+Their use is discouraged because a program making use of them
+is tied to a particular version of the operating system.
+.PP
+PIOCGETPR can be applied to a \f2zombie\fP process
+(see PIOCPSINFO).
+.SS PIOCACINFO
+PIOCACINFO returns the currently accumulated accounting
+information for the process.
+\f2p\fP points to a \f3pracinfo\fP structure that is filled in by the
+operation.
+The fields in \f3pracinfo\fP are implementation dependent; no
+application can assume portability in this area.
+See \f2<sys/procfs.h>\fP and \f2<sys/extacct.h>\fP for the exact
+definition of a particular implementation.
+.PP
+The SGI implementation supports the following fields:
+.Ex
+typedef struct pracinfo {
+	char		pr_version;	/* Accounting data version */
+	char		pr_flag;		/* Miscellaneous flags */
+	char		pr_nice;		/* Nice value */
+	unchar	pr_sched;		/* Scheduling discipline */
+						/* (see sys/schedctl.h) */
+	__int32_t	pr_spare1;	/* reserved */
+	ash_t	pr_ash;		/* Array session handle */
+	prid_t	pr_prid;		/* Project ID */
+	time_t	pr_btime;		/* Begin time (in secs since 1970)*/
+	time_t	pr_etime;		/* Elapsed time (in HZ) */
+	__int32_t	pr_spare2[2];	/* reserved */
+	struct acct_timers  pr_timers; /* Assorted timers: see extacct.h */
+	struct acct_counts  pr_counts; /* Assorted counters: (ditto) */
+	__int64_t	pr_spare3[8];	/* reserved */
+} pracinfo_t;
+.Ee
+.SS PIOCGETSN0EXTREFCNTRS  PIOCGETSN0REFCNTRS
+PIOCGETSN0EXTREFCNTRS returns the extended memory reference counter values
+in an Origin system for a specified virtual address space range.
+See refcnt(5). 
+.PP
+The third argument is used to specify the virtual address space range
+and the user buffer where to store the counter values. This argument is
+of type sn0_refcnt_args_t, as defined in <sys/SN/hwcntrs.h>:
+.PP
+.Ex
+typedef struct sn0_refcnt_args {
+        caddr_t             vaddr;
+        long                len;
+        sn0_refcnt_buf_t*   buf;
+} sn0_refcnt_args_t;
+.Ee
+.PP
+The first field \f3vaddr\fP is the base of the virtual address space range,
+the field \f3len\fP is the corresponding length in bytes, and the field
+\f3buf\fP is a pointer to a user buffer where the system will store
+the counter values and additional information. This buffer is an array
+of elements of type sn0_refcnt_buf_t, where each element corresponds
+to the counter information associated with one hardaware page:
+.PP
+.Ex
+typedef struct sn0_refcnt_buf {
+	sn0_refcnt_set_t   refcnt_set;
+	__uint64_t         paddr;
+        __uint64_t         page_size;
+        cnodeid_t          cnodeid;  
+} sn0_refcnt_buf_t;
+.Ee
+.PP
+The field \f3refcnt_set\fP contains the set of counters associated
+with the virtual address passed via \f3sn0_refcnt_args\fP, \f3paddr\fP is the
+address of the physical page associated with this virtual address,
+\f3page_size\fP is the page size being used to map it, and \f3cnodeid\fP
+is the physical page home node, expressed in terms of \fICompact
+Node Identifiers\fP which can be mapped back to node names using the
+command topology(1).
+The \f3refcnt_set\fP type is defined by
+.PP
+.Ex
+typedef struct sn0_refcnt_set {
+        refcnt_t    refcnt[SN0_REFCNT_MAX_COUNTERS];
+        __uint64_t  flags;
+} sn0_refcnt_set_t;
+.Ee
+.PP
+The field \f3refcnt\fP is the actual set of counters (one counter
+per node), and \f3flags\fP
+is a state vector reserved for future use.
+The counters in \f3refcnt\fP are ordered according to the 
+\fICompact Node Identifiers\fP, also known as \f3cnodeids\fP (numa(5)).
+
+.PP
+PIOCGETSN0REFCNTRS instructs the system to return the
+actual hardware counter values instead of the extended software counter
+values returned by PIOCGETSN0EXTREFCNTRS.
+.PP
+The following section of code shows an example of use for this interface:
+.PP
+.Ex
+#include <sys/types.h>
+#include <stdio.h>
+#include <malloc.h> 
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <sys/prctl.h>
+#include <procfs/procfs.h>
+#include <sys/syssgi.h>
+#include <sys/sysmp.h>
+#include <sys/SN/hwcntrs.h>
+
+/*
+ * This routine makes two assumptions that may not
+ * be true in all systems:
+ * Length of hardware page (counter granularity): 0x1000 bytes
+ * Length of base software page (smallest mappable memory area): 0x4000 bytes
+ */
+
+void
+print_refcounters(char* vaddr, int len)
+{
+        pid_t pid = getpid();
+        char  pfile[256];
+        int fd;
+        sn0_refcnt_buf_t* refcnt_buffer;
+        sn0_refcnt_buf_t* direct_refcnt_buffer;        
+        sn0_refcnt_args_t* refcnt_args;
+        int npages;
+        int gen_start;
+        int numnodes;
+        int page;
+        int node;
+
+        sprintf(pfile, "/proc/%05d", pid);
+        if ((fd = open(pfile, O_RDONLY)) < 0) {
+		fprintf(stderr,"Can't open /proc/%d", pid);
+		exit(1);
+	}
+
+        vaddr = (char *)( (unsigned long)vaddr & ~0xfff );
+        npages = (len + 0xfff) >> 12;
+
+        if ((refcnt_buffer = malloc(sizeof(sn0_refcnt_buf_t) * npages)) == NULL) {
+                perror("malloc refcnt_buffer");
+                exit(1);
+        }
+        
+        if ((direct_refcnt_buffer = malloc(sizeof(sn0_refcnt_buf_t) * npages)) == NULL) {
+                perror("malloc refcnt_buffer");
+                exit(1);
+        }
+        
+        if ((refcnt_args = malloc(sizeof(sn0_refcnt_args_t))) == NULL) {
+                perror("malloc refcnt_args");
+                exit(1);
+        }
+
+        refcnt_args->vaddr = vaddr;
+        refcnt_args->len = len;
+        refcnt_args->buf = refcnt_buffer;
+
+        if ((gen_start = ioctl(fd, PIOCGETSN0EXTREFCNTRS, (void *)refcnt_args)) < 0) {
+		perror("ioctl  PIOCGETSN0EXTREFCNTRS returns error");
+		exit(1);
+	}
+
+        refcnt_args->vaddr = vaddr;
+        refcnt_args->len = len;
+        refcnt_args->buf = direct_refcnt_buffer;        
+        if ((gen_start = ioctl(fd, PIOCGETSN0REFCNTRS, (void *)refcnt_args)) < 0) {
+		perror("ioctl  PIOCGETSN0REFCNTRS returns error");
+		exit(1);
+	}
+        
+        if ((numnodes = sysmp(MP_NUMNODES)) < 0) {
+                perror("sysmp MP_NUMNODES");
+                exit(1);
+        }
+
+        for (page = 0; page < npages; page++) {
+                printf("page[%05d, 0x%lx, 0x%llx (0x%llx)]:",
+                       page,
+                       vaddr + page*0x1000,
+                       refcnt_buffer[page].paddr,
+                       refcnt_buffer[page].paddr >> 14);
+                for (node = 0; node < numnodes; node++) {
+                        printf(" %05lld (%06lld)",
+                               refcnt_buffer[page].refcnt_set.refcnt[node],
+                               direct_refcnt_buffer[page].refcnt_set.refcnt[node]);
+                }
+                printf("\n");
+        }
+
+        close(fd);
+        free(refcnt_args);
+        free(refcnt_buffer);
+}
+.Ee
+.SS PIOCGETINODE
+PIOCGETINODE returns information about an open file for the process.
+\f2p\fP points to a \f3prinodeinfo\fP structure containing the 
+file descriptor of interest (in \f3pi_fd\fP).
+On return \f3pi_dev\fP, \f3pi_inum\fP, and \f3pi_gen\fP contain the 
+filesystem device, inode number, and inode generation number
+respectively.
+Further information about the file can then be obtained through
+\f2syssgi\fP(\f3SGI_FS_BULKSTAT\fP), for instance.
+The \f3pi_dev\fP value matches that returned by \f2statvfs\fP (\f3f_fsid\fP)
+and \f2stat\fP (\f3st_dev\fP).
+Bad values for \f3pi_fd\fP result in EBADF errors;
+if the referenced file is actually a socket then errno is set to EINVAL.
+Filesystems other than XFS and EFS return 0 for the \f3pi_gen\fP value.
+.SH NOTES
+Each operation (\f2ioctl\fP or I/O) is guaranteed to be atomic with
+respect to the traced process, except when applied to a system process.
+.PP
+To wait for one or more of a set of processes to stop,
+\f2/proc\fP file descriptors can be used in a \f2poll\fP(2) system call.
+On successful return, the polling event POLLPRI
+indicates that the process has stopped on an ``event of interest'' (see
+\f3PIOCSTOP\fP above).
+Although they cannot be requested, the polling events
+POLLHUP, POLLERR and POLLNVAL
+may be returned.
+POLLHUP indicates that the process has terminated.
+POLLERR indicates that the file descriptor has become invalid.
+POLLNVAL is returned immediately if POLLPRI is requested
+on a file descriptor referring to either itself or a system process
+(see PIOCSTOP).
+\f2/proc\fP file descriptors may also be used in a \f2select\fP(2)
+system call.
+Selecting for an exceptional event has the same semantics as
+polling for POLLPRI.
+Selecting for reading or writing or polling for POLLIN or POLLOUT
+will always return true.
+See the \f2poll\fP(2) and \f2select\fP(2) man pages
+for further details.
+.PP
+\f2poll\fP() or \f2select\fP() may not be used on the /proc directory
+itself.
+.PP
+For security reasons, except for the superuser, an open of a
+\f2/proc\fP file fails unless both the user-ID and group-ID of
+the caller match those of the traced process and the process's
+object file is readable by the caller.
+Files corresponding to setuid
+and setgid processes can be opened only by the superuser.
+Even if held by the superuser, an open process file descriptor
+becomes invalid if the traced process performs an \f2exec\fP() of a
+setuid/setgid object file or an object file that it cannot read.
+Any operation performed on an invalid file descriptor,
+except \f2close\fP(2), fails with EAGAIN.
+In this situation, if any tracing flags are set and the process
+file descriptor is open for writing, the process will
+have been directed to stop and
+its run-on-last-close flag will have been set (see PIOCSET).
+This enables a controlling process (if it has permission) to reopen
+the process file to get a new valid file descriptor, close the
+invalid file descriptor, and proceed.
+Just closing the invalid file descriptor causes the traced process
+to resume execution with no tracing flags set.
+Any process not currently open for writing via \f2/proc\fP but that has
+left-over tracing flags from a previous open and that \f2exec\fPs
+a setuid/setgid or unreadable object file will not be stopped
+but will have all its tracing flags cleared.
+.PP
+Descriptions of structures in this document include only interesting
+structure elements, not filler and padding fields, and
+may show elements out of order for descriptive clarity.
+The actual structure definitions are contained in \f2<sys/procfs.h>\fP.
+.PP
+For reasons of symmetry and efficiency
+there are more control operations than strictly necessary.
+.PP
+Programs compiled with the old 32-bit abi calling convention can
+perform ioctls on programs compiled with the new 32-bit abi or 64-bit abi
+calling conventions by "or'ing" the ioctl with PIOC_IRIX5_N32 or
+PIOC_IRIX5_64, respectively, and passing in a pointer to a buffer that is
+big enough to hold the larger structure.
+.SH FILES
+.PD 0
+.TP 16
+/proc
+directory (list of active processes)
+.TP
+/proc/\f2nnnnn\fP
+process image
+.PD
+.SH SEE ALSO
+mntproc(1M),
+ioctl(2),
+open(2),
+poll(2),
+ptrace(2),
+sigaction(2),
+signal(2),
+stat(2),
+statvfs(2),
+syssgi(2),
+siginfo(5),
+signal(5).
+.SH DIAGNOSTICS
+Errors that can occur in addition to the
+errors normally associated with filesystem access:
+.TP 16
+ENOENT
+The traced process has terminated after being opened.
+.TP
+EIO
+I/O was attempted at an illegal address in the traced process.
+.TP
+ENXIO
+I/O was attempted to an isolated processes address space.
+.TP
+EBADF
+An I/O or \f2ioctl\fP operation requiring write access was
+attempted on a file descriptor not open for writing;
+PIOCGETINODE was applied to a process file which was not open.
+.TP
+EBUSY
+PIOCSTOP or PIOCWSTOP was applied to a system process;
+an exclusive \f2open\fP(2) was attempted
+on a process file already open for writing;
+an \f2open\fP(2) for writing was attempted
+and an exclusive open is in effect on the process file;
+PIOCRUN, PIOCSREG or PIOCSFPREG
+was applied to a process not stopped on an event of interest;
+an attempt was made to mount \f2/proc\fP when it is already mounted.
+.TP
+EPERM
+Someone other than the superuser attempted to better
+a process's priority by issuing PIOCNICE.
+.TP
+ENOSYS
+An attempt was made to perform an unsupported operation
+(such as create, remove, link, or unlink) on an entry in \f2/proc\fP.
+.TP
+EFAULT
+An I/O or \f2ioctl\fP request referred to an invalid
+address in the controlling process.
+.TP
+EINVAL
+In general this means that some invalid argument
+was supplied to a system call.
+The list of conditions eliciting this error includes:
+the \f2ioctl\fP code is undefined;
+the \f2ioctl\fP code is not implemented;
+an \f2ioctl\fP operation was issued on a file descriptor
+referring to the \f2/proc\fP directory;
+an out-of-range signal number was specified with
+PIOCSSIG, PIOCKILL, or PIOCUNKILL;
+SIGKILL was specified with PIOCUNKILL;
+an illegal virtual address was specified in a PIOCOPENM request;
+overlapping watched areas were specified in a PIOCSWATCH request;
+an attempt was made to establish more than the supported number
+of watched areas in a PIOCSWATCH request;
+PIOCGFPREG or PIOCSFPREG was issued on
+a machine without floating-point hardware;
+the file specified to PIOCGETINODE is a socket.
+.TP
+E2BIG
+Data to be returned in a \f2read\fP(2) of the page data file
+exceeds the size of the read buffer provided by the caller.
+.TP
+EINTR
+A signal was received by the controlling process while waiting for
+the traced process to stop via PIOCSTOP or PIOCWSTOP.
+.TP
+EAGAIN
+The traced process has performed an \f2exec\fP
+of a setuid/setgid object file
+or of an object file that it cannot read;
+all further operations on the process file descriptor
+(except \f2close\fP(2)) elicit this error.
+.SH BUGS
+When a signal is sent to the target process, but it is
+cleared (either by PIOCUNKILL or by using the PRCSIG
+flag to PIOCRUN),
+most system calls complete normally and do not return EINTR.
+However, the specific system calls \f2msgsnd\fP(2), \f2msgrcv\fP(2),
+\f2semop\fP(2),
+\f2uspsema\fP(3P), \f2poll\fP(2) and \f2ioctl\fP(2)
+to the \f2imon\fP(7M) device
+are interrupted and do return EINTR. 

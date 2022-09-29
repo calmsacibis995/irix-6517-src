@@ -1,0 +1,295 @@
+.TH FETCHOP 3P
+.SH NAME
+atomic_alloc_res_ident, atomic_alloc_res_ident_addr,
+atomic_alloc_reservoir, atomic_alloc_reservoir_addr, 
+atomic_alloc_var_ident, atomic_alloc_variable, atomic_set_perms,
+atomic_free_variable, atomic_free_var_ident, atomic_free_reservoir,
+atomic_store, atomic_store_and_or, atomic_store_and_and,
+atomic_load, atomic_fetch_and_increment, atomic_fetch_and_decrement,
+atomic_clear \- atomic operations employing special fetchop hardware
+.SH SYNOPSIS
+
+\f4#include <sys/pmo.h>\f1
+.br
+\f4#include <fetchop.h>\f1
+.PP
+\f4atomic_res_ident_t atomic_alloc_res_ident(size_t count);\f1
+.PP
+\f4atomic_reservoir_t atomic_alloc_reservoir(pmo_handle_t policy, size_t count, atomic_res_ident_t res_id);\f1
+.PP
+\f4atomic_reservoir_t atomic_alloc_reservoir_addr(pmo_handle_t policy, size_t count, atomic_res_ident_t res_id, void *addr, uint flags);\f1
+.PP
+\f4atomic_var_ident_t atomic_alloc_var_ident(atomic_reservoir_t reservoir);\f1
+.PP
+\f4atomic_var_t *atomic_alloc_variable(atomic_reservoir_t reservoir, atomic_var_ident_t, var_id);\f1
+.PP
+\f4int atomic_set_perms(atomic_reservoir_t reservoir, atomic_perm_t perms);\f1
+.PP
+\f4void atomic_free_variable(atomic_reservoir_t reservoir, atomic_var_t * variable);\f1
+.PP
+\f4void atomic_free_var_ident(atomic_reservoir_t res_id, atomic_var_ident_t var_ident);\f1
+.PP
+\f4void atomic_free_reservoir(atomic_reservoir_t reservoir);\f1
+.PP
+\f4void atomic_store(atomic_var_t *var, atomic_var_t value);\f1
+.PP
+\f4void atomic_store_and_or(atomic_var_t *var, atomic_var_t value);\f1
+.PP
+\f4void atomic_store_and_and(atomic_var_t *var, atomic_var_t value);\f1
+.PP
+\f4atomic_var_t atomic_load(atomic_var_t *var);\f1
+.PP
+\f4atomic_var_t atomic_fetch_and_increment(atomic_var_t *var);\f1
+.PP
+\f4atomic_var_t atomic_fetch_and_decrement(atomic_var_t *var);\f1
+.PP
+\f4atomic_var_t atomic_clear(atomic_var_t *var);\f1
+.PP
+
+
+.SH Arguments
+
+.IP "\f2res_id\fP" 10n
+The handle used by unrelated processes to allocate a reservoir.  This is
+the value returned by
+.IR atomic_alloc_res_ident().
+.IP "\f2policy\fP" 10n
+The handle of a policy module created by the user.
+.IP "\f2count\fP" 10n
+The number of atomic variables that will be needed in a reservoir.
+.IP "\f2addr\fP" 10n
+The base address when choosing or getting information about the base
+address where the variables are allocated.
+.IP "\f2flags\fP" 10n
+The flags indicate whether to set or return the base address of the variables.
+.IP "\f2reservoir\fP" 10n
+The handle for a reservoir from which variables can be allocated.  This is
+the value return by
+.IR atomic_alloc_reservoir().
+.IP "\f2var_id\fP" 10n
+The handle used by unrelated processes to allocate a variable.  This is the
+value returned by
+.IR atomic_alloc_var_ident().
+.IP "\f2var\fP" 10n
+The handle for an atomic variable returned by
+.IR atomic_alloc_variable().
+.IP "\f2value\fP" 10n
+A value to be stored, ORed, or ANDed against.
+
+.\" **********************
+.SH DESCRIPTION
+.\" **********************
+
+The primary function of the fetchop library (libfetchop) is to provide
+atomic operations on memory.  If two processors attempt to simultaneously
+modify a piece of memory, this library, via hardware, will ensure that the
+operations are serialized.  These operation can be used to eliminate race
+conditions when two processors desire to increment a variable.  The atomic
+functions are performed using the hardware available on the system on which
+the program is run.  For the Origin series (Origin 200 and 2000) this means
+invoking the special fetchop hardware support for operations on uncached
+memory.  When special support is lacking, as on other platforms, the
+operations are performed using the load-linked, store-conditional
+instruction sequence of the MIPS instruction set.  The fetchop library
+(libfetchop.so) allows these atomic operations to be performed both on
+memory shared in an address space as well as memory across address spaces.
+The setup for these two cases varies but the actual calls to the atomic
+operations on the variables remain the same.
+
+To initialize the fetchop library for processes that will share an address
+space (such as sproc'ed processes), a call to
+\f2atomic_alloc_reservoir\f1() should be made.  A NULL value should be
+given for the res_id.  The function will return a handle to a reservoir
+that can be used to allocate variables.  A call to
+\f2atomic_alloc_variable\f1() (with NULL for \f2var_id\f1) should be made
+for each variable desired.  Before exiting the program should call
+\f2atomic_free_variable\f1() for each variable used and
+\f2atomic_free_reservoir\f1() once.
+
+The fetchop library has the ability to allow programs not sharing the same
+address space to perform atomic operations on the same memory.  The setup
+requires an extra step for both the reservoir and variable.  The first call
+that should be made is \f2atomic_alloc_res_ident\f1().  This call should be
+made once and only once.  This call return a unique global identifier that
+all processes can use when calling atomic_alloc_reservoir() using the
+identifier returned by \f2atomic_alloc_res_ident\f1() as the value for
+\f2res_id\f1.  A similar set of steps is followed for
+atomic_alloc_var_ident() and \f2atomic_alloc_variable\f1().  For
+convenience, there is no reason why one process can't make all the calls to
+both alloc_res_ident and alloc_var_ident and then pass all the information
+(the res_id and each var_id) to its peers in one message.  Before exiting the
+program should call \f2atomic_free_var_ident\f1() and
+\f2atomic_free_variable\f1() for each variable used and
+\f2atomic_free_reservoir\f1() once.
+
+NOTE: In the case where processes don't share an address space, the fetchop
+library makes use of shared memory so it is important that the free calls
+are executed.  If they fail to be executed either because they are not in
+the program or the program exits prematurely, the shared memory segments
+can, and should be cleaned up "by hand" by using the ipcrm(1) command.
+
+NOTE: The space allocated for the fetchop space is pinned down in memory
+and as such the user should allocate only the numbers of variables they
+plan to use.
+
+.\" **********************
+.SS Examples
+.\" **********************
+Example for processes sharing address space:
+
+atomic_reservoir = atomic_alloc_reservoir(USE_DEFAULT_PM,10, NULL);
+
+atomic_var = atomic_alloc_variable(atomic_reservoir, NULL);
+
+loop over work
+  atomic_fetch_and_increment(atomic_var);
+
+ret_inc = atomic_load(atomic_var);
+ 
+printf("finishing value of atomic var %lld", ret_inc);
+
+atomic_free_reservoir(atomic_reservoir);
+
+
+
+Example for processes across address spaces:
+
+
+atomic_res_ident = atomic_alloc_res_ident(10);
+
+atomic_reservoir = atomic_alloc_reservoir(USE_DEFAULT_PM,10, atomic_res_ident);
+
+atomic_var_ident = atomic_alloc_var_ident(atomic_reservoir);
+
+atomic_var = atomic_alloc_variable(atomic_reservoir, atomic_var_ident);
+
+loop over work
+  atomic_fetch_and_increment(atomic_var);
+
+ret_inc = atomic_load(atomic_var);
+ 
+printf("finishing value of atomic var %lld", ret_inc);
+
+atomic_free_reservoir(atomic_reservoir);
+
+.PP
+.\" **********************
+.SS Resource Allocation
+.\" **********************
+.PP
+\f4atomic_alloc_res_ident()\f1
+Establishes a system-wide unique reservoir id that can be used by unrelated
+processes (not in the same address space) to allocate a reservoir out of
+which they can obtain variables.  \f2count\f1 indicates the number of
+variables the user will wish to use.
+
+\f4atomic_alloc_reservoir()\f1
+Initializes a atomic variable reservoir sized to hold a \f2count\f1
+variables.  In systems with special hardware for atomic operations, the
+reservoir may be allocated in a special region of memory.  When hardware
+support is not provided, the reservoir is allocated in the process heap.
+In either case the memory is pinned down so care should be taken to
+allocate only the number of variables that are going to be used.  If NULL
+is passed for the \f2res_id\f1, the memory will be mapped from /dev/zero.
+If something other than NULL is passed in as the res_ident, then the memory
+is allocated from shared memory (see shmget(2)).  Care should be taken to
+call \f2atomic_free_reservoir\f1 upon exiting.  If a program exits prematurely
+then the shared memory can be removed by hand with \f2ipcrm\f1(1).
+.PP
+The policy module specified in 
+.IR policy 
+is used to indicate where to
+place the atomic variables, if users care about the locality of the
+variables on a Non-Uniform Memory Access (NUMA) platforms.  If no
+particular policy module is required, pass the constant
+USE_DEFAULT_PM.  The system will allocate the atomic variables using
+the default policy for the user process.
+.PP
+The handle of the reservoir is returned if the function is successful.
+This handle is used to allocate variables.
+NULL is returned if a reservoir could not be allocated.
+
+\f4atomic_alloc_reservoir_addr() \f1
+Similar to \f2atomic_alloc_reservoir()\f1 except that it is possible either
+to set or to get the address of the base address of the variables.  If
+ATOMIC_GET_VADDR is passed in for the \f2flags\f1, the \f2vaddr\f1 will
+have the value where the variables were placed.  If ATOMIC_SET_VADDR is
+passed in for the \f2flags\f1, then \f2vaddr\f1 is taken as the location
+where the library is supposed to place the variables.  A failure to place
+the base of the variables at this location is considered a failure, and
+NULL is returned.
+
+\f4atomic_alloc_var_ident()\f1
+Establishes a system-wide unique variable id for this \f2reservoir\f1 that
+can be used by unrelated processes (not in the same address space) to
+allocate a variable with the guarantee that each will obtain access to the
+same memory.  Upon success the identifier is returned else NULL is
+returned.
+
+\f4atomic_alloc_variable()\f1
+Allocates a variable from the given reservoir.  If all processes are within
+one address space, the var_id can be NULL otherwise the value returned by
+\f2atomic_alloc_var_ident\f1() should be used.  Upon success a handle to
+the the variable is returned else NULL is returned.
+
+\f4atomic_set_perms()\f1
+Meaningful only in the case when \f2atomic_alloc_var_ident\f1() has been
+called to establish mapping between unrelated processes.  This call allows
+the mapping to also occur between programs running under different userids.
+Upon success 0 is returned, else -1 is returned with errno set.
+
+\f4atomic_free_variable()\f1
+Frees an atomic variable so that it can be reused.
+
+\f4atomic_free_var_ident()\f1
+Used only in when processes are sharing address space.  Frees the variable
+identifier so that it can be re-used to allocate another variable.
+
+\f4atomic_free_reservoir()\f1
+Frees the atomic reservoir.  It is especially important that this is called
+in programs using fetchop across address spaces.  If the program fails to
+call \f2atomic_free_reservoir\f1() either because the code was not in the
+program or the program exits prematurely, the shared memory segments can,
+and should be cleaned up "by hand" by using the \f2ipcrm\f1(1) command.
+
+.\" **********************
+.SS Atomic Operations
+.\" **********************
+
+\f4atomic_store()\f1
+Stores \f2value\f1 in the memory addressed by \f1var\f2.
+
+\f4atomic_store_and_or()\f1
+\f2value\f1 is bit-wise ORed with the data address by \f1var\f2.
+
+\f4atomic_store_and_and()\f1
+\f2value\f1 is bit-wise ANDed with the data address by \f1var\f2.
+
+\f4atomic_load()\f1
+The value of the memory addressed by \f2var\f1 is returned.
+
+\f4atomic_fetch_and_increment()\f1
+The memory addressed by \f2var\f1 is incremented by 1 and the previous value
+is returned.
+
+\f4atomic_fetch_and_decrement()\f1
+The memory addressed by \f2var\f1 is decremented by 1 and the previous value
+is returned.
+
+\f4atomic_clear()\f1
+The memory addressed bye \f2var\f1 is set to 0.
+
+.ft 1
+.fi
+.\" **********************
+.SH "SEE ALSO"
+.\" **********************
+sproc(2), test_and_set(3p), barrier(3p), ipcs(1), ipcrm(1)
+
+
+
+
+
+
+
+

@@ -1,0 +1,139 @@
+#ident  "$Revision: 1.1 $"
+
+TECHNIQUE
+
+Compile kernel C source files to assembly language
+and edit to insert calls to trace each function
+entry and exit.
+
+MORE OVERVIEW
+
+The command "trord" creates a file mapping each kernel function
+(/unix text symbol) to a unique integer (ordinal value). Kernel
+makefiles are edited to (1) include the assembly language file
+"trace.s" which defines two functions _trentry() and _trexit()
+which store kernel function entry and exit events with function
+ordinal value and timestamp into private 64K/processor trace
+buffers and (2) modify the .c.o rule causing each C source file to
+be compiled to assembly language, edited by the command
+"trinsert", and assembled into the .o file.  A bit vector in the
+kernel is used to uniquely enable individual functions. After
+making and booting the new kernel, the command "tracex" is used to
+execute an arbitrary command while a specified list of functions
+are enabled for tracing.  During command execution, trace events
+are retrieved from the kernel and written to one or more output
+files.
+
+INSTALLATION INSTRUCTIONS
+
+	Changes are needed on both the source side where a kernel 
+with tracing capability is built, as well as on the target side 
+where commands are run to trace kernel functions. While some 
+commands built on the source side are used to build a modified 
+kernel, others are copied over to the target machine to be used 
+in execution of trace tools.
+
+	Source Side Changes
+	===================
+
+- create a function ordinal file ordfile in /usr/tmp:
+
+	# trord /usr/tmp/ordfile [kernel]
+
+  This command does a "nm -B kernel (/unix if kernel omitted)" and assigns 
+  a unique, increasing integer number to each kernel function name
+  ('t' or 'T' symbol).  Be sure your <kernel> has all the functions you're 
+  interested in tracing.
+
+- copy trace.s to your kern/ml directory 
+
+- edit ml/Makefile, add trace.s to the definition of ML_ASRCS
+
+- copy trinsert to your $TOOLROOT/bin
+
+- edit kern/Makefile kernel.o definition adding "-u _trentry"
+
+- edit bottom of kern/kcommonrules commenting out existing
+	.c.o rule and adding this new one:
+
+
+#if $(VCC) == "RAGNAROK"
+.c.o:
+        $(CCF) -S $(.IMPSRC) && \
+        sed -e 's/,/, /g' < $(*F).s > $(*F).s1 && \
+        $(TOOLROOT)/bin/trinsert -f /usr/tmp/ordfile $(*F).s1 $(*F).s2 && \
+        mv $(*F).s2 $(*F).s && \
+        $(ASF) -nocpp -c $(*F).s -o $(.TARGET:T) && \
+        $(LDF) -r $(.TARGET:T) -o $$$$.o && \
+        mv $$$$.o $(.TARGET:T) && \
+        rm -f $(*F).s $(*F).s1
+#else
+.c.o:
+        $(CCF) -c $(.IMPSRC) -o $(.TARGET:T)
+#endif
+
+- touch kernel source files you want to trace, make and boot new kernel
+	(Ignore any "as: Warning: -mips3 should not .." for now).
+
+	Target Side Changes
+	===================
+
+- create an ascii file containing a list of kernel function names
+	you want to trace, see example "funcfile"
+
+- Make tracex on the source machine by running "make -f Makefile.tracex"
+  and copy it to the target machine.
+
+- trace by:
+
+	# tracex ordfile funcfile outfile kernel cmd [args ]
+
+  where "ordfile" is the previously created ordinal file,
+  "funcfile" is an ascii list of kernel function names,
+  one per line, and "outfile" is the base name for the
+  output files, kernel is the name of the kernel you are running on.  
+
+  If you are booting the kernel over the network, you must copy the kernel
+  to your target machine for "tracex" to be able to figure out the symbols
+  in the kernel.
+  If funcfile contains the keyword "ALL",
+  then all functions with compiled-in trace points will
+  be enabled.
+
+	Example:
+
+	# cat > allfuncs
+	ALL
+	^D
+	#
+
+	# tracex ordfile allfuncs /tmp/out kernel rusers babylon
+
+  This will create one or more output files beginning
+  with the path <outfile> and ending with ".cpu<n>"
+  depending upon the number of processors on your system.
+
+- copy trascii over from the source machine.
+- convert output files to ascii using trascii:
+
+	# trascii ordfile /tmp/out.cpu0
+
+will convert to ascii printing on stdout.
+
+There's also a tdiff command which annotates the ascii
+with delta microsecond timestamps on each line.
+Also a cheap and dirty hist command which takes the ascii
+and displays histogram timing of any event pairs.
+
+- copy tdiff over from the source machine.
+- tdiff reads the output of trascii and adds delta times.
+
+
+TOOLROOT
+
+You need to use 6.02, the latest version, (not yet released to public, 
+but will be used in the official build of June Banyan) of compiler tools to 
+generate proper code in files which assign addresses of local/static functions 
+to variables (io/wd95.c for example).
+
+You may find a copy of the toolroot on babylon:/build5/snb/toolroot.602.

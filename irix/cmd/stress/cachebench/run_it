@@ -1,0 +1,51 @@
+#! /bin/sh
+
+. ./config
+
+go="runon $mustrun ../../go"
+
+hostname=`uname -n`
+arch=`uname -m`
+
+limit stacksize 2048k
+
+ticks_per_usec=`runon $mustrun ./go -c | awk '{print $2}'`
+echo "Calibrated ticks per usec: $ticks_per_usec"
+
+rundir=$arch.$hostname.`date +%y-%m-%d`
+mkdir $rundir || exit
+cd $rundir || exit
+
+for op in $ops
+do
+	mkdir $op || exit
+	cd $op || exit
+
+	hinv > hinv-$hostname
+	mpadmin -s > mpadmin-$hostname
+	echo $ticks_per_usec > ticks-$hostname
+	uname -a > uname-$hostname
+
+	touch errors-$hostname
+
+	nthr=1
+
+	while [ $nthr -le $maxnthr ]
+	do
+		work=$minwork
+
+		while [ $work -le $maxwork ]
+		do
+			$go -m$mustrun -t$nthr -w$work -n$time -o$op \
+				-z$ticks_per_usec \
+				> data-$hostname-w$work-t$nthr \
+				2>> errors-$hostname
+
+			work=`expr $work + $delwork`
+		done
+
+		nthr=`expr $nthr + $delnthr`
+	done
+
+	cd ..
+done

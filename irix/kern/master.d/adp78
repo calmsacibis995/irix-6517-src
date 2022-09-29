@@ -1,0 +1,213 @@
+* $Id: adp78,v 1.9 1997/12/30 06:41:29 gwh Exp $
+*
+* Adaptec 7800 series scsi controller
+*
+*FLAG	PREFIX	SOFT	#DEV	DEPENDENCIES
+nsc	adp78	-	-	scsi
+
++thread_class	scsi
+
+$$$
+#include "sys/scsi.h"
+#include "sys/PCI/pciio.h"	/* vertex_hdl_t */
+#include "sys/adp78.h"
+
+/*
+ * Print sense info.  This is useful for debugging weird SCSI devices or
+ * situations.
+ */
+u_char adp78_printsense=0;
+
+/*
+ * delay after a driver initiated reset before new commands will
+ * be issued to any device on that bus.  Some devices take a long
+ * time to become fully ready after a reset, and if this interval
+ * is shorter than that period, the driver may end up issuing a
+ * command, having it timeout, reset, etc. in a cycle for quite some
+ * time.  Units are in HZ (1*HZ == 1 second).
+ */
+uint adp78reset_delay = 1*HZ;
+
+
+/*
+ * Any mismatch in the data buffer length given for a command and what the
+ * command actually returns or takes is caught as an overrun or underrun error.
+ * adp78 will only complain about this on Read 0x8 and 0x28, and Write 0xa
+ * and 0x2a because many things in IRIX give the wrong sized buffer
+ * for various commands such as modesense and inquiry.  If you want to see
+ * all overflow/underflows, set this to 1.
+ */
+u_char adp78_print_over_under_run=0;
+
+/*
+ * Size of the scatter gatter (sg) list.  To calculate the size, take the
+ * 99 percentile size of your commands, divide by the physical page size,
+ * truncate the remainder, and then add 2.  For example, if 99 percent of
+ * your commands are below 1MB (2^20), and your page size is 4K, then you
+ * should use (2^20)/(2^12) + 2 = 258.  This is a good number for normal
+ * IRIX operation.
+ * If you are doing a specialized application where you know the 99
+ * percentile size is different, you can adjust the number for the adapter
+ * that you are doing that on.
+ *
+ * The adapter can handle arbitrarily large commands up to maxdmasz,
+ * but the performance of those large commands will not be optimal.  If
+ * you expect to issue a lot of those commands, and your need good
+ * performance from them, you should adjust up the num_sg for those adapters.
+ */
+int adp_num_sg[ADP78_NUMADAPTERS] = {258, 258, 258, 258, 258, 258, 258};
+
+
+/*
+ * The following values specifies options for each device on each
+ * adapter.  There must be 16 values per adapter, even if it is a narrow
+ * (8 bit) bus.  In that case, the last 8 values are ignored.
+ * 
+ * The values are 'or'd from the following bit flags.
+ *
+ *	0x01	enable sync negotiation
+ *	0x02	enable disconnects
+ *	0x04    force sync negotiation
+ *      0x08    force wide negotiation
+ *	0x00	synchronous xfer rate of 10.0 Mhz
+ *	0x10	synchronous xfer rate of  8.0 Mhz
+ *	0x20	synchronous xfer rate of  6.7 Mhz
+ *	0x30	synchronous xfer rate of  5.7 Mhz
+ *	0x40	synchronous xfer rate of  5.0 Mhz
+ *	0x50	synchronous xfer rate of  4.4 Mhz
+ *	0x60	synchronous xfer rate of  4.0 Mhz
+ *	0x70	synchronous xfer rate of  3.6 Mhz
+ *	0x80	enable host initiated wide negotiation
+ *
+ *      **NOTE** If Disconnection is not allowed, tag-queueing must be
+ *      turned off.  If tag-queuing is on, the device must be allowed to
+ *	disconnect!
+ */
+u_char adp_device_options[ADP78_NUMADAPTERS][16] = {
+	/* adapter 0 */
+	0x83, 0x83, 0x83, 0x83, 0x03, 0x83, 0x83, 0x83, 
+	0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 
+	/* adapter 1 */
+	0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 
+	0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 
+	/* adapter 2 */
+	0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 
+	0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 
+	/* adapter 3 */
+	0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 
+	0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 
+	/* adapter 4 */
+	0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 
+	0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 
+	/* adapter 5 */
+	0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 
+	0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 
+	/* adapter 6 */
+	0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 
+	0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 0x83, 0x83};
+
+/*
+ * enables (if not 0) or disables (if 0) the probing for luns on each
+ * device. Should leave at its default value unless you know that the
+ * device will behave badly if luns are probed. For a particular
+ * target, get its scsi ID and change the entry that you get by
+ * counting from the left starting with zero up to the value of
+ * the targets ID. If a targets value is 0 in the array, then
+ * you will not be able to access non-zero luns on that target.
+ * using SGI supplied drivers.
+ */
+
+u_char adp_probe_all_luns[ADP78_NUMADAPTERS][16] = {
+	/* adapter 0 */
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+	/* adapter 1 */
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+	/* adapter 2 */
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+	/* adapter 3 */
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+	/* adapter 4 */
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+	/* adapter 5 */
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+	/* adapter 6 */
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
+
+
+/*
+ * because some CDROMs have problems when negotiated with the default
+ * is to not allow negotiations with CDROMs. However, if you wish to
+ * allow negotiations with a cdrom, make this value non-zero. If you have
+ * more than one CDROM and wish to negotiate with one and not the other
+ * then make this variable non-zero to allow negotiations with the
+ * one CDROM. Then for the CDROM which does not want negotiations turn
+ * off its "enable sync negotiation" and "enable host initiated wide
+ * negotiation" bits in the adp_device_options variable above.
+*/
+
+u_char adp_allow_cdrom_negotiations = 0;
+
+
+/*
+ * The SCSI id for each of the adapters.
+ * For the adapter which has the root partition, the scsihostid prom
+ * environment variable overrides the id set here
+ */
+u_char adp_adapter_id[ADP78_NUMADAPTERS] = {0, 0, 0, 0, 0, 0, 0};
+
+
+/*
+ * Selection timeout for each adapter.
+ * This is the length of time in milliseconds the host adapter will wait
+ * for a target to respond to selection before aborting the selection
+ * procedure.  Valid values are:
+ * 
+ *	0x0	256 milliseconds
+ *	0x1	128 milliseconds
+ *	0x2	 64 milliseconds
+ *	0x3	 32 milliseconds
+ */
+u_char adp_select_timeout[ADP78_NUMADAPTERS] = {0, 0, 0, 0, 0, 0, 0};
+
+
+/*
+ * From wd93:
+ *
+        If non-zero, the minimum number of seconds for any SCSI timeout
+	(i.e., timeouts shorter than this value will be increased to
+	this value.  If zero, whatever timeout the various upper level
+	drivers specified is used.  This may be useful when disconnects
+	are enabled, but some devices hold the bus for a very long
+	period, and devices that had started commands are therefore not
+	able to reconnect to complete;  that is, it may be an
+	alternative to changing disabling disconnect for a device.
+*/
+uint adp78_mintimeout = 0;
+
+/*
+ * Number of simultaneous outstanding commands per controller.  Set to 0
+ * for default.  Its best just to leave it at the default.  The system
+ * determines the number of outstanding commands based on how many and
+ * what types of devices are attached to a bus.  The value is printed
+ * out if showconfig is 1.
+ */
+int adp_num_ha[ADP78_NUMADAPTERS] = {0, 0, 0, 0, 0, 0, 0};
+
+
+/*
+ * Bit map to inhibit scanning during startup.  Its best to just leave
+ * this at the default.  If a bit is set, then the SCSI device at that
+ * id will not get an inquiry during startup and will not be added to
+ * hinv.
+ */
+uint16_t adp_noinq_map[ADP78_NUMADAPTERS] = {0xffe0, 0, 0, 0, 0, 0, 0};
+
+
+/*
+ * Bit map for the termination settings on Adaptec option PCI cards.
+ * Leave this at the default unless you really know what you are doing.
+ * Bit 0 enables low byte termination, bit 1 enables high byte term.
+ * The setting has no effect for base controllers.
+ */
+u_char adp_option_termination[ADP78_NUMADAPTERS] = {3, 3, 3, 3, 3, 3, 3};
+

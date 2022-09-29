@@ -1,0 +1,96 @@
+#!/bin/sh
+#
+#
+TEST_LIST=test_list	# File containing unixperf tests to run
+CUTOFF=.01		# Let upcmp/prfcmp do the filtering (so prfpr uses .01)
+COUNT=200000		# Number of iterations within each unixperf test
+REPEAT=2		# Each test is repeated two times.
+
+#
+# Each of the following files are generated for each of the tests run.
+#
+PRFSNAP=prfsnap		# prfsnap snapshot
+PRFOUT=prfout		# Output after running snapshot through prfpr
+UPOUT=upout		# unixperf output
+
+#
+# Process input args.
+#
+if [ "$1" = "" ]
+then
+	echo "usage: $0 <unix_pathname> <output_dir> [<parallelism>]"
+	exit
+else
+	UNIX=$1
+fi
+if [ "$2" = "" ]
+then
+	echo "usage: $0 <unix_pathname> <output_dir> [<parallelism>]"
+	exit
+else
+	OUTDIR=$2
+fi
+echo Unix pathname is $UNIX
+echo Output directory is $OUTDIR
+echo Running tests specified by $TEST_LIST
+if [ "$3" = "" ]; then
+	COPIES=1
+else
+	COPIES=$3
+	echo Spawning $COPIES instances
+fi
+
+#
+# Make the output directory.
+#
+if [ -r "$OUTDIR" ]
+then
+	echo Moving existing $OUTDIR directory to $OUTDIR.old
+	if [ -r "$OUTDIR.old" ]
+	then
+		rm -rf "$OUTDIR.old"
+	fi
+	mv $OUTDIR $OUTDIR.old
+fi
+mkdir $OUTDIR
+cp $TEST_LIST $OUTDIR
+
+#
+# Load the Unix name list.
+#
+prfld $UNIX
+
+#
+# Run the tests.
+#
+grep -v "^#" $TEST_LIST | while read TEST args
+do
+	if [ "$args" = "" ]; then
+		ARGS="-loop $COUNT -repeat $REPEAT"
+	else
+		ARGS=$args
+	fi
+	echo `date "+%H:%M:%S"` "Running $TEST ($ARGS) test..."
+	mkdir $OUTDIR/$TEST
+	sync;sync		# strive for reproducibility
+	prfstat off 2>&1 >/dev/null 
+	prfsnap $OUTDIR/$TEST/$PRFSNAP 2>&1 >/dev/null 
+	i=$COPIES
+	while [ $i -gt 0 ]; do 
+		/usr/stress/unixperf -$TEST $ARGS >> $OUTDIR/$TEST/$UPOUT &
+		i=`expr $i - 1`
+	done
+	wait
+	prfsnap $OUTDIR/$TEST/$PRFSNAP 2>&1 >/dev/null 
+	prfstat off 2>&1 >/dev/null 
+done
+echo `date "+%H:%M:%S"` ...tests done, post-processing...
+
+#
+# Do prfpr post-processing of the profile snapshots.
+#
+grep -v "^#" $TEST_LIST | while read TEST ARGS
+do
+	prfpr $OUTDIR/$TEST/$PRFSNAP $CUTOFF $UNIX > $OUTDIR/$TEST/$PRFOUT
+done
+echo `date "+%H:%M:%S"` ...done

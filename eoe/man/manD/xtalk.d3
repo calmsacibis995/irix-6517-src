@@ -1,0 +1,259 @@
+.TH xtalk D3
+.IX "\f2xtalk\f1(D3)"
+.IX "\f2xwidget_driver_register\f1(D3)"
+.IX "\f2xwidget_driver_unregister\f1(D3)"
+.IX "\f2xtalk_iterate\f1(D3)"
+.SH NAME
+.nf
+\f2xtalk\f1 \- IRIX XIO Infrastructure
+\f2xwidget_driver_register\f1 \- claim a class of XIO widgets
+\f2xwidget_driver_unregister\f1 \- remove driver from registry
+\f2xtalk_iterate\f1 \- revisit all claimed widgets
+.fi
+.\" **********************
+.SH SYNOPSIS
+.\" **********************
+.nf
+.ds fT \f1
+.if t .ds fT \f4
+\*(fT#include <sys/xtalk/xtalk.h>
+.sp .8v
+int
+xwidget_driver_register(
+	xwidget_part_num_t \f2part_num\*(fT,
+	xwidget_mfg_num_t \f2mfg_num\*(fT,
+	char *\f2driver_prefix\*(fT,
+	unsigned \f2flags\*(fT);
+.sp .8v
+void
+xwidget_driver_unregister(char *\f2driver_prefix\*(fT);
+.sp .8v
+void
+xtalk_iterate(
+	char *\f2driver_prefix\*(fT,
+	xtalk_iter_f *\f2func\*(fT)\f1
+.fi
+.\" **********************
+.SS Arguments
+.\" **********************
+.IP "\f2part_num\f1 and \f2mfg_num\f1" 8n
+are the values that the XIO-based device will present
+in its XIO ID register as identification.
+.IP "\f2driver_prefix\f1" 8n
+is the prefix string for the driver's standard functions;
+the infrastructure will use this prefix to locate the
+driver's cdevsw entry, in order to call the driver's
+attach and detach routines.
+.IP "\f2flags\f1" 8n
+Normally passed as zero.
+.\" **********************
+.SH DESCRIPTION
+.\" **********************
+\f2xtalk\f1 is the package that drivers for XIO-based
+devices use to set up services for their devices.
+These services include:
+.IP \(bu 4n
+locating all instances of the device in the system
+(documented in this page).
+.IP \(bu 4n
+constructing CPU addresses that the driver can use to do
+PIO accesses to the device (see \f2xtalk_pio\f1(D3)).
+.IP \(bu 4n
+constructing XIO addresses that the device can use to do
+DMA accesses to memory (see \f2xtalk_dma\f1(D3)).
+.IP \(bu 4n
+arranging for a function to be called when the device
+requests interrupt service (see \f2xtalk_intr\f1(D3)).
+.IP \(bu 4n
+arranging for a function to be called when an error
+occurs during PIO to, or DMA from the device
+(see \f2xtalk_error\f1(D3)).
+.IP \(bu 4n
+accessing useful fields in some otherwise opaque
+data structures (see \f2xtalk_get\f1(D3)).
+.\" **********************
+.SS "Driver Registration"
+.\" **********************
+.IR xwidget_driver_register ()
+is used by drivers to
+inform the infrastructure that they are interested
+in certain XIO-based devices; a relation is
+kept associating the specified part and manufacturer
+ID numbers with the noted device driver prefix.
+The infrastructure will call the attach routine with
+that driver prefix, passing the hardware graph
+connection point vertex as the only parameter.
+This
+.I "connection point"
+is then used in most calls to the infrastructure
+to identify which particular XIO device is of interest.
+.P
+Loadable device drivers should call this function
+from their \f2reg\f1() entry point.
+Drivers that are prelinked into the kernel should
+also make the call from \f2reg\f1() for consistancy,
+but may call from \f2init\f1() if necessary.
+.P
+Device drivers may make multiple calls with
+different vendor and device ID numbers, representing
+several compatible XIO devices.
+.P
+Wildcard values \f2XWIDGET_PART_NUM_NONE\f1
+and \f2XWIDGET_MFG_NUM_NONE\f1
+may be used if cards from any vendor or
+cards with any device code are of interest;
+if both vendor and device are wildcarded,
+the attach routine will be called for every
+XIO device connected to the system.
+.P
+When a loadable device driver calls
+.IR xwidget_driver_register (),
+the calls to the driver's \f2attach\f1() function
+may occur before the infrastructure returns
+control to the caller.
+On some large systems, the \f2attach\f1() calls
+may be executed by other threads and
+possibly on other processors, concurrently
+with continued execution of the \f2reg\f1()
+function.
+.P
+.IR xwidget_driver_unregister ()
+should be called by any unloadable device driver,
+from within the driver's \f2unreg\f1() function.
+This will trigger calls to the driver's \f2detach\f1()
+entry point, and remove any references to the driver
+from the registry table.
+
+
+.\" **********************
+.SS "Connection Point Iteration"
+.\" **********************
+
+It is sometimes important for driver code to be able
+to go back and revisit each connection point that
+was passed to its attach routine; the best case for
+this is the disconnecting of interrupt and error
+handling functions before unloading a driver, and
+the reconnecting of these handlers after the driver
+is reloaded.
+.IR xtalk_iterate ()
+provides a quick mechanism to have a private function
+called with each connection point that the infrastructure
+has matched with the specified driver.
+.P
+On large systems, the calls may take place in many
+separate threads on many separate processors, so
+the function to be called needs to use appropriate
+locking when accessing driver-global structures.
+
+.\" **********************
+.SH EXAMPLES
+.\" **********************
+
+Here is how a typical driver might make use
+of these functions:
+
+.if t .ft 4
+.nf
+static char             xiofoo_prefix[] = "xiofoo_";
+static char		xiofoo_edge[] = "foo";
+
+xiofoo_init(void)
+{
+	/* the first time through, we are not
+	 * registered, so this is a no-op.
+	 * after that, it triggers reload_me.
+	 */
+	xtalk_iterate(xiofoo_prefix, xiofoo_reload_me);
+}
+
+xiofoo_unload(void)
+{
+	...
+	xtalk_iterate(xiofoo_prefix, xiofoo_unload_me);
+	...
+}
+
+xiofoo_reg(void)
+{
+	xwidget_driver_register(
+		XIOFOO_VENDOR_ID,
+		XIOFOO_DEVICE_ID,
+		xiofoo_prefix, 0);
+}
+
+xiofoo_unreg(void)
+{
+	xwidget_driver_unregister(xiofoo_prefix);
+}
+
+xiofoo_reload_me(vertex_hdl_t conn)
+{
+	vertex_hdl_t	vhdl;
+	xiofoo_soft_t	xiofoo_soft;
+
+	if (GRAPH_SUCCESS !=
+		hwgraph_traverse(conn, xiofoo_edge, &vhdl))
+			return;
+	xiofoo_soft = hwgraph_fastinfo_get(vhdl);
+	if (!xiofoo_soft)
+		return;
+
+	if (xiofoo_soft->intr)
+		xtalk_intr_connect(xiofoo_soft->intr,
+			xiofoo_intr,
+			xiofoo_soft);
+}
+
+xiofoo_reload_me(vertex_hdl_t conn)
+{
+	vertex_hdl_t	vhdl;
+	xiofoo_soft_t	xiofoo_soft;
+
+	if (GRAPH_SUCCESS !=
+		hwgraph_traverse(conn, xiofoo_edge, &vhdl))
+			return;
+
+	xiofoo_soft = hwgraph_fastinfo_get(vhdl);
+	if (!xiofoo_soft)
+		return;
+
+	if (xiofoo_soft->intr)
+		xtalk_intr_connect(xiofoo_soft->intr,
+			xiofoo_intr,
+			xiofoo_soft);
+}
+
+xiofoo_unload_me(vertex_hdl_t conn)
+{
+	vertex_hdl_t	vhdl;
+	xiofoo_soft_t	xiofoo_soft;
+
+	if (GRAPH_SUCCESS !=
+		hwgraph_traverse(conn, xiofoo_edge, &vhdl))
+			return;
+	xiofoo_soft = hwgraph_fastinfo_get(vhdl);
+	if (xiofoo_soft->intr)
+		xtalk_intr_disconnect(xiofoo_soft->intr);
+}
+.fi
+.ft 1
+
+.\" **********************
+.\" .SH NOTES
+.\" **********************
+
+
+.\" **********************
+.SH "SEE ALSO"
+.\" **********************
+
+xtalk_dma(D3),
+xtalk_error(D3),
+xtalk_get(D3),
+xtalk_intr(D3),
+xtalk_pio(D3).
+
+.\" **********************
+.\" .SH DIAGNOSTICS
+.\" **********************

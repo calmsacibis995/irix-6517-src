@@ -1,0 +1,65 @@
+Using the ELSC package
+----------------------
+
+    The user of the elsc package must supply a routine called
+get_elsc_space() that always returns a pointer to the same 1024-byte buffer
+aligned on 8 bytes.  It will be called by the elsc routines when it needs
+space to store state information. It needs to return a different buffer on
+each CPU.
+
+    The user must call elsc_init() before any other elsc routines are
+called.  You can then use routines like elsc_version, elsc_display_mesg,
+elsc_nvram_write, etc.  You don't need i2c_init, since i2c is initialized
+once by the PROM when the system boots.
+
+    It's a convention that one never assumes the ELSC is alive or requires
+it for system operation. Instead, call the elscuart_probe() routine at the
+beginning of your program.  If it returns 0, the ELSC is not accessible; if
+it returns 1, it is accessible.
+
+    Elsc routines return a negative error code if they fail, or 0 if they
+succeed.  If you pass the negative error code to the elsc_errmsg routine,
+it'll return a static string containing the corresponding error message.
+
+Using the ELSC for TTY input/output
+-----------------------------------
+
+    After the elsc_init(), call elscuart_init(0). This prepares the TTY
+buffer part of the elsc package which is accessed through the elscuart_*
+routines.
+
+    elscuart_poll() returns non-zero if a character is waiting.  It is a
+slow routine (takes 2 or more milliseconds).  The poll routine transfers
+all characters waiting in the ELSC into a local buffer in the temp space.
+
+    elscuart_readc() returns the next character in the local temp space (do
+not use unless poll() indicates a character is waiting).
+
+elscuart_getc() waits for a character.
+
+elscuart_puts() puts a whole string.
+elscuart_putc(c) puts a single character.
+elscuart_flush() flushes the output.
+
+    NOTE: Since writing to the ELSC is so inefficient, output is
+line-buffered. Characters that are written are put in a buffer that's
+flushed whenever it fills up or a newline is printed. The elscuart_flush()
+routine forces all output to be flushed. It's recommended that this be
+called after printing a prompt (before reading input).
+
+Getting warning messages from the elsc
+--------------------------------------
+
+    Assuming elscuart_poll() or (elsc_process()) is being called on a
+regular basis (one per second or more), then warning messages, when they
+occur, will be read out of the elsc and stored in a separate queue.  Put a
+call to elsc_msg_check(buf, sizeof (buf)) in your main loop. If it returns
+non-zero, that means a message was waiting, and has been stored in
+buf. Messages are things like "pd temp", indicating the system is about to
+shut down due to overtemperature.
+
+    In the Kernel we can't afford the overhead of the polling, which takes
+multiple milliseconds in the best case (and interrupts must be turned off
+because it's all timing-dependent).  We're planning to never do console
+I/O, and rely on the "panic interrupt" from the elsc to indicate when a
+really important warning message is waiting.

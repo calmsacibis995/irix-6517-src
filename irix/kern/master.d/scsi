@@ -1,0 +1,835 @@
+*#ident	"$Revision: 1.44 $
+*
+* SCSI
+*
+*FLAG	PREFIX	SOFT	#DEV	DEPENDENCIES
+ns	scsi_	-	-	
+
+$$$
+/* NOTE: the initialized array below that describes the various tpsc tape types,
+ * etc., has been moved to this file from master.d/tpsc, to allow the
+ * tpsc driver to be excluded, and possibly a loadable driver in the
+ * future.  The remainder of this file is tpsc specific.
+*/
+#include "sys/param.h"
+#include "sys/scsi.h"
+#include "sys/mtio.h"
+#include "sys/tpsc.h"
+#include "sys/invent.h"
+
+
+/* Used to set tape type from the inquiry cmd.
+ * This allows SGI and users to add new tape drives of known types without
+ * re-compiling the driver.  The assumption is that the SCSI commands,
+ * capabilities, and request sense info are constant within
+ * a type.  This is rarely completely true, but is often close enough
+ * to allow a drive to work.  Note that when no additional info (id_ailen
+ * field) is returned on the inquiry, the driver sets the vendor id (id_vid)
+ * to "CIPHER" and id_pid to "540S" before checking this table.
+ *
+ * See also sys/mtio.h for definitions of the MTCAN_* bits.
+ *
+ * Note that this does not quite allow arbitrary drives to be
+ * connected, since interpretation of the request sense results,
+ * and the modeselect that is done is based on the tp_type field.
+ * That field must be set to match one of the known types, or a
+ * drive must not appear in this table at all, in which case it is
+ * treated as an unknown type, and the tpsc_generic structure (below)
+ * is used.  However, if a drive is of an unknown type, but the inquiry
+ * command indicates SCSI 2 compliance, the error codes and additional
+ * sense info are decoded according to SCSI 2.
+ *
+ * Also note that a similar list is built into the PROMs and standalone
+ * drivers, so changes to this are only effective for use under unix.
+ * Furthermore, miniroot kernels will not have any local changes made
+ * to this file, which may be important to people attempting system
+ * recover with "unknown" tape drives.  If such drives are your only
+ * tape device, it is best to make a backup using the fixed block
+ * device with 512 byte blocks, of at least enough files to allow you
+ * to boot a customized kernel.
+ *
+ * This structure is defined in sys/tpsc.h - read the comments there for
+ * the meanings of fields, and their units, where applicable (search for
+ * the tpsc_types structure definition).
+ *
+*/	
+#define tpsc_exa8500_dens_count 	2
+#define tpsc_exa8500c_dens_count 	4
+#define tpsc_exa8505_dens_count 	4
+char   *tpsc_exabyte_hwg_dens_names[]   = { "8500",  "8200",  "8500_compress", "8200_compress" };
+char   *tpsc_exabyte_alias_dens_names[] = { ".8500", ".8200", ".8500c",        ".8200c"        };
+
+#define tpsc_kennedy_dens_count 	4
+char   *tpsc_kennedy_hwg_dens_names[]   = { "6250bpi", "3200bpi", "1600bpi", "800bpi" };
+char   *tpsc_kennedy_alias_dens_names[] = { ".6250",   ".3200",   ".1600",   ".800"   };
+
+#define tpsc_dlt7000_dens_count 	4
+char   *tpsc_dlt7000_hwg_dens_names[]   = { "7000",  "7000_compress", "4000",  "4000_compress" };
+char   *tpsc_dlt7000_alias_dens_names[] = { ".7000", ".7000c",        ".4000", ".4000c"        };
+
+#define tpsc_default_dens_count 	2
+char   *tpsc_default_hwg_dens_names[]   = { "uncompress", "compress" };
+char   *tpsc_default_alias_dens_names[] = { "",           "c"        };
+
+void (*scsi_strategy)(struct buf *);
+
+struct tpsc_types tpsc_types[] = {
+	{ CIPHER540, TPQIC24, 6, 4, "CIPHER", "540S",  1, "", {0},
+	  MTCAN_PREV|MTCAN_SPEOD, 20, 150, 18*60, 5*60, 5*60, 512, 400*512, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	/* the array avoids a compiler warning about not enough
+	 * room for the null.  This is really just "TANDBERG" */
+	{ TANDBERG3660, TPQIC150, 8, 8, {'T','A','N','D','B','E','R','G'},
+	  " TDC 3660",
+	  /* set read/write thresholds and buffer size for better performance */
+	  12, "\0\20\20\200\0\0\10\10\0\4", {0},
+	  MTCAN_BSF|MTCAN_BSR|MTCAN_PREV|MTCAN_SPEOD|MTCAN_CHKRDY|MTCAN_SEEK,
+	  20, 150, 18*60, 5*60, 5*60, 512, 400*512, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	{ VIPER150, TPQIC150, 7, 9, "ARCHIVE", "VIPER 150", 0, 0, {0},
+	  MTCAN_BSF|MTCAN_BSR|MTCAN_PREV|MTCAN_SPEOD|MTCAN_CHKRDY|MTCAN_SEEK,
+	  40, 150, 27*60, 5*60, 5*60, 512, 400*512,
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	{ VIPER60, TPQIC24, 7, 8, "ARCHIVE", "VIPER 60", 0, 0, {0},
+	  MTCAN_BSF|MTCAN_BSR|MTCAN_PREV|MTCAN_SPEOD|MTCAN_CHKRDY|MTCAN_SEEK,
+	  40, 150, 27*60, 5*60, 5*60, 512, 400*512, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	/* use VIPER150 for internal type, for error decoding, etc. */
+	{ VIPER150, TPQIC1000, 7, 10, "ARCHIVE", "ANCDA 2750", 0, 0, {0},
+	  MTCAN_BSF|MTCAN_BSR|MTCAN_PREV|MTCAN_SPEOD|MTCAN_CHKRDY|MTCAN_SEEK,
+	  40, 150, 27*60, 5*60, 5*60, 512, 400*512, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	/* use VIPER150 for internal type, for error decoding, etc. */
+	{ VIPER150, TPQIC1000, 7, 5, "WANGTEK", "51000", 0, 0, {0},
+	  MTCAN_BSF|MTCAN_BSR|MTCAN_PREV|MTCAN_SPEOD|MTCAN_CHKRDY|MTCAN_SEEK,
+	  40, 150, 27*60, 5*60, 5*60, 512, 400*512, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	/* use TANDBERG3660, for error decoding, etc. */
+	{ TANDBERG3660, TPQIC1000, 8, 6, {'T','A','N','D','B','E','R','G'},
+		" TDC 4", 0, 0, {0},
+	  MTCAN_BSF|MTCAN_BSR|MTCAN_PREV|MTCAN_SPEOD|MTCAN_CHKRDY|MTCAN_SEEK,
+	  40, 150, 27*60, 5*60, 5*60, 512, 400*512, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	{ DATTAPE, TPDAT, 7, 12, "ARCHIVE", "Python 25601" /*DDS1*/, 0, 0, {0},
+	  MTCAN_BSF|MTCAN_BSR|MTCAN_APPEND|MTCAN_SETMK|MTCAN_PART|MTCAN_PREV|
+	    MTCAN_SYNC|MTCAN_SPEOD|MTCAN_CHKRDY|MTCAN_VAR|MTCAN_SETSZ|
+	    MTCAN_SILI|MTCAN_AUDIO|MTCAN_SEEK|MTCAN_CHTYPEANY,
+	  /* minimum delay on i/o is 4 minutes, because when a retry is
+	   * performed, the drive retries a number of times, and then
+	   * rewinds to BOT, repositions, and tries again.  */
+	  40, 4*60, 4*60, 5*60, 3*3600, 512, 512*512, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	{ DATTAPE, TPDAT, 7, 12, "ARCHIVE", "Python 01931" /*DDS2*/, 0, 0, {0},
+		/* note: this drive uses modeselect page 0xf for compression control;
+		 * most of the other drives supporting compression use page 0x10 */
+	  MTCAN_BSF|MTCAN_BSR|MTCAN_APPEND|MTCAN_SETMK|MTCAN_PART|MTCAN_PREV|
+	    MTCAN_SYNC|MTCAN_SPEOD|MTCAN_CHKRDY|MTCAN_VAR|MTCAN_SETSZ|
+	    MTCAN_SILI|MTCAN_AUDIO|MTCAN_SEEK|MTCAN_CHTYPEANY|MTCAN_COMPRESS,
+	  /* minimum delay on i/o is 4 minutes, because when a retry is
+	   * performed, the drive retries a number of times, and then
+	   * rewinds to BOT, repositions, and tries again.  */
+	  40, 4*60, 4*60, 5*60, 3*3600, 512, 512*512, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	{ SONYAIT, TP8MM_AIT, 4, 8, "SONY", "SDX-300 " /*AIT*/, 0, 0, {0},
+	  MTCAN_BSF | MTCAN_BSR | MTCAN_APPEND | MTCAN_SETMK | MTCAN_PART | MTCAN_PREV |
+	    MTCAN_SYNC | MTCAN_SPEOD | MTCAN_CHKRDY | MTCAN_VAR | MTCAN_SETSZ | MTCANT_IMM |
+	    MTCAN_SILI | MTCAN_SEEK | MTCAN_CHTYPEANY,
+	  40, 4*60, 4*60, 5*60, 3*3600, 512, 512*512, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	{ SONYAIT, TP8MM_AIT, 4, 8, "SONY", "SDX-300C" /*AIT*/, 0, 0, {0},
+	  MTCAN_BSF | MTCAN_BSR | MTCAN_APPEND | MTCAN_SETMK | MTCAN_PART | MTCAN_PREV |
+	    MTCAN_SYNC | MTCAN_SPEOD | MTCAN_CHKRDY | MTCAN_VAR | MTCAN_SETSZ | MTCANT_IMM |
+	    MTCAN_SILI | MTCAN_SEEK | MTCAN_CHTYPEANY | MTCAN_COMPRESS,
+	  40, 4*60, 4*60, 5*60, 3*3600, 512, 512*512, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	{ SONYAIT, TP8MM_AIT, 4, 8, "SONY", "SDX-500C" /*AIT2*/, 0, 0, {0},
+	  MTCAN_BSF | MTCAN_BSR | MTCAN_APPEND | MTCAN_SETMK | MTCAN_PART | MTCAN_PREV |
+	    MTCAN_SYNC | MTCAN_SPEOD | MTCAN_CHKRDY | MTCAN_VAR | MTCAN_SETSZ | MTCANT_IMM |
+	    MTCAN_SILI | MTCAN_SEEK | MTCAN_CHTYPEANY | MTCAN_COMPRESS,
+	  40, 4*60, 4*60, 5*60, 3*3600, 512, 512*512, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	{ DATTAPE, TPDAT, 4, 8, "SONY", "SDT-9000" /*DDS3*/, 0, 0, {0},
+	  MTCAN_BSF|MTCAN_BSR|MTCAN_APPEND|MTCAN_SETMK|MTCAN_PART|MTCAN_PREV|
+	    MTCAN_SYNC|MTCAN_SPEOD|MTCAN_CHKRDY|MTCAN_VAR|MTCAN_SETSZ|
+	    MTCAN_SILI|MTCAN_AUDIO|MTCAN_SEEK|MTCAN_CHTYPEANY|MTCAN_COMPRESS,
+	  /* minimum delay on i/o is 4 minutes, because when a retry is
+	   * performed, the drive retries a number of times, and then
+	   * rewinds to BOT, repositions, and tries again.  */
+	  40, 4*60, 4*60, 5*60, 3*3600, 512, 512*512, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	/* 016 is even byte disconnect and parity check enabled.  
+	 * Even though erases can take up to 2.5 hours, the rewtimeo is still 
+	 * fairly low.  The driver recognizes this special case (for type
+	 * EXABYTE*) and uses 2.5 hours plus rewtimeo.  Minimum delay is set
+	 * somewhat high because of the long startup time after idle, and
+	 * because FM's take a long time to write. */
+	{ EXABYTE8200, TP8MM_8200, 7, 8, "EXABYTE", "EXB-8200", 1, "\16",
+	  {0},
+	  MTCAN_BSF|MTCAN_BSR|MTCAN_PREV|MTCAN_CHKRDY|MTCAN_VAR|MTCAN_SETSZ|
+	    MTCAN_SILI|MTCAN_CHTYPEANY,
+	  80, 4*60, 25*60, 5*60, 3*3600, 1024, 128*1024, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	/* There are 2 densities, 8500 mode and 8200.
+	 * The inventory string sets the drive up exactly like the 8200. */
+	{ EXABYTE8500, TP8MM_8500, 7, 8, "EXABYTE", "EXB-8500", 6, "\40\4\16\0\200\7",
+	  {0x0, 0x14, 0x0, 0x0},
+	  MTCAN_BSF|MTCAN_BSR|MTCAN_PREV|MTCAN_CHKRDY|MTCAN_VAR|MTCAN_SETSZ|
+	    MTCAN_SILI|MTCAN_CHTYPEANY|MTCAN_SETDEN|MTCAN_SPEOD|MTCAN_SYNC|
+		MTCAN_SEEK,
+	  80, 4*60, 25*60, 5*60, 3*3600, 1024, 128*1024, 
+	  tpsc_exa8500_dens_count, tpsc_exabyte_hwg_dens_names, tpsc_exabyte_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	/* There are 4 densities, 8500 mode and 8200, and compression in each;
+	 * The 8200C isn't listed here, but 8200 compressed mode can be written
+	 * from the 850{0C,5} series.
+	 * The 8505 and the 8500C are functionally the same; the 8x05 drives
+	 * are the half height versions.  They all show up as 8500 in hinv. */
+	{ EXABYTE8500, TP8MM_8500, 7, 8, "EXABYTE", "EXB-8505", 6, "\40\4\16\0\200\7",
+	  {0x15 /*8500*/, 0x14 /*8200*/, 0x8c /*8500C*/, 0x90 /*8200C*/ },
+	  MTCAN_BSF|MTCAN_BSR|MTCAN_PREV|MTCAN_CHKRDY|MTCAN_VAR|MTCAN_SETSZ|
+	    MTCAN_SILI|MTCAN_CHTYPEANY|MTCAN_SETDEN|MTCAN_SPEOD|MTCAN_SYNC|
+		MTCAN_SEEK,
+	  80, 4*60, 25*60, 5*60, 3*3600, 1024, 128*1024, 
+	  tpsc_exa8505_dens_count, tpsc_exabyte_hwg_dens_names, tpsc_exabyte_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0},
+
+	{ EXABYTE8500, TP8MM_8500, 7, 8, "EXABYTE", "EXB8500C", 6, "\40\4\16\0\200\7",
+	  {0x15 /*8500*/, 0x14 /*8200*/, 0x8c /*8500C*/, 0x90 /*8200C*/ },
+	  MTCAN_BSF|MTCAN_BSR|MTCAN_PREV|MTCAN_CHKRDY|MTCAN_VAR|MTCAN_SETSZ|
+	    MTCAN_SILI|MTCAN_CHTYPEANY|MTCAN_SETDEN|MTCAN_SPEOD|MTCAN_SYNC|
+		MTCAN_SEEK,
+	  80, 4*60, 25*60, 5*60, 3*3600, 1024, 128*1024, 
+	  tpsc_exa8505_dens_count, tpsc_exabyte_hwg_dens_names, tpsc_exabyte_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	/* NOTE: xfrtimeo is for the 800 bpi (slowest transfer rate) */
+	{ KENNEDY96X2, TP9TRACK, 7, 9, "KENNEDY", "96X2 TAPE", 0, 0,
+	   {3, 6, 2, 1}, MTCAN_BSF|MTCAN_BSR|MTCAN_APPEND|MTCAN_LEOD |
+	     MTCAN_CHKRDY|MTCAN_VAR| MTCAN_SETSZ|MTCAN_SETSP|MTCAN_SETDEN|
+		 MTCAN_SYNC|MTCANT_RET|MTCANT_IMM,
+	  20, 150, 20*60, 5*60, 5*60, 512, 60*512, 
+	  tpsc_kennedy_dens_count, tpsc_kennedy_hwg_dens_names, tpsc_kennedy_alias_dens_names,	
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	/* DEC THZxx DLT drive */
+	{ DECDLT, TPDLT, 0, 7, "", "DLT2000", 0, 0,
+	   {0}, MTCAN_BSF|MTCAN_BSR|MTCAN_APPEND|MTCAN_SPEOD |
+	     MTCAN_CHKRDY|MTCAN_VAR| MTCAN_SETSZ|MTCAN_SILI|MTCAN_SEEK|
+		 MTCAN_SYNC|MTCAN_CHTYPEANY|MTCAN_COMPRESS,
+	  20, 8*60, 20*60, 5*60, 3*3600, 4096, 64*1024, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	/* DEC THZxx DLT drive */
+	{ DECDLT, TPDLT, 0, 7, "", "DLT4000", 0, 0,
+	   {0}, MTCAN_BSF|MTCAN_BSR|MTCAN_APPEND|MTCAN_SPEOD |
+	     MTCAN_CHKRDY|MTCAN_VAR| MTCAN_SETSZ|MTCAN_SILI|MTCAN_SEEK|
+		 MTCAN_SYNC|MTCAN_CHTYPEANY|MTCAN_COMPRESS,
+	  20, 8*60, 20*60, 5*60, 3*3600, 4096, 64*1024, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	/* DEC THZxx DLT drive */
+	{ DECDLT, TPDLT, 0, 7, "", "DLT7000", 0, 0,
+	  {0x1B /*7000*/, 0x1B /*7000c*/, 0x1A /*4000*/, 0x1A /*4000c*/ },
+	  MTCAN_BSF|MTCAN_BSR|MTCAN_APPEND|MTCAN_SPEOD |
+	    MTCAN_CHKRDY|MTCAN_VAR| MTCAN_SETSZ|MTCAN_SILI|MTCAN_SEEK|
+	      MTCAN_SYNC|MTCAN_CHTYPEANY|MTCAN_COMPRESS|MTCAN_SETDEN,
+	  20, 8*60, 20*60, 5*60, 3*3600, 4096, 64*1024, 
+	  tpsc_dlt7000_dens_count, tpsc_dlt7000_hwg_dens_names, tpsc_dlt7000_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	/* DEC THZxx DLT drive + stacker */
+	{ DECDLT, TPDLTSTACKER, 0, 7, "", "DLT2500", 0, 0,
+	   {0}, MTCAN_BSF|MTCAN_BSR|MTCAN_APPEND|MTCAN_SPEOD |
+	     MTCAN_CHKRDY|MTCAN_VAR| MTCAN_SETSZ|MTCAN_SILI|MTCAN_SEEK|
+		 MTCAN_SYNC|MTCAN_CHTYPEANY|MTCAN_COMPRESS,
+	  20, 8*60, 20*60, 5*60, 3*3600, 4096, 64*1024, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	/* DEC THZxx DLT drive + stacker */
+	{ DECDLT, TPDLTSTACKER, 0, 7, "", "DLT2700", 0, 0,
+	   {0}, MTCAN_BSF|MTCAN_BSR|MTCAN_APPEND|MTCAN_SPEOD |
+	     MTCAN_CHKRDY|MTCAN_VAR| MTCAN_SETSZ|MTCAN_SILI|MTCAN_SEEK|
+		 MTCAN_SYNC|MTCAN_CHTYPEANY|MTCAN_COMPRESS,
+	  20, 8*60, 20*60, 5*60, 3*3600, 4096, 64*1024, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	/* DEC THZxx DLT drive + stacker */
+	{ DECDLT, TPDLTSTACKER, 0, 7, "", "DLT4500", 0, 0,
+	   {0}, MTCAN_BSF|MTCAN_BSR|MTCAN_APPEND|MTCAN_SPEOD |
+	     MTCAN_CHKRDY|MTCAN_VAR| MTCAN_SETSZ|MTCAN_SILI|MTCAN_SEEK|
+		 MTCAN_SYNC|MTCAN_CHTYPEANY|MTCAN_COMPRESS,
+	  20, 8*60, 20*60, 5*60, 3*3600, 4096, 64*1024, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	/* DEC THZxx DLT drive + stacker */
+	{ DECDLT, TPDLTSTACKER, 0, 7, "", "DLT4700", 0, 0,
+	   {0}, MTCAN_BSF|MTCAN_BSR|MTCAN_APPEND|MTCAN_SPEOD |
+	     MTCAN_CHKRDY|MTCAN_VAR| MTCAN_SETSZ|MTCAN_SILI|MTCAN_SEEK|
+		 MTCAN_SYNC|MTCAN_CHTYPEANY|MTCAN_COMPRESS,
+	  20, 8*60, 20*60, 5*60, 3*3600, 4096, 64*1024,
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	/* IBM NTP drive */
+	{ IBMNTP, TPNTP, 3, 8, "IBM", "03590B1A", 0, 0, {0, 0, 0, 0},
+	   MTCAN_BSF | MTCAN_BSR | MTCAN_SPEOD | MTCANT_RET | MTCAN_CHKRDY | 
+	    MTCAN_PREV | MTCAN_SEEK | MTCAN_APPEND | MTCAN_SILI | MTCAN_VAR | 
+             MTCAN_SETSZ | MTCAN_CHTYPEANY | MTCAN_COMPRESS | MTCANT_LOAD | MTCAN_LDREW ,
+	      20, 14*60, 25*60, 6*60, 6*60, 16384, 512*1024, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  "\300\0\0\0\30\0", 6, 0, 0,
+	  0, (u_char *)0 },
+
+	/* IBM NTPSTACKER drive */
+	{ IBMNTP, TPNTPSTACKER, 3, 8, "IBM", "03590B11", 0, 0, {0, 0, 0, 0},
+	   MTCAN_BSF | MTCAN_BSR | MTCAN_SPEOD | MTCANT_RET | MTCAN_CHKRDY | 
+	    MTCAN_PREV | MTCAN_SEEK | MTCAN_APPEND | MTCAN_SILI | MTCAN_VAR | 
+             MTCAN_SETSZ | MTCAN_CHTYPEANY | MTCAN_COMPRESS | MTCANT_LOAD | MTCAN_LDREW ,
+	      20, 14*60, 25*60, 6*60, 6*60, 16384, 512*1024, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  "\300\0\0\0\30\0", 6, 0, 0,
+	  0, (u_char *)0 },
+	
+	/* IBM NTP drive */
+	{ IBMNTP, TPNTP, 3, 8, "IBM", "03590E1A", 0, 0, {0, 0, 0, 0},
+	   MTCAN_BSF | MTCAN_BSR | MTCAN_SPEOD | MTCANT_RET | MTCAN_CHKRDY | 
+	    MTCAN_PREV | MTCAN_SEEK | MTCAN_APPEND | MTCAN_SILI | MTCAN_VAR | 
+             MTCAN_SETSZ | MTCAN_CHTYPEANY | MTCAN_COMPRESS | MTCANT_LOAD | MTCAN_LDREW ,
+	      20, 14*60, 67*60, 14*60, 67*60, 16384, 512*1024, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  "\300\0\0\0\30\0", 6, 0, 0,
+	  0, (u_char *)0 },
+
+	/* IBM NTPSTACKER drive */
+	{ IBMNTP, TPNTPSTACKER, 3, 8, "IBM", "03590E11", 0, 0, {0, 0, 0, 0},
+	   MTCAN_BSF | MTCAN_BSR | MTCAN_SPEOD | MTCANT_RET | MTCAN_CHKRDY | 
+	    MTCAN_PREV | MTCAN_SEEK | MTCAN_APPEND | MTCAN_SILI | MTCAN_VAR | 
+             MTCAN_SETSZ | MTCAN_CHTYPEANY | MTCAN_COMPRESS | MTCANT_LOAD | MTCAN_LDREW ,
+	      20, 14*60, 67*60, 14*60, 67*60, 16384, 512*1024, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  "\300\0\0\0\30\0", 6, 0, 0,
+	  0, (u_char *)0 },
+
+        /* IBM Magstar 3570 drive */
+        { IBMMGSTRMP, TPMGSTRMP, 3, 8, "IBM", "03570B00", 0, 0, {0, 0, 0, 0},
+           MTCAN_BSF | MTCAN_BSR | MTCAN_SPEOD | MTCANT_RET | MTCAN_CHKRDY | 
+            MTCAN_PREV | MTCAN_SEEK | MTCAN_APPEND | MTCAN_SILI | MTCAN_VAR | 
+             MTCAN_SETSZ | MTCAN_CHTYPEANY | MTCAN_COMPRESS | MTCANT_LOAD | MTCAN_LDREW ,
+              20, 14*60, 25*60, 6*60, 6*60, 16384, 256*1024, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+		0, (u_char *)0 },
+
+        /* IBM Magstar 3570 stacker */
+        { IBMMGSTRMP, TPMGSTRMPSTCKR, 3, 8, "IBM", "03570B01", 0, 0, {0, 0, 0, 0},
+           MTCAN_BSF | MTCAN_BSR | MTCAN_SPEOD | MTCANT_RET | MTCAN_CHKRDY | 
+            MTCAN_PREV | MTCAN_SEEK | MTCAN_APPEND | MTCAN_SILI | MTCAN_VAR | 
+             MTCAN_SETSZ | MTCAN_CHTYPEANY | MTCAN_COMPRESS | MTCANT_LOAD | MTCAN_LDREW ,
+              20, 14*60, 25*60, 6*60, 6*60, 16384, 256*1024, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+		0, (u_char *)0 },
+
+        /* IBM Magstar MP stacker */
+        { IBMMGSTRMP, TPMGSTRMPSTCKR, 3, 8, "IBM", "03570B11", 0, 0, {0, 0, 0, 0},
+           MTCAN_BSF | MTCAN_BSR | MTCAN_SPEOD | MTCANT_RET | MTCAN_CHKRDY | 
+            MTCAN_PREV | MTCAN_SEEK | MTCAN_APPEND | MTCAN_SILI | MTCAN_VAR | 
+             MTCAN_SETSZ | MTCAN_CHTYPEANY | MTCAN_COMPRESS | MTCANT_LOAD | MTCAN_LDREW ,
+              20, 14*60, 25*60, 6*60, 6*60, 16384, 256*1024, 
+		tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+		0, (u_char *)0 },
+
+	/* STK 9490 drive */
+	{ STK90, TPSTK9490, 3, 4, "STK", "9490", 0, 0, {0, 0, 0, 0},
+	   MTCAN_BSF | MTCAN_BSR | MTCANT_RET | MTCAN_CHKRDY | MTCAN_PREV |
+	    MTCAN_SEEK | MTCAN_FASTSEEK | MTCAN_APPEND | MTCAN_SILI | MTCAN_VAR | MTCAN_SETSZ |
+	     MTCAN_CHTYPEANY | MTCAN_COMPRESS,
+	      20, 8*60, 10*60, 3*60, 3*60, 16384, 256*1024, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+	
+	/* STK SD3 drive */
+	{ STKSD, TPSTKSD3, 3, 4, "STK", "SD-3", 0, 0, {0, 0, 0, 0},
+	   MTCAN_BSF | MTCAN_BSR | MTCANT_RET | MTCAN_CHKRDY | MTCAN_PREV |
+	    MTCAN_SEEK | MTCAN_FASTSEEK | MTCAN_APPEND | MTCAN_SILI | MTCAN_VAR | MTCAN_SETSZ |
+	     MTCAN_CHTYPEANY | MTCAN_COMPRESS,
+	      20, 100*60, 10*60, 9*60, 9*60, 16384, 256*1024,
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	/* STK 9840 drive */
+	{ STK9840, TPSTK9840, 3, 4, "STK", "9840", 0, 0, {0, 0, 0, 0},
+	   MTCAN_BSF | MTCAN_BSR | MTCANT_RET | MTCAN_CHKRDY | MTCAN_PREV | MTCAN_SPEOD |
+	    MTCAN_SEEK | MTCAN_APPEND | MTCAN_SILI | MTCAN_VAR | MTCAN_SETSZ |
+	     MTCAN_CHTYPEANY | MTCAN_COMPRESS,
+	      20, 8*60, 10*60, 3*60, 3*60, 16384, 256*1024, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	/* SONY GY-10 drive */
+	{ SONYGY, TPGY10, 4, 5, "SONY", "GY-10", 0, 0, {0, 0, 0, 0},
+	   MTCAN_BSF|MTCAN_BSR|MTCANT_RET|MTCAN_CHKRDY|MTCAN_PREV|
+	    MTCAN_SEEK|MTCAN_APPEND|MTCAN_SILI|MTCAN_VAR|MTCAN_SETSZ|
+	     MTCAN_CHTYPEANY,
+	      20, 100*60, 10*60, 9*60, 9*60, 16384, 256*1024, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	/* SONY GY-2120 drive */
+	{ SONYGY, TPGY2120, 4, 7, "SONY", "GY-2120", 0, 0, {0, 0, 0, 0},
+	   MTCAN_BSF | MTCAN_BSR | MTCANT_RET | MTCAN_CHKRDY | MTCAN_PREV | 
+	    MTCAN_SEEK | MTCAN_APPEND | MTCAN_SILI | MTCAN_VAR | MTCAN_SETSZ | 
+	     MTCAN_CHTYPEANY | MTCAN_COMPRESS,
+	      20, 100*60, 10*60, 9*60, 9*60, 16384, 256*1024, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	/* EXABYTE 8900 */
+	{ EXABYTE8900, TP8MM_8900, 7, 8, "EXABYTE", "EXB-8900", 0,0,
+	  {0, 0, 0, 0},
+	  MTCAN_BSF|MTCAN_BSR|MTCAN_PREV|MTCAN_CHKRDY|MTCAN_VAR|MTCAN_SETSZ|
+	    MTCAN_SILI|MTCAN_CHTYPEANY|MTCAN_SPEOD|MTCAN_SYNC|
+		MTCAN_SEEK|MTCAN_COMPRESS,
+	  80, 4*60, 25*60, 5*60, 5*60, 1024, 128*1024, 
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	/* FUJITSU Diana-1 (M1016/M1017) 3480 drive */
+	{ FUJDIANA1, TPFUJDIANA1, 7, 4, "FUJITSU", "M101", 0, 0,
+	   {0, 9, 0, 0},
+	     MTCAN_BSF | MTCAN_BSR | MTCAN_APPEND | MTCAN_SYNC | MTCAN_LEOD |
+	     MTCAN_CHKRDY | MTCAN_VAR | MTCAN_SETSZ | MTCAN_SETDEN |
+	     MTCAN_SILI | MTCANT_RET | MTCAN_SEEK | MTCAN_CHTYPEANY |
+	     MTCAN_COMPRESS,
+	  20, 150, 20*60, 5*60, 5*60, 1024, 32*1024,
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  "\317\0\0\0\0\0\0\0\21\0", 10, 0, 0,
+	  0, (u_char *)0 },
+
+	/* FUJITSU Diana-2 (M2483) 3480/3490 drive */
+	{ FUJDIANA2, TPFUJDIANA2, 7, 5, "FUJITSU", "M2483", 0, 0,
+	   {0, 9, 0, 0},
+	     MTCAN_BSF | MTCAN_BSR | MTCAN_APPEND | MTCAN_SYNC | MTCAN_LEOD |
+	     MTCAN_CHKRDY | MTCAN_VAR | MTCAN_SETSZ | MTCAN_SETDEN |
+	     MTCAN_SILI | MTCANT_RET | MTCAN_SEEK | MTCAN_CHTYPEANY,
+	  20, 150, 20*60, 5*60, 5*60, 1024, 32*1024,
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  "\317\0\0\0\0\0\0\0\21\0", 10, 0, 0,
+          0, (u_char *)0 },
+
+	/* FUJITSU Diana-3 (M2488) 3480/3490 drive (narrow or wide) */
+	{ FUJDIANA3, TPFUJDIANA3, 7, 5, "FUJITSU", "M2488", 0, 0,
+	   {0, 9, 0, 0},
+	     MTCAN_BSF | MTCAN_BSR | MTCAN_APPEND | MTCAN_SYNC | MTCAN_LEOD |
+	     MTCAN_CHKRDY | MTCAN_VAR | MTCAN_SETSZ | MTCAN_SETDEN |
+	     MTCAN_SILI | MTCANT_RET | MTCAN_SEEK | MTCAN_CHTYPEANY,
+	  20, 150, 20*60, 5*60, 5*60, 1024, 32*1024,
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  "\317\0\0\0\0\0\0\0\21\0", 10, 0, 0,
+          0, (u_char *)0 },
+
+        /* STK 4781 (Avalon) */
+        { STK4781, TPSTK4781, 3, 4, "STK", "4781", 0, 0,
+           {0, 0, 0, 0}, MTCAN_BSF | MTCAN_BSR | MTCAN_APPEND | MTCANT_RET |
+             MTCAN_VAR |  MTCAN_SETSZ | MTCAN_SILI | MTCAN_SEEK |
+	     MTCAN_FASTSEEK | MTCANT_LOAD | MTCAN_LDREW |
+             MTCAN_SYNC | MTCAN_CHTYPEANY | MTCANT_IMM | MTCAN_LEOD | MTCAN_COMPRESS,
+          20, 3*60, 10*60, 5*60 + 5, 5*60 + 5, 512, 64*1024,
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+         {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+        /* STK 4791 (Avalon) */
+        { STK4791, TPSTK4791, 3, 4, "STK", "4791", 0, 0,
+           {0, 0, 0, 0}, MTCAN_BSF | MTCAN_BSR | MTCAN_APPEND | MTCAN_CHKRDY | MTCANT_RET | 
+             MTCAN_VAR |  MTCAN_SETSZ | MTCAN_SILI | MTCAN_SEEK | 
+	     MTCAN_FASTSEEK | MTCANT_LOAD | MTCAN_LDREW |
+             MTCAN_SYNC | MTCAN_CHTYPEANY | MTCANT_IMM | MTCAN_LEOD | MTCAN_COMPRESS,
+          20, 3*60, 10*60, 5*60 + 5, 5*60 + 5, 512, 64*1024,
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	 {0}, 0, 0, 0,
+          0, (u_char *)0 },
+
+	{ M49914, TP9TRACK, 3, 9, "SGI", "GOLD SEAL", 0, 0,
+	   {3, 6, 2, 1},
+	     MTCAN_BSF | MTCAN_BSR | MTCAN_APPEND | MTCAN_SYNC |
+	     MTCAN_SPEOD | MTCAN_CHKRDY | MTCAN_VAR | MTCAN_SETSZ |
+	     MTCAN_SETSP | MTCAN_SETDEN | MTCAN_SILI |
+	     MTCANT_RET | MTCAN_SEEK | MTCANT_IMM,
+	  20, 150, 20*60, 5*60, 5*60, 512, 60*512,
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	/* AMPEX DST Series - fixed block only */
+	{ AMPEXDST, TPD2, 5, 7, "AMPEX", "DST310 ", 0, 0,
+	   {0, 0, 0, 0},
+	     MTCAN_BSF | MTCAN_BSR | MTCAN_APPEND | MTCAN_SYNC |
+	     MTCAN_SPEOD | MTCAN_BUFFM | MTCAN_CHKRDY | MTCAN_SETSZ |
+	     MTCANT_RET | MTCAN_SEEK | MTCAN_PART | MTCANT_LOAD,
+	  20, 10*60, 10*60, 8*60, 8*60, 8192, 512*8192,
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+	/* AMPEX DST Series - variable block support */
+	{ AMPEXDST, TPD2, 5, 3, "AMPEX", "DST", 0, 0,
+	   {0, 0, 0, 0},
+	     MTCAN_BSF | MTCAN_BSR | MTCAN_APPEND | MTCAN_SYNC | MTCAN_VAR |
+	     MTCAN_SPEOD | MTCAN_BUFFM | MTCAN_CHKRDY | MTCAN_SETSZ |
+	     MTCANT_RET | MTCAN_SEEK | MTCAN_PART | MTCANT_LOAD,
+	  20, 10*60, 10*60, 8*60, 8*60, 8192, 146*8192,
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+	
+	/* AMPEX DIS Series - fixed block only */
+	{ AMPEXDST, TPD2, 5, 7, "AMPEX", "DIS120 ", 0, 0,
+	   {0, 0, 0, 0},
+	     MTCAN_BSF | MTCAN_BSR | MTCAN_APPEND | MTCAN_SYNC |
+	     MTCAN_SPEOD | MTCAN_BUFFM | MTCAN_CHKRDY | MTCAN_SETSZ |
+	     MTCANT_RET | MTCAN_SEEK | MTCAN_PART | MTCANT_LOAD,
+	  20, 10*60, 10*60, 8*60, 8*60, 8192, 512*8192,
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+	
+	/* AMPEX DIS Series - variable block support */
+	{ AMPEXDST, TPD2, 5, 3, "AMPEX", "DIS", 0, 0,
+	   {0, 0, 0, 0},
+	     MTCAN_BSF | MTCAN_BSR | MTCAN_APPEND | MTCAN_SYNC | MTCAN_VAR |
+	     MTCAN_SPEOD | MTCAN_BUFFM | MTCAN_CHKRDY | MTCAN_SETSZ |
+	     MTCANT_RET | MTCAN_SEEK | MTCAN_PART | MTCANT_LOAD,
+	  20, 10*60, 10*60, 8*60, 8*60, 8192, 146*8192,
+	  tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+        /* IBM NCTP drive */
+        { PHLSNCTP, TPNCTP, 3, 6, "LMS", "NCTP001", 0, 0, {0, 0, 0, 0},
+           MTCAN_BSF|MTCAN_BSR|MTCAN_SPEOD|MTCANT_RET|MTCAN_CHKRDY|
+            MTCAN_PREV|MTCAN_SEEK|MTCAN_APPEND|MTCAN_SILI|MTCAN_VAR|
+             MTCAN_SETSZ|MTCAN_CHTYPEANY|MTCAN_COMPRESS,
+              20, 14*60, 25*60, 6*60, 6*60, 16384, 2*1024*1024,
+		tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+        /* Philips TD3600 drive */
+        { PHLS3600, TPTD3600, 3, 6, "LMS", "03490E", 0, 0, {0, 0, 0, 0},
+           MTCAN_BSF | MTCAN_BSR | MTCAN_SPEOD | MTCANT_RET | MTCAN_CHKRDY | 
+            MTCAN_SEEK | MTCAN_FASTSEEK | MTCAN_APPEND | MTCAN_SILI | MTCAN_VAR | MTCAN_SETSZ | 
+             MTCAN_CHTYPEANY | MTCAN_COMPRESS,
+              20, 8*60, 10*60, 6*60, 6*60, 16384, 256*1024, 
+		tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+        /* Overland Data L490E drive */
+        { OVL490E, TPOVL490E, 8, 6, "OVERLAND", "L490E ", 0, 0, {0, 0, 0, 0},
+           MTCAN_BSF | MTCAN_BSR | MTCAN_SPEOD | MTCANT_RET | MTCAN_CHKRDY | 
+            MTCAN_SEEK | MTCAN_FASTSEEK | MTCAN_APPEND | MTCAN_SILI | MTCAN_VAR | MTCAN_SETSZ | 
+             MTCAN_CHTYPEANY | MTCAN_COMPRESS,
+              20, 8*60, 10*60, 6*60, 6*60, 16384, 256*1024, 
+		tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	  {0}, 0, 0, 0,
+	  0, (u_char *)0 },
+
+
+/* (NOTE: Comma is legal even on last struct entry.) */
+};
+
+/* numtypes doesn't include the generic entry */
+int tpsc_numtypes = sizeof(tpsc_types)/sizeof(tpsc_types[0]);
+
+/* this entry is used for all tapes not matching any of the entries
+ * in tpsc_types.  It basicly assumes a limited QIC set of capablities. */
+struct tpsc_types tpsc_generic = {
+	TPUNKNOWN, TPUNKNOWN, 0, 0, "", "", 0, 0, {0},
+	MTCAN_SPEOD, 20, 150, 18*60, 5*60, 5*60, 512, 400*512, 
+	tpsc_default_dens_count, tpsc_default_hwg_dens_names, tpsc_default_alias_dens_names,
+	{0}, 0, 0, 0,
+	0, (u_char *)0
+};
+
+/* if non-zero, rewinds are done with the immediate bit set, which
+ * means that the rewind ioctl will return as soon as the drive
+ * has accepted the command (rewinds are *always* immediate when
+ * in AUDIO mode, so that programs may poll the drive as to the
+ * current position, which works only in audio mode).  If a drive
+ * description has the MTCANT_IMM bit set, the setting of this variable
+ * is ignored for that drive (for drives that do not handle immediate
+ * mode rewinds, or do not return the correct "error" codes while an
+ * immediate mode operation is in progress.
+ * This variable also effects the MTRET  ioctl with the exception
+ * of drives which have the MTCANT_RET capability flag in their description,
+ * since they need to have the retension command emulated; it partially
+ * works for these drives, since the emulation is 'space to eom, unload'
+ * NOTE: This doesn't affect the MTUNLOAD or MTOFFL ioctls.
+ *
+ * The value of 0 is the way releases previous to IRIX 5 worked,
+ * where programs were unkillable until the rewind completed.
+ * This variable also affects the rewind the driver does when
+ * the rewind device is closed, so that the close of the rewind
+ * and no-rewind devices will both return immediately if this variable
+ * is set.
+ *
+ * If the drive is closed (e.g., when doing 'mt rewind'), subsequent opens
+ * will block until the rewind has completed. If programs use the rewind
+ * ioctl, and want to know when it is done, The MTIOCGET ioctl will block
+ * until the rewind is completed; other tape commands will fail with EBUSY
+ * until the rewind completes.
+ */
+int tpsc_immediate_rewind = 1;
+
+/*
+ * The following variable is used to enable/disable printing a message
+ * when the illegal length indicator is enabled (the default state).
+ * Such messages are of the form:
+ *   NOTICE: SCSI tape #0,7 blocksize mismatch; blocksize on tape is 4096 bytes
+ * If tpsc_print_ili is cleared, these messages will not be printed to
+ * the console or spooled SYSLOG.
+ */
+int tpsc_print_ili = 1;
+
+/*
+ * The following table is used to ensure that all CD-ROM drives are
+ * so identified in the hardware inventory. The SGI supplied CD-ROM
+ * drives (and possibly those from some other vendors) identify themselves
+ * as hard disk drives at poweron, and after SCSI bus resets, until
+ * issued a vendor specific command (0xc9).  This is done because older
+ * systems would otherwise be unable to boot and load miniroots from CD, due
+ * to their design (they attempted to protect the user from booting from
+ * "ridiculous" devices, long before CD-ROM drives existed).  The SGI drives
+ * are sent a command to "revert" to CD-ROM inquiry information during boot
+ * if on a SCSI bus handled by the PROM, but not all possible buses are
+ * handled by all PROMs; additionally, a SCSI bus reset causes the CD-ROM
+ * drives to revert to the poweron default, and this could happen before
+ * the hardware inventory code in the kernel runs, if there are SCSI
+ * problems.  The table of strings below is used identify CD-ROM drives by
+ * doing a strstr() with each the strings below on the vendor and product
+ * fields of the data returned by the the inquiry command.  A match on
+ * any of them will cause the device to be added to the hardware inventory
+ * as a CD-ROM, for SCSI drivers.
+ */
+char *cdrom_inq_strings[] = {
+	"CDROM", "CD-ROM", "CD ROM", NULL
+};
+
+/* 
+ * All devices to be treated as floppies, as opposed to hard disks, are
+ * tabulated along with the inventory type.
+ */
+single_inq_str_s floppy_inq_strings[] = {
+	{ "TEAC",		8,	INV_TEAC_FLOPPY },
+	{ "INSITE",		8,	INV_INSITE_FLOPPY },
+	{ "IOMEGA  Io20S",	8,	INV_INSITE_FLOPPY },
+	{ "SyQuest",		8,	INV_INSITE_FLOPPY },
+	{ NULL,			0,      0 }
+};
+
+/*
+ * Some type 0 removable devices need to be treated as both floppies and
+ * hard disks.
+ */
+single_inq_str_s multimode_inq_strings[] = {
+	{ "SyQuest",	8,	0 },
+	{ NULL,         0,      0 }
+};
+
+/*
+ * Some SCSI devices lie about supporting multiple LUNs. Since the
+ * infrastructre automatically creates device nodes for all supported
+ * LUNs, exceptions need to be noted.
+ */
+single_inq_str_s multilun_exc_inq_strings[] = {
+	{ "TEAC",	8,	0 },
+	{ "INSITE", 8,	0 },
+	{ NULL,		0,	0 }
+};
+
+/*
+ * Which devices are to be treated as multilunned RAIDs from an
+ * inventory standpoint.
+ */
+double_inq_str_s raid_inq_strings[] = {
+	{ "SGI",	8,	"SAUNA",	36,	0 },
+	{ "SGI",	8,	"K5",		36,	0 },
+	{ NULL,		0,	NULL,		0,	0 }
+};	
+
+/* 
+ * THIRD PARTY DRIVER REGISTRATION TABLES:
+ * ---------------------------------------
+ * The following are the driver registration tables used for registering
+ * 3rd party drivers. scsi_drivers[] is merely a list of sub-tables, one
+ * entry for each SCSI device type. By default, only the type 1 table is 
+ * defined, but additional types may be defined.
+ * 
+ * Each of the sub-tables is a list of tuples, where each tuple defines a
+ * pairing between device ID and a driver to which the device is to be
+ * attached. Specifically, each entry has 4 fields: a SCSI vendor ID
+ * string, a SCSI product ID string, a driver prefix string, and a HWG
+ * pathname component. During device discovery, each type table is
+ * searched and if a match is found (based on the SCSI vendor ID and
+ * product ID strings) the device is attached to the (previously
+ * registered) driver defined by the prefix in the third field. The VHDL
+ * passed to the particular driver's _attach() routine is associated with
+ * the pathname formed by taking the LUN pathname and adding to it the
+ * string found in the fourth field of the registration entry.
+ * 
+ * As a simple example, which shows the addition of a 3rd party tape
+ * driver, consider the following. The example shows the case where the
+ * driver fuj.c would be registered and any type 1 SCSI device having
+ * vendor-ID="Fujitsu" and product-ID="Diana-1" would be attached to
+ * it. The HWG pathname of the vhdl passed to the driver's _attach()
+ * routine would include the component "fujitsu-tape", namely
+ * /hw/module/..../scsi_ctlr/0/target/0/lun/0/fujitsu-tape
+ * 
+ *  scsi_driver_reg_s scsi_drivers_type1[] = {
+ *   	// Type 1 - sequential access devices, tapes //
+ *  	{ "Fujitsu", "Diana-1", "fuj", "fujitsu-tape" },
+ *  	{ NULL, NULL, NULL, NULL }
+ *  };
+ * 
+ * For a more complicated example, showing the addition of a type 8 CD
+ * Jukebox driver, consider the following. First, an additional entry
+ * must be made to the scsi_drivers table to add support for type 8
+ * devices.
+ * 
+ * 
+ *  scsi_type_reg_t scsi_drivers[] = {
+ *	{ 0, 	NULL 			},	// Type 0 driver reg table //
+ *	{ 0, 	scsi_drivers_type1	},	// Type 1 driver reg table //
+ *	{ 0, 	NULL 			},	// Type 2 driver reg table //
+ *	{ 0, 	NULL 			},	// Type 3 driver reg table //
+ *	{ 0, 	NULL 			},	// Type 4 driver reg table //
+ *	{ 0, 	NULL 			},	// Type 5 driver reg table //
+ *	{ 0, 	NULL 			},	// Type 6 driver reg table //
+ *	{ 0, 	NULL 			},	// Type 7 driver reg table //
+ *	{ 0, 	scsi_drivers_type8	},	// Type 8 driver reg table //
+ *	{ 1, 	NULL 			},	// Terminator - don't remove //
+ *  };
+ * 
+ * The following table shows the case where the driver pion.c would be
+ * registered and any type 8 SCSI device having vendor-ID="Pioneer" and
+ * product-ID="1004X" would be attached to it. The HWG pathname of the
+ * vhdl passed to the driver's _attach() routine would include the
+ * component "pioneer-jukebox", namely
+ * /hw/module/..../scsi_ctlr/0/target/0/lun/0/pioneer-jukebox
+ * 
+ *  scsi_driver_reg_s scsi_drivers_type8[] = {
+ *  	// Type 8 - media changer devices, e.g. jukeboxes //
+ * 	{ "Pioneer", "1004X", "pion", "pioneer-jukebox" },
+ * 	{ NULL, NULL, NULL, NULL }
+ *  };
+ * 
+ * A NOTE about registration of drivers and attaching of devices. All
+ * third party drivers are required to have a _reg() and an _attach()
+ * entry point. The routine names must be prefixed by the "prefix" field
+ * defined above. During kernel boot, or registration of loadable
+ * drivers, the _reg() routine will be called during which time the
+ * driver must register itself. This it does by calling the function
+ * scsi_driver_register() with two arguments, the SCSI device type and
+ * the driver prefix.
+ * 
+ * 	int scsi_driver_register(int unit_type, char *driver_prefix)
+ * 
+ * During SCSI device discovery, a matching device will be attached to
+ * the driver via a call to the driver's _attach() routine. The argument
+ * passed to the _attach() routine will be the vhdl (hardware graph
+ * vertex handle) of the device, as described in the examples above. It
+ * is the driver's responsibility to construct the hardware graph
+ * namespace in the _attach() routine.
+ */
+
+/*
+ * NOTE: The tpsc_types structures are only relevant to the default
+ * SGI tape driver, tpsc.c. Third party tape driver clones are free to
+ * use it, at their own risk, as the structure may change without notice.
+ */
+
+scsi_driver_reg_s scsi_drivers_type1[] = {
+ 	/* Type 1 - sequential access devices, tapes */
+	{ NULL, NULL, NULL, NULL },
+};
+
+scsi_type_reg_s scsi_drivers[] = {
+	{ 0, 	NULL			},	/* Type 0 driver reg table */
+	{ 0, 	scsi_drivers_type1	},	/* Type 1 driver reg table */
+	{ 0, 	NULL 			},	/* Type 2 driver reg table */
+	{ 0, 	NULL 			},	/* Type 3 driver reg table */
+	{ 0, 	NULL 			},	/* Type 4 driver reg table */
+	{ 0, 	NULL			},	/* Type 5 driver reg table */
+	{ 0, 	NULL 			},	/* Type 6 driver reg table */
+	{ 0, 	NULL 			},	/* Type 7 driver reg table */
+
+	{ 1, 	NULL 			},	/* Terminator - don't remove */
+};
+

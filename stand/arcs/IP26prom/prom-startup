@@ -1,0 +1,88 @@
+
+This is a description of the Power Indigo2 (aka IP26, teton) power-on on
+sequence from the point that software (PROM level) assumes control to the
+first message printed.  Other manufacturing documents detail the higher
+level power-on diagnostics.  This is used to debug dead boards.
+
+This is for the 12/23/94 PROM with checksum XXXXXX.
+
+What follows is a high level address trace for the machine initialization.
+These addresses should be seen on the T-bus or SysAd bus under normal
+operation.   Note that uncached instruction fetches fetch 8 words and only
+execute up to 4 instrucitons from this fetch.
+
+For most "dead" board repair a set of signals to look for from the IU
+and TCC/SysAD is probably required for the 0x1fc00000 fetch.
+
+Address		Reason
+
+0x1fc00000	boot vector
+			clears IU status and cause register
+			If GIO mode powers up correctly jumps to 0x1fc00060.
+			This usually happens on power-up but not on reset.
+				- If 1fc is not seen on the T-bus, the IU
+				  is not comming out of reset propperly.
+				- If 1fc is on the T-bus, but not the SysAD
+				  bus, then the T-bus and TCC are suspect.
+
+0x1fc00020	reset machine on bad GIO
+
+0x1fc00060	initialize some IU and FPU registers.
+
+0x1fc000a0	call check_scachesize (0x1fc01d10)
+
+0x1fc000c0	call init_C0 (0x1fc00e9c)
+
+0x1fc000e0	call _flush_tlb (0x1fc00f0c)
+		call pon_invalidate_IDcaches (0x1fc01d50)
+		call flush_SAQueue (0x1fc01d1c)
+
+0x1fc00120	jump from uncached mode to 'chandra' mode, which the
+		intructions stream is cached in the ICache (not the
+		secondary cache).  This speeds-up execution but it
+		is harder to follower execution with a logic analyzer.
+
+0x1fc00140	call inval_gcache_tags (0x1fc04e00)
+		initialize MC registers (physical base 0x1fa00004)
+
+0x1fc00220	initialize TCC registers (physical base 0x18000000)
+		call init_hpc3 (0x1fc00a98)
+
+0x1fc00280	call pon_initio (0x1fc04ea8)
+			We can now print messages to the serial port, so
+			all diagnostic failures will be printed.
+		call StartAesTx (audio card) (0x1fc00c40)
+		call init_scsi (0x1fc00da8)
+
+0x1fc002a0	call init_int2 (0x1fc00d1c)
+		call init_hpc3_scsi (0x1fc00b64)
+		call scache_tag (0x1fc03780) Secondary cache tag RAM tests
+		call scache_tag2 (0x1fc03bfc) Secondary cache tag RAM tests
+			- Failure here indicates bad Scache tag RAMs.  A
+			  message will be printed.
+
+0x1fc002c0	call scache_tag3 (0x1fc03e00) Secondary cache tag RAM tests
+		call scache_data (0x1fc03fe4) Secondary cache RAM tests
+		call scache_data2 (0x1fc04a80) Secondary cache RAM tests
+		call inval_gcache_tags (0x1fc04e00)
+			- Failure here indicates bad Scache data or tag RAMs.
+			  A message will be printed.
+
+0x1fc00340	jump to fully cached text mode (use secondary cache).
+		call pon_invalidate_IDcaches (0x1fc01d50)
+
+0x1fc00400	initialize ECC hardware
+
+0x1fc004c0	call pon_mc (0x1fc05908)
+		call pon_regs (0x1fc055e4)
+		call init_memconfig (0x1fc00fa0)
+			- The two pon* tests will walk a bit across various
+			  registers and may indicate bad traces on failure.
+			- If no memory is present init_memconfig will print
+			  a message on the serial port and flash the LED.
+
+0x1fc004e0	call init_prom_ram (0x1fc00a18)
+
+0x1fc00560	call sysinit -- we are now running C code.
+			- If we get this far, the teton module should be
+			  testable by other means.

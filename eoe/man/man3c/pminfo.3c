@@ -1,0 +1,158 @@
+'\"macro stdmacro
+.TH pminfo 3
+.SH NAME
+__pm_get_page_info, __mld_to_node \- retrieve placement information
+.SH SYNOPSIS
+.nf
+.B "#include <sys/types.h>"
+.B "#include <sys/pmo.h>"
+.PP
+\fB
+typedef	struct pm_pginfo_s {
+	caddr_t vaddr;
+	dev_t	node_dev;
+	uint	page_size;
+	pmo_handle_t pm_handle;
+        void*   reserved[2];
+} pm_pginfo_t;
+
+int __pm_get_page_info(void *base_addr,
+                       size_t length,
+                       pm_pginfo_t* pginfo_buf,
+                       int buf_len)
+
+dev_t __mld_to_node(pmo_handle_t mld_handle)
+\fP
+.PP
+.fi
+.SH DESCRIPTION
+.PP
+The above two interfaces can be used to get placement information
+of a process's address space. It has to be done from the context
+of that process.
+.PP
+\f4__pm_get_page_info\fP takes an address range in terms of base_addr  
+and length. pginfo_buf is an array of pm_pginfo_t structs passed
+by the caller. On completion of the system call pginfo_buf contains
+the placement information for every page in the address range that
+has been faulted in. The vaddr field of pm_pginfo_t contains the
+virtual address of the page, node_dev contains the hardware graph
+dev_t of the node where the page has been placed. page_size is the
+page size used while mapping that virtual address. pm_handle is the
+handle of the pm that is attached to that virtual address. From
+dev_t one can get the hardware graph device name by
+using the libc routine dev_to_devname. If a page in the virtual
+address range has not been faulted in there is no corresponding
+entry in the pginfo_buf. If there is no error the return value
+contains the number of entries in the buffer that have been filled
+by the kernel.
+.PP
+\f4__mld_to_node\fP converts an mld to the node where the mld has been
+placed. It returns the HWG dev_t of the node. The hardware graph
+name can be found by using the library routine dev_to_devname.
+.PP
+\f4dev_to_devname\fP has the following prototype:
+.PP
+.nf
+\fB
+char* dev_to_devname(dev_t dev, char *devname, int *length)
+\fP
+.PP
+This function converts a dev_t to a hardware graph device name.
+devname is a character array and length is a pointer to an integer
+which contains the length of the array.
+
+.SH SEE ALSO
+numa(5), mmci(5), mld(3c), mldset(3c), pm(3c), migration(3c)
+.SH "DIAGNOSTICS"
+.PP
+Returns -1 on error.
+.PP
+EFAULT  pginfo_buf address does not exist in the address space.
+.PP
+EINVAL If the number of elements in the pginfo is < 1
+.PP
+E2BIG If the number of elements > 1024
+.PP
+.SH EXAMPLE
+.Ex
+#include <sys/types.h>
+#include <sys/pmo.h>
+#include <sys/attributes.h>
+#include <sys/conf.h>
+#include <sys/hwgraph.h>
+#include <sys/stat.h>
+#include <invent.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define NUMNODES        100
+#define NBPP            16384
+#define STACK_SIZE      20*NBPP
+#define DATA_SIZE       20*NBPP
+
+char databuf[DATA_SIZE];
+
+pm_pginfo_t  node_buf[NUMNODES];
+
+void print_nodes(pm_pginfo_t *, int);
+extern int __pm_get_page_info();
+
+void
+main(int argc, char **argv)
+{
+        char    stkbuf[STACK_SIZE];
+        int     ret;
+        volatile char   *addr;
+
+
+        printf("addr %x len %x\n",databuf, stkbuf - databuf + STACK_SIZE);
+        addr = databuf;
+        while (addr < (databuf + DATA_SIZE)) {
+                *addr = 0;
+                addr += NBPP;
+        }
+                 
+        ret = __pm_get_page_info(0, 0x7fffffff, &node_buf, NUMNODES);
+        printf("__pm_get_page_info returns ret %d\n", ret);
+        if (ret == -1) {
+                perror("__pm_get_page_info");
+                exit(1);
+        }
+
+        printf("stack buf nodes\n");
+        print_nodes(node_buf, ret);
+
+        ret = __pm_get_page_info(databuf, sizeof(databuf), &node_buf, NUMNODES);
+        printf("__pm_get_page_info returns ret %d\n", ret);
+        if (ret == -1) {
+                perror("__pm_get_page_info");
+                exit(1);
+        }
+        printf("data buf nodes\n");
+        print_nodes(node_buf, ret);
+}
+
+void
+print_nodes(pm_pginfo_t *nbuf, int numnodes)
+{
+        int     i;
+        char    devname[160];
+        int     length;
+        
+
+        for (i = 0; i < numnodes; i++) {
+                length = sizeof(devname);
+                printf("Address %x devt %x node %s page size %d pm %d\n",
+                        nbuf[i].vaddr, 
+                        nbuf[i].node_dev,
+                        dev_to_devname(nbuf[i].node_dev,  devname, &length),
+                        nbuf[i].page_size,
+                        nbuf[i].pm_handle); 
+        }
+}
+.Ee
+
+
+

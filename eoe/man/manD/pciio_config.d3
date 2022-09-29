@@ -1,0 +1,271 @@
+.TH pciio_config D3
+.SH NAME
+pciio_config: pciio_config_get, pciio_config_set \- access PCI Configuration register
+.SH SYNOPSIS
+.nf
+.ft 3
+#include <sys/PCI/pciio.h>
+#include <sys/PCI/PCI_defs.h>
+.sp .8v
+uint64_t
+pciio_config_get(
+	vertex_hdl_t \f2vhdl\fP,
+	unsigned \f2reg\fP,
+	unsigned \f2size\fP)
+.sp .8v
+void
+pciio_config_set(
+	vertex_hdl_t \f2vhdl\fP,
+	unsigned \f2reg\fP,
+	unsigned \f2size\fP,
+	uint64_t \f2value\fP )
+.ft 1
+.fi
+.SS Arguments
+.IP "\f2vhdl\f1" 8n
+The connection point of the PCI device, as passed to the driver's
+.IR attach ()
+entry point.
+.IP "\f2reg\f1"
+Byte offset of the register
+of interest in the PCI address space.
+.IP "\f2size\f1"
+Width of the target register in bytes.
+.IP "\f2value\f1"
+Value to be written to the
+specified register.
+.SH DESCRIPTION
+Various SGI platforms introduce complexities and
+restrictions in how Configuration Space
+cycles are generated on the PCI bus.
+For instance, some platforms may require all PCI
+Configuration accesses to be done using 32-bit
+wide accesses.
+Other platforms may require
+more than a simple load or store to trigger the
+actual cycle, so that configuration access cannot
+be performed using simple PIO loads and stores.
+The functions described here
+allow the hardware differences to be encapsulated
+behind a single interface, so PCI drivers do not
+have to know the details of each platform.
+.P
+The
+.I reg
+value specifies the offset of the target value in configuration space.
+The
+.I size
+value specifies the width of the target value.
+Registers defined by the standard are 1, 2, 3, 4, or 8 bytes,
+but the functions permit any size from 1-8 bytes.
+Eight-byte registers are returned in proper byte and word order.
+.P
+Some implementations must
+access configuration space in 32-bit units on 32-bit boundaries,
+while other implementations may do this for performance reasons.
+When
+.I reg
+and
+.I size
+specify a standard PCI configuration register,
+.IR pciio_config_get ()
+shifts and masks appropriately to return
+just the value of the register.
+Similarly,
+.IR pciio_config_set ()
+executes a read-merge-write
+operation to place the data in
+the correct portion of the word.
+.SS "Standard PCI Configuration Registers"
+To access vendor-specific registers, specify
+the base address in PCI configuration space,
+bearing in mind that PCI places the least
+significant data in the lowest offset.
+.P
+The following constants are used as the
+.I reg
+value to specify
+a standard register in the Type 00 PCI
+configuration space:
+.IP
+.nf
+PCI_CFG_VENDOR_ID
+PCI_CFG_DEVICE_ID
+PCI_CFG_COMMAND
+PCI_CFG_STATUS
+.sp .8v
+PCI_CFG_REV_ID
+PCI_CFG_BASE_CLASS
+PCI_CFG_SUB_CLASS
+PCI_CFG_PROG_IF
+.sp .8v
+PCI_CFG_CACHE_LINE
+PCI_CFG_LATENCY_TIMER
+PCI_CFG_HEADER_TYPE
+PCI_CFG_BIST
+.sp .8v
+PCI_CFG_BASE_ADDR(0)
+PCI_CFG_BASE_ADDR(1)
+PCI_CFG_BASE_ADDR(2)
+PCI_CFG_BASE_ADDR(3)
+PCI_CFG_BASE_ADDR(4)
+PCI_CFG_BASE_ADDR(5)
+.sp .8v
+PCI_CFG_CARDBUS_CIS
+PCI_CFG_SUBSYS_VEND_ID
+PCI_CFG_SUBSYS_ID
+PCI_CFG_PCI_EXPANSION_ROM
+.sp .8v
+PCI_INTR_LINE
+PCI_INTR_PIN
+PCI_MIN_GNT
+PCI_MAX_LAT
+.br
+.fi
+Use PCI_CFG_VEND_SPECIFIC to specify the first
+vendor-specific register word.
+.SH EXAMPLES
+Most things that drivers might think they need
+to set up in their configuration space have
+already been taken care of by the infrastructure,
+including checking the VENDOR and DEVICE
+identifiers, allocating PCI space appropriately
+and assigning values to the BASE registers,
+enabling DMA, Memory and I/O decode,
+and setting up the system-specific values for
+other registers as appropriate; so we expect
+that many PCI drivers will never actually
+need to worry about their configuration space
+at all.
+.P
+This example reflects a driver that is supporting
+multiple revisions of a card, where the revision
+code needs to be stored for later use.
+.Ex
+pcifoo_attach(vertex_hdl_t conn)
+{
+	...
+	/* retrieve current device revision */
+	foo_soft->fs_revision =
+		pciio_config_get(conn, PCI_CFG_REV_ID, 1);
+	...
+	/* write 0x5555AAAA test pattern to first
+	** vendor specific register */
+	pciio_config_set(conn, PCI_CFG_VEND_SPECIFIC, 4,
+		0x5555AAAA);
+}
+.Ee
+.SH NOTES
+Access to sizes or alignments not directly supported by
+the processor or any bus or bus adapter between the processor and
+the PCI device may result in multiple CFG cycles being
+used to construct the access.
+.P
+A number of SGI-built PCI peripherals require
+all CFG space accesses to use all byte lanes.
+In support of this,
+all current
+.IR pciio_config_get ()
+provider implementations
+always read the
+entire 32-bit wide word, then extract the
+register of interest using shift and mask
+operations.
+This is also faster than switching between
+various load sequences based on the size
+and alignment of the register.
+.P
+On systems that are unable to initiate store cycles
+with only some byte lanes enabled,
+support code may synthesize the transaction effect
+by reading the word containing the register,
+modifying the proper bits in the word,
+then rewriting the entire bus word.
+This synthesis code knows about the special handling
+of the STATUS register.
+However, if other registers in your card's configuration space
+are sensitive to being rewritten,
+you should access other registers in the same word as
+the sensitive ones using full
+four-byte-wide accesses, manipulating
+the word data appropriately.
+.SS "Previous Releases"
+In IRIX 6.3, the functions with the names
+.I pciio_config_get
+and
+.I pciio_config_set
+took different arguments than these functions do,
+and had more restrictions.
+When porting from IRIX 6.3, some recoding of configuration access is needed.
+.P
+All systems supported by IRIX 6.4 permitted direct PIO access to
+configuration space.
+Accordingly, IRIX 6.4 included no configuration access functions.
+When porting from IRIX 6.4, configuration access must be recoded to
+use these functions in order to avoid being platform-dependent.
+.P
+It is possible to code configuration access call macros so that
+they compile properly in all releases from 6.3 onward.
+The macro code would be similar to the following:
+.Ex
+/* PCI Config Space Access Macros
+** for source compatibility in drivers
+** that need to use the same source
+** for IRIX 6.3, IRIX 6.4, and IRIX 6.5
+**
+** PCI_CFG_BASE(conn)
+** PCI_CFG_GET(conn,base,offset,type)
+** PCI_CFG_SET(conn,base,offset,type,value)
+**
+** Use PCI_CFG_BASE once during attach to get the
+** base value to be used for the specific device.
+** Later, use PCI_CFG_GET to read and PCI_CFG_SET
+** to write config registers.
+**
+** NOTE: Irix 6.3 determines the size of the register
+** directly on its own, based on the layout of a Type 00
+** PCI Configuration Space Header. If you specify a
+** nonstandard size, you will get different results
+** depending on the system revision number.
+*/
+#if IRIX6_3
+#define	PCI_CFG_BASE(c)		pciio_piotrans_addr(c,0,PCIIO_SPACE_CFG,0,256,0)
+#define	PCI_CFG_GET(c,b,o,t)	pciio_config_get(b,o)
+#define	PCI_CFG_SET(c,b,o,t,v)	pciio_config_set(b,o,v)
+#elif IRIX6_4
+#define	PCI_CFG_BASE(c)		pciio_piotrans_addr(c,0,PCIIO_SPACE_CFG,0,256,0)
+#define	PCI_CFG_GET(c,b,o,t)	((*(t *)((char *)(b)+(o))))
+#define	PCI_CFG_SET(c,b,o,t,v)	((*(t *)((char *)(b)+(o))) = v)
+#else	/* starting in IRIX 6.5 */
+#define	PCI_CFG_BASE(c)		NULL
+#define	PCI_CFG_GET(c,b,o,t)	pciio_config_get(c,o,sizeof(t))
+#define	PCI_CFG_SET(c,b,o,t,v)	pciio_config_set(c,o,sizeof(t),v)
+#endif
+.Ee
+The macros would be used approximately as follows (repeating
+the example from the preceding section):
+.Ex
+pcifoo_attach(vertex_hdl_t conn)
+{
+	void * config_base = PCI_CFG_BASE(conn);
+	...
+	/* retrieve current device revision */
+	foo_soft->fs_revision =
+		PCI_CFG_GET(conn, config_base, PCI_CFG_REV_ID, uchar);
+	...
+	/* write 0x5555AAAA test pattern to first
+	** vendor specific register */
+	PCI_CFG_SET(conn, config_base, PCI_CFG_VEND_SPECIFIC, uint32_t,
+		0x5555AAAA);
+}
+.Ee
+.\" .SH FILES
+.SH "SEE ALSO"
+pciio(D3),
+pciio_config(D3),
+pciio_dma(D3),
+pciio_error(D3),
+pciio_get(D3),
+pciio_intr(D3).
+pciio_pio(D3).
+.\" .SH DIAGNOSTICS

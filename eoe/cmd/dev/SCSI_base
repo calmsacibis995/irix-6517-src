@@ -1,0 +1,63 @@
+#!/sbin/ksh
+
+# done as a function for clarity, and so code can be reverted to
+# use real mknod for testing or other reasons.  install is used
+# because it will not remake devices if they are already correct,
+# and will preserve local modifications to ownership and modes.
+mknod()
+{
+	install -root "" -rawidb "" -f . -m 600 -chr $3,$4 $1
+}
+
+mk_ctlrnumber()
+{
+	# construct scsi controller number part of minor number from hinv info
+	number=$(( ($1 / 10) * 8 + $1 % 10)) 
+}
+
+set +e; /sbin/hinv | \
+sed -n -e '/^Integral SCSI controller /'p -e '/^GIO SCSI controller /'p | \
+sed 's/://g' | \
+while read a scsi c ctlr d ; do
+	mk_ctlrnumber $ctlr
+	mknod scsi/bus$ctlr c 5 $number
+	for targ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+	    for lun in 0; do
+		min=$(( 128 * $number + 16 * $lun + $targ))
+		mknod scsi/sc${ctlr}d${targ}l$lun c ${C_SCSI} $min 
+	    done;
+	done;
+	set +e;
+done
+
+/sbin/hinv | grep lun | grep -v "PC Card" | grep -v "RAID" | sed 's/://g' | sed 's/,//g' | \
+while read nm un targ l lun on scsi c ctlr rest; do
+	mk_ctlrnumber $ctlr
+	min=$(( 128 * $number + 16 * $lun + $targ));
+	mknod scsi/sc${ctlr}d${targ}l${lun} c ${C_SCSI} $min
+done
+
+/sbin/hinv | grep 'PC Card.*lun' | sed 's/://g' | sed 's/,//g' | \
+while read nm1 nm2 un targ l lun on scsi c ctlr rest; do
+        mk_ctlrnumber $ctlr
+        min=$(( 128 * $number + 16 * $lun + $targ))
+        mknod scsi/sc${ctlr}d${targ}l${lun} c ${C_SCSI} $min
+done
+
+/sbin/hinv -c scsi | grep "RAID controller" | sed 's/://g' | \
+while read raid cntr un targ on scsi c ctlr rest; do
+    for lun in 1 2 3 4 5 6 7; do
+	mk_ctlrnumber $ctlr
+	min=$(( 128 * $number + 16 * $lun + $targ))
+	mknod scsi/sc${ctlr}d${targ}l${lun} c ${C_SCSI} $min
+    done
+done
+
+/sbin/hinv | sed 's/://g' | while read type unit ID on SCSI controller CTLR; do
+	if [ "$type" = CDROM: ]; then
+		mk_ctlrnumber $CTLR
+		lun=0 min=$(( 128 * $number + 16 * $lun + $ID))
+		mknod abi/cd_iso c ${C_SCSI} $min
+		break
+	fi
+done

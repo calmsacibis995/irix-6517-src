@@ -1,0 +1,218 @@
+'\"macro stdmacro
+.if n .pH g7.fsctl @(#)fsctl	30.8 of 4/1/86
+.nr X
+.if \nX=0 .ds x} FSCTL 7 "Networking Support Utilities" "\&"
+.if \nX=1 .ds x} FSCTL 7 "Networking Support Utilities"
+.if \nX=2 .ds x} FSCTL 7 "" "\&"
+.if \nX=3 .ds x} FSCTL "" "" "\&"
+.TH \*(x}
+.SH "NAME"
+fsctl \- operations on a mounted file system
+.SH "SYNOPSIS"
+/dev/fsctl
+.SH "DESCRIPTION"
+.I fsctl\^
+presents a device interface for performing low-level
+operations on a mounted file system.
+This driver is used by the file system reorganizer,
+.I fsr.
+.PP
+WARNING: this driver does NOT copy or otherwise operate
+on data within file system blocks.
+This can be done through the raw device interface
+to the file system.
+.PP
+Only the superuser can open \f2/dev/fsctl\fP.
+Only one process at a time can open this device.
+.PP
+The following operations are available as
+.I ioctl(2)
+calls on a file descriptor opened on this device.
+The second argument to
+.I ioctl(2)
+is the command name.
+The third argument is a pointer to a
+.I struct fscarg
+with the specified fields appropriately set.
+The command names and the structure are defined in
+.B /usr/include/sys/fsctl.h.
+.PP
+.\"
+.\"
+.TP 10
+.SM
+.B "ILOCK dev inum"
+Locks the inode,
+synchronously updates the physical
+disk with the current state of the in-core inode,
+synchronously updates the file's data blocks to disk,
+and invalidates any cached pages for this inode.
+This is an inode lock which will cause any
+system call from any process to block until released
+by an
+.B IUNLOCK.
+.RS 10
+.TP 10
+[EFAULT]
+Failed to copy in argument to
+.I ioctl(2).
+.TP 10
+[EBUSY]
+Another inode is already locked by this device,
+or the specified inode is in use.
+.TP 10
+[ENOENT]
+The file system was unmounted before the inode could be
+read from the disk and locked.
+.TP 10
+[EINVAL]
+The device is not a mounted file system,
+or the inode is not a regular file.
+.TP 10
+[EFBIG]
+Failed to read in indirect extents.
+.RE
+.\"
+.\"
+.TP 10
+.SM
+.B "IUNLOCK dev inum"
+Unlocks the inode.
+.RS 10
+.TP 10
+[EFAULT]
+Failed to copy in argument to
+.I ioctl(2).
+.TP 10
+[EINVAL]
+The specified inode is not currently
+.B ILOCK'ed.
+.RE
+.\"
+.\"
+.TP 10
+.SM
+.B "ICOMMIT dev inum ne ex ni ix"
+This commits the new direct and indirect extents,
+and synchronously updates the new inode and
+indirect extents to disk.
+The state of the inode is otherwise unchanged --
+.B ICOMMIT
+does not update the inode ctime, or mtime, for example.
+.B ne
+is the number of direct extents.
+.B ex
+is a pointer to the direct extents.
+.B nie
+is the number of indirect extents.
+.B ix
+is the pointer to the indirect extents.
+A check is made that all blocks described in the
+new extent and indirect extents are valid and allocated data blocks.
+This does NOT copy the contents of any data blocks
+in the implied move as a result of
+.B ICOMMIT'ing
+new extents, nor does
+.B ICOMMIT
+automatically free any blocks
+which are now no longer described by the file's extents.
+If
+.B ICOMMIT
+fails for any reason
+the inode and its data remain intact and unchanged.
+.RS 10
+.TP 10
+[EFAULT]
+Failed to copy in argument to
+.I ioctl(2).
+.TP 10
+[EINVAL]
+The specified inode is not
+.B ILOCK'ed.
+.TP 10
+[EINVAL]
+The extent information is not valid.
+The extent and indirect extent information must
+be consistent and the blocks they describe must
+be allocated.
+.TP 10
+[EFAULT]
+Failed to copy in argument to
+.I ioctl(2)
+or the extent lists to which this points.
+.RE
+.\"
+.\"
+.TP 10
+.SM
+.B "BALLOC/BFREE dev bn len"
+Allocates/frees the specified blocks.
+.RS 10
+.TP 10
+[EFAULT]
+Failed to copy in argument to
+.I ioctl(2).
+.TP 10
+[EINVAL]
+There is currently no
+.B ILOCK'ed
+inode in the specified device.
+.TP 10
+[EINVAL]
+The specified data blocks are not valid data blocks.
+.TP 10
+[EEXIST]
+The specified data blocks are not currently free/allocated.
+.RE
+.\"
+.\"
+.TP 10
+.SM
+.B "TSTALLOC/TSTFREE dev bn"
+Returns the number of cylinder group data blocks
+allocated/free on the specified dev
+starting at block bn.
+.RS 10
+.TP 10
+[EFAULT]
+Failed to copy in argument to
+.I ioctl(2).
+.TP 10
+[EINVAL]
+There is currently no
+.B ILOCK'ed
+inode in the specified device.
+.TP 10
+[EINVAL]
+The block number is not a valid data block number.
+.RE
+.SH "REORGANIZER USAGE"
+The reorganizer,
+.I fsr,
+uses
+.I /dev/fsctl
+as follows:
+.nf
+.sp
+open(/dev/fsctl)
+for each file system
+	for each regular file
+		ILOCK
+		find better location using TSTFREE/TSTALLOC
+		BALLOC new bn+len
+		copy blocks to new bn+len using fs device
+		ICOMMIT new extents using new bn+len
+		BFREE old bn+len
+		IUNLOCK
+close(/dev/fsctl)
+.sp
+.fi
+.SH "FILES"
+/usr/include/sys/fsctl.h
+.SH "SEE ALSO"
+fsr(1M).
+.SH "DIAGNOSTICS"
+These
+.I ioctl(2)'s
+all return -1 on error.
+Otherwise, all commands except TSTALLOC and TSTFREE return 0.

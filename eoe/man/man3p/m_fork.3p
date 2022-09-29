@@ -1,0 +1,234 @@
+'\"macro stdmacro
+.TH M_FORK 3P
+.SH NAME
+m_fork, m_kill_procs, m_set_procs, m_get_numprocs, m_get_myid, m_next, m_lock, m_unlock, m_park_procs, m_rele_procs, m_sync  \- parallel programming primitives 
+.Op c p a
+.SH C SYNOPSIS
+.B #include <ulocks.h>
+.br
+.B #include <task.h>
+.P
+.ft 3
+.br
+.B "int m_fork (void (\(**func)(), ...);"
+.P
+.B int m_kill_procs (void);
+.P
+.B int m_set_procs (int numprocs);
+.P
+.B int m_get_numprocs (void);
+.P
+.B int m_get_myid (void);
+.P
+.B unsigned m_next (void);
+.P
+.B void m_lock (void);
+.P
+.B void m_unlock (void);
+.P
+.B int m_park_procs (void);
+.P
+.B int m_rele_procs (void);
+.P
+.B void m_sync (void);
+.Op
+.Op f
+.SH FORTRAN SYNOPSIS
+.ft 3
+integer*4 function m_fork (func, [arg1, arg2, arg3, arg4, arg5, arg6] )
+.br
+external func
+.br
+integer*4 arg1, arg2, arg3, arg4, arg5, arg6
+.ft 1
+.P
+.B integer*4 function m_kill_procs () 
+.P
+.B integer*4 m_set_procs (numprocs)
+.br
+.B integer*4 numprocs
+.P
+.B integer*4 function m_get_numprocs ()
+.P
+.B integer*4 function m_get_myid ()
+.P
+.B integer*4 function m_next ()
+.P
+.B subroutine m_lock ()
+.P
+.B subroutine m_unlock ()
+.P
+.B integer*4 function m_park_procs ()
+.P
+.B integer*4 function m_rele_procs ()
+.P
+.B subroutine m_sync ()
+.Op
+.SH DESCRIPTION
+The
+.I m_fork \^
+routine creates 
+.I n-1
+processes that execute the given 
+.I func
+in parallel with the calling process.
+The processes are created using the 
+.I sproc(2)
+system call, and share all attributes (virtual address space, 
+file descriptors, uid, etc.).
+Once the processes are all created, they each start executing the
+subprogram 
+.I func
+taking up to six arguments as passed to 
+.I m_fork.
+The arguments passed must not be larger than pointers in size,
+i.e. floating point numbers must be passed by reference.
+.P
+The processes execute the subprogram and wait until they all return,
+at which point the 
+.I m_fork
+call returns.
+The other threads are left busy-wait spinning until the
+master again calls
+.IR m_fork .
+The overhead of creating the additional process was done in the first call to
+.IR m_fork
+and is not repeated.
+.I m_fork
+sets a flag (see
+.IR prctl (2))
+so that if any of the threads terminate, they will all receive a
+.SM
+.B SIGTERM
+signal.
+Certain operations such as profiling require that the various
+threads exit normally (via the
+.IR exit (2))
+call.
+This can best be done by using
+.I m_kill_procs
+to terminate the slave threads, then have the master itself exit.
+.P
+The number of subtasks
+.I n
+can be set and queried using
+.I m_set_procs
+and
+.I m_get_numprocs,
+where the default is the number of processors in the system (and
+hence the maximum number of processes that can truly be run in 
+parallel).
+Note that although up to 256 tasks may be requested, the busy-wait
+rendezvous mechanism will usually result in a large performance loss
+with any more threads than processors.
+.P
+If 
+.I sproc(2) 
+is used with the PR_SADDR flag (share virtual address space),
+.I m_set_procs 
+should not be called more than once in the same program with different 
+values.  To set the number of tasks more than once (with 
+different values) in the same program, either use 
+.I sproc(2)
+without the PR_SADDR (shared virtual address space) option or use 
+.I fork
+instead of 
+.IR sproc(2).
+.P
+When the processes are created, each is assigned a unique thread identifier
+(its
+.IR tid ).
+This identifier can be obtained through
+.I m_get_myid.
+Thread id's range from 0 to n-1.
+.P
+A global counter and a global lock are 
+provided to simplify synchronization between the processes.
+On each 
+.I m_fork 
+call, the counter is reset to zero.
+The counter value is gotten and post incremented through the
+.I m_next
+routine.
+The first time
+.I m_next
+is called, it returns a zero.
+The global lock is set and unset through
+.I m_lock
+and
+.I m_unlock.
+.P
+The 
+.I m_park_procs 
+and
+.I m_rele_procs
+are provided to suspend and resume the child processes 
+created by 
+.I m_fork.
+This is useful if you have a phase of the program where the parent will do
+setup or reinitialization code and you do not want to have the 
+children spinning and wasting resources.
+.I m_park_procs
+should not be called when processes are already suspended.
+.P
+.I m_sync
+is provided to synchronize all threads at some point in the code.
+When 
+.I m_sync 
+is called by each thread, it waits at that point for all other threads
+to call 
+.I m_sync.
+The global counter is reset, and all threads resume after the 
+m_sync call.
+.P
+.I m_kill_procs
+terminates the processes created from the previous 
+.I m_fork.
+.P
+Most errors from
+.I m_fork
+come from either
+.IR sproc (2)
+or
+.IR usinit (3P).
+See those manual pages for more information on errors.
+.SH NOTES
+These primitives are based on the Sequent Computer Systems parallel
+programming primitives, but may not conform to all Sequent semantics.
+.P
+Diagnostic output analyzing
+the failures in
+.IR m_lock (3P)
+and the routines that
+.I m_fork
+calls can be gotten using the
+.I _utrace
+mechanism discussed in the
+.IR  usinit (3P)
+manual page.
+.P
+.I m_fork
+will not work properly if the parent of the current process has
+also called it.  To avoid this problem, the parent should call
+.I m_kill_procs
+prior to forking.
+.SH SEE ALSO
+sproc(2), blockproc(2), prctl(2), barrier(3P), usinit(3P), ussetlock(3P).
+.SH "DIAGNOSTICS"
+.I m_fork,
+.I m_set_procs,
+.I m_park_procs,
+.I m_rele_procs,
+and 
+.I m_kill_procs
+return a 0 when successful, and a -1 with errno set upon failure.
+.I m_get_numprocs,
+.I m_get_myid,
+and
+.I m_next
+all return integers.
+.I m_lock,
+.I m_unlock,
+and
+.I m_sync
+return no value.

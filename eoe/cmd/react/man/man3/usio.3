@@ -1,0 +1,127 @@
+'\"! tbl|mmdoc
+'\"macro stdmacro
+.TH usio 7
+.SH NAME
+usio \- user mapped interface to serial communication ports
+.SH INTRODUCTION
+.LP
+On Origin, O2 and Octane systems, the user mode serial, or usio,
+library provides access to the system serial ports without the
+overhead of system calls. The device is mapped into the user process's
+address space and is accessed directly by the library routines. The
+user mode library provides read, write and error detection
+routines. In addition to the library routines, ioctl support is
+provided to perform functions which are not time critical, such as
+port configuration. The read(2) and write(2) system calls are not
+supported for this device type as these functions are implemented in
+the user library.
+.PP
+Kernel support for the usio library is provided by a special tty port
+type called ttyus (see serial(7)). On systems configured to support
+usio, device nodes of the form /dev/ttyus* will be present. These files
+are used by the library to establish the user mapping.
+.SH SYNOPSIS
+#include <sys/serialio.h>
+.PP
+link with -lusio
+.PP
+void *\f4usio_init\fP(int fd);
+.PP
+int \f4usio_read\fP(void *private, char *buf, int len);
+.PP
+int \f4usio_write\fP(void *private, char *buf, int len);
+.PP
+int \f4usio_get_status\fP(void *private)
+.SH DESCRIPTION
+.PP
+\f4usio_init\fP initializes the usio library for a given port. The
+file descriptor
+.I fd
+refers to a usio serial port of the form /dev/ttyusXX as noted
+above. On success, a non-NULL pointer is returned. This pointer is
+passed as the first argument to all other usio functions. On failure,
+a NULL pointer is returned and errno indicates the error.
+.PP
+\f4usio_read\fP attempts to read as many as
+.I len
+bytes from the port associated with
+.I private
+into the buffer pointed to by
+.I buf.
+The number of bytes actually read is returned. This call is strictly
+non-blocking, if there are no bytes available, 0 is returned
+immediately.
+.PP
+\f4usio_write\fP attempts to write as many as
+.I len
+bytes from the buffer pointed to by
+.I buf
+to the port associated with
+.I private.
+The number of bytes actually written is returned. This call is
+strictly non-blocking, if there is no space left in the device to
+accept more characters, nothing is written and 0 is returned
+immediately.
+.PP
+Error detection is accomplished by checking the return status of both
+\f4usio_read\fP and \f4usio_get_status\fP. Under normal operation the
+\f4usio_read\fP function may return any number of bytes. However if an
+error or special status is detected for a particular byte, that byte
+is guaranteed to be returned alone by \f4usio_read\fP, i.e. the return
+status will be 1. When this occurs, \f4usio_get_status\fP should be
+called to determine the special status of that byte, if any. Note that
+there may not be any special status, the hardware may simply have
+received a single byte.
+.PP
+\f4usio_get_status\fP returns the special status, if any, of the byte
+previously read by \f4usio_read\fP from the port referenced by
+.I private.
+The return value is a bitmask of zero or more of the following flags:
+.TP
+.B USIO_ERR_PARITY
+indicates that the byte just received has a parity error.
+.TP
+.B USIO_ERR_FRAMING
+indicates that the byte just received has a framing error.
+.TP
+.B USIO_ERR_OVERRUN
+indicates that a receiver overrun error has occurred. The overrun is
+not guaranteed to have occurred exactly at the previously read byte.
+.TP
+.B USIO_BREAK
+indicates that the byte just received is a break char. Note that when
+USIO_BREAK is set, USIO_ERR_FRAMING may also be set on some
+implementations, since a break char is by definition a null char with
+a framing error.
+.PP
+Since \f4usio_read\fP is not guaranteed to return all of the currently
+available bytes, it must be called repeatedly until a status of zero
+is returned in order to ensure that all bytes have been read. For
+example, as noted above a char with special status is always returned
+alone. Thus if the hardware is buffering 5 chars with no special
+status, a break char, and 5 more chars with no special status, at
+least three calls to \f4usio_read\fP will be necessary to retrieve all
+of these bytes.
+.SH IOCTLS
+The ttyus ports support a limited subset of the ioctl set used to
+control ordinary tty ports. Specifically, ioctl functions which relate
+directly to the hardware are supported, whereas ioctl functions which
+relate to software functions of the tty interface such as the line
+discipline are not supported and may either fail or be silently
+ignored. In addition, streams ioctls will fail since this is not a
+streams device.
+.PP
+For port hardware configuration, the ttyus interface supports the
+following ioctls as described in termio(7): TCGETA, TCSETA, TCGETS,
+TCSETS. Not all fields of the termio struct are relevant to the ttyus
+interface. The following fields are supported as described in
+termio(7): c_ospeed, CSIZE, CSTOPB, PARENB, PARODD, CNEW_RTSCTS. All
+other fields of the termio struct are silently ignored.
+.PP
+The ttyus ports also honor the TCSBRK ioctl as described in
+termio(7).
+.PP
+Lastly, the following ioctls are supported as described in
+serial(7): SIOC_RS422, SIOC_EXTCLK.
+.SH SEE ALSO
+serial(7), termio(7)

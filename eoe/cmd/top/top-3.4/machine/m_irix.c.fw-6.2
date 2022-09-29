@@ -1,0 +1,712 @@
+/*
+ * top - a top users display for Unix
+ *
+ * SYNOPSIS:  Any SGI machine running IRIX 5.3 - 6.2 (common executable)
+ *
+ * DESCRIPTION:
+ * This is the machine-dependent module for IRIX 
+ * It has been tested on Indys running 5.3 and Indigos running 5.3XFS
+ * It has been tested on Challenges running 6.2.
+ *
+ * LIBS: -lmld -lelf
+ * CFLAGS: -DHAVE_GETOPT -DUSE_1024
+ *
+ * AUTHOR: Sandeep Cariapa <cariapa@sgi.com>
+ * AUTHOR: Larry McVoy <lm@sgi.com>
+ * Sandeep did all the hard work; I ported to 6.2 and fixed up some formats.
+ * AUTHOR: John Schimmel <jes@sgi.com>
+ * He did the all irix merge.
+ * This is not a supported product of Silicon Graphics, Inc.
+ * Please do not call SGI for support.
+ */
+
+#define _KMEMUSER
+
+#include <sys/types.h>
+#include <sys/time.h>
+#include <sys/stat.h>
+#include <sys/swap.h>
+#include <sys/proc.h>
+#include <sys/procfs.h>
+#include <sys/sysinfo.h>
+#include <sys/sysmp.h>
+#include <sys/utsname.h>
+#include <invent.h>
+#include <paths.h>
+#include <dirent.h>
+#include <stdio.h>
+#include <nlist.h>
+#include <unistd.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <dlfcn.h>
+#include <elf.h>
+#include "top.h"
+#include "machine.h"
+
+extern int _libmld_nlist(const char *, struct nlist *);
+extern int _libelf_nlist(const char *, struct nlist *);
+extern int _libelf_nlist64(const char *, struct nlist64 *);
+
+#define UNIX	"/unix"
+#define KMEM	"/dev/kmem"
+#define CPUSTATES 6
+
+#ifndef FSCALE
+#define FSHIFT  8		/* bits to right of fixed binary point */
+#define FSCALE  (1<<FSHIFT)
+#endif				/* FSCALE */
+
+#ifdef FIXED_LOADAVG
+typedef long load_avg;
+
+# define loaddouble(la) ((double)(la) / FIXED_LOADAVG)
+# define intload(i) ((int)((i) * FIXED_LOADAVG))
+#else
+typedef double load_avg;
+
+# define loaddouble(la) (la)
+# define intload(i) ((double)(i))
+#endif
+
+#define percent_cpu(x) ((double)(x)->pr_cpu / FSCALE)
+
+/*
+ *  These definitions control the format of the per-process area
+ */
+
+static char header[] =
+"  PID X        PRI NICE   SIZE   RES STATE   TIME   WCPU    CPU COMMAND";
+
+/* 0123456   -- field to fill in starts at header+6 */
+#define UNAME_START 6
+
+#define Proc_format \
+	"%5d %-8.8s %3d %4d %6s %5s %-5s %6s %3d.0%% %5.2f%% %.16s"
+
+/* these are for detailing the process states */
+char   *state_abbrev[] =
+{"", "sleep", "run", "zombie", "stop", "idle", "", "swap"};
+
+int     process_states[8];
+char   *procstatenames[] = {
+	"", " sleeping, ", " running, ", " zombie, ", " stopped, ",
+	" idle, ", "", " swapped, ",
+	NULL
+};
+
+/* these are for detailing the cpu states */
+int     cpu_states[CPUSTATES];
+char   *cpustatenames[] = {
+	"idle", "usr", "ker", "wait", "swp", "intr",
+	NULL
+};
+
+/* these are for detailing the memory statistics */
+
+int     memory_stats[5];
+char   *memorynames[] = {
+	"K max, ", "K avail, ", "K free, ", "K swap, ", "K free swap", NULL
+};
+
+/* useful externals */
+extern int errno;
+extern char *myname;
+extern char *sys_errlist[];
+extern char *format_k();
+extern char *format_time();
+extern long percentages();
+
+#define X_AVENRUN	0
+#define X_NPROC		1
+#define X_FREEMEM	2
+#define X_AVAILRMEM     3
+#define X_NUMCPUS       4
+
+static int irix_kernel;
+
+#define COFF	0
+#define ELF32	1
+#define ELF64	2
+
+static struct nlist64 nlst64[] = {
+	{"avenrun"},		/* 0. Array containing the 3 load averages. */
+	{"nproc"},		/* 1. Kernel parameter: Max number of
+				 * processes. */
+	{"freemem"},		/* 2. Amount of free memory in system. */
+	{"availrmem"},		/* 3. Available real memory. */
+	{"numcpus"},		/* 4. Number of configured processors on
+				 * system. */
+	{0}
+};
+
+static struct nlist nlst[] = {
+	{"avenrun"},		/* 0. Array containing the 3 load averages. */
+	{"nproc"},		/* 1. Kernel parameter: Max number of
+				 * processes. */
+	{"freemem"},		/* 2. Amount of free memory in system. */
+	{"availrmem"},		/* 3. Available real memory. */
+	{"numcpus"},		/* 4. Number of configured processors on
+				 * system. */
+	{0}
+};
+
+static unsigned long avenrun_offset;
+static unsigned long nproc_offset;
+static unsigned long freemem_offset;
+static unsigned long availrmem_offset;
+static unsigned long numcpus_offset;
+double  load[3];
+char    fmt[MAX_COLS];
+static int kmem;
+static int nproc;
+static int bytes;
+static struct prpsinfo *pbase;
+static struct prpsinfo **pref;
+static DIR *procdir;
+
+/* get_process_info passes back a handle.  This is what it looks like: */
+struct handle {
+	struct prpsinfo **next_proc;	/* points to next valid proc pointer */
+	int     remaining;		/* number of pointers remaining */
+};
+
+static struct handle handle;
+void    getptable();
+
+static int
+kernel_type(char *kernel)
+{
+	int fd;
+	char magic_buf[EI_NIDENT+1];
+	if ((fd = open(kernel, 0)) < 0)
+		return -1;
+	if (read(fd, magic_buf, EI_NIDENT) == -1) {
+		close(fd);
+		return -1;
+	}
+	magic_buf[EI_NIDENT] = '\0';
+	close(fd);
+	if (strncmp(magic_buf, ELFMAG, SELFMAG) == 0) {
+		if (magic_buf[EI_CLASS] == ELFCLASS32) {
+			return ELF32;
+		} else {
+			return ELF64;
+		}
+	} else {
+		return COFF;
+	}
+}
+
+int 
+machine_init(statics)
+	struct statics *statics;
+{
+	struct utsname uts;
+	void *handle;
+	int (*proc)(const char *, struct nlist *);
+
+	if ((kmem = open(KMEM, O_RDONLY)) == -1) {
+		perror(KMEM);
+		return (-1);
+	}
+	/* get the list of symbols we want to access in the kernel */
+	/*
+	 * This is a little tricky since Irix 5.* had a coff kernel, but
+	 * Irix 6.* has an elf kernel.  And, worse, servers are now 64 bit
+	 * while workstations are 32 bit.  The kernel_type function
+	 * determines which of these types our local kernel is, then
+	 * we call the appropriate nlist function.  Note that these
+	 * symbols don't exist until Irix 6.2 so on earlier versions
+	 * of the OS it is impossible to call individual nlist routines
+	 * without generating dso's and deliberately opening the correct
+	 * library.
+	 */
+	irix_kernel = kernel_type(UNIX);
+	if (irix_kernel == ELF64) {
+		(void) _libelf_nlist64(UNIX, nlst64);
+		if (nlst64[0].n_type == 0) {
+			fprintf(stderr, "%s: nlist failed\n", myname);
+			return (-1);
+		}
+	} else if (irix_kernel == ELF32) {
+		(void) _libelf_nlist(UNIX, nlst);
+		if (nlst[0].n_type == 0) {
+			fprintf(stderr, "%s: nlist failed\n", myname);
+			return (-1);
+		}
+	} else {
+		(void) _libmld_nlist(UNIX, nlst);
+		if (nlst[0].n_type == 0) {
+			fprintf(stderr, "%s: nlist failed\n", myname);
+			return (-1);
+		}
+	}
+
+	/* Check if we got all of 'em. */
+	if (check_nlist(nlst, nlst64) > 0) {
+		return (-1);
+	}
+	if (irix_kernel == ELF64) {
+		avenrun_offset = nlst64[X_AVENRUN].n_value;
+		nproc_offset = nlst64[X_NPROC].n_value;
+		freemem_offset = nlst64[X_FREEMEM].n_value;
+		availrmem_offset = nlst64[X_AVAILRMEM].n_value;
+		numcpus_offset = nlst64[X_NUMCPUS].n_value;
+	} else {
+		avenrun_offset = nlst[X_AVENRUN].n_value;
+		nproc_offset = nlst[X_NPROC].n_value;
+		freemem_offset = nlst[X_FREEMEM].n_value;
+		availrmem_offset = nlst[X_AVAILRMEM].n_value;
+		numcpus_offset = nlst[X_NUMCPUS].n_value;
+	}
+
+	/*
+	 * Got to do this first so that we can map real estate for the process
+	 * array.
+	 */
+	(void) getkval(nproc_offset, (int *) (&nproc), sizeof(nproc), "nproc");
+
+	/* allocate space for proc structure array and array of pointers */
+	bytes = nproc * sizeof(struct prpsinfo);
+	pbase = (struct prpsinfo *) malloc(bytes);
+	pref = (struct prpsinfo **) malloc(nproc * sizeof(struct prpsinfo *));
+
+	/* Just in case ... */
+	if (pbase == (struct prpsinfo *) NULL || pref == (struct prpsinfo **) NULL) {
+		(void) fprintf(stderr, "%s: can't allocate sufficient memory\n", myname);
+		return (-1);
+	}
+	if (!(procdir = opendir("/proc"))) {
+		(void) fprintf(stderr, "Unable to open %s\n", "/proc");
+		return (-1);
+	}
+	if (chdir("/proc")) {
+		/* handy for later on when we're reading it */
+		(void) fprintf(stderr, "Unable to chdir to %s\n", "/proc");
+		return (-1);
+	}
+	statics->procstate_names = procstatenames;
+	statics->cpustate_names = cpustatenames;
+	statics->memory_names = memorynames;
+
+	/* all done! */
+	return (0);
+}
+
+char   *
+format_header(uname_field)
+	register char *uname_field;
+
+{
+	register char *ptr;
+
+	ptr = header + UNAME_START;
+	while (*uname_field != '\0') {
+		*ptr++ = *uname_field++;
+	}
+
+	return (header);
+}
+
+long
+memsize()
+{
+	inventory_t *inv;
+	long    bytes = 16 * 1024 * 1024;	/* in case it fails */
+
+	setinvent();
+	while (inv = getinvent()) {
+		if (inv->inv_class == INV_MEMORY) {
+			if (inv->inv_type == INV_MAIN_MB) {
+				return ((long) (inv->inv_state << 20));
+			}
+			if (inv->inv_type == INV_MAIN) {
+				bytes = inv->inv_state;
+			}
+		}
+	}
+	endinvent();
+	return (bytes);
+}
+
+void 
+get_system_info(si)
+	struct system_info *si;
+
+{
+	register int i;
+	register int avenrun[3];
+	static int freemem;
+	static int maxmem;
+	static int availrmem;
+	static int numcpus;
+	struct sysinfo sysinfo;
+	static time_t cp_old[CPUSTATES];
+	static time_t cp_diff[CPUSTATES];	/* for cpu state percentages */
+	off_t   fswap;		/* current free swap in blocks */
+	off_t   tswap;		/* total swap in blocks */
+
+	(void) getkval(avenrun_offset, (int *) avenrun, sizeof(avenrun), "avenrun");
+	for (i = 0; i < 3; i++) {
+		si->load_avg[i] = loaddouble(avenrun[i]);
+		si->load_avg[i] = si->load_avg[i] / 1024.0;
+	}
+
+	(void) getkval(freemem_offset, (int *) (&freemem), sizeof(freemem),
+	    "freemem");
+	maxmem = memsize();
+	(void) getkval(availrmem_offset, (int *) (&availrmem), sizeof(availrmem),
+	    "availrmem");
+	si->last_pid = -1;
+	(void) getkval(numcpus_offset, (int *) (&numcpus), sizeof(numcpus),
+	    "numcpus");
+	swapctl(SC_GETFREESWAP, &fswap);
+	swapctl(SC_GETSWAPTOT, &tswap);
+	memory_stats[0] = maxmem >> 10;
+	memory_stats[1] = pagetok(availrmem);
+	memory_stats[2] = pagetok(freemem);
+	memory_stats[3] = tswap / 2;
+	memory_stats[4] = fswap / 2;
+
+	/*
+	 * use sysmp() to get current sysinfo usage. Can run into all kinds of
+	 * problems if you try to nlist this kernel variable.
+	 */
+	if (sysmp(MP_SAGET, MPSA_SINFO, &sysinfo, sizeof(struct sysinfo)) == -1) {
+		perror("sysmp");
+		return;
+	}
+	(void) percentages(CPUSTATES, cpu_states, sysinfo.cpu, cp_old, cp_diff);
+
+	si->cpustates = cpu_states;
+	si->memory = memory_stats;
+	return;
+}
+
+caddr_t 
+get_process_info(si, sel, compare)
+	struct system_info *si;
+	struct process_select *sel;
+	int     (*compare) ();
+
+{
+	register int i;
+	register int total_procs;
+	register int active_procs;
+	register struct prpsinfo **prefp;
+	register struct prpsinfo *pp;
+
+	/* these are copied out of sel for speed */
+	int     show_idle;
+	int     show_system;
+	int     show_uid;
+
+	/* read all the proc structures */
+	getptable(pbase);
+
+	/* get a pointer to the states summary array */
+	si->procstates = process_states;
+
+	/* set up flags which define what we are going to select */
+	show_idle = sel->idle;
+	show_system = sel->system;
+	show_uid = sel->uid != -1;
+
+	/* count up process states and get pointers to interesting procs */
+	total_procs = 0;
+	active_procs = 0;
+	(void) memset(process_states, 0, sizeof(process_states));
+	prefp = pref;
+
+	for (pp = pbase, i = 0; i < nproc; pp++, i++) {
+		/*
+		 * Place pointers to each valid proc structure in pref[].
+		 * Process slots that are actually in use have a non-zero
+		 * status field.  Processes with SSYS set are system
+		 * processes---these get ignored unless show_system is set.
+		 */
+		if (pp->pr_state != 0 &&
+		    (show_system || ((pp->pr_flag & SSYS) == 0))) {
+			total_procs++;
+			process_states[pp->pr_state]++;
+			if ((!pp->pr_zomb) &&
+			    (show_idle || (pp->pr_state == SRUN)) &&
+			    (!show_uid || pp->pr_uid == (uid_t) sel->uid)) {
+				*prefp++ = pp;
+				active_procs++;
+			}
+		}
+	}
+
+	/* if requested, sort the "interesting" processes */
+	if (compare != NULL)
+		qsort((char *) pref, active_procs, sizeof(struct prpsinfo *), compare);
+
+	/* remember active and total counts */
+	si->p_total = total_procs;
+	si->p_active = active_procs;
+
+	/* pass back a handle */
+	handle.next_proc = pref;
+	handle.remaining = active_procs;
+	return ((caddr_t) &handle);
+}
+
+char   *
+format_next_process(handle, get_userid)
+	caddr_t handle;
+	char   *(*get_userid) ();
+
+{
+	register struct prpsinfo *pp;
+	struct handle *hp;
+	register long cputime;
+	register double pctcpu;
+
+	/* find and remember the next proc structure */
+	hp = (struct handle *) handle;
+	pp = *(hp->next_proc++);
+	hp->remaining--;
+
+	/* get the cpu usage and calculate the cpu percentages */
+	cputime = pp->pr_time.tv_sec;
+	pctcpu = percent_cpu(pp);
+
+	/* format this entry */
+	sprintf(fmt,
+	    Proc_format,
+	    pp->pr_pid,
+	    (*get_userid) (pp->pr_uid),
+	    pp->pr_pri - PZERO,
+	    pp->pr_nice - NZERO,
+	    format_k(pagetok(pp->pr_size)),
+	    format_k(pagetok(pp->pr_rssize)),
+	    state_abbrev[pp->pr_state],
+	    format_time(cputime),
+	    (pp->pr_cpu & 0377),
+	    100.0 * pctcpu,
+	    pp->pr_fname);
+
+	/* return the result */
+	return (fmt);
+}
+
+/*
+ *  getkval(offset, ptr, size, refstr) - get a value out of the kernel.
+ *	"offset" is the byte offset into the kernel for the desired value,
+ *  	"ptr" points to a buffer into which the value is retrieved,
+ *  	"size" is the size of the buffer (and the object to retrieve),
+ *  	"refstr" is a reference string used when printing error meessages,
+ *	    if "refstr" starts with a '!', then a failure on read will not
+ *  	    be fatal (this may seem like a silly way to do things, but I
+ *  	    really didn't want the overhead of another argument).
+ *
+ */
+
+int 
+getkval(offset, ptr, size, refstr)
+	unsigned long offset;
+	int    *ptr;
+	int     size;
+	char   *refstr;
+
+{
+	if (lseek(kmem, (long) offset, SEEK_SET) == -1) {
+		if (*refstr == '!')
+			refstr++;
+		(void) fprintf(stderr, "%s: lseek to %s: %s\n", KMEM,
+		    refstr, strerror(errno));
+		exit(0);
+	}
+	if (read(kmem, (char *) ptr, size) == -1) {
+		if (*refstr == '!')
+			return (0);
+		else {
+			(void) fprintf(stderr, "%s: reading %s: %s\n", KMEM,
+			    refstr, strerror(errno));
+			exit(0);
+		}
+	}
+	return (1);
+}
+
+/*
+ *  proc_compare - comparison function for "qsort"
+ *	Compares the resource consumption of two processes using five
+ *  	distinct keys.  The keys (in descending order of importance) are:
+ *  	percent cpu, cpu ticks, state, resident set size, total virtual
+ *  	memory usage.  The process states are ordered as follows (from least
+ *  	to most important):  WAIT, zombie, sleep, stop, idle, run.  The
+ *  	array declaration below maps a process state index into a number
+ *  	that reflects this ordering.
+ */
+
+
+unsigned char sorted_state[] =
+{
+	0,			/* not used		 */
+	3,			/* sleep		 */
+	6,			/* run			 */
+	2,			/* zombie		 */
+	4,			/* stop			 */
+	5,			/* idle 		 */
+	0,			/* not used             */
+	1			/* being swapped (WAIT)	 */
+};
+
+int 
+proc_compare(pp1, pp2)
+	struct prpsinfo **pp1;
+	struct prpsinfo **pp2;
+{
+	register struct prpsinfo *p1;
+	register struct prpsinfo *p2;
+	register long result;
+
+	/* remove one level of indirection */
+	p1 = *pp1;
+	p2 = *pp2;
+
+	/* compare percent cpu (pctcpu) */
+	if ((result = (long) (p2->pr_cpu - p1->pr_cpu)) == 0) {
+		/* use cpticks to break the tie */
+		if ((result = p2->pr_time.tv_sec - p1->pr_time.tv_sec) == 0) {
+			/* use process state to break the tie */
+			if ((result = (long) (sorted_state[p2->pr_state] -
+				    sorted_state[p1->pr_state])) == 0) {
+				/* use priority to break the tie */
+				if ((result = p2->pr_oldpri - p1->pr_oldpri) == 0) {
+					/*
+					 * use resident set size (rssize) to
+					 * break the tie
+					 */
+					if ((result = p2->pr_rssize - p1->pr_rssize) == 0) {
+						/*
+						 * use total memory to break
+						 * the tie
+						 */
+						result = (p2->pr_size - p1->pr_size);
+					}
+				}
+			}
+		}
+	}
+	return (result);
+}
+
+/* return the owner of the specified process. */
+uid_t 
+proc_owner(pid)
+	pid_t   pid;
+{
+	register struct prpsinfo *p;
+	int     i;
+
+	for (i = 0, p = pbase; i < nproc; i++, p++)
+		if (p->pr_pid == pid)
+			return (p->pr_uid);
+
+	return (-1);
+}
+
+/*
+ * check_nlist(nlst) - checks the nlist to see if any symbols were not
+ *		found.  For every symbol that was not found, a one-line
+ *		message is printed to stderr.  The routine returns the
+ *		number of symbols NOT found.
+ */
+
+int 
+check_nlist(nlst, nlst64)
+	register struct nlist *nlst;
+	register struct nlist64 *nlst64;
+{
+	register int i;
+
+	/* check to see if we got ALL the symbols we requested */
+	/* this will write one line to stderr for every symbol not found */
+
+	i = 0;
+	if (irix_kernel == ELF64) {
+		while (nlst64->n_name != NULL) {
+			if (nlst64->n_type == 0) {
+				/* this one wasn't found */
+				fprintf(stderr, "kernel: no symbol named `%s'\n", nlst64->n_name);
+				i = 1;
+			}
+			nlst64++;
+		}
+	} else {
+		while (nlst->n_name != NULL) {
+			if (nlst->n_type == 0) {
+				/* this one wasn't found */
+				fprintf(stderr, "kernel: no symbol named `%s'\n", nlst->n_name);
+				i = 1;
+			}
+			nlst++;
+		}
+	}
+
+	return (i);
+}
+
+/* get process table */
+void 
+getptable(baseptr)
+	struct prpsinfo *baseptr;
+{
+	struct prpsinfo *currproc;	/* pointer to current proc structure	 */
+	int     numprocs = 0;
+	struct dirent *direntp;
+
+	for (rewinddir(procdir); direntp = readdir(procdir);) {
+		int     fd;
+
+		if ((fd = open(direntp->d_name, O_RDONLY)) < 0)
+			continue;
+
+		currproc = &baseptr[numprocs];
+		if (ioctl(fd, PIOCPSINFO, currproc) < 0) {
+			(void) close(fd);
+			continue;
+		}
+		size(fd, currproc);
+		numprocs++;
+		(void) close(fd);
+	}
+
+	if (nproc != numprocs)
+		nproc = numprocs;
+	return;
+}
+
+size(int fd, struct prpsinfo *ps)
+{
+	prmap_sgi_arg_t maparg;
+	struct prmap_sgi maps[256];
+	int	nmaps;
+	double	sz;
+	int	i;
+
+	maparg.pr_vaddr = (caddr_t) maps;
+	maparg.pr_size = sizeof maps;
+	if ((nmaps = ioctl(fd, PIOCMAP_SGI, &maparg)) == -1) {
+		/* XXX - this will be confusing */
+		return;
+	}
+	for (i = 0, sz = 0; i < nmaps; ++i) {
+		sz += (double) maps[i].pr_wsize / MA_WSIZE_FRAC;
+	}
+	ps->pr_rssize = sz;
+}
+
+pagetok(int pages)
+{
+	static  pagesize = 0;
+
+	if (!pagesize) {
+		pagesize = getpagesize();
+	}
+	return ((pages * pagesize) >> 10);
+}

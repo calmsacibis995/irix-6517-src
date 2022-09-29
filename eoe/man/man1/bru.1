@@ -1,0 +1,1211 @@
+'\"! tbl|mmdoc
+'\"macro stdmacro
+.if n .ds lq ""
+.if n .ds rq ""
+.if t .ds lq ``
+.if t .ds rq ''
+.if n .ds BU o
+.if t .ds BU \(bu
+.TH bru 1
+.SH NAME
+bru \- backup and restore utility
+.SH SYNOPSIS
+.nf
+\f3bru\f1 \f3modes\f1 [ \f3control options\f1 ] [ \c
+\f3selection options\f1 ] files
+.fi
+.SH DESCRIPTION
+.I Bru
+is a
+.B UNIX
+filesystem backup utility with significant enhancements
+over other more common utilities such as
+.IR tar ,
+.IR cpio ,
+.IR volcopy ,
+and
+.IR dd .
+Some of
+.IR bru 's
+capabilities include:
+.sp .8v
+.RS 5
+.PD 0
+.TP 3
+\*(BU
+Full or incremental backup with quick and easy restoration
+of files.
+.TP 3
+\*(BU
+Multiple physical volumes per archive.
+.TP 3
+\*(BU
+Data integrity assurance via checksum computation on every
+archive block.
+.TP 3
+\*(BU
+Ability to properly save and restore directories,
+symbolic links,
+block special files, and character special files.
+.TP 3
+\*(BU
+Comparison of archives with current directory hierarchy.
+.TP 3
+\*(BU
+Ability to recover files from corrupted archives or damaged media
+with minimal data loss.
+.TP 3
+\*(BU
+No inherent maximum archive buffer size.
+.TP 3
+\*(BU
+Improved performance through random access archive I/O when
+available.
+.TP 3
+\*(BU
+Automatic byte or half word swapping as necessary when reading
+archives produced on other machines.
+.TP 3
+\*(BU
+Recognition of filename generation patterns in the same
+form as the shell for files read from an archive.
+.RE
+.PD 1
+.PP
+When
+.I files
+are specified on the command line then the actions to be
+performed are limited to those
+.IR files .
+If a named file is a directory then it and all its descendents
+are used.
+If no
+.I files
+are specified then the default for writing archives is all files
+in and below the current directory.
+The default for reading archives is selection of all files in
+the archive.
+.PP
+If ``\-'' is given instead of
+.I files
+then the standard input is read to obtain the file list.
+This is useful in conjunction with the
+.I find
+command to provide finer control over files selected for
+backup.
+Obviously this mode is only valid when
+.I bru
+is not also reading its archive from the standard input.
+.PP
+If you are doing backups non-interactively (for example, via
+.IR cron ,
+be sure to read the description of the
+.B -B
+option below.
+.SH DEFAULTS
+Various default parameters, such as archive device name
+and size, archive buffer size, controlling terminal name,
+etc.
+are system dependent.
+These defaults, along with version, variant, and other
+miscellaneous internal  information may be discovered
+via the
+.B \-h
+mode.
+.br
+.sp .8v
+.I bru
+assumes the default tape device to be
+.B \/dev/tape
+if no tape device is specified using the
+.B \-f
+option.
+For this to work correctly,
+.B \/dev/tape
+should be linked to the actual tape device, for ex.
+.B \/dev/mt/tps0d6.
+Also there should be an appropriate entry for
+.B \/dev/mt/tps0d6
+in the
+.B \/etc/brutab
+file.
+.SH MODES
+One or more of the following modes must be specified.
+The order of execution, from highest priority to lowest, is
+.BR ecitxdgh .
+.TP 10
+.B \-c
+.B Create
+a new archive.
+Forces a new archive to be created regardless of whether one
+currently exists.
+Writing starts at the first block.
+.TP
+.B \-d
+.B Differences
+between archived
+.I files
+and current
+.I files
+are detected and reported.
+May be specified more than once, as
+.B \-dd
+.B \-ddd
+or
+.B \-dddd
+to control level of difference checking.
+.br
+.sp .8v
+When specified as
+.B \-d
+.I bru
+reports when it discovers that a regular file's size (st_size) or contents
+(when compared as byte streams) has changed since the archive
+was made.
+.br
+.sp .8v
+When specified as
+.B \-dd
+.I bru
+reports additional differences in
+modification date (st_mtime)
+access mode (st_mode),
+number of links (st_nlink) for non-directory files,
+differences in the contents of symbolic links,
+owner id (st_uid),
+and
+group id (st_gid).
+.br
+.sp .8v
+When specified as
+.B \-ddd
+.I bru
+reports additional differences in
+host device (st_dev),
+major/minor device (st_rdev) for special files,
+and
+time of last access (st_atime) for regular files.
+.br
+.sp .8v
+When specified as
+.B \-dddd
+.I bru
+reports all differences except
+time of last status change (st_ctime is not resettable),
+major/minor device numbers for non-special files (meaningless),
+and
+size differences for directory files (may have empty entries).
+The
+.B \-dddd
+mode is generally only meaningful during a verification
+pass with full backups of
+quiescent filesystems.
+.TP
+.B \-e
+.B Estimate
+media requirements for archive creation with same arguments.
+Prints estimated number of volumes, number of files to be
+archived, total number of archive blocks, and total size
+of archive in kilobytes.
+If the media size is unknown, unspecified, or set to 0 via the
+.B \-s
+flag or the
+.I brutab
+file, it is assumed to be infinite.
+The
+.B \-Z
+flag may also be given.
+If used, every file that would be backed
+up will be compressed to a temporary file, which may slow down
+the estimation considerably.
+When
+.BR \-Z , \-c " and " \-e
+are all used, each file will be compressed twice, once during
+the estimation pass, and once while writing to the archive.
+.TP
+.B \-g
+Dump archive info block in a form more easily parsed by programs
+implementing a complete filesystem management package.
+Performs no other archive actions.
+Note: when used with
+.BR -t ,
+and the
+rewind tape device, this information is printed after the file list.
+This option will not work when used with
+.B -t
+if the norewind tape device is used, since
+.I bru
+expects to be positioned at the beginning of the tape archive after
+the tape device is closed.
+When a number of
+.I bru
+archives are written to the same tape, a sequence like that below
+will work correctly (where # is the position of a particular archive
+set), listing first the label information, and then the files in
+the same archive.
+.Ex
+	mt fsf #
+	bru -vgf /dev/nrtape
+	mt bsf 1
+	bru -vtf /dev/nrtape
+.Ee
+.TP
+.B \-h
+Print
+.B help
+summary of options.
+Also prints some internal information such as version number
+and default values for archive pathname, media size,
+archive buffer size, etc.
+.TP
+.B \-i
+.B Inspect
+archive for internal consistency and data integrity.
+When
+.B \-vv
+option is also given, prints information from archive
+header block.
+.TP
+.B \-t
+List
+.B table
+of contents of archive.
+When used with the
+.B \-v
+option will give a verbose table of contents in the same format as
+the ``ls \-l'' command.
+When used with the
+.B \-vv
+option will also indicate what files are linked to other files,
+and where symbolic links point to.
+.TP
+.B \-x
+.B Extract
+named
+.I files
+from archive.
+If an archived file is extracted (see
+.B \-u
+option) then the
+access mode,
+device id (special files only),
+owner uid,
+group uid,
+access time,
+and
+modification time
+are also restored.
+If the
+.B \-C
+flag is given (see below),
+then the owner uid and group uid will be changed to that of the current user.
+.br
+.sp .8v
+Nonexistent directories are recreated from archived directories
+if possible, otherwise they are created with appropriate defaults
+for the current user.
+Extracted or created directories are initially empty.
+.SH CONTROL OPTIONS
+Many of the control options are similar in function to their
+.I tar
+or
+.I cpio
+equivalents.
+.PP
+Sizes are specified in bytes.
+The scale factors
+.BR M ,
+.BR k ,
+or
+.BR b ,
+can be used to indicate
+multiplication by 2**20, 1024, or 512 respectively.
+Thus
+``10k'',
+``20b'',
+and
+``10240'' all specify the same number of
+bytes.
+.TP
+.B \-a
+Do not update the
+.B access
+times of disk files that have
+been read while performing other actions.
+Normally
+.I bru
+restores the access and modification times of disk files
+after they have been read to the access and modification times to whatever
+they were before the read operation.
+Restoring the times prevents defeat of the mechanism used to track
+down and remove
+``dead'' files that haven't been accessed in any meaningful way recently.
+Note that this has the side effect that backup programs such as
+.IR dump (1m)
+will backup the file, since the
+.I ctime
+of the file will have been modified; use of
+.B \-a
+is therefore recommended
+when using
+.I dump
+as your system backup utility.
+Use of
+.B \-a
+will also slightly speed up backups, since the inode will not be written.
+.TP
+.BI "\-b " bsize
+Use
+.I bsize
+as the archive input/output
+.B buffer
+size.
+The minimum is the size of an archive block (2k or 2048 bytes)
+and the maximum is determined by available
+memory and I/O device limitations.
+If
+.I bsize
+is not an even multiple of 2048 bytes, it will be rounded up.
+Normally this option is only required with the
+.B \-c
+mode
+since
+.I bru
+writes this information in the archive header block.
+If specified,
+.I bsize
+overrides any existing default value (generally 20k), whether built in or
+read from the archive header.
+.TP
+.B \-B
+Useful in shell scripts where
+.I bru
+is run in the
+.B background
+with no operator present or not possible, such as when there
+is no controlling terminal, causing an open of
+.B /dev/tty
+to fail.
+Under these conditions,
+.I bru
+simply terminates with appropriate error messages and status,
+rather than attempting interaction with the terminal.
+With this option,
+.I bru
+will exit, rather than try to open the controlling terminal.
+In this
+case, the entire backup must fit on a single tape or other media, as
+there is no way to ask for a media change.
+.TP
+.B \-C
+Change the owner
+.RB ( chown )
+and group of each extracted file to the owner uid and group gid
+of the current user.
+Normally,
+.I bru
+will restore the owner and group to those recorded in the archive.
+This flag causes bru to follow the system default,
+with extracted files having the same owner and group as
+the user running
+.IR bru ,
+including Root.
+.br
+.sp .8v
+The
+.B \-C
+option is useful with archives imported from other systems.
+In general, it should not be used by the operator or system
+administrator when restoring saved files.
+Use the
+.B \-tv
+option to see the owner and group of files stored in the archive.
+.TP
+.B \-D
+This option is not implemented, but is still accepted for
+backward compatibility with scripts that may use it.
+.TP
+.BI "\-f " path
+Use
+.I path
+as the archive
+.B file
+instead of the default.
+If the
+.I path
+is ``\-'' then
+.I bru
+uses the standard input for archive reading or standard output
+for archive writing, as appropriate.
+If the path is remote then it needs
+to be specified as
+.I \[user@\]system:/dev/???
+.br
+The \<user@\> part of the path is optional, and if none is specified
+then the user's login is used.
+The login has to be equivalently mapped
+to the remote machine if it has a password.
+.TP
+.B \-F
+.B Fast
+mode.
+In fast mode, checksum computations and comparisons are disabled.
+This mode is useful when the output of one
+.I bru
+is piped to the input of another
+.IR bru ,
+or when the data integrity of the archive transmission medium is
+essentially perfect.
+Archives recorded with fast mode enabled must also be read with
+fast mode.
+Also, be aware that some of the automatic features of
+.IR bru ,
+such as automatic byte swapping,
+are not functional in fast mode.
+.TP
+.B \-j
+Convert
+.B absolute
+pathnames to "."  relative pathnames.
+This option applies only to the
+.B \-x
+mode.
+.TP
+.B \-X
+Echo relative pathnames as absolute pathnames.
+This option only valid when used in conjunction with the \-x,
+\-j and \-v options.
+.TP
+.BI "\-L " str
+.B Label
+the archive with the specified string
+.IR str .
+.I Str
+is limited to 63 characters and is usually some
+meaningful reminder pertaining to the archive contents.
+.TP
+.B \-l
+Ignore unresolved
+.BR links .
+Normally bru reports problems with unresolved links
+(both regular and symbolic links).
+This option suppresses all such complaints.
+.TP
+.B \-m
+Do not cross
+.B mounted
+filesystem boundaries during expansion
+of explicitly named directories.
+This option applies only to directories named in
+.IR files .
+It limits selection of directory descendents to those
+located on the same filesystem as the explicitly named directory.
+This option currently applies only to the
+.B \-c
+and
+.B \-e
+modes.
+.TP
+.B \-p
+.B Pass
+over files in archive by reading rather than seeking.
+Normally
+.I bru
+will use random access capabilities if available.
+This option forces reading instead of seeks.
+.TP
+.B \-R
+.B Remote
+files are to be
+.B excluded
+from the archive (unless explicitly listed on the command line; remote
+directories on the command line are backed up as a directory, but files,
+subdirectories, etc.
+therein will not be backed up).  Filesystems such as the
+.IR proc (4)
+filesystem are considered to not be local, based on the
+information returned by the
+.IR statvfs (2)
+system call.
+.TP
+.BI "\-s " msize
+Use
+.I msize
+as the media
+.BR size .
+The effective media
+.B size
+will be computed from
+.I msize
+since it must be integral multiple of the input/output buffer
+size (see the
+.B \-b
+option).
+Normally this option is only required with the
+.B \-c
+or
+.B \-e
+flags since
+.I bru
+writes this information in the archive header block.
+If specified,
+.I msize
+overrides any existing default value, whether built
+in, read from the
+.I brutab
+file, or read from the archive header.
+If set to 0, the tape
+is assumed to be infinite in length, and the archive is written
+until an error occurs, at which time a new volume is prompted for.
+.TP
+.B \-v
+Enable
+.B verbose
+mode.
+May be specified more than once, as
+.BR \-vv ,
+.BR \-vvv ,
+or
+.BR \-vvvv ,
+to get even more verbosity.
+.TP
+.B \-w
+.B Wait
+for confirmation.
+.I Bru
+will print the filename, the action to be taken, and
+.B wait
+for
+confirmation.
+Any response beginning with 'y' will cause the action to complete.
+Any other response will abort the action.
+.TP
+.B \-Z
+Use 12-bit LZW file compression.
+This is not the default because not all versions of
+.I bru
+know how to deal with compressed files.
+When the
+.B \-v
+option is also selected, the compression ratio for each file is
+printed as a percentage.
+When this flag is used in conjunction with the
+.B \-t
+option on an archive that contains compressed file, the actual archive
+file sizes and names are printed,
+rather than the original values before archiving.
+Files are compressed into a temporary file in a directory given
+by the BRUTMPDIR environment variable.
+If not given, /usr/tmp
+is used.
+.TP
+.B \-K
+Required to archive files larger than 2 Gigabytes.
+\f4Bru\f1 will issue
+a warning and skip such files if the \f4-K\f1 flag is not specified.
+Must be used in conjunction with the \f4-Z\f1 flag.
+If \f4Bru\f1 can
+compress the file to a size smaller than 2 Gigabytes, the file will be
+archived.
+Otherwise, a warning will be issued and the file will be skipped.
+.SH FILE SELECTION OPTIONS
+The file selection options control which files are selected for processing.
+Note that some options are only valid with specific modes.
+.TP 10
+.BI "\-n" date
+Select only files
+.B newer
+than
+.IR date ,
+where this is based on the file modification time (see \f4st_mtime\fP in
+\f4stat\fP(2)); the inode modification time is not checked.
+The
+.I date
+is given in one of the forms:
+.sp .8v
+.TS
+l l.
+DD\-MMM\-YY[YY][,HH:MM:SS]	EX:\ 12\-Mar\-84,12:45:00
+MM/DD/YY[YY][,HH:MM:SS]	EX:\ 3/12/84
+MMDDHHMM[YY[YY]]	EX: 0312124584
+pathname	EX: /etc/lastfullbackup
+.TE
+.IP "" 10
+The time of day is optional in the first two forms.
+If present, it is separated from the date with a comma.
+If YY is less than 39, it is assumed to be in the range 2000-2039.
+Otherwise, if less than 100, it is assumed to be in the range 1940-1999.
+The resulting year must be in the range 1970-2038.
+.IP "" 10
+If
+.I date
+is really the pathname of a file,
+then the modification date of that file will be used instead.
+This is useful in automated backups when a dummy file is
+``touched'' to save the date of last backup.
+.TP
+.BI "\-o " user
+Select only files
+.B owned
+by
+.IR user .
+.I User
+may be specified in one of three ways:
+.sp .8v
+.RS 15
+.PD 0
+.TP 3
+\*(BU
+As an ascii string corresponding to a user name
+in the password file.
+.TP 3
+\*(BU
+As the pathname of a file in which case the owner
+of that file is used.
+.TP 3
+\*(BU
+As a numeric value (decimal).
+.RE
+.PD 1
+.TP
+.BI "\-u " flags
+When used in conjunction with
+.B \-x
+mode, causes files of type specified by
+.I flags
+to be
+.B unconditionally
+selected regardless of modification times.
+Normally
+.I bru
+will not overwrite (supersede) an existing file with an older archive
+file of the same name.
+Files which are not superseded will give warnings if
+.B verbose
+mode level 2
+.RB ( \-vv )
+or higher is enabled.
+Possible characters for
+.I flags
+are:
+.sp .8v
+.RS 15
+.PD 0
+.TP 5
+.B b
+select block special files
+.TP 5
+.B c
+select character special files
+.TP 5
+.B d
+select directories
+.TP 5
+.B l
+select symbolic links
+.TP 5
+.B p
+select fifos (named pipes)
+.TP 5
+.B r
+select regular files
+.RE
+.PD 1
+.IP "" 10
+Selection of directories only implies that their attributes
+may be modified.
+Existing directories are never overwritten,
+this option merely
+allows their attributes to be set back to some
+previously existing state.
+.IP "" 10
+Selection of symbolic links only implies that the contents of the link
+will be modified.
+It is currently impossible
+to change access time, modification time, or the file mode of a symbolic
+link.
+.SH EXAMPLES
+Create
+.RB ( \-c )
+a new archive of all files under ``/usr/src'',
+writing archive to file
+.RB ( \-f )
+``/dev/rmt0''
+using multiple tapes with a maximum size
+.RB ( \-s )
+of 30 megabytes per tape.
+.PP
+.RS
+bru \-c \-f /dev/rmt0 \-s 30M /usr/src
+.RE
+.PP
+Create
+.RB ( \-c )
+a new archive on the default device in the
+first pass, archiving all files in and below the current directory
+which have been created or modified
+.RB ( \-n )
+since 3 P.M.
+on 14\-Jan\-84.
+Then do a second pass to verify that there are no differences
+.RB ( \-d )
+between the archive and current files.
+Each file is listed
+.RB ( \-v )
+as it is processed.
+.PP
+.RS
+bru \-cvd \-n 14\-Jan\-84,15:00:00
+.RE
+.PP
+Archive all files owned
+.RB ( \-o )
+by user ``user1''
+using the default archive device.
+.PP
+.RS
+find / \-user user1 \-print \(bv bru \-c \-
+.br
+bru \-c \-o user1 /
+.RE
+.PP
+Copy a directory hierarchy from ``/usr/u1'' to
+``/usr/u2''.
+.PP
+.RS
+(cd /usr/u1; bru \-cf \- ) \(bv (cd /usr/u2; bru \-xf \-)
+.RE
+.PP
+Extract
+.RB ( \-x )
+the regular file ``/usr/guest/myfile'' unconditionally
+.RB ( \-ur )
+from an archive on file
+.RB ( \-f )
+``/dev/rf0''.
+Since the device size was recorded in the header block,
+it need not be specified.
+Note that option arguments do not need to be
+separated from their corresponding option flag by whitespace.
+.PP
+.RS
+bru \-x \-ur \-f/dev/rf0 ./usr/guest/myfile
+.RE
+.PP
+Extract
+.RB ( \-x )
+all C source files in ``/usr/src/cmd'' that have names
+beginning with characters 'a' through 'm'.
+Wait
+.RB ( \-w )
+for confirmation before extracting each file.
+.PP
+.RS
+bru \-xw \(fm/usr/src/cmd/[a\-m]*.c\(fm
+.RE
+.PP
+Inspect
+.RB ( \-i )
+a previously created archive on the
+default device, dumping the contents of the header block for
+inspection
+.RB ( \-vvv )
+and verifying internal consistency and data integrity
+of the archive.
+.PP
+.RS
+bru \-ivvv
+.RE
+.PP
+Back up the entire root filesystem without
+crossing mounted
+.RB ( \-m )
+filesystem boundaries.
+The archive will be written to file
+.RB ( \-f )
+``/dev/rmt0'' using an I/O
+buffer size
+.RB ( \-b )
+of 10k bytes.
+.PP
+.RS
+cd /
+.br
+bru \-cvm \-f /dev/rmt0 \-b 10k
+.RE
+.SH DIAGNOSTICS
+Most diagnostics are reasonably informative.
+The most common have to do with meaningless combinations of options,
+incompatible options,
+hitting memory or device limits,
+unresolved file links,
+trying to archive or restore something to which access is normally denied,
+or problems with media errors and/or archive corruption.
+.SH DEVICE TABLE
+.I Bru
+contains an internal table of known devices and their characteristics.
+This table is dynamically loaded from a data file specified by
+the environment variable
+.BR BRUTAB ,
+or from
+.IR /etc/brutab ,
+or from an internal default description if neither of the preceding is found.
+.PP
+The format of the \f2bru\fP data file for loadable devices is as follows.
+Note that the table MUST contain at least one entry and the
+first entry is the default archive device.
+.PP
+Also, the table should contain an entry for the standard
+input and output, with a name of "-".
+.PP
+Entries consist of a device name field, followed by one
+or more capabilities fields.
+Entries may span more than
+one line by escaping the newline at the end of the line with
+a '\\' character ('\\' is last character on line before newline).
+All whitespace (tabs, blanks, newlines, formfeeds) between fields
+is ignored.
+.PP
+The device name field must be the first field in the entry and has
+the following form:
+.PP
+.RS
+.nf
+<device name>|<device name>| ... |<device name>
+.sp .8v
+example:  /dev/rmt[0-2]|/dev/mt[0-2]
+.fi
+.RE
+.PP
+where each device has the same capabilities as the other devices
+specified (a class of devices).
+Regular expressions as described
+in
+.IR regexp (3)
+may be used.
+.PP
+Each capability field is of the form:
+.PP
+.RS
+.nf
+<capability name>=<value>  or  <boolean flag>
+.sp .8v
+example:  size=640K   REOPEN  pwerr=EIO
+.fi
+.RE
+.PP
+Note that there can be no whitespace between the capability name
+and the value.
+Note that a size of 0 is treated specially, see the
+.B \-s
+flag description above.
+Numeric values may be given in absolute form or
+with a trailing scale factor of:
+.PP
+.RS
+.nf
+b or B	Blocks (512 bytes)
+k or K	Kilobytes (1024 bytes)
+m or M	Megabytes (1024 * 1024 bytes)
+.fi
+.RE
+.PP
+Error numbers may be given in absolute or symbolic form,
+as defined in <errno.h>.
+.PP
+Currently used capabilities include:
+.TS
+l l l.
+Name	Type	Meaning
+_
+size	numeric	media size in bytes if known, zero otherwise
+seek	numeric	minimum seek resolution, zero if no seeks allowed
+prerr	numeric	errno for partial reads
+pwerr	numeric	errno for partial writes
+zrerr	numeric	errno for zero reads
+zwerr	numeric	errno for zero writes
+frerr	numeric	errno for read of unformatted media
+fwerr	numeric	errno for write of unformatted media
+wperr	numeric	errno for write protected media
+reopen	boolean	close and reopen archive upon media switch
+noreopen	boolean	no close and reopen archive upon media switch
+tape	boolean	archive device is a tape drive
+rawtape	boolean	archive device is a "raw" tape drive
+		used primarily with devices that support
+		multiple block sizes
+norewind	boolean	closing does not automatically rewind
+advance	boolean	read/writes advance media even when errors occur\fP
+.TE
+.PP
+For instance, an excerpt from
+.I /etc/brutab
+for SCSI tapedrives is:
+.PP
+.nf
+\s-2
+\fC
+/dev/r*mt/tps[0-9]d[1-7]nr* \\
+	size=0K seek=0 \\
+	prerr=EIO pwerr=EIO zrerr=ENOSPC zwerr=ENOSPC frerr=0 fwerr=0 \\
+	wperr=EROFS norewind reopen tape rawtape advance
+#
+/dev/r*mt/tps[0-9]d[1-7]* \\
+	size=0K seek=0 \\
+	prerr=EIO pwerr=EIO zrerr=ENOSPC zwerr=ENOSPC frerr=0 fwerr=0 \\
+	wperr=EROFS reopen tape rawtape advance
+#	This entry is a generic entry for stdin and stdout.
+- size=0 seek=0 prerr=0 pwerr=0 zrerr=0 zwerr=0 frerr=0 fwerr=0 wperr=0
+\fP
+The internal table that is used if no file can be found is:
+.fi
+.nf
+\s-2
+\fC
+/dev/tape* \\
+	size=0k seek=0 \\
+	prerr=EIO pwerr=EIO zrerr=ENOSPC zwerr=ENOSPC frerr=0 fwerr=0 \\
+	wperr=EROFS reopen tape rawtape advance
+/dev/nrtape* \\
+	size=0k seek=0 \\
+	prerr=EIO pwerr=EIO zrerr=ENOSPC zwerr=ENOSPC frerr=0 fwerr=0 \\
+	wperr=EROFS norewind reopen tape rawtape advance
+\fP
+.fi
+.SH SIGNAL HANDLING
+.I Bru
+normally catches both interrupt (SIGINT) and quit (SIGQUIT).
+When interrupt is caught during archive creation or extraction,
+.I bru
+completes its work on the current file before cleaning up and exiting.
+This is the normal way of aborting
+.IR bru .
+When a quit signal is caught an immediate exit is taken.
+.PP
+Note that during file extraction, a quit signal may leave the last file only
+partially extracted.
+Similarly, a quit signal during archive writing may leave the archive
+truncated.
+When either interrupt or quit is caught at any other time
+an immediate exit is taken.
+.SH ERROR RECOVERY
+When properly configured for a given software/hardware environment,
+bru can recover from most common errors.
+For example, attempts to use unformatted media are detected, allowing
+substitution of formatted media.
+Random blocks in an archive can be deliberately overwritten (corrupted)
+without affecting
+.IR bru 's
+ability to recover data from the rest of the archive.
+When I/O errors are detected, retries are performed automatically.
+Out of order sequencing on multi-volume archive reads is detected,
+allowing replacement with the correct volume.
+.SH DIRECTORIES
+When creating non-incremental archives
+.I bru
+automatically archives all directories necessary to
+fully restore any file from the archive.
+During extraction, any required directories which do not
+already exist are restored from the archive if possible,
+otherwise they are created with appropriate defaults for
+the current user.
+.PP
+The net result is that restoration from incremental
+archives (which may not contain all necessary directories),
+or incremental restoration from full
+archives (which may skip directories needed later),
+may result in creation of directories with the default
+attributes.
+.SH WILDCARDS
+When
+.B reading
+archives
+.I bru
+recognizes filename generation patterns in the same format as
+the shell.
+This allows greater flexibility in specifying files to be extracted,
+compared, or listed.
+As a special extension to shell type expansion, the sense of the match
+is reversed for patterns that begin with '!'.
+.PP
+Note that the patterns may have to be quoted to prevent expansion by the
+shell.
+Also note that patterns are processed independently, without regard for
+any other patterns that may or may not be present.
+In particular,
+"/bin/a*  /bin/b*" is equivalent to "/bin/[ab]*", but
+"/bin/!a* /bin/!b*" is equivalent to "/bin/*",
+.B not
+"/bin/![ab]*".
+.SH BYTE/WORD SWAPPING
+While reading archives produced on other machines,
+.I bru
+automatically attempts to perform byte and/or word swapping as
+necessary.
+.PP
+If no device table is specified,
+.I bru
+automatically uses the no-swap tape device, which provides higher performance
+and compatibility with non-byte swapped tapes from other systems.
+The IRIS 3000 series does not support non-byte swapped tapes, but the
+automatic byte-swapping capabilities of
+.I bru
+will deal with this problem.
+.SH REMOTE TAPE DRIVES
+.I Bru
+allows the use of remote tape drives for the archive device
+(via the
+.B \-f
+option).
+A remote tape drive filename has the form
+.RS
+.sp .8v
+.I [user@]system:/dev/???
+.sp .8v
+.RE
+where
+.I system
+is the remote system,
+the optional
+.I user
+is the login name to use on the remote system if different
+from the current user's login name, and
+.B /dev/???
+is the tape drive to use (1600 BPI or 800 BPI, raw or blocked,
+rewinding or non-rewinding, etc.).
+In all cases, the user must have the appropriate permissions
+on the remote system.
+(See also the
+.B CAVEATS
+section, below.)
+.SH EXIT CODES
+.I Bru
+always returns meaningful status as follows:
+.PP
+.RS
+0\ \ \ \ Normal exit, no errors or warnings.
+.br
+1\ \ \ \ Warnings (or interrupted).
+.br
+2\ \ \ \ Errors (or quit signal).
+.RE
+.SH SEE ALSO
+cpio(1),
+rmt(1M),
+tar(1),
+attr(1),
+xfsdump(1).
+.SH UNIX SYSTEM INCOMPATIBILITIES
+.I Bru
+recognizes special file types that may be allowed on one type of
+.B UNIX
+system, but not on another.
+For instance, on a 4.2\ BSD system,
+.I bru
+will extract
+fifos as plain files (mode 0666, as modified by the
+.IR umask ),
+and issue an appropriate error message.
+Usually,
+.I bru
+will issue two messages.
+The first message will be the more descriptive of the two.
+.PP
+Currently, the only different
+.B UNIX
+systems that
+.I bru
+fully understands are System V, 4.2\ BSD, and Pyramid's OSx.
+.SH CAVEATS
+Pathnames are limited to 127 characters in length.
+This could become a chronic problem.
+.br
+.sp .8v
+Implementation differences complicate the algorithms for
+automatic detection of end of file on devices.
+The algorithms can be fooled, hence the
+.B \-s
+option.
+.br
+.sp .8v
+Special files moved to a machine other than their original host
+will generally be useless and possibly even dangerous.
+This goes double for symbolic links.
+.br
+.sp .8v
+When extracting files from archives, patterns used to match
+directories may result in some unnecessary directories being
+extracted.
+For example, if the pattern is ``a/*/c'', and the directory
+``a/b'' is encountered in the archive, the directory file ``a/b''
+will be extracted since it will be needed when (and if)
+the file ``a/b/c'' is encountered.
+When in doubt, use the
+.B \-w
+option.
+.br
+.sp .8v
+In order to be able to efficiently archive needed directories,
+.I bru
+builds an image of the directory tree for
+.I files
+using dynamically allocated memory.
+Since there may be at most 5120 characters passed on the command line,
+it is very unlikely that
+.I bru
+will run out of memory while building the tree from command line arguments.
+This is not true of file lists read from the standard input,
+particularly on machines with limited address space.
+.br
+.sp .8v
+Information about file linkages is also kept in memory.
+Some linkages may be lost if memory is exhausted.
+.br
+.sp .8v
+Since
+.I bru
+is owned by root
+and runs with ``set\ user\ id'' to allow it to create directories
+and special files, it makes every attempt to prevent normal users
+from archiving or extracting files they would normally not have access to.
+There may be loopholes.
+Also note that
+anyone with physical or electronic access to an archive,
+and knowledge of the archive structure,
+can recover
+any of its contents by writing their own file extraction program.
+.br
+.sp .8v
+Files within directories which have filesystems mounted on them will not
+be properly archived until the filesystem is unmounted, since the mounted
+filesystem hides them.
+This is not generally a problem.
+.br
+.sp .8v
+Explicitly naming both a directory and one of its
+descendents will cause the descendent to be archived twice,
+unless they are on separate filesystems and the
+.B \-m
+flag is used.
+.br
+.sp .8v
+Explicitly naming a file more than once is ineffective.
+.br
+.sp .8v
+When reading from the raw magnetic tape file (rmtxxx)
+.I bru
+automatically attempts to adjust the I/O buffer size to match
+that used to record the archive.
+Under certain circumstances it may fail and require help via the
+.B \-b
+option.
+.br
+.sp .8v
+Using remote tape drives can be slow.
+.br
+.sp .8v
+Extended Attributes are not archived or restored.
+See
+.IR attr (1)
+for more information about Extended Attributes and see
+.IR xfsdump (1m)
+for a method to back them up.

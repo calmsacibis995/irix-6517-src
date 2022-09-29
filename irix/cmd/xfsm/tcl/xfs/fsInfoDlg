@@ -1,0 +1,182 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	fsInfoDlg
+# Version:	$Revision: 1.5 $
+# Synopsis:	Encapsulates the dialog that displays file system information.
+# Functions:	fsInfo:realize
+#		fsInfo:manage
+#		fsInfo:fill
+#		fsInfo:getData
+#		fsInfo:_cookRawData
+#		fsInfo:_startDrop
+#		fsInfo:_doTransfer
+#%COMMENT_END
+
+#########################################
+#		Public			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	fsInfo:realize
+# Synopsis:	Initializes any class-wide data and creates an instance of
+#		the dialog. If an instance of this dialog already exists for
+#		the given handle, no action is taken.
+# Arguments:	- handle	An identifier that is used as a key for storing
+#				(and later retrieving) the created widgets and
+#				any instance specific data.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc fsInfo:realize { handle parent } \
+{
+	global		_GW_fsi _GD_fsi
+
+	if { ! [info exists _GW_fsi($handle,dialog) ] } {
+		set _GD_fsi(fsInfo,columns)	\
+			{DIR NAME TYPE OPTIONS PASS_NO DUMP_FREQ}
+		set _GD_fsi(fsInfo,cwidths)	{13 11 4 7 4 4}
+		set _GD_fsi(fsInfo,buttons)	{close help}
+
+		set _GW_fsi($handle,dialog) \
+			[iu:createDlg $handle $parent fsInfo _GD_fsi _GW_fsi]
+
+		$_GW_fsi($handle,buttons).help activateCallback \
+				"sgiHelpMsg $_GW_fsi($handle,dialog)"
+		$_GW_fsi($handle,buttons).close activateCallback \
+				"$_GW_fsi($handle,dialog) unmanageChild"
+
+		$_GW_fsi($handle,matrix) dropSiteRegister -dropProc \
+			"fsInfo:_startDrop $handle %dragContext \
+			 $_GW_fsi($handle,matrix)" \
+			-numImportTargets 1 \
+			-importTargets "COMPOUND_TEXT"
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	fsInfo:manage
+# Synopsis:	Manages an instance of the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc fsInfo:manage { handle } \
+{
+	global		_GW_fsi
+
+	$_GW_fsi($handle,dialog) manageChild
+}
+
+#%COMMENT_BEGIN
+# Function:	fsInfo:fill
+# Synopsis:	Given a list of object signatures, retrieve the data for those
+#		objects and fill in the matrix.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- mode		Reserved for future use.
+#		- lst		A list of object signatures for which to
+#				display information.
+#%COMMENT_END
+proc fsInfo:fill { handle mode lst } \
+{
+	global		_GW_fsi _GD_fsi
+	set rval	0
+
+	if {[llength $lst]} {
+		foreach item $lst {
+			if {! [obj:isXfsmTemplate $item]} {
+				lappend nlst $item
+			}
+		}
+		if {[info exists nlst]} {
+			set data [iu:getObjectInfo $nlst]
+			if {[clength $data] != 0} {
+				set data [fsInfo:_cookRawData $data]
+				iu:setData fsInfo $_GW_fsi($handle,matrix) \
+						$_GD_fsi(fsInfo,cwidths) $data
+				set rval 1
+			}
+		}
+	}
+
+	return $rval
+}
+
+#########################################
+#		Private			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	fsInfo:_cookRawData
+# Synopsis:	Takes the raw data (one of the sublists returned by
+#		iu:getObjectInfo) and formats it so that it can be
+#		displayed in a matrix widget.
+# Arguments:	- data		The raw data.
+#%COMMENT_END
+proc fsInfo:_cookRawData { data } \
+{
+	global		_GW_fsi _GD_fsi
+
+	foreach item $data {
+		set item [split $item \n]
+		foreach i $_GD_fsi(fsInfo,columns) {
+
+			if {! [clength [set x [lmatch $item "MNT_$i:*"]]]} {
+				set x [lmatch $item FS_$i:*]
+			}
+
+			if {! [clength $x]} {
+				set val " - "
+			} else {
+				set val [join [lassign [split $x :] key] :]
+			}
+
+			lappend steamed $val
+		}
+		lappend cooked [concat $steamed]
+		unset steamed
+	}
+
+	return $cooked
+}
+
+#%COMMENT_BEGIN
+# Function:	fsInfo:_startDrop
+# Synopsis:	The function that is called when icons are dropped on
+#		the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- dragContext	The Motif drag context widget id.
+#		- w		The widget id for the matrix.
+#%COMMENT_END
+proc fsInfo:_startDrop { handle dragContext w } \
+{
+	set dts [concat COMPOUND_TEXT $w]
+	$dragContext dropTransferStart \
+		-dropTransfers [list $dts] \
+		-numDropTransfers 1 \
+		-transferProc "fsInfo:_doTransfer $handle %closure {%value}"
+}
+
+#%COMMENT_BEGIN
+# Function:	fsInfo:_doTransfer
+# Synopsis:	The function that is called when the drop transfer is
+#		completed.  It converts the information to the proper
+#		internal format and then calls fsInfo:fill() to fill
+#		the matrix.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- destination	Unused
+#		- value		The data for the dropped objects.
+#%COMMENT_END
+proc fsInfo:_doTransfer { handle destination value } \
+{
+	if {! [ip:uniqueToObject $value objs]} {
+		####	TODO
+	} else {
+		fsInfo:fill $handle replace $objs
+	}
+}

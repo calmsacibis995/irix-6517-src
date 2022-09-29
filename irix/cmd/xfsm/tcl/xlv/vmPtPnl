@@ -1,0 +1,711 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	vmPtPnl
+# Version:	$Revision: 1.4 $
+# Synopsis:	Encapsulates the panel that allows the user to select the
+#		partitions that belong to a ve.
+# Functions:	ptPnl:realize
+#		ptPnl:manage
+#		ptPnl:enable
+#		ptPnl:validNextPrev
+#		ptPnl:markPartsAvail
+#		ptPnl:markPartsInUse
+#		ptPnl:setChosenListParts
+#		ptPnl:setChosenListLabel
+#		ptPnl:getItems
+#		ptPnl:getItemCount
+#		ptPnl:newPartList
+#		ptPnl:getPartsSize
+#		ptPnl:registerPartChangeAction
+#		ptPnl:registerNextPrevAction
+#		ptPnl:_create
+#		ptPnl:_toAvailCb
+#		ptPnl:_toChosenCb
+#		ptPnl:_searchAction
+#		ptPnl:_stateAction
+#		ptPnl:_changeVe
+#%COMMENT_END
+
+global	G_data
+if {! [info exists G_data(source,vmSrchPtDlg)]} {
+	source $G_data(sourcedir)/vmSrchPtDlg
+	set G_data(source,vmSrchPtDlg) true
+}
+
+#########################################
+#		Public			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	ptPnl:realize
+# Synopsis:	Creates an instance of the panel.  On the first call, any
+#		class-wide data is initialized.  If an instance of this
+#		panel already exists for the given handle, no action is taken.
+#		other than to return the top-level widget for the panel.
+# Arguments:	- handle	An identifier that is used as a key for storing
+#				(and later retrieving) the created widgets and
+#				any instance specific data.
+#		- parent	The parent for the created panel.
+#%COMMENT_END
+proc ptPnl:realize { handle parent } \
+{
+	global		_GW_ptPnl _GD_ptPnl
+
+	####    One time initialization
+	if {! [info exists _GD_ptPnl(initialized)]} {
+		####    Make sure we don't go through this again
+		set _GD_ptPnl(initialized) true
+
+		set _GD_ptPnl(list_font)	\
+			"-*-fixed-bold-r-normal--15-*-*-*-c-90-iso8859-1"
+		set _GD_ptPnl(lists)	"AVAIL CHOSEN"
+		set _GD_ptPnl(btns)	"toAVAIL toCHOSEN"
+	}
+
+	####	Per instance initialization / creation
+	if {! [info exists _GW_ptPnl($handle,panel)]} {
+		set _GD_ptPnl($handle,pcaction) ""
+		set _GD_ptPnl($handle,npaction) ""
+
+		####	Create the widget(s)
+		set _GW_ptPnl($handle,panel) [ptPnl:_create $handle $parent]
+
+		ptSrch:realize $handle $_GW_ptPnl($handle,panel)
+		ptSrch:registerSearchExecute $handle ptPnl:_searchAction
+		ptSrch:registerStateChange $handle ptPnl:_stateAction
+	}
+	
+	return $_GW_ptPnl($handle,panel)
+}
+
+#########################################
+#	Public: State Change Routines	#
+#########################################
+#%COMMENT_BEGIN
+# Function:	ptPnl:manage
+# Synopsis:	Manages an instance of the panel.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc ptPnl:manage { handle } \
+{
+	global		_GW_ptPnl
+
+	if {[info exists _GW_ptPnl($handle,panel)]} {
+		$_GW_ptPnl($handle,panel) manageChild
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	ptPnl:enable
+# Synopsis:	Enables/disables the panel.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- enable	True if the panel is to be enabled, false
+#				otherwise.
+#%COMMENT_END
+proc ptPnl:enable { handle enable } \
+{
+	global		_GW_ptPnl
+
+	if {[info exists _GW_ptPnl($handle,panel)]} {
+		$_GW_ptPnl($handle,AVAIL) setValues -sensitive $enable
+		$_GW_ptPnl($handle,toChosen) setValues -sensitive $enable
+		$_GW_ptPnl($handle,toAvail) setValues -sensitive $enable
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	ptPnl:validNextPrev
+# Synopsis:	Sets the sensitivity of the of the "Next Ve" and "Previous Ve"
+#		push buttons.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- next		True if "Next Ve" is to be sensitive.
+#		- prev		True if "Previous Ve" is to be sensitive.
+#		- setSensitive	An optional parameter.  If true, then set the
+#				sensitivity of the buttons.  If false, then
+#				map/unmap the widgets.
+#%COMMENT_END
+proc ptPnl:validNextPrev { handle next prev {setSensitive true} } \
+{
+	global	_GW_ptPnl
+
+	if {$setSensitive} {
+		$_GW_ptPnl($handle,next) setSensitive $next
+		$_GW_ptPnl($handle,prev) setSensitive $prev
+	} else {
+		if {$next} {
+			$_GW_ptPnl($handle,next) mapWidget
+		} else {
+			$_GW_ptPnl($handle,next) unmapWidget
+		}
+
+		if {$prev} {
+			$_GW_ptPnl($handle,prev) mapWidget
+		} else {
+			$_GW_ptPnl($handle,prev) unmapWidget
+		}
+	}
+	
+}
+
+#%COMMENT_BEGIN
+# Function:	ptPnl:markPartsAvail
+# Synopsis:	Mark the specified partitions as being available.  If a
+#		partition is available, the UI will allow it to be added
+#		to a ve.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- parts		The list of partitions to mark.
+#%COMMENT_END
+proc ptPnl:markPartsAvail { handle parts } \
+{
+	global	_GW_ptPnl
+
+	if {$parts != ""} {
+	    set items [ptSrch:getNamedItems $handle $parts]
+	    foreach i $items {
+		lappend nitems "  [string trimleft [string trim $i "\""] "+* "]"
+	    }
+	    ptSrch:markPartsAvail $handle $nitems
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	ptPnl:markPartsInUse
+# Synopsis:	Mark the specified partitions as being in use.  If a partition
+#		is in use, the UI will not allow it to be added to a ve.
+#		There are two flavors of being in use.  The first (denoted
+#		by the state "inuse") indicates that the partition is being
+#		reserved by this application, but has not been committed
+#		to the XLV subsystem.  The second (denoted by the state "used")
+#		indicates that the partition is currently used by XLV.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- parts		The list of partitions to mark.
+#		- state		An optional argument that indicates how the
+#				partitions are to be marked in use.  Valid
+#				values are "inuse" and "used".
+#%COMMENT_END
+proc ptPnl:markPartsInUse { handle parts {state inuse} } \
+{
+	global	_GW_ptPnl
+
+	if {$parts != ""} {
+	    set items [ptSrch:getNamedItems $handle $parts]
+	    foreach i $items {
+		lappend nitems "  [string trimleft [string trim $i "\""] "+* "]"
+	    }
+	    ptSrch:markPartsInUse $handle $nitems $state
+	}
+}
+
+#########################################
+#	Public: Data In Routines	#
+#########################################
+#%COMMENT_BEGIN
+# Function:	ptPnl:setChosenListParts
+# Synopsis:	Displays the given partitions in the "Chosen" list.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- parts		The list of partitions to display.
+#%COMMENT_END
+proc ptPnl:setChosenListParts { handle parts } \
+{
+	global		_GW_ptPnl _GD_ptPnl
+
+	set items [ptSrch:getNamedItems $handle $parts]
+	set nitems ""
+	foreach item $items {
+		if {[regsub {\+} $item " " x]} {
+			lappend nitems $x
+		} else {
+			lappend nitems $item
+		}
+	}
+
+	$_GW_ptPnl($handle,CHOSEN) setValues \
+			-items $nitems \
+			-itemCount [llength $nitems]
+}
+
+#%COMMENT_BEGIN
+# Function:	ptPnl:setChosenListLabel
+# Synopsis:	Sets the label that appears above the "Chosen" list.  The
+#		label helps the user to associate the list with the correct ve.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- subv		The subvolume that the partition belongs to.
+#				If this list is associated with a stand-alone
+#				plex or ve, this will be the empty string ("").
+#		- plex		The plex that the partition belongs to.  If
+#				this list is associated with a stand-alone ve,
+#				this will be the empty string ("").
+#		- ve		The ve that the partition belongs to.
+#%COMMENT_END
+proc ptPnl:setChosenListLabel { handle subv plex ve } \
+{
+	global		_GW_ptPnl _GD_ptPnl
+
+	if {[clength $subv]} {
+		set lbl "$subv Plex: $plex   Ve: $ve"
+	} elseif {[clength $plex]} {
+		set lbl "Plex: $plex Ve: $ve"
+	} elseif {[clength $ve]} {
+		set lbl "Ve: $ve"
+	} else {
+		set lbl "Ve: <No Name>"
+	}
+
+	$_GW_ptPnl($handle,CHOSEN-label) setValues \
+			-labelString "Partitions selected for: @n $lbl"
+}
+
+#########################################
+#	Public: Data Out Routines	#
+#########################################
+#%COMMENT_BEGIN
+# Function:	ptPnl:getItems
+# Synopsis:	Returns the list of paritions chosen for the currently
+#		selected ve.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc ptPnl:getItems { handle } \
+{
+	global		_GW_ptPnl
+
+	$_GW_ptPnl($handle,CHOSEN) getValues -items items
+	return $items
+}
+
+#%COMMENT_BEGIN
+# Function:	ptPnl:getItemCount
+# Synopsis:	Returns the number of paritions chosen for the currently
+#		selected ve.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc ptPnl:getItemCount { handle } \
+{
+	global		_GW_ptPnl
+
+	$_GW_ptPnl($handle,CHOSEN) getValues -itemCount count
+	return $count
+}
+
+#%COMMENT_BEGIN
+# Function:	ptPnl:newPartList
+# Synopsis:	Executes a search for partitions on the given host.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- host		The name of the host on which to search
+#				for partitions.
+#%COMMENT_END
+proc ptPnl:newPartList { handle host } \
+{
+	global		_GW_ptPnl _GD_ptPnl
+
+	if {! [ptSrch:newPartList $handle $host]} {
+		return -1
+	}
+	if {! [ptSrch:_searchCb $handle]} {
+		return 0
+	}
+
+	set items [ptSrch:getItems $handle]
+	$_GW_ptPnl($handle,AVAIL) setValues \
+			-items $items \
+			-itemCount [llength $items]
+
+	return 1
+}
+
+#%COMMENT_BEGIN
+# Function:	ptPnl:getPartsSize
+# Synopsis:	Returns the total size of the given partitions in the
+#		specified unit.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- part_list	The list of partitions to total.
+#		- unit		An optional parameter that allows the caller
+#				to specify the desired unit into which to
+#				convert the total.  Valid values for this
+#				parameter are: kb, mb, and gb.
+#%COMMENT_END
+proc ptPnl:getPartsSize { handle part_list {unit mb} } \
+{
+	return [ptSrch:getPartsSize $handle $part_list $unit]
+}
+
+#########################################
+#	Public: Register for Actions	#
+#########################################
+#%COMMENT_BEGIN
+# Function:	ptPnl:registerPartChangeAction
+# Synopsis:	This provides a way for other procedures to register a function
+#		to be called whenever there is a change to the "Chosen" list.
+#		The called function is passed three arguments, the handle,
+#		a list of the names of the partitions and a list of the sizes
+#		of the partitions.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- action	The name of the function to be called.
+#%COMMENT_END
+proc ptPnl:registerPartChangeAction { handle action } \
+{
+	global		_GD_ptPnl
+	lappend _GD_ptPnl($handle,pcaction) $action
+}
+
+#%COMMENT_BEGIN
+# Function:	ptPnl:registerPartChangeAction
+# Synopsis:	This provides a way for other procedures to register a function
+#		to be called whenever the "Next Ve" or "Previous Ve" push
+#		button is activated.  The called function is passed two
+#		arguments, the handle and a string that indicates which button
+#		was activated.  The string is set to either "next" or "prev".
+# Arguments:	- handle	The identifier for the desired instance.
+#		- action	The name of the function to be called.
+#%COMMENT_END
+proc ptPnl:registerNextPrevAction { handle action } \
+{
+	global		_GD_ptPnl
+	lappend _GD_ptPnl($handle,npaction) $action
+}
+
+#########################################
+#		Private			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	ptPnl:_create
+# Synopsis:	Creates an instance of the dialog and defines callbacks for
+#		the dialog buttons.
+# Arguments:	- handle	The identifier for the new instance.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc ptPnl:_create { handle parent } \
+{
+	global		_GW_ptPnl _GD_ptPnl
+	set name	ptPnl
+	set arrow_size	28
+
+	set container [xmForm $parent.$name]
+	set pb_search [xmPushButton $container.search managed \
+			-topAttachment attach_none \
+			-leftAttachment attach_form \
+			-rightAttachment attach_position \
+			-bottomAttachment attach_form \
+			-leftOffset 60 \
+			-rightPosition 50 \
+			-rightOffset [expr ($arrow_size / 2) + 65]]
+	$pb_search activateCallback "ptSrch:manage $handle"
+
+	set pb_form [xmForm $container.pb_form managed \
+			-topAttachment attach_none \
+			-leftAttachment attach_position \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form \
+			-leftPosition 50 \
+			-leftOffset [expr ($arrow_size / 2) + 20] \
+			-rightOffset 15]
+
+	set _GW_ptPnl($handle,next) [xmPushButton $pb_form.next managed \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_position \
+			-bottomAttachment attach_form \
+			-rightPosition 50 \
+			-rightOffset 15]
+
+	set _GW_ptPnl($handle,prev) [xmPushButton $pb_form.prev managed \
+			-topAttachment attach_form \
+			-leftAttachment attach_position \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form \
+			-leftPosition 50 \
+			-leftOffset 15]
+	$_GW_ptPnl($handle,next) activateCallback "ptPnl:_changeVe $handle next"
+	$_GW_ptPnl($handle,prev) activateCallback "ptPnl:_changeVe $handle prev"
+
+	set item AVAIL
+	set _GW_ptPnl($handle,$item-label) [xmLabel $container.$item-label \
+			 managed \
+			-alignment alignment_center \
+			-marginWidth 20 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_position \
+			-bottomAttachment attach_none \
+			-rightPosition 50 \
+			-rightOffset [expr ($arrow_size / 2) + 5]]
+	set _GW_ptPnl($handle,$item) [xmScrolledList $container.$item managed \
+			-fontList $_GD_ptPnl(list_font) \
+			-visibleItemCount 8 \
+			-listSizePolicy resize_if_possible \
+			-selectionPolicy extended_select \
+			-topAttachment attach_widget \
+			-leftAttachment attach_form \
+			-rightAttachment attach_position \
+			-bottomAttachment attach_widget \
+			-topWidget $_GW_ptPnl($handle,$item-label) \
+			-topOffset 5 \
+			-rightPosition 50 \
+			-rightOffset [expr ($arrow_size / 2) + 5] \
+			-bottomWidget $pb_search \
+			-bottomOffset 5]
+
+	set item CHOSEN
+	set _GW_ptPnl($handle,$item-label) [xmLabel $container.$item-label \
+			 managed \
+			-alignment alignment_center \
+			-marginWidth 20 \
+			-topAttachment attach_form \
+			-leftAttachment attach_position \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none \
+			-leftPosition 50 \
+			-leftOffset [expr ($arrow_size / 2) + 5]]
+	set _GW_ptPnl($handle,$item) [xmScrolledList $container.$item managed \
+			-fontList $_GD_ptPnl(list_font) \
+			-visibleItemCount 8 \
+			-listSizePolicy resize_if_possible \
+			-selectionPolicy extended_select \
+			-topAttachment attach_widget \
+			-leftAttachment attach_position \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_widget \
+			-topWidget $_GW_ptPnl($handle,$item-label) \
+			-topOffset 5 \
+			-leftPosition 50 \
+			-leftOffset [expr ($arrow_size / 2) + 5] \
+			-bottomWidget $pb_form \
+			-bottomOffset 5]
+
+	set item toChosen
+	set _GW_ptPnl($handle,$item) [xmArrowButton $container.$item managed \
+                        -arrowDirection arrow_right \
+			-width $arrow_size \
+			-height $arrow_size \
+                        -topAttachment attach_none \
+                        -leftAttachment attach_position \
+                        -rightAttachment attach_none \
+                        -bottomAttachment attach_position \
+                        -leftPosition 50 \
+                        -bottomPosition 50 \
+                        -leftOffset [expr $arrow_size / -2] \
+                        -bottomOffset 5]
+	$_GW_ptPnl($handle,$item) activateCallback "ptPnl:_toChosenCb $handle \
+			$_GW_ptPnl($handle,AVAIL) $_GW_ptPnl($handle,CHOSEN)"
+
+	set item toAvail
+	set _GW_ptPnl($handle,$item) [xmArrowButton $container.$item managed \
+                        -arrowDirection arrow_left \
+			-width $arrow_size \
+			-height $arrow_size \
+                        -topAttachment attach_position \
+                        -leftAttachment attach_position \
+                        -rightAttachment attach_none \
+                        -bottomAttachment attach_none \
+                        -topPosition 50 \
+                        -leftPosition 50 \
+                        -topOffset 5 \
+                        -leftOffset [expr $arrow_size / -2]]
+	$_GW_ptPnl($handle,$item) activateCallback "ptPnl:_toAvailCb $handle \
+			$_GW_ptPnl($handle,CHOSEN) $_GW_ptPnl($handle,AVAIL)"
+
+	$_GW_ptPnl($handle,AVAIL) defaultActionCallback "ptPnl:_toChosenCb \
+			$handle $_GW_ptPnl($handle,AVAIL) \
+			$_GW_ptPnl($handle,CHOSEN)"
+	$_GW_ptPnl($handle,CHOSEN) defaultActionCallback "ptPnl:_toAvailCb \
+			$handle $_GW_ptPnl($handle,CHOSEN) \
+			$_GW_ptPnl($handle,AVAIL)"
+
+	return $container
+}
+
+#################################
+#	Callbacks		#
+#################################
+#%COMMENT_BEGIN
+# Function:	ptPnl:_toAvailCb
+# Synopsis:	This gets the selected items from the "chosen" list of
+#		partitions and moves them to the "available" list.  The
+#		selected partitions are marked as being available.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- f_list	The widget id for the "chosen" scrolled list.
+#		- t_list	The widget id for the "available" scrolled list.
+#%COMMENT_END
+proc ptPnl:_toAvailCb { handle f_list t_list } \
+{
+	global		_GD_ptPnl
+
+	$f_list getValues -selectedItems sel_items
+	if {[lempty $sel_items]} {
+		return
+	}
+	$t_list deselectAllItems
+
+	foreach item $sel_items {
+		$f_list deleteItem [list $item]
+	}
+	ptSrch:markPartsAvail $handle $sel_items
+
+	$f_list getValues -items items
+	set names ""; set sizes ""
+	foreach item $items {
+		lassign $item nm sz tp
+		lappend names $nm
+		lappend sizes $sz
+	}
+	foreach item $_GD_ptPnl($handle,pcaction) {
+		$item $handle $names $sizes
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	ptPnl:_toChosenCb
+# Synopsis:	This gets the selected items from the "available" list of
+#		partitions and moves them to the "chosen" list.  It checks
+#		to make sure that adding the partitions would not exceed
+#		the maximum allowed number of partitions/ve (currently defined
+#		in <sys/xlv_base.h> as 100).  The selected partitions are
+#		marked as being "inuse".
+# Arguments:	- handle	The identifier for the desired instance.
+#		- f_list	The widget id for the "available" scrolled list.
+#		- t_list	The widget id for the "chosen" scrolled list.
+#%COMMENT_END
+proc ptPnl:_toChosenCb { handle f_list t_list } \
+{
+	global		_GD_ptPnl
+
+	$f_list getValues -selectedItems sel_items -selectedItemCount sel_count
+	if {$sel_items == ""} { return }
+
+	####	Merge the two lists
+	$t_list getValues -items items -itemCount count
+	set new_count 0
+	foreach item $sel_items {
+		set ch [string index $item 0]
+		if {$ch == "*" || $ch == "+"} { continue }
+		lappend new_items $item
+		lappend items $item
+		incr new_count
+	}
+
+	if {! [info exists new_items]} {
+		return
+	}
+	set new_count [llength $new_items]
+
+	if {[expr $new_count + $count] > 100} {
+	    em:simpleMsg $handle information \
+	       "The maximum number of partitions per volume element is @n \
+	        100. There are currently $count partitions in this volume @n \
+	        element. @n @n \
+	        Adding the $new_count selected partitions would exceed the @n \
+		maximum number of partitions allowed."
+	    return
+	}
+
+	foreach item $items {
+		lassign $item nm sz tp
+		lappend names $nm
+		lappend sizes $sz
+		lappend types $tp
+	}
+	set list_list [list $names $sizes $types]
+	set sep_list {"  " " " " " ""}
+	set items [lu:format [ptSrch:getFmt $handle] list_list sep_list]
+	$t_list setValues -items $items -itemCount [llength $items]
+
+	ptSrch:markPartsInUse $handle $new_items
+	foreach item $_GD_ptPnl($handle,pcaction) {
+		$item $handle $names $sizes
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	ptPnl:_searchAction
+# Synopsis:	This procedure is registered with the "Partition Search" dialog
+#		and is called from there when the user executes a search.
+#		The result of the search is displayed in the "available"
+#		scrolled list.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc ptPnl:_searchAction { handle } \
+{
+	global	_GW_ptPnl
+
+	set items [ptSrch:getItems $handle]
+	$_GW_ptPnl($handle,AVAIL) setValues \
+			-items $items \
+			-itemCount [llength $items]
+}
+
+#%COMMENT_BEGIN
+# Function:	ptPnl:_stateAction
+# Synopsis:	This procedure is registered with the "Partition Search" dialog
+#		and is called from there when the state of a partition changes.
+#		scrolled list.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- state		The new state for the given partitions.
+#		- parts		The list of partitions whose state has changed.
+#%COMMENT_END
+proc ptPnl:_stateAction { handle state parts } \
+{
+	global	_GW_ptPnl
+
+	if {$state == "avail"} {
+	    $_GW_ptPnl($handle,AVAIL) getValues -items items
+	    foreach item $parts {
+		set x_item "\"+ [string trimleft $item]\""
+		set pos [$_GW_ptPnl($handle,AVAIL) itemPosition "$x_item"]
+		if {$pos == 0} {
+		    set x_item "\"* [string trimleft $item]\""
+		    set pos [$_GW_ptPnl($handle,AVAIL) itemPosition "$x_item"]
+		    if {$pos == 0} {
+			continue
+		    }
+		}
+		$_GW_ptPnl($handle,AVAIL) deletePosition $pos
+		$_GW_ptPnl($handle,AVAIL) addItemUnselected "\"$item\"" $pos
+	    }
+	} else {
+	    if {$state == "inuse"} {
+		set ch +
+	    } else {
+		set ch *
+	    }
+	    foreach item $parts {
+		set pos [$_GW_ptPnl($handle,AVAIL) itemPosition "\"$item\""]
+		if {$pos == 0} {
+		    set x_item "\"+ [string trimleft $item]\""
+		    set pos [$_GW_ptPnl($handle,AVAIL) itemPosition "$x_item"]
+		    if {$pos == 0} {
+			continue
+		    }
+		}
+		$_GW_ptPnl($handle,AVAIL) deletePosition $pos
+		set item "\"$ch [string trimleft $item]\""
+		$_GW_ptPnl($handle,AVAIL) addItemUnselected $item $pos
+	    }
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	ptPnl:_changeVe
+# Synopsis:	This is the callback for the "Next Ve" and "Previous Ve" push
+#		buttons.  It calls all procedures that were registered through
+#		ptPnl:registerNextPrevAction() with a key indicating whether
+#		it was the "Next" or "Previous" button that was activated.
+# Arguments:	- handle	The identifier for the new instance.
+#		- op		A string that is either "next" or "prev".
+#%COMMENT_END
+proc ptPnl:_changeVe { handle op } \
+{
+	global	_GD_ptPnl
+
+	foreach item $_GD_ptPnl($handle,npaction) {
+		$item $handle $op
+	}
+}

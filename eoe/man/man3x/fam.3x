@@ -1,0 +1,316 @@
+'\"macro stdmacro
+.if n .pH g3x.fam @(#)fam	30.3 of 1/19/86
+.nr X
+.if \nX=0 .ds x} FAM 3X "Specialized Libraries" "\&"
+.if \nX=1 .ds x} FAM 3X "Specialized Libraries"
+.if \nX=2 .ds x} FAM 3X "" "\&"
+.if \nX=3 .ds x} FAM "" "" "\&"
+.TH \*(x}
+.SH NAME
+fam \- File Alteration Monitor (FAM) library routines
+.SH SYNOPSIS
+.nf
+.B #include <fam.h>
+.P
+.B "extern int FAMOpen(FAMConnection* fc);"
+.PP
+.B "extern int FAMClose(FAMConnection* fc);"
+.PP
+.B "extern int FAMMonitorDirectory(FAMConnection *fc,"
+.B "                               char *filename,"
+.B "                               FAMRequest* fr,"
+.B "                               void* userData);"
+.PP
+.B "extern int FAMMonitorFile(FAMConnection *fc, 
+.B "                          char *filename,"
+.B "                          FAMRequest* fr,"
+.B "                          void* userData);"
+.PP
+.B "extern int FAMMonitorRemoteDirectory(FAMConnection *fc,"
+.B "                                     char *hostname,"
+.B "                                     char *filename,"
+.B "                                     FAMRequest* fr,"
+.B "                                     void* userdata);"
+.PP
+.B "extern int FAMMonitorRemoteFile(FAMConnection *fc,
+.B "                                char *hostname,"
+.B "                                char *filename,"
+.B "                                FAMRequest* fr,"
+.B "                                void* userdata);"
+.PP
+.B "int FAMSuspendMonitor(FAMConnection *fc, FAMRequest *fr);"
+.PP
+.B "int FAMResumeMonitor(FAMConnection *fc, FAMRequest *fr);"
+.PP
+.B "int FAMCancelMonitor(FAMConnection *fc, FAMRequest *fr);"
+.PP
+.B "int FAMNextEvent(FAMConnection *fc, FAMEvent *fe);"
+.PP
+.B "int FAMPending(FAMConnection* fc);"
+.PP
+.B "typedef struct {"
+.B "    int fd;"
+.B "} FAMConnection;"
+.PP
+.B "#define FAMCONNECTION_GETFD(fc)      (fc->fd)"
+.PP
+.B "typedef struct {"
+.B "    int reqnum;"
+.B "} FAMRequest;"
+.PP
+.B "enum FAMCodes { FAMChanged=1, FAMDeleted=2, FAMStartExecuting=3, "
+.B "    FAMStopExecuting=4, FAMCreated=5, FAMMoved=6, FAMAcknowledge=7,"
+.B "    FAMExists=8, FAMEndExist=9 };"
+.PP
+.B "typedef struct {"
+.B "    FAMConnection* fc;"
+.B "    FAMRequest fr;"
+.B "    char hostname[MAXHOSTNAMELEN];"
+.B "    char filename[NAME_MAX];"
+.B "    void *userdata;"
+.B "    FAMCodes code;"
+.B "} FAMEvent;"
+.PP
+.B "extern int FAMErrno;"
+.PP
+.B "extern char *FamErrlist[];"
+.PP
+.SH DESCRIPTION
+\fIFAM\fP monitors files and directories, notifying interested
+applications of changes.  Routines for communicating with the fam(1M)
+server process are found in ``libfam.a'', which is loaded if the
+option ``-lfam'' is used with cc(1) or ld(1).  The library
+``libC.a'' (``-lC'') must also be specified.
+.PP
+An application calls routines described here to establish a list of
+files for \fIfam \fPto monitor.  \fIFam \fPgenerates events on a socket to
+communicate with the application.  The \fIfam\fP process is started when
+the first connection from any application to it is opened.  It exits
+after all connections to it have been closed.
+.PP
+.SH USING FAM
+Here are the steps required to use \fIFAM \fPin an application:
+.PP
+.AL
+.LI
+.IP 1.
+Create a connection to \fIfam\fP by calling FAMOpen.  This routine
+will pass back a FAMConnection structure used in all \fIfam \fP
+procedures. 
+.IP 2.
+Tell \fIfam\fP which files and directories to monitor by calling
+FAMMonitorFile and FAMMonitorDirectory to express interest in
+files and directories, respectively.
+.IP 3.
+Select on the \fIfam\fP socket file descriptor and call
+FAMNextEvent when the \fIfam \fPsocket is active.  Alternatively,
+the application must call FAMNextEvent (or FAMPending)
+periodically to check the socket connection to \fIfam\fP to see
+if any new information has arrived.  If there are no events
+pending, FAMNextEvent blocks until an event occurs.
+.IP 4.
+When the application is through monitoring a file or directory, it
+should call FAMCancelMonitor.  If the application wants to
+temporarily suspend monitoring of a file or directory, it may call
+FAMSuspendMonitor.  When the application is ready to start
+monitoring again, it calls FAMResumeMonitor.
+.IP 5.
+Before the application exits, it should call FAMClose to free
+resources associated with files still being monitored and to close the
+connection to \fIfam.\fP
+.PP
+.SH DATA STRUCTURES
+.B "The FAMConnection Structure"
+.PP
+The FAMConnection data structure is created when opening a connection
+to \fIFAM.\fP  Subsequently it is passed into all \fIFAM \fPprocedures.  This
+structure has all the information in it to communicate to \fIfam\fP.
+.PP
+Use the macro FAMCONNECTION_GETFD to access the file descriptor inside the
+FAMConnection, rather than accessing it directly.
+.PP
+.B "The FAMRequest Structure"
+.PP
+When \fIfam\fP is called on to monitor a file, it passes back a
+FAMRequest structure.  This structure uniquely identifies the request
+so that it may be cancelled, using FAMCancelMonitor
+or suspended, using FAMSuspendMonitor.
+.PP
+.B "The FAMEvent Structure"
+.PP
+Changes to files and directories are encoded in the FAMEvent
+structure.  The \fIcode \fPfield of this structure contains one of the
+following enumeration constants:
+.TP .90i
+.SM FAMChanged
+Some value which can be obtained with fstat(1) changed for a file or
+directory being monitored.
+.TP
+.SM FAMDeleted
+A file or directory being monitored was deleted or its name was changed.
+This event is also generated when monitoring starts on a nonexistent file or directory.
+.TP
+.SM FAMStartExecuting
+An executable file or shared library
+being monitored started executing.  If multiple processes execute
+the same file, this event only occurs when the first process starts.
+.TP
+.SM FAMStopExecuting
+An executable file being monitored which was running finished.  If
+multiple processes from an executable are running, this event is only
+generated when the last one finishes.
+.TP
+.SM FAMCreated
+A file was created in a directory being monitored.  Note: this event
+is only generated for files created directly in a directory being
+monitored; subdirectories are not automatically monitored.
+.TP
+.SM FAMMoved
+FAMMoved events never occur.  The name remains defined so that
+programs that reference it will still compile.
+.TP
+.SM FAMAcknowledge
+After a FAMCancelMonitor, \fIfam \fPgenerates a FAMAcknowledge event.
+Also, if an invalid pathname is specified, \fIfam \fP generates a
+FAMAcknowledge event.
+.TP
+.SM FAMExists
+When the application requests a file be monitored, \fIfam\fP
+generates a FAMExists event for that file.  When the application
+requests a directory be monitored, \fIfam\fP generates a FAMExists
+event for that directory and every file directly contained in that
+directory.
+.TP
+.SM FAMEndExist
+When the application requests a file directory be monitored, a series of
+FAMExists events is generated as described above.  After the last
+FAMExists message, \fIfam \fPgenerates a FAMEndExist messsage.
+.PP
+If a FAM event applies to a file or directory being monitored, the
+FAMEvent's \fIfilename \fPfield contains the full pathname
+that was passed to fam.
+If an event applies to an entry in a monitored directory, the
+\fIfilename \fPfield contains the relative path only.  For
+example, if the directory \fI/usr/tmp/xyzzy \fPwere monitored,
+and the file \fI/usr/tmp/xyzzy/plugh \fP were deleted, a FAMDeleted
+event would be generated containing "plugh" in \fIfilename\fP.
+If the directory itself were deleted, \fIfilename \fPwould contain
+"/usr/tmp/xyzzy".
+.SH ERROR HANDLING
+If an error occurs inside of \fIFAM, \fPa global named FAMErrno is set to a
+non-zero value and the routine that generated the error in will return an error
+value.  The value of FAMErrno is valid until the next \fIFAM \fProutine is
+called.  The FAMErrno can be translated in to a character string using the
+global array FAMErrlist.
+.PP
+.SH PROCEDURES
+
+.B "FAMOpen, FAMClose"
+.PP
+The application opens a connection to \fIfam \fPby calling FAMOpen.  FAMOpen
+initializes the FAMConnection structure passed in to it and returns 0 if
+successful, otherwise -1.  The variable char* appName should be set to the 
+name of your application. The FAMConnection structure is passed to all
+subsequent \fIFAM \fPprocedure calls.
+
+FAMClose frees resources associated with files still being monitored and closes
+a \fIfam \fPconnection.  It returns 0 if successful and -1 otherwise.
+.PP
+.B "FAMMonitorDirectory, FAMMonitorFile"
+.PP
+FAMMonitorDirectory and FAMMonitorFile tell \fIFAM \fPto start
+monitoring a directory or file, respectively.  The parameters to this
+function are a FAMConnection (initialized by FAMOpen), a FAMRequest
+structure, a filename and a user data pointer.  The FAMRequest
+structure is modified to subsequently identify this request.  When
+the file or directory changes, a \fIFAM \fPevent structure will be
+generated.  The application can retrieve this structure by calling
+FAMNextEvent (see description under FAMNextEvent).
+.PP
+FAMMonitorDirectory monitors changes that happens to the contents of the
+directory (as well as the directory file itself); FAMMonitorFile monitors only
+what happens to a particular file.  Both routines return 0 if successful and -1
+otherwise.
+.PP
+The filename argument must be a full pathname.
+
+.B "FAMMonitorRemoteDirectory, FAMMonitorRemoteFile"
+.PP
+FAMMonitorRemoteDirectory and FAMMonitorRemoteFile are obsolete.
+Remote files and directories on mounted NFS filesystems may
+be monitored using FAMMonitorDirectory and FAMMonitorFile.
+There is not supported way to monitor files or directories
+that are not mounted.
+
+.B "FAMSuspendMonitor, FAMResumeMonitor"
+.PP
+FAMSuspendMonitor temporarily suspends monitoring of files or directories.
+This is useful when an application is not displaying information about files,
+when it is iconified, for example.  FAMResumeMonitor signals \fIfam \fPto
+start monitoring the file or directory again.  Changes which occur while
+monitoring is suspended are enqueued and delivered when monitoring is
+resumed.
+.PP
+Both of these routines take a FAMConnection and a FAMRequest structure.
+The FAMRequest Structure is returned from the FAMMonitorFile or
+FAMMonitorDirectory routines and return 0 if successful and -1 otherwise.
+.PP
+Because fam runs as an asynchronous process, FAMNextEvent may return
+a few events regarding a given request after that request has been suspended.
+
+.B "FAMCancelMonitor"
+.PP
+When an application is through monitoring a file or directory, it should
+call FAMCancelMonitor.  This routine will signal \fIfam \fPnot to monitor
+this directory anymore.  The FAMRequest structure is returned from the
+FAMMonitorFile or FAMMonitorDirectory routines.  FAMCancelMonitor returns 0 if
+successful and -1 otherwise.
+.PP
+
+.B "FAMPending, FAMNextEvent"
+.PP
+FAMPending returns 1 if an event waiting, 0 if no event is waiting, and -1 if
+there is an error.  This routine returns immediately to the caller.
+.PP
+FAMNextEvent will get the next \fIFAM \fPevent (file or directory change).  If 
+there are no \fIFAM \fPevents waiting, then the calling application blocks
+until a \fIFAM \fPevent is received (from fam).
+.PP
+There are two ways to for applications to receive \fIFAM \fPevents:
+.PP
+.AL
+.LI
+1. The Select approach - The application selects on the file
+    descriptor returned from FAMOpen, in the FAMConnection structure.
+    When this file descriptor becomes active, the application calls
+    FAMNextEvent to retrieve the pending \fIFAM \fPevent.
+.PP
+2. The Polling approach - The application calls FAMPending
+    periodically (usually when the system is waiting for input).
+    When FAMPending returns with a positive return value, the
+    application calls FAMNextEvent to retrieve the pending \fIFAM \f
+    Pevents.
+.PP
+FAMNextEvent reads any information that is on the \fIfam \fPsocket,
+and returns it to the application in the form of a FAMEvent.
+.PP
+FAMNextEvent returns 1 if successful and -1 otherwise.
+
+
+.SH SEE ALSO
+fam(1M).
+.SH BUGS
+The FAMMoved event is not currently supported.
+.PP
+FAMNextEvent may not initialize the FAMEvent's filename field
+for FAMEndExist and FAMAcknowledge events.
+Use the request number to determine the file or directory
+to which those events refer.
+.PP
+The FAMErrno variable is not set when errors occur.
+.PP
+When a shell script is run, notification is generated for the shell
+executing the script, typically sh(1) or csh(1).
+.PP
+Each process is limited to 1000 active requests at a time.
+

@@ -1,0 +1,451 @@
+'\"macro stdmacro
+.nr X
+.if \nX=0 .ds x} PADC 1 "" "\&"
+.if \nX=1 .ds x} PADC 1 ""
+.if \nX=2 .ds x} PADC 1 "" "\&"
+.if \nX=3 .ds x} PADC "" "" "\&"
+.TH \*(x}
+.SH NAME
+\f4padc\fP \- process activity data collector
+.SH SYNOPSIS
+\f4padc\fP
+\f4\-sr\fP
+[\f4\-I \f2len\f1]
+[\f4\-h \f2pri\f1]
+[\f4\-b \f2bufsz\f1]
+[\f4\-t \f2time\f1]
+.PP
+\f4padc\fP
+\f4\-sr\fP
+[\f4\-i\fP]
+[\f4\-I \f2len\f1]
+[\f4\-h \f2pri\f1]
+[\f4\-b \f2bufsz\f1]
+[\f4\-t \f2time\f1]
+.br
+.ti +10
+[\f4\-p \f2pid\f1]
+.SH DESCRIPTION
+\f4padc\fP
+traces various aspects of the activity of a process or group of processes
+and writes the raw trace data to standard output.
+The normal mode of operation would be to feed the output of
+\f4padc\fP(1)
+to \f4par\fP(1) to be formatted or summarized.
+The system calls and scheduling history of a process or of
+the system as a whole can be traced.
+Only one
+\f4padc\fP(1)
+process can be active on a system at any given time.
+.PP
+By default,
+\f4padc\fP
+traces the requested events for all processes.
+The
+.B \-r
+option requests scheduling events to be traced, the
+.B \-s
+option requests system calls to be traced.
+One of the above 2 options must be specified.
+Process supplied events are traced with either option.
+A process can supply a string by writing to
+\f4/dev/par\fP.
+This string is time stamped and tagged so
+\f4par\fP(1)
+can properly report when and by whom it was sent.
+\f4padc\fP
+can also collect information for a set of processes by specifying
+one or more
+.BR \-p
+options.
+The traced process(es) must belong to the current user unless the user
+has super-user privilege.
+If the
+.BR \-i
+option is given, all future children of the specified process(es) will
+inherit the parents tracing options.
+\f4padc\fP
+will continue to trace until either the time in seconds specified with the
+.B \-t
+option has elapsed or until
+\f4padc\fP
+receives a
+.B SIGINT
+or a
+.B SIGHUP
+signal.
+\f4padc\fP
+will respond by detaching from any traced process and
+the process(es) will continue running normally.
+.PP
+The execution of traced processes is not affected except that they may be
+momentarily blocked while the tracer is emptying the
+trace buffers.
+.PP
+\f4padc\fP
+reads its information from the special
+device
+.B /dev/par
+and outputs the raw binary data to standard output.
+The par device buffers the trace data in 2 16K buffers.
+Even so, it is possible that these buffers fill before
+\f4padc\fP
+gets a chance to read them. 
+In this case an overflow event is generated.
+The overflow count is accumulated over the entire
+\f4padc\fP
+run.
+To minimize the likelihood of overflow, the priority of
+\f4padc\fP
+can be changed with the
+.B \-h
+option to make it a arbitrary priority process.
+By default,
+\f4padc\fP
+attempts to run itself as a non-preemptive real-time process.
+It must be run as the
+super-user to have permission to do this.
+.PP
+Some system calls (e.g. \f4read\fP) have potentially lots of data
+associated with them.
+\f4padc\fP always collects system call arguments but offers some
+control over this 'indirect' data via the
+\f4\-I\fP option.
+A value of 0 will disable the collection of any 'indirect' data.
+The maximum value is determined by the operating system - currently
+4096 bytes.
+Note that setting the collection length to a large number greatly
+increases the probability of an overflow.
+.PP
+Each event is time stamped with a compressed version of the system time
+as reported by \f4gettimeofday\fP(3B).
+The default resolution is 10 mS, but
+\f4padc\fP
+attempts to turn on the higher resolution clock (see \f4ftimer\fP(1))
+but requires super-user privilege to do so.
+The time stamps are a single 32 bit word encoded with the number of
+seconds in the top 11 bits and the number of microseconds in the
+bottom 21 bits.
+.PP
+To help minimize the effect that
+\f4padc\fP
+has on the traced system,
+\f4padc\fP
+buffers its data in a 128K byte buffer before writing it out to
+.IR stdout .
+This buffer size may be changed with the
+.B \-b
+option.
+Setting the buffer size to 0 instructs
+\f4padc\fP
+to line buffer all output.
+This is useful for a more interactive feel.
+\.".PP
+\."The format of the ascii debug output file, padc.debug, is described below.
+\."Each event type has a 1 or 2 character opcode, followed by the data
+\."associated with the event.
+\.".TP 5
+\.".B RO
+\."A process has been switched out.
+\.".TP 5
+\.".B \-a
+\."Trace page references.
+\."The process activity driver will force every page
+\."change within each region to cause a fault, thus all the page references
+\."can be monitored.
+\."The format of the page references data is as follows:
+\.".sp .5v
+\.".in +5n
+\."A
+\.".I <pregtype> <address>
+\.".in -5n
+\.".sp .5v
+\.".I pregtype
+\."is one of the "pregion type" values defined in <sys/region.h>.
+\.".I address
+\."is the user virtual address of the referenced page.
+\.".TP 5
+\.".B \-f
+\."Trace page faults.
+\."Address translation page faults (valid pages
+\."not in memory) and page reference faults (valid page in memory, but hardware
+\."valid bit disabled to emulate hardware reference bit) will be monitored.
+\."The format of the page fault data is as follows:
+\.".in +5n
+\."F
+\.".I <pregtype> <address>
+\.".in -5n
+\.".TP 5
+\.".B \-s
+\."Intercepts the  system calls and signals of the process(es).
+\."The number of
+\."the system call, its arguments and result are printed on the standard output.
+\."String arguments are
+\."dereferenced and printed as the values instead of addresses.
+\."The formats look like:
+\.".sp .5v
+\.".in +5n
+\."C
+\.".I <pid><sys><value><cpuid><string><num><args>
+\.".br
+\."or
+\.".br
+\."E
+\.".I <pid><sys><value><cpuid><string><num><args>
+\.".in -5n
+\."where
+\.".RS 10
+\.".PD 0
+\.".TP 10
+\."C
+\."system call
+\.".TP 10
+\."E
+\."system call error
+\.".TP 10
+\.".I pid
+\."process id
+\.".TP 10
+\.".I sys
+\."system call number
+\.".TP 10
+\.".I value
+\."the return value of the system call
+\.".TP 10
+\.".I cpuid
+\."on  the processor
+\.".I cpuid
+\."that system call is executed
+\.".TP 10
+\.".I string
+\."0 = no string argument
+\.".br
+\."1 = 1 string argument
+\.".br
+\."2 = 2 string arguments
+\.".br
+\.".TP 10
+\.".I num
+\."number of arguments
+\.".TP 10
+\.".I args
+\."arguments
+\.".RE
+\.".sp .5v
+\.".TP 5
+\.".B \-r
+\."Trace scheduling history.
+\."This option provides the information about the processes added
+\."to the run queue, which processes called swtch() to give up CPU, and the
+\."processes who gained the CPU to run.
+\."Under this option, the profiling clock period is set to
+\."1.11 milliseconds, which is used for time-stamping each event.
+\."Since  this option
+\."is used to monitor the scheduling history that is relevant to
+\."all the processes, it is automatically changed to multi-processes mode.
+\."This option produces four different formats:
+\.".sp
+\.".RS
+\."RR
+\.".I <pid> <pri> 0 <rtpri> <cpuid> <timestamp>
+\.".br
+\.".RS 5
+\.".PD 0
+\.".TP 10
+\."RR
+\."the process is put into the run queue
+\.".TP 10
+\.".I pid
+\."process id
+\.".TP 10
+\.".I pri
+\."process priority
+\.".TP 10
+\.".I rtpri
+\."real-time priority
+\.".TP 10
+\.".I cpuid
+\."processor ID (on MP systems)
+\.".TP 10
+\.".I timestamp
+\."profiling clock
+\.".RE
+\.".sp
+\."RO
+\.".I <pid><pri><reasons><rtpri><cpuid><timestamp>
+\.".RS 5
+\.".PD 0
+\.".TP 10
+\."RO
+\."the process that called swtch() to give up the CPU
+\.".TP 10
+\.".I reasons
+\."the reason for calling swtch():
+\.".RS 10
+\.".PD 0
+\.".TP 7
+\."0x01 =
+\."must run on other CPU
+\.".TP 7
+\."0x02 =
+\."wait for semaphore
+\.".TP 7
+\."0x04 =
+\."preempted
+\.".TP 7
+\."0x08 =
+\."yield
+\.".TP 7
+\."0x10 =
+\."stopped by signal
+\.".TP 7
+\."0x20 =
+\."process exit
+\.".RE
+\.".RE
+\.".sp
+\."RN
+\.".I <pid> <pri> <idle> <rtpri> <cpuid> <timestamp>
+\.".RS 5
+\.".PD 0
+\.".TP 10
+\."RN
+\."the process that gains control of the CPU
+\.".TP 10
+\.".I idle
+\."the reasons for those processes that are on the run queue and have 
+\."higher priority but are ineligible to run:
+\.".RS 10
+\.".PD 0
+\.".TP 7
+\."0x01 =
+\."kernel stack is used on another CPU
+\.".TP 7
+\."0x02 =
+\."not in core
+\.".TP 7
+\."0x04 =
+\."only allowed to run on other CPU
+\.".TP 7
+\."0x08 =
+\."FP on another CPU
+\.".TP 7
+\."0x10 =
+\."non-runnable graphics process
+\.".TP 7
+\."0x20 =
+\."run queue is null
+\.".RE
+\.".RE
+\.".sp
+\."RI
+\.".I <cpuid> <idle> <timestamp>
+\.".RS 5
+\.".PD 0
+\.".TP 10
+\."RI
+\."the CPU is idle
+\.".TP 10
+\.".I idle
+\."the reasons for those processes who are on the run queue but ineligible 
+\."to run for the moment (see above).
+\.".RE
+\.".RE
+\.".sp
+\.".PP
+\."Additional system information is formatted as follows:
+\.".sp .5v
+\.".in +5n
+\."L
+\.".I <number>
+\.".in -5n
+\.".RS 10
+\.".PD 0
+\.".TP 10
+\."L
+\.".I lbolt
+\.".TP 10
+\.".I number
+\."time in HZ since last boot (HZ is defined in <sys/param.h>)
+\.".RE
+\.".sp
+\.".in +5n
+\."S
+\.".I <time>
+\.".in -5n
+\.".RS 10
+\.".PD 0
+\.".TP 10
+\."S
+\."system time
+\.".TP 10
+\.".I time
+\."the system time used by the process
+\.".RE
+\.".sp
+\.".in +5n
+\."U
+\.".I <time>
+\.".in -5n
+\.".RS 10
+\.".PD 0
+\.".TP 10
+\."U
+\."user time
+\.".TP 10
+\.".I time
+\."the user time used by the process
+\.".RE
+\.".sp
+\.".in +5n
+\."O
+\.".I <number>
+\.".in -5n
+\.".RS 10
+\.".PD 0
+\.".TP 10
+\."O
+\."overflow
+\.".TP 10
+\.".I number
+\."the number of the events overflowed the buffer since the last O token
+\.".RE
+\.".sp
+\.".in +5n
+\."N
+\.".I <pid> <name>
+\.".in -5n
+\.".RS 10
+\.".PD 0
+\.".TP 10
+\."N
+\."dump the process name when it is first time traced
+\.".TP 10
+\."name
+\."process name
+\.".RE
+\.".sp
+\.".in +5n
+\."K
+\.".I <pid>
+\.".in -5n
+\.".RS 9
+\.".PD 0
+\.".TP 10
+\."K
+\."process was killed
+\.".RE
+\.".sp
+.SH FILES
+\f4/dev/par\fP
+.SH LIMITATIONS
+To avoid deadlock and resource exhaustion problems, events generated by
+\f4padc\fP
+itself are not recorded.
+This can lead to some inexplicable gaps in the schedule trace.
+.SH "SEE ALSO"
+\f4ftimer\fP(1),
+\f4par\fP(1),
+\f4schedctl\fP(2),
+\f4gettimeofday\fP(3B),
+\f4par\fP(7).

@@ -1,0 +1,123 @@
+'\"macro stdmacro
+.\" Copyright (c) 1983 Regents of the University of California.
+.\" All rights reserved.  The Berkeley software License Agreement
+.\" specifies the terms and conditions for redistribution.
+.\"
+.\"	@(#)getnetent.3n	6.3 (Berkeley) 5/19/86
+.\"
+.if n .pH man3.getnetent @(#)getnetent	30.3 of 2/1/86
+.TH NS_LOOKUP 3C
+.UC 5
+.SH NAME
+ns_lookup, ns_list, ns_close \- lookup interface to name service daemon
+.SH SYNOPSIS
+.nf
+.ft 3
+#include <ns_api.h>
+.PP
+.ft 3
+int ns_lookup(ns_map_t *map, char *domain, char *table, const char *key, char *library, char *buf, size_t len);
+.PP
+.ft 3
+FILE *ns_list(ns_map_t *map, char *domain, char *table, char *library);
+.fi
+.PP
+.ft 3
+void ns_close(ns_map_t *map);
+.fi
+.PP
+.ft 3
+extern int _getXbyY_no_stat;
+.fi
+.SH DESCRIPTION
+.I ns_lookup, ns_list
+and 
+.I ns_close
+are part of the public interface to the UNS name service daemon,
+nsd(1M).
+Ordinarily they are called through name service library routines
+such as getpwnam(3C) and gethostbyname(3N).
+.PP
+When 
+.I ns_lookup
+is called with a particular domain, table and key, it first
+will mmap in a global shared cache database corresponding to the
+table name and attempt to look up the key.  The mdbm database cache
+information is stored in the passed map structure.  If the lookup
+fails then the routine will open a file associated with
+the key, table and domain, and parse the data, in a similar way
+to flat configuration files.  The file opened is generated on the
+fly by the cache miss daemon
+.I nsd(1M).
+.PP
+The daemon will determein the resolve order for the request
+then call routines in shared libraries for each of the protocols
+supported to answer the request.  Once the data is found it is 
+stored in the global shared cache database and a file is 
+generated in memory using the format of the flat text file.
+The value, if found is returned in buf.  Request result types
+can be found in 
+.I ns_api.h.
+.PP
+The map structure contains state for the cache file.  The structure
+is defined as:
+.sp
+.nf
+typedef struct {
+	time_t		m_version;
+	int		m_flags;
+	MDBM		*m_map;
+	int		m_stayopen;
+} ns_map_t;
+.fi
+.sp
+The \fBm_version\fP field contains a timestamp; any cache record older
+than this will be ignored.  The \fBm_map\fP field contains a pointer
+to the map file state and should be null on first call.  The
+\fBm_stayopen\fP field is unused by ns_lookup. The \fBm_flags\fP bit
+field contains state for ns_lookup and should be set to zero on first
+call, unless the dynamic creation of tables is desired.  In this case,
+the NS_MAP_DYNAMIC bit of the m_flags field should be set.  This will
+cause ns_lookup() or ns_list() to attempt to create the table if it
+does not exist.  The mapping may be removed by a call to \fBns_close\fP,
+see below.
+.PP
+.I ns_list
+will return a file handle to an NFS mounted file containing a list
+of all entries for a given domain and table.
+.PP
+.I ns_close
+should be called to remove a cache mapping from memory.  The \fBns_lookup\fP
+routine will open a cache file and map it into the process memory on first
+use, and it remains available for the life of the process.  The \fBns_close\fP
+routine can be used to recover the virtual memory space or force a reopen of
+the cache.  This must be called before releasing the memory for the ns_map_t
+structure if dynamically allocated.
+.PP
+Each of the name service API routines call stat(2) on the local files and
+ignore anything in the cache older than these files.  Since the stat call
+is quite expensive this may be skipped by setting the global integer
+_getXbyY_no_stat to a non-zero value.
+.SH DYNAMIC TABLES
+Tables that are not listed in \fBnsswitch.conf(4)\fP may be created
+by associating them with a parent table.  A parent table
+is one that is marked with the \fBdynamic\fP attribute.  Parent tables
+cannot support key lookup, but exist only to contain  and to provide
+protocol information to dynamically created tables.  See
+\fBnsswitch.conf(4)\fP for more information.  To use dynamic tables,
+the m_flags field of the nsd_map_t passed to ns_lookup or ns_list must
+have the NS_MAP_DYNAMIC bit set and the table name must reference both
+the parent table and the new dynamic table.  The format of the
+dynamic table reference is the name of the parent table name followed by a
+colon followed by the name of the dynamic table name.  For the
+parent table \fBautomount\fP, the reference for the dynamic table
+\fBauto_home\fP would then be \fB"automount:auto_home"\fP. 
+.SH FILES
+/usr/include/ns_api.h
+.SH "SEE ALSO"
+nsd(1M), networks(4), nsswitch.conf(4)
+.SH DIAGNOSTICS
+The ns_lookup routine returns an integer result code which is one of:
+NS_SUCCESS, NS_NOTFOUND, NS_UNAVAIL, NS_TRYAGAIN, NS_BADREQ, NS_FATAL
+and NS_NOPERM. The ns_list routine will return a FILE pointer which is
+null on failure with errno set.

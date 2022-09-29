@@ -1,0 +1,228 @@
+#!./perl
+#
+# if the RAWIDB environment exists, run the install scripts -n and convert
+#   to IDB file format.
+# else
+#   just run the install script.
+#
+# Options are to generate perl, man, and src IDB.
+#
+# "$Id:"
+
+BEGIN { @INC = ('lib'); }
+use Config;
+use Cwd;
+
+## IDB configuration:
+$bin_IDB = "PERL";
+$lib_IDB = "PERL_LIB";
+$catman_IDB = "PERL_MAN";
+$src_IDB = "PERL_SRC";
+$installsrcdir = "usr/share/src/perl$]";
+$mantmpdir = "../catman";
+
+$which = shift;
+die "missing required argument [perl|man|src]\n" unless $which;
+$RAWIDB = $ENV{"RAWIDB"};
+if ($ENV{'DEBUG'}) {
+    open(DEBUG,">>$ENV{'DEBUG'}");
+} else {
+    open(DEBUG, ">/dev/null");
+}
+
+$ver = $];
+$release = substr($ver,0,3);   # Not used presently.
+$patchlevel = substr($ver,3,2) + 0;
+
+$cwd = cwd;
+if ($which eq "perlman") {
+    chdir($mantmpdir);
+    $MAN = cwd;
+    chdir($cwd);
+    &perlman();
+} elsif ($which eq "manman") {
+    chdir($mantmpdir);
+    $MAN = cwd;
+    chdir($cwd);
+    &manman();
+} elsif ($RAWIDB) {
+    die "missing environment: SRC\n" unless $ENV{"SRC"};
+    $cwd = cwd;
+    chdir($mantmpdir);
+    $MAN = cwd;
+    chdir($ENV{"SRC"});
+    $SRC = cwd;
+    chdir($cwd);
+    $src_offs = substr($cwd, length($SRC)+1);
+    $man_offs = substr($MAN, length($SRC)+1);
+    open(OUT, ">>$RAWIDB");
+    if ($which eq "perl") {
+        &idbperl();
+    } elsif ($which eq "man") {
+        &idbman();
+    } elsif ($which eq "src") {
+        &idbsrc();
+    }
+    close(OUT);
+} else {
+    if ($which eq "perl") {
+        system("./installperl");
+    } elsif ($which eq "man") {
+        system("./installman");
+    } elsif ($which eq "src") {
+        print STDERR "no normal src install\n";
+    }
+}
+
+exit(0);
+
+########################################################################
+
+sub idbperl
+{
+    my($idb);
+
+    $rc = open(CMD, "./perl installperl -n 2>&1 |");
+
+    my($line, $cmd, $l, $r, $format, $src, $dest, $mode, $extra);
+    while(<CMD>) {
+	print DEBUG;
+        last if /^Warning: perl appears in your path/;
+        $extra = "";
+        ($cmd, $l, $r) = split;
+        if ($cmd eq "cp") {
+            print OUT $line if $line;
+            $line = "";
+            $src = $l;
+            ($dest = $r) =~ s,^/,,;
+            if ($dest =~ m,/s?bin|usr/lib,) {
+                $idb = $bin_IDB;
+                $mode = "555";
+                if ($src =~ /\.so(\.\d+)?$/) {
+                    $extra = "nostrip ";
+                }
+            } elsif ($dest =~ m,/lib/perl,) {
+                $idb = $lib_IDB;
+                $mode = "444";
+            } elsif ($dest =~ m,man/,) {
+                $idb = $catman_IDB;
+                $mode = "444";
+            }
+            $format = "f %s root sys %s $src_offs/$src $extra$idb\n";
+            $line = sprintf $format, $mode, $dest;
+        } elsif ($cmd eq "chmod") {
+            ($dest = $r) =~ s,^/,,;
+            $line = sprintf $format, $l, $dest;
+        } elsif ($cmd eq "Installing") {
+            ($dest = $l) =~ s,^/,,;
+            $dest =~ s,/man,/cat,;
+            $dest =~ s,\d$,z,;
+            ($src = $dest) =~ s,^.*/,,;
+            $src = "$man_offs/$src";
+            print OUT "f 444 root sys $dest $src $catman_IDB\n";
+        } else {
+	    print STDERR "skipped: $_";
+	}
+    }
+    $rc = close(CMD);
+    print OUT $line if $line;
+
+    # a few SGI-specific extras:
+    my($installprivlib) = $Config{'installprivlib'};
+    $installprivlib =~ s,^/,,;
+    my($installarchlib) = $Config{'installarchlib'};
+    $installarchlib =~ s,^/,,;
+    print OUT "l 0 root sys usr/lib32/libperl.so . symval($Config{'libperl'}) $bin_IDB\n" if ($Config{"shrpdir"} && $Config{"shrpdir"} ne "none");
+    print OUT "l 555 root sys usr/bin/perl $src_offs symval(../sbin/perl$]) $bin_IDB\n";
+    print OUT "l 555 root sys usr/bin/perl5 $src_offs symval(../sbin/perl$]) $bin_IDB\n";
+    print OUT "l 555 root sys usr/sbin/perl $src_offs symval(perl$]) $bin_IDB\n";
+    print OUT "l 555 root sys usr/sbin/pstruct $src_offs symval(c2ph) $bin_IDB\n";
+    print OUT "f 544 root sys $installprivlib/make.libs $src_offs/../build/make.libs $lib_IDB exitop(\"\${rbase}/$installprivlib/make.libs\")\n";
+}
+
+########################################################################
+
+sub idbman
+{
+    my($idb) = $catman_IDB;
+
+    $rc = open(CMD, "./perl installman -n " .
+	       "--man1dir=/usr/share/catman/u_man/man1 " .
+	       "--man3dir=/usr/share/catman/p_man/man3/perl5 2>&1 |");
+
+    my($doffs) = $src_offs;
+    my($p, $i, $j, $cmd, $sec, $ofcl, $src, $r, $targ);
+    while(<CMD>) {
+        chomp;
+        if (/^chdir/) {
+            ($cmd, $dir) = split;
+            if ($dir =~ m,^/,) {
+                $doffs = $src_offs;
+            } else {
+                $doffs = "$src_offs/$dir";
+            }
+            next;
+        }
+        next unless m,\.\./perl,;
+        ($p, $i, $j, $cmd, $sec, $ofcl, $src, $r, $targ) = split;
+        $targ =~ s,^/,,;
+        $targ =~ s,/man,/cat,;
+        $targ =~ s,tmp$,z,;
+        ($src = $targ) =~ s,.*/,,;
+        $src = "$man_offs/$src";
+        print OUT "f 444 root sys $targ $src $idb\n";
+    }
+}
+
+########################################################################
+
+sub idbsrc
+{
+    my($idb) = $src_IDB;
+    my(@morefiles) = qw(config.sh);
+    $rc = open(LIST, "<MANIFEST") || die "Can't open MANIFEST? $!\n";
+
+    my($file, $desc, $mode);
+    while(<LIST>) {
+        ($file, $desc) = split;
+        $mode = (stat($file))[2] & 0777;
+        printf OUT ("f %o root sys %s/%s %s/%s %s\n", $mode, $installsrcdir, 
+                    $file, $src_offs, $file, $idb);
+    }
+    $rc = close(LIST);
+    foreach $file (@morefiles) {
+        print OUT "f 444 root sys $installsrcdir/$file $src_offs/$file $idb\n";
+    }
+}
+
+########################################################################
+
+sub perlman
+{
+
+    # copied straight out of installperl (with minor mods):
+    my(@manpages) = qw();
+    my($man1ext) = $Config{"man1ext"};
+    for (@manpages) {
+        ($new = $_) =~ s/man$/$man1ext/;
+        $new =~ s,.*/,,;
+        open(MI,$_) || warn "Can't open $_: $!\n";
+        open(MO,">$MAN/$new") || 
+            warn "Can't install $MAN/$new: $!\n";
+        print MO ".ds RP Release $release Patchlevel $patchlevel\n";
+        while (<MI>) {
+            print MO;
+        }
+        close MI;
+        close MO;
+    }
+
+}
+
+########################################################################
+
+sub manman
+{
+    # fake the install script to put the files where I want them...
+    system("./perl installman --man1dir=$MAN --man3dir=$MAN");
+}

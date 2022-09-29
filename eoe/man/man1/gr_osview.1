@@ -1,0 +1,1106 @@
+'\"macro stdmacro
+.\"
+.\" 		 Copyright (C) 1989, Silicon Graphics, Inc.
+.\"
+.\"  These coded instructions, statements, and computer programs  contain 
+.\"  unpublished  proprietary  information of Silicon Graphics, Inc., and
+.\"  are protected by Federal copyright law.  They  may  not be disclosed
+.\"  to  third  parties  or copied or duplicated in any form, in whole or
+.\"  in part, without the prior written consent of Silicon Graphics, Inc.
+.\"
+.TH GR_OSVIEW 1 local "Silicon Graphics, Inc."
+.SH NAME
+gr_osview \- graphical system monitor
+.SH SYNOPSIS
+gr_osview
+.RB [ -hVLeapzEF ]
+.RB [ -D file]
+.RB [ -s file]
+.RB [ -N [user@]node]
+.RB [ -n namelist]
+.SH DESCRIPTION
+This command provides a graphical display of usage of certain
+types of system resources.
+This display provides a real-time window into the overall operation of
+the system.
+The main display element is a rectangular area which is filled by uniquely
+colored bands, each band signifying a sampled variable measuring system
+performance.
+This rectangular area is called a \f2bar\fP throughout the rest of this
+description.
+.PP
+Each bar in a window has a header which consists of the bar title plus
+the names of each variable displayed, in colors to match 
+those used for each band in the bar.
+The colors used, as well as size, layout, background and foreground colors
+may be modified.
+.PP
+\f2gr_osview\fP is implemented using a client-server model.
+The server side acts as a simple display engine, while the client acts
+as a data generator.
+By default, client and server are invoked as a tightly coupled process
+for optimal performance.
+However, the client (data-collection) side can be automatically run
+on a remote machine while the server runs locally, allowing remote monitoring
+of system performance.
+Server and client operation can be used independently through the use
+of \f2gr_osview\fP "export" files, allowing recording and playback of
+performance monitoring sessions.
+.PP
+This man page describes \f3Version 2.2\fP of \f2gr_osview\fP.
+Setup files from previous versions of gr_osview are accepted,
+however remote operation is only possible with a \f2gr_osview\fP of the
+same version.
+.PP
+\f2gr_osview\fP is driven by a setup file.
+The setup file may be explicitly named on the command line, found through
+an environment variable, or in the caller's home directory.
+A complete description of the format and additional capabilities of the
+setup file is given below.
+.PP
+.SH OPTIONS
+The following options are supported:
+.TP 10
+-h
+Print a summary of the available options.
+.TP 10
+-D file
+This option specifies where the setup file will come from.
+If the file "-" is named, then the setup will be read
+from standard input.
+If this option is not specified, the environment variable GROSVIEW is
+checked for a setup file name.
+If this variable is not set, then a file named ".grosview" is scanned for
+in the invoker's home directory.
+If all this fails, a default setup of a single CPU usage bar is used.
+.IP
+\f2gr_osview\fP will automatically recognize a \f2gr_osview\fP "export" file
+if found instead of a setup file.
+This causes \f2gr_osview\fP to automatically act as a display server, 
+playing back the data in the file.
+.TP 10
+-s file
+This option specifies the creation of an "export" file.
+This file is an ASCII text file containing the information needed to 
+initialize the display server properly, followed by an arbitrary number
+of data samples.
+.TP 10
+-N [user@]host
+Contact the remote host, using the given user ID if specified, and monitor
+that host's performance on the local machine.
+The window border is forced in this case, and the argument is used as 
+the window title.
+If user is not specified, the user ID "guest" is used.
+.IP
+\f2gr_osview\fP will automatically attempt to re-connect to the remote
+system if the connection is lost for some reason.
+If system errors or other problems which would preclude successful
+reconnection are present, then \f2gr_osview\fP will simply exit.
+.TP 10
+-F
+This option suppresses text output.
+This can be useful in several situations, for instance when creating a
+very small \f2gr_osview\fP display where the text would be illegible
+anyway.
+As a side effect, max value and average counters, and the scale for absolute
+bars are suppressed.
+.TP 10
+-E
+This option directs \f2gr_osview\fP to act simply as a data generator, and
+an "export" file will be written to standard output, with continuous
+writing of sampled data until the program is killed.
+The \f3-D\fP option is handled as expected, except that if an "export"
+file is passed, \f2gr_osview\fP uses only the initialization information
+and generates new data samples from the running system.
+.TP 10
+-V
+Print the current version and copyright information for the program.
+.TP 10
+-a
+This option invokes a subset of the displayable bars that includes: cpu usage,
+memory usage, cpu wait time, system activity and graphics activity.
+.TP 10
+-p
+This option prints the window position and size after the window has been 
+laid out on standard input.
+This is useful for programming setup scripts.
+.TP 10
+-z
+This option enables "freeze" toggling.
+Sending SIGUSR1 (see
+.IR signal ( 2 ))
+to
+.I gr_osview
+will freeze and unfreeze the display.
+If currently generating a \f2gr_osview\fP "export" file, it will also
+stop any output to the file.
+This is useful when doing screen dumps or snapshoting particular events.
+.TP 10
+-e
+This option is only effective when \f2gr_osview\fP is reading an "export"
+file.
+It instructs \f2gr_osview\fP to exit when the data in the file is exhausted.
+By default, the display window is left up, frozen at the last data sample.
+.TP 10
+-L
+This option causes 
+.I gr_osview
+to lock down those pages which it actually uses while running and 
+prevent the process from swapping.
+This enables a minimum number of pages to be locked while keeping
+.I gr_osview
+performing as a real-time display under heavy system load.
+.TP 10
+-n
+This option causes 
+.I gr_osview
+to use a kernel namelist other than the default, 
+.B /unix.
+This option is currently not supported with -N.
+.SH OVERVIEW
+There are three potential formats for each bar, with various optional features.
+Each bar has a header line, which gives the bar name and the names
+of its parameters, plus some additional information depending on the bar
+type.
+Below this is the actual bar.
+Parameters are such things as the various elements of CPU usage: user time,
+system time, interrupt overhead and idle time.
+The text of a parameter name in the header is colored to match the
+associated part of the bar display.
+.PP
+The most common format is called
+\f2moving bar format\f1.
+In this format, the information is displayed as a sectioned bar, each section
+being a different color.
+As time passes, each section will be redrawn with its length adjusted
+proportionally to the value of the parameter.
+To obtain smooth motion, and damp peaks and valleys which would otherwise
+be visually confusing, each section of the bar is averaged over a specific
+number of intervals.
+For instance, if a parameter doubles in value, the section will gradually
+double in length over a certain number of samples.
+By setting the sample interval, the user can control the update rate of the bar
+information.
+The default is 2/10 second, which provides smooth visual motion.
+A bar border is supplied by default which includes a heavy lower border
+marked in 1/10 increments for easier estimation.
+This border can be suppressed completely, or the ruler can be suppressed.
+.PP
+There are two subformats for the moving bar: relative and absolute.
+In relative mode, the displayed values must all add up to 100% and are
+relative only to each other.
+In absolute mode, the bar displays an indicator
+of events per second over the sample interval,
+and the header includes the sample interval.
+The bar itself will auto-scale; this means that the scale used will
+vary automatically (with some hysteresis) as the number of events changes.
+The scale value being used is displayed above the right-hand edge of the
+bar.
+The property of relative or absolute display is a characteristic
+of the type of data being displayed, and is not under control of the user.
+.PP
+The scale value can be
+.IR locked ,
+in which case autoscaling is disabled, and the scale value is inverted in
+color to indicate locked operation.
+The user may specify that the bar scale be locked and its value.
+If instead the user asks the scale to \f2creep\fP, the scale factor will
+only increase, and never decrease.
+.PP
+The second format is called
+\f2strip chart format\f1.
+Any moving bar may also be displayed as a strip chart.
+In this mode, instead of being displayed horizontally, the bar is drawn
+vertically at the right hand edge of the bar after moving the bar down
+by the size of a single sample.
+This forms a strip-chart effect.
+The number of samples and the sample interval can be changed.
+The header of an absolute bar displayed as a strip chart will indicate
+the overall time shown by the strip instead of the sample interval time.
+Finally, tick marks may be added to the strip to ease estimation.
+.PP
+If the strip chart format is used for an absolute bar type, and the
+scale is not locked, then autoscaling causes an additional action.
+When the scale changes, a red line is drawn through the bar at the
+point at which the scale changed, and the remainder of the bar is 
+drawn in a gray color, showing only the outline of the parameter values.
+This shows that the scale changed, and the grayed out data is invalid.
+.PP
+In either of the above bar formats, and if the bar type is absolute,
+then some additional display options are available.
+In
+\f2max value mode\f1,
+the bar display area is compressed and a text field is added to the right
+of the bar showing the maximum value ever achieved by the sum of the
+parameters.
+By default, this number is displayed as red on black, in the upper part of
+the bar area.
+If the user desires, then this maximum can be automatically reset to a lower
+value if the current value remains below it for some number of intervals.
+This gives the effect of a "peak" meter, holding a maximum long enough for
+the user to note it.
+.PP
+If
+\f2tracking mode\f1
+is enabled, then a text field is added at the right of the bar below
+the maximum value field showing the average of the sum of the parameters
+over an interval.
+By default, this number is displayed as blue on white.
+.PP
+Each of these modes displays a calculated events-per-second ratio.
+If the sample interval is much smaller than one second, then the displays
+will show the "burst" rate achieved at the sample interval.
+The system may not be able to sustain this rate over longer periods of time.
+To get an accurate measure at any interval, simply adjust the sample 
+interval as described below.
+.PP
+The number shown for each of these modes, as well as the value used for
+scaling, are usually calculated for a subset of the parameters shown in the
+bar.
+For example, if displaying memory usage, the counters and scale will not
+include the free memory in the system.
+.PP
+The third main format is
+\f2numeric format\f1.
+This format is currently only available for absolute value bar types.
+Instead of a graphic display, the bar is replaced by a text display area
+in which the actual values of the parameters are displayed.
+In contrast to the other displays, the parameter values are given over
+the whole sample interval rather than scaled to units per second.
+This allows a long sample time for slow changing parameters.
+.PP
+By default, the current values of the parameters are displayed in the same
+color as the graphical display would use just below each parameter name
+in the header.
+If
+\f2max value mode\f1
+is turned on, then a listing of the maximum value seen for each parameter
+is given below the current values, except that all text is displayed in the
+current maximum display foreground color, which is red by default.
+If \f2tracking mode\f1 is turned on, then the average numeric values are
+summed and
+displayed to the right in the foreground color, with an appropriate
+title.
+.PP
+The behavior of the \f2max value\fP and \f2average\fP modes is intuitively
+similar to that for a moving bar, except each parameter is handled 
+independently.
+.SH SETUP FILE
+The setup file provides a simple mechanism for initializing a large number
+of possible parameters for the
+.I gr_osview
+display.
+The setup file is an ASCII file.
+Comment lines are delimited by a # character in the first column, and blank
+lines are ignored.
+In addition, trailing comments may be added using a # character, after which
+all data on the line is ignored.
+Lines containing information may be classed into two types,
+.I monitor
+lines and
+.I option
+lines.
+.I Monitor
+lines describe the format of an individual bar, while
+.I option
+lines describe global parameters.
+The monitor bars in the
+.I gr_osview
+window are brought up in the same order they are found in the setup file.
+A particular monitor bar may be entered several times, possibly with many
+different options.
+.PP
+Each monitor line consists of a name followed by zero or more
+modifier options.
+The following monitor bars are available:
+.\" bufh		- monitor buffer header usage
+.RS 5
+.nf
+
+cpu		- monitor CPU usage
+rmem		- monitor real memory usage
+rmemc	- monitor real memory usage
+wait		- monitor time waiting for I/O
+sysact 	- monitor important system activity
+gfx		- monitor important graphics activity
+bdev		- monitor block device throughput
+fault	- monitor page faults
+tlb		- monitor TLB activity
+intr		- monitor interrupts
+pswap	- monitor page swapping activity
+nettcp	- monitor TCP protocol activity
+netudp	- monitor UDP protocol activity
+netip	- monitor IP layer activity
+netif	- monitor network interface activity
+disk		- monitor disk usage
+swp		- monitor logical swap space
+
+.fi
+.RE
+The
+.BR cpu ,
+.B netif
+and
+.B disk
+bars have special formats.
+The
+.B cpu
+bar may have an optional argument which indicates a particular CPU to
+monitor (if more than one is present in the system).
+In this case, the descriptor takes the form:
+.RS 5
+.nf
+
+cpu(n)		- monitor CPU number \f2n\f1
+
+.fi
+.RE
+If the word \f2sum\f1 is given instead, the bar monitors the sum of all
+CPU activity in the system in a single bar.
+.PP
+The
+.B netif
+bar may have an optional argument which indicates a particular interface to
+monitor, or it may indicate that only the sum of all network interface activity
+is to be monitored.
+By default, a bar is generated for each network interface on the system 
+except for the local loopback interface.
+If a name is given, the descriptor takes the form:
+.RS 5
+.nf
+
+netif(name)	- monitor interface name \f2name\f1
+
+.fi
+.RE
+Typical interface names are \f2et0\f1, for the built-in ethernet interface
+on the POWERSeries, \f2lo0\f1 for the local loopback interface, \f2enp0\f1
+for the standard Professional IRIS VMEbus ethernet card, and \f2ec0\f1 for
+the Personal IRIS built-in ethernet interface.
+If the word \f2sum\f1 is given instead, the bar monitors the sum of all
+interface traffic for the system.
+.PP
+The
+.B disk
+bar requires an argument describing the volume to monitor.
+The form of the descriptor is:
+.RS 5
+.nf
+
+disk(path)	- monitor the volume given by \f2path\f1
+
+.fi
+.RE
+The \f2path\f1 argument can name a filesystem in one of two ways.
+If it names a block special device, then that device is assumed to 
+contain an EFS or XFS filesystem, and usage is monitored with the special file
+name used as the bar header.
+Otherwise, the argument is assumed to name a file residing on some
+mounted volume.
+The path name passed in is used as the header.
+The bar scale is set at the number of megabytes of storage on the
+volume.
+.PP
+The scale number for the real memory bars, 
+.B rmem
+and
+.BR rmemc ,
+is the number of memory pages in the system.
+On current SGI systems, each page can be 4096 or 16384 bytes in length
+depending on the return value of the \f2getpagesize\f1(2) system call.
+In general, the larger page size is used on systems where \f2uname(1)\f1
+returns "IRIX64".
+For the 
+.BR sysact ,
+.BR gfx ,
+.BR intr ,
+.BR bdev ,
+.BR fault ,
+.BR pswap ,
+.BR netudp ,
+.BR netip ,
+.BR netif ,
+.B tlb
+bars, the scale will show the calculated number of events per second which
+would fill the bar.
+For the
+.BR disk
+bar, the scale value will show the total size of the disk in bytes.
+For the
+.BR swp
+bar, the scale value will show the total amount of logical swap.
+The
+.B cpu 
+and
+.B wait
+bars cannot be displayed as numeric bars.
+If the 
+.BR bdev ,
+.BR netudp ,
+.B netip
+or
+.B netif
+bars are displayed as numeric bars then additional information is
+available.
+.PP
+The following options may be supported for each of the above bar types.
+If the option is unsupported, it will be silently ignored by
+.IR gr_osview .
+.RS 5
+.nf
+
+strip		- display as a strip chart
+numeric		- display numeric values
+max		- add a maximum value numeric meter
+max(n)		- add a maximum value meter with reset interval n
+tracksum	- add an average value numeric meter
+tracksum(n)	- add an average value meter with interval n
+noborder	- suppress bar border
+interval(n)	- set sample interval in base units
+samples(n)	- set number of samples in strip chart
+attack(f)		- set attack speed of bar
+colors(c,...)	- set bar colors to use
+maxcolor(b,f)	- set maximum value display colors
+limcolor(b,f)	- set scale limit value display colors
+sumcolor(b,f)	- set tracking sum display colors
+lockscale(x)	- lock the scale value
+creepscale	- autoscaling will only increase the scale
+ticks(i,n)		- set strip chart tick marks
+
+.fi
+.RE
+A strip chart is a pictorial representation of a number of samples
+from the given bar, displayed vertically rather than horizontally.
+The header displays the total time covered by the bar, which
+is the interval times the number of samples.
+A numeric chart simply shows the monitored values as absolute numeric
+values rather then as pictorial values.
+.PP
+The
+.B max
+enables max value mode, while the
+.B tracksum
+option enables average value tracking mode.
+If the second form of
+.BR max ,
+is used, the argument indicates a number of intervals after which the
+max value will be reset to the current value, if the current value remains
+below the displayed max value.
+In the second form of
+.BR tracksum ,
+the argument specifies the number of intervals over which to average
+the value.
+This allows, for instance, a moving bar to react very quickly for good
+visual effect while the average value is computed over a longer interval
+for more accuracy.
+These values are displayed at the end of a bar,
+the \fBmax\fP value above the \fBtracksum\fP value.
+.PP
+If the
+.B noborder
+option is given, then the bar border is suppressed.
+.PP
+The
+.B interval
+option specifies the update interval of the bar, in base interval units.
+The base interval is set as a global option; see below.
+The argument to this option indicates the number of base interval units
+in the interval for this bar.
+For instance, if the base interval is .2 seconds, then an argument
+of "5" would indicate a 1 second interval.
+.PP
+The
+.B attack
+option specifies the percentage of the new value to be used in the
+rolling average calculation.
+This averaging is what makes each bar appear to move smoothly;
+changing the attack value can change the speed and appearance of a bar
+substantially.
+The value can range from 0.0 to 1.0; of course 0.0 indicates no movement of
+the bar ever, while 1.0 means instant change to the next value.
+.PP
+The
+.B colors
+option modifies the colors used for the bar.
+Starting from the first parameter in a bar, the colors are
+modified until either all parameters are modified or no more colors
+are specified.
+Each color specified in the argument is a color map index to use for
+that color.
+The 
+.BR maxcolor ,
+.B limcolor
+and
+.B sumcolor
+options set the background and foreground colors, respectively, of that type
+of display for this bar.
+.PP
+The
+.B lockscale
+option locks the scale value for the bar to the given value, disabling 
+autoscaling.
+A locked scale is indicated by the scale value being inverted
+(reverse video) in the display.
+If the numeric argument to 
+.B lockscale
+is suffixed by a 'k' or 'K', then the argument is multiplied by 1024,
+a 'm' or 'M' suffix multiplies the argument by 1 meg (1024 times 1024), or
+a 'g' or 'G' suffix multiplies the argument by 1 gig (1024 times 1024 times 1024).
+The 
+.B creepscale
+option allows autoscaling, but the scale can only increase.
+.PP
+The
+.B ticks
+option enables tick marks for the given strip.
+Tick marks are painted at the top of the bar, and follow the strip as it moves.
+The first form,
+.IR ticks ( n ),
+paints a tick mark every 
+.I n
+samples.
+The second form,
+.IR ticks ( n , m ),
+paints a double-length tick mark every 
+.RI ( n * m )
+samples, or every 
+.I m
+normal tick marks.
+.PP
+Global options are introduced by a line with the special descriptor
+.B opt
+beginning the line.
+The following global options are accepted:
+.RS 5
+.nf
+
+noborder	- suppress borders on all bars
+arbsize		- allow arbitrary window sizing
+width(w)	- set number of bars horizontally
+interval(t)	- set base sample interval
+colors(c,...)	- modify default color behavior
+maxcolor(b,f)	- set colors for maximum value displays
+limcolor(b,f)	- set colors for limit value displays
+sumcolor(b,f)	- set colors for sum value displays
+backcolor(c)	- set background color
+frontcolor(c)	- set foreground color
+font(f)		- set font to use
+origin(x,y)	- set window origin
+winsize(x,y)	- set window size
+nodecorate	- request an unframed window
+
+.fi
+.RE
+The
+.B noborder
+option suppresses borders on all bars, making each bar display
+seem to "hang in space".
+The
+.B arbsize
+option allows arbitrary sizing of the window; 
+.I gr_osview
+may not always be able to properly scale text or draw to match the window
+size if it is too small.
+The acceptability of a too-small display is left to the user.
+The
+.B width
+option sets the number of bars horizontally to use.
+This value is one by default, meaning that a long, vertical display is
+used.
+The
+.B interval
+option sets the base sample interval.
+The argument is given in tenths of seconds.
+The default base interval is two tenths of a second.
+.PP
+The
+.B colors
+option sets the global color table, from which each bar selects its
+default colors, in the same manner as for an individual bar.
+The
+.BR limcolor ,
+.B maxcolor
+and
+.B sumcolor
+options set the background and foreground colors, respectively, of the
+limit value, maximum value and tracking sum value displays.
+The
+.B backcolor
+and
+.B frontcolor
+options set the general background or foreground colors respectively.
+.PP
+The 
+.B font
+option sets the font to be used for text.
+This is a font name as known to the IRIS GL Font Manager (libfm).
+Default is "TimesBoldItalic".
+The
+.B origin
+option specifies the initial origin of the window in screen coordinates.
+The
+.B winsize
+option sets the initial window size in screen coordinates.
+.PP
+Setting the
+.B nodecorate
+option specifies a
+.I gr_osview
+window with no borders.
+The default is to request a border around the window.
+.SH INTERPRETING THE DISPLAY
+.TP 8
+\f3cpu\f1
+The cpu bar statistically monitors the distribution of CPU cycles between
+user programs, the operating system, interrupt overhead, graphics and idle time.
+Computation-intensive loads will show large user times, while I/O or
+kernel service intensive loads will show up as increased system and
+interrupt time.
+If intensive graphics activity is under way, then the time spent waiting for
+the graphics hardware to context switch and the time spent waiting for the
+graphics FIFO to empty will consume a significant portion of the
+processor.
+.I gr_osview
+perturbs this slightly, since it causes graphics context switches to
+occur.
+.IP
+The data is collected by sampling the program counter at the kernel
+clock frequency, which is 100HZ on the 4D series.
+This sampling is done automatically by the operating system; 
+.I gr_osview
+simply collects the data and displays it.
+.TP 8
+\f3wait\f1
+The wait bar monitors the percentage of time that the system is idle
+due to waiting for outstanding I/O requests.
+If a processor can perform other useful work while waiting for
+an I/O request, then the processor is not viewed as idle (on the cpu bar)
+and the wait bar will not reflect any wait time.
+This bar is constructed by summing all the idle time for all
+processors in the system and displaying the percentage of that time that
+an I/O request was pending.
+Since in a multiprocessor system, there is no way to differentiate which
+processors have I/O pending, if there is any outstanding I/O
+request, and a processor goes idle, that processor 
+(along with all other idle processors) will accumulate wait for I/O
+time rather than idle time.
+.IP
+The different forms of waiting are:
+.B IO
+refers to time spent waiting for traffic related to file system accesses
+(including local, remote, and mapped files, and normal file read and write).
+.B Swap
+refers to time spent waiting for paging and swapping operations to
+and from any swap devices.
+.B Pio
+refers to time spent waiting for physical IO to complete; for example,
+direct DMA to user space.
+.IP
+The information is collected in the same way as cpu time.
+.TP 8
+\f3rmem\f1
+This bar measures real memory usage.
+\f3kernel\f1 memory is memory allocated to the operating system
+and drivers.
+\f3fs ctl\fP is memory used to store filesystem meta-data, that is,
+information such as inodes, bitmaps, directories and the like that are used
+to manage file data.
+\f3fsdirty\fP memory is occupied by modified file system pages
+which have not yet been written to backing store.
+\f3fsclean\fP memory is occupied by unmodified file system pages which
+are currently attached to file system buffer headers.
+\f3free\fP is memory not currently in use.
+\f3user\fP is memory currently allocated to
+running processes.
+.IP
+Note that some of the pages marked
+\f3fsclean\fP or \f3fsdirty\fP may also be allocated to running processes,
+but will not be accounted as \f3user\fP memory.
+.br
+Note also that some of the \f3free\fP memory may represent file system data.
+.IP
+Memory data is collected as absolute numbers rather than with statistical
+means, such as for cpu usage.
+Most bars listed here use this kind of accurate data, unless stated
+otherwise.
+.TP 8
+\f3rmemc\f1
+This bar is the same as the \f3rmem\f1 bar, except that two fields
+are used to describe memory not currently in use: \f3freec\f1 is
+unused memory which contains valid backing-store data and which may be
+reclaimed by a process or by the file system buffer cache;
+\f3freeu\f1 is unused memory which contains no usable data.
+.TP 8
+\f3sysact\f1
+The system activity bar measures a few of the important system activities,
+namely total system calls, process context switches, fork,
+exec and iget operations.
+.B Fork
+operations are initiated by a process when it wishes to create a new
+process.
+.B Exec
+operations are initiated by a process to overlay itself with a new process;
+this is how a new program image is loaded and run.
+Finally, an
+.B iget
+operation occurs whenever the state of a file is changed, for instance
+when it is opened.
+This is a crude measure of file system activity.
+It is important to note that
+.I gr_osview
+adds to the totals shown in this bar, since it to must perform at least 
+some system calls, and causes some process context switches.
+.TP 8
+\f3gfx\f1
+This bar monitors graphics activity on the system.
+On most systems, the graphics hardware can interrupt the CPU when certain
+conditions occur; the first bar element measures the amount of such activity,
+named
+.BR intr .
+Every time the processor switches to a new process which is using a GL window
+on the graphics screen, a graphics context switch occurs, labeled
+.BR swch .
+The X server and GL graphics programs will sometimes interact with 
+privileged code in the kernel to obtain some service; this is labeled
+.B ioctl
+after the system call used to perform the service.
+When a GL graphics program wishes to be synchronized with buffer swapping done
+during double buffering, it must wait for the next vertical retrace.
+The number of times this happens is labeled
+.BR swap .
+Finally, the graphics pipeline is preceded by a FIFO buffer to smooth data
+movement into the pipeline.
+When the FIFO fills up, which it can with a fast processor, it interrupts the
+host, which waits until the FIFO has emptied somewhat before allowing the
+graphics process to continue drawing.
+The
+.B fiwt
+element describes the number of times this has happened.
+The
+.B finowt
+element describes the number of times the interrupt routine found that
+the FIFO was below the low-water mark by the time it had saved state and entered the interrupt
+handler.
+.TP 8
+\f3bdev\f1
+This bar (titled "BufAct") monitors the input/output activity to block devices.
+Block devices are usually those which hold filesystems, thus this
+bar measures filesystem throughput.
+The values are given in blocks per second, each block being 512 bytes
+in length.
+If displayed as a numeric bar, then the logical read and write rates
+as well as the actual read and write rates, are displayed, as well
+as the hit ratio of logical to actual reads and writes and the rate
+at which delayed writes are cancelled (due, for example, to truncation
+requests).
+.\" .TP 8
+.\" \f3bufh\f1
+.\" This bar displays the various usages to which the file system buffer
+.\" headers are being put.
+.\" A buffer header containing a file system superblock is included in the
+.\" \f2sb\fP field; \f2bitmap\fP means a file system block allocator bitmap;
+.\" disk inodes are marked \f2inode\fP, buffers with directory data are
+.\" in the \f2dir\fP field, and buffers with symbolic link data are \f2lnk\fP.
+.\" Buffers managing block and character special file transactions are
+.\" marked \f2block\fP and \f2char\fP, respectively, while swap transactions
+.\" are marked \f2swap\fP.
+.\" The \f2unused\fP bucket indicates that the system buffer header does
+.\" not cache valid data.
+.\" \f2other\fP indicates that there is valid data of
+.\" unknown (to \f2gr_osview\fP) origin;
+.\" this includes
+.\" buffer headers used by drivers that don't tag their headers with flags
+.\" known to \f2gr_osview\fP and regular file data.
+.\" While regular file data use buffer headers during i/o transactions,
+.\" the buffers are released and disassociated from the data after the
+.\" transactions are complete; the buffer headers will show as \f2other\fP
+.\" during the transaction and \f2unused\fP afterwards.
+.\" .IP
+.\" Note that the actual amount of memory mapped by each buffer header can
+.\" vary.
+.\" While superblocks are always 512 bytes and block special files and inodes
+.\" and bitmaps are always managed in 4K blocks, directory and symbolic
+.\" link data buffers can vary (currently from 512 to 4096 bytes), as can
+.\" swap buffers (one page when swapping in data, a configurable limit
+.\" when swapping out) and buffers managing character special files (whose
+.\" size depends on the size of the read or write request).
+.TP 8
+\f3fault\f1
+This bar monitors page fault activity.
+These are events that occur in managing the virtual address space of a
+process.
+The types of events are:
+.RS 5
+.TP 6
+\f3cpw\f1
+These are \f2copy-on-write\f1 events.
+This occurs when two or more processes
+are sharing a page, and one of them attempts to modify the page.
+To preserve the semantics of the UNIX fork() primitive, a copy of the shared
+page is made for the process, and it is then allowed to modify that page at
+will.
+.TP 6
+\f3mod\f1
+\f2Modified\f1 faults occur the first time a process modifies a page, which
+tells the operating system that the page is dirty.
+For unmodified pages, the kernel can go to the filesystem to get a copy of
+the page, which saves the overhead of keeping a copy on swap during paging.
+A copy of all modified pages must be maintained in memory or on swap.
+.TP 6
+\f3dmd\f1
+\f2Demand-fill\f1 faults occur the first time a process references a page
+with which there is no associated backing-store,
+for instance when first touching the BSS segment in a program.
+Since BSS is guaranteed to be zero, it is not kept in the object file, but
+is allocated to the process on demand by the kernel.
+.TP 6
+\f3cache\f1
+During paging, the kernel keeps a pool of pages which have been selected as
+candidates for stealing, and have backing store containing a copy of the page.
+This allows the kernel to respond to memory allocation needs quickly, while
+allowing a process to get back a page quickly if it touches it again.
+This pool is called the \f2page cache\f1.
+Each \f2cache\f1 event indicates that a page fault occurred and the desired
+page was found in the page cache.
+.TP 6
+\f3file\f1
+\f2File\f1 events occur when a page fault happens and a copy of the required
+page is fetched from the file system.
+.TP 6
+\f3swap\f1
+This event indicates that a page fault occurred, and the desired page was
+fetched from the disk swap area.
+.TP 6
+\f3double\f1
+This event indicates that a second-level fault has occurred.
+On the 4D series, translation lookaside buffer (TLB) handling is
+performed entirely by software.
+This is done by looking up the missing page entry in a page table, and
+entering the virtual to physical mapping into the TLB.
+First-level faults are handled by extremely efficient low-level software.
+The page tables themselves are virtually mapped, so when the first
+level TLB handler attempts to load a page table entry, it may fault
+because the page table isn't mapped.
+This is a second-level fault, and must be repaired by high-level 
+kernel routines.
+.TP 6
+\f3pgref\f1
+This event indicates that a page fault occurred, but the page was actually
+still attached to the user address space.
+Reference faults are used by the operating system to keep accurate
+usage information when paging is imminent.
+.RE
+.TP 8
+\f3pswap\f1
+The page swapping activity monitor bar (titled "Pages Swapped")
+measures access to the swap areas,
+for either swapin or swapout activity.
+During heavy paging, both swapin and swapout activity could be significant.
+On a system with only a single swap area on the same disk as the system and
+user data, the swapping rate will be effectively limited by the 
+disk latency.
+Much higher swapping rates are possible with several swap areas configured 
+across multiple disks and disk controllers.
+This may be necessary to achieve reasonable throughput in the face of many
+large jobs competing for main memory.
+.IP
+The \f2pswap\fP bar is different than the \f2swp\fP bar described elsewhere;
+while \f2pswap\fP measures pages swapped in and out, the \f2swp\fP bar
+measures the usage of logical swap space.
+.TP 8
+\f3nettcp\f1
+This bar measures data throughput for the TCP network protocol, in
+kilobytes per second.
+TCP, standing for \f3T\fPransmission \f3C\fPontrol \f3P\fProtocol,
+is a reliable connection oriented protocol used mainly for stream
+oriented operation, such as remote login or file copy.
+.TP 8
+\f3netudp\fP
+This bar measures data throughput for the UDP network protocol, in
+datagrams.
+\f3INdgram\fP and \f3OUTdgram\fP measure the datagram throughput, while
+\f3Dropped\fP measures the number of datagrams dropped.
+.IP
+UDP, the \f3U\fPser \f3D\fPatagram \f3P\fProtocol, is a datagram service
+used where low latency transactions are useful.
+For instance, the Sun Remote Procedure Call protocol uses UDP.
+The NFS filesystem is based on SunRPC, and therefore UDP activity is a good
+indicator of NFS activity.
+.TP 8
+\f3netip\fP
+This bar measures packet throughput for the IP network protocol.
+\f3INpack\fP and \f3OUTPack\fP measure the number of packets, while
+\f3Dropped\fP measures the number of packets dropped by the protocol.
+In numeric mode, additional fields are:\f3Forward\fP,
+giving the number of packets forwarded on to another host and \f3Delivered\fP,
+giving the number of packets handed over to an upper-layer protocol.
+.IP
+IP, standing for \f3I\fPnternet \f3P\fProtocol, is the basic packet
+management layer of the network.
+It sits between the network interface driver and higher level protocols,
+providing error control and routing facilities.
+.TP 8
+\f3netif\fP
+This bar monitors packets transmitted or received through the various
+network interfaces which may be present on a machine.
+If displayed as a regular bar, the number of packets transferred in or
+out over the interface is shown as \f3INpack\fP or \f3OUTpack\fP.
+If displayed as a numeric bar, then three additional fields may be displayed:
+\f3INerr\fP and \f3OUTerr\fP measure the number of packets received in error
+or which had errors during transmission, while \f3coll\fP measures the
+number of packet collisions which occurred, which only happens
+on CSMA/CD interfaces.
+.IP
+Each machine supporting networking has a local loopback interface called
+\f2lo0\fP.
+This interface is not usually displayed unless specifically called out,
+and it does not have the \f3INerr\fP, \f3OUTerr\fP and \f3coll\fP fields.
+.TP 8
+\f3tlb\f1
+The \f3tlb\f1 monitor bar measures translation lookaside buffer (TLB)
+activity on the system.
+\f3mpsync\f1 counts how many times a request is made to flush all
+TLB entries on all processors and \f3vmwrap\f1 indicates how many times
+\f3mpsync\f1 is caused by a depletion of clean (with respect to the TLB)
+kernel virtual addresses.
+\f3flush\f1 counts how many times an entire TLB is flushed on any
+one processor and \f3idwrap\f1 shows how many times this happens
+because a processor's TLB ids have been depleted.
+\f3idget\f1 monitors TLB id allocation and
+\f3idpurge\fP counts how many times a tlb id is forcefully removed
+from a process.
+Lastly, \f3vapurge\f1 counts individual tlb entries being purged.
+.TP 8
+\f3intr\f1
+The interrupt monitor bar measures the interrupt rate in the system,
+and is broken out into VME interrupts and others, which are typically
+local interrupts to the CPU chip, such as serial I/O ports.
+The operating system clock also interrupts the CPU at 100HZ, thus
+at least this interrupt rate will always show as a background value.
+A large interrupt value, coupled with extremely sluggish performance,
+may indicate hardware problems, such as continuously interrupting device.
+.TP 8
+\f3disk\f1
+The disk monitor bar comes in two flavors, an EFS version and
+an "everything else" version.
+In the EFS version, the first two parameters specify the space taken
+by the used and free I-nodes on the volume.
+The third is the space used by files, and any remainder is free space.
+In the non-EFS version, only the space used by files is shown.
+The \fBtracksum\fP and \fBmax\fP values are the number
+of bytes used on the file system.
+.TP 8
+\f3swp\fP
+This bar monitors the amount of logical swap space on the system.
+If swap space is added or deleted, the bar will update to the appropriate
+values automatically.
+The total amount of logical swap space is computed as the sum of
+the amount of physical memory available to processes plus the amount
+of physical swap space plus the amount of virtual swap space.
+Physical swap space is further divided into free and used.
+Logical swap is reserved (used) by processes' private mappings
+(see \f2swap\fP(1m) for more information on private mappings).
+The \f3swp\fP bar combines these two kinds of information (logical
+swap makeup and reserved logical swap) by splitting each of the four
+parts that make up the sum logical swap into two pieces - reserved and
+available.
+The 8 components of this bar are:
+.RS 5
+.TP 6
+\f3mem\f1
+The amount of physical memory available to processes that is not reserved.
+.TP 6
+\f3mem-r\f1
+The amount of physical memory available to processes that is reserved.
+.TP 6
+\f3fswp\f1
+The amount of physical swap that is neither allocated nor reserved.
+.TP 6
+\f3fswp-r\f1
+The amount of physical swap that is not allocated but is reserved.
+.TP 6
+\f3uswp\f1
+The amount of physical swap that is allocated but not reserved.
+.TP 6
+\f3uswp-r\f1
+The amount of physical swap that is allocated and reserved.
+.TP 6
+\f3vswp\f1
+The amount of virtual swap that is not reserved.
+.TP 6
+\f3vswp-r\f1
+The amount of virtual swap that is reserved.
+.RE
+.IP
+The \fBtracksum\fP and \fBmax\fP values are the number
+of bytes of logical swap reserved.
+.SH EXAMPLE
+The following description file gives a layout identical to that used when
+the -a option of
+.I gr_osview is given:
+.RS 5
+.nf
+
+cpu
+rmem max tracksum
+wait strip
+sysact max tracksum creepscale
+gfx max tracksum creepscale
+
+.fi
+.RE
+.SH FILES
+/usr/sbin/gr_osview
+.br
+$HOME/.grosview
+.SH "SEE ALSO"
+gr_top(1), ps(1), top(1).
+.SH BUGS
+When using a strip chart display, and some other window obscures part of
+the strip chart, the bar will gradually turn to black.
+This is because an in-framebuffer copy operation is used to make the strip
+appear to move, and when part of the window is obscured there is nothing to
+copy.
+It is not clear that this bug will ever be fixed, because of the
+performance advantages of this style of update.
+.PP
+If the gr_osview window is redrawn, perhaps due to a repaint or resizing
+of the window, the next tick mark to be drawn on the strip may be drawn at
+an incorrect position.
+Following marks will have correct position and interval.
+.PP
+If the
+.I arbsize
+option is used, a tiny window can be drawn which is unintelligible.
+It is assumed that if the
+.I arbsize 
+option is given, then a truly arbitrary size is desired.
+.PP
+A global colors option will only affect bars declared after the
+colors declaration.
+It seems that this is the proper behavior, since it allows groups of
+bars to be set to the same colors.
+.PP
+If a small window is used, and a width greater than one is specified, 
+the bar header and variable names may continue beyond the end of the bar.
+This does not effect the operation of the program, but may cause some
+visual confusion.
+.PP
+If you use
+.IR csh (1),
+.I gr_osview
+does not work if
+your \f2.cshrc\f1 file on the remote host
+unconditionally executes
+interactive or output-generating commands.
+Put these commands inside the following conditional block:
+.Ex
+if ($?prompt) then
+.sp .8v
+endif
+.Ee
+so they won't interfere with
+.IR gr_osview
+and other non-interactive,
+.IR rcmd (3N)-based
+programs.

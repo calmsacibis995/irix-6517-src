@@ -1,0 +1,826 @@
+#! /bin/sh
+# 
+# INSTALL:  script to add diskless architecture support and add clients
+#
+#	@(#)INSTALL	1.1 88/06/08 4.0NFSSRC; from 1.22 88/03/11 D/NFS
+#
+#  	Copyright (c) 1987 by Sun Microsystems, Inc.
+#
+if id | grep -v root > /dev/null; then
+	echo "You must become superuser to run $0"
+	exit 1
+fi
+
+HOME=/; export HOME
+PATH=/bin:/usr/bin:/etc:/usr/etc:/usr/etc/netdisk:/usr/bsd
+
+CMDNAME=$0
+RELEASE="1.0"
+HOSTS="/etc/hosts"
+BOOTPARAMS="/etc/bootparams"
+YPMASTERPATH="/var/yp"
+
+# If $TAPE starts with /dev/ then $TAPEDEV will be that name.  Otherwise
+# tape device name $TAPEDEV constructed from ${NRTAPE}${TAPE}${DEVNO}
+#       NRTAPE  is the prefix (including rooted path name)
+#       TAPE    is the driver type taken from input prompt
+#       DEVNO   is the suffix
+# The device name should be the non-rewinding tape device to use.
+NRTAPE="/dev/nr"
+DEVNO="0"
+
+# Specify default values for various paths here
+ROOTPATHDEF=/export/root
+SWAPPATHDEF=/export/swap
+DUMPPATHDEF=none
+HOMEPATHDEF=/home
+EXECDEF=""
+SWAPDEF=""
+CLIENTYPDEF=""
+
+echo
+echo "	>>>	Sun Diskless Client Installation Tool	<<<"
+echo "	>>>		(for non-Sun Servers)		<<<"
+echo "	>>>		     Release $RELEASE		<<<"
+#
+# Get system hostname and YP domain name
+#
+HOST=`hostname`
+DOMAIN=`domainname`
+#
+# Specify tape drive type : local or remote
+# If remote, specify tape host name
+#
+while :; do
+        echo
+        echo "Enter tape drive type ? [local | remote]: \c"
+        read DRIVE;
+        case "$DRIVE" in
+        "local"|"l" )
+		TAPEHOST=""
+		TAPE="/dev/nrtapens"
+                break ;;
+        "remote"|"r" )
+		while :; do
+			echo;echo "Enter host of remote drive ? \c"
+			read TAPEHOST;
+			case "$TAPEHOST" in
+			"" )
+				echo; echo "${CMDNAME}: invalid tape host."
+				;;
+			* )
+				if [ "$DOMAIN" = "noname" -o "$DOMAIN" = "" ];
+				then
+					grep "[	 ]$TAPEHOST[	 ]" /etc/hosts \
+					    >/dev/null
+				else
+					ypmatch $TAPEHOST hosts >/dev/null
+				fi
+				case $? in
+				1)
+					echo
+					echo "${CMDNAME}: invalid tapehost."
+					;;
+				*)
+					break ;;
+				esac ;;
+			esac
+		done
+		#
+		# Specify tape type : ar, st, mt, xt or /dev/something
+		#
+		while :; do 
+			echo \
+"\nEnter remote tape type ? [ar[08] | st[08] | mt[08] | xt[08] | /dev/???]: \c"
+			read TAPE;
+			case "$TAPE" in
+			ar | ar0 | nrar0 )
+				TAPE=ar
+				break ;;
+			ar8 | nrar8 )
+				TAPE=ar
+				DEVNO=8
+				break ;;
+			st | st0 | nrst0 )
+				TAPE=st
+				break ;;
+			st8 | nrst8 )
+				TAPE=st
+				DEVNO=8
+				break ;;
+			/dev/* )
+				break ;;
+			mt | mt0 | nrmt0 | xt | xt0 | nrxt0 )
+				TAPE=mt
+				break ;;
+			mt8 | nrmt8 | xt8 | nrxt8 )
+				TAPE=mt
+				DEVNO=8
+				break ;;
+			* )
+			    echo "${CMDNAME}: invalid tape type \"${TAPE}\"." ;;
+			esac
+		done
+		break ;;
+	* )
+		echo "${CMDNAME}: invalid tape drive type \"${DRIVE}\"." ;;
+	esac
+done
+case $TAPE in
+/dev/* )
+	TAPEDEV=$TAPE
+	;;
+* )
+	TAPEDEV=${NRTAPE}${TAPE}${DEVNO}
+	;;
+esac
+#
+# Create a list of architecture types.  Valid types are determined
+# from the release tapes.
+#
+ARCHLIST=""
+PATHLIST=""
+while :; do
+	while :; do
+		echo "
+Enter next architecture type to load
+    [ sun4 | sun3 | ... | continue | done ]: \c"
+		read ARCH;
+		for i in ${ARCHLIST}; do
+			case "$i" in
+			"$ARCH")
+				echo "\"${ARCH}\" already specified."
+				break ;;
+			esac
+		done
+		case "$i" in
+		"$ARCH")
+			;;
+		*)
+			break ;;
+		esac
+	done
+	case "$ARCH" in
+	"" | "execs" | "clients" | "share" | "noshare" )
+		echo "${CMDNAME}: invalid architecture \"${ARCH}\"."
+		;;
+	"done" )
+		break ;;
+	"continue" | "c" )
+		# continue with setup_exec with data already gathered
+		ARCH=continue
+		case "$ARCHLIST" in
+		"")
+			if [ -f /tmp/ARCHLIST ]; then
+			    ARCHLIST=`cat /tmp/ARCHLIST`
+			    case "$ARCHLIST" in
+			    "")
+				echo "No current architectures to use."
+				;;
+			    *)
+				if [ -f /tmp/PATHLIST ]; then
+				    PATHLIST=`cat /tmp/PATHLIST`
+				    case "$PATHLIST" in
+				    "")
+					;;
+				    *)
+					echo "Continuing with architecture(s)\c"
+					for i in $ARCHLIST
+					do
+					    case $i in
+					    execs | clients | share | noshare )
+						;;
+					    * )
+						echo " $i\c"
+						;;
+					    esac
+					done
+					echo ""
+					break ;;
+				    esac
+				fi
+				echo "No current pathlist to use."
+				;;
+			    esac
+			else
+			    echo "No current architectures to use."
+			fi ;;
+		*)
+			echo "
+Cannot continue after specifying additional architectures."
+			;;
+		esac ;;
+	* )
+		while :; do
+			echo
+			echo "Enter pathname for $ARCH executables ? \c"
+			read EXEC;
+			case "$EXEC" in
+			"" )
+				case "$EXECDEF" in
+				"")
+					;;
+				*)
+					EXEC=$EXECDEF
+					echo "Using default \"$EXEC\""
+					;;
+				esac ;;
+			esac
+			case "$EXEC" in
+			"" )
+				;;
+			*/$ARCH | */$ARCH/* )
+				echo \
+"Please give pathname without \"$ARCH\" at end."
+				;;
+			/* )
+			    rm -rf /tmp/*.${ARCH}
+			    if [ -d ${EXEC}/${ARCH}/bin ]; then
+				echo "
+${CMDNAME}: exec tree ${EXEC}/${ARCH} appears to exist already.
+  You may select one of the following options:
+	ignore	continue as if this architecture had not been specified
+	remove	remove existing exec tree, then continue
+	use	continue, loading any new optional software specified
+	clients	continue with $ARCH clients, but use existing exec tree
+			? \c"
+			        while :; do
+				    read ans
+				    case "$ans" in
+				    "ignore" | "use" | "clients" )
+					break ;;
+				    "remove" )
+					echo "Removing ${EXEC}/${ARCH}..."
+					rm -rf ${EXEC}/${ARCH}
+					if [ -d ${EXEC}/${ARCH} ]; then
+					    echo \
+"  ${EXEC}/${ARCH} not removed; architecture ${ARCH} ignored"
+					    ans=ignore
+					else
+					    ans=use
+					fi
+					break ;;
+				    * )
+					echo \
+"Please enter \"ignore\" \"remove\" \"use\" or \"clients\" : \c"
+					;;
+				    esac
+			        done
+			    else
+				ans=use
+			    fi
+			    # ans is one of ignore, use, or clients
+			    case "$ans" in
+			    "use" )
+				STATUS=error
+				opt_software ${ARCH} ${TAPEDEV} ${TAPEHOST}
+				case $? in
+				0 )
+				    if [ -f /tmp/EXTRACTLIST.${ARCH} ]; then
+					set `head -1 /tmp/EXTRACTLIST.${ARCH}`
+					# args "IDENT <title> <release>
+					if [ $# = 3 -a "$1" = IDENT ]; then
+					    EXECDEF=$EXEC
+					    PATHLIST="${PATHLIST} ${EXEC}" 
+					    while :; do
+						echo "
+Load sharable objects in shared location ? [y/n] :\c"
+						read ans
+						case "$ans" in
+						"y" | "yes" )
+							ans=share
+							break ;;
+						"n" | "no" )
+							ans=noshare
+							break ;;
+						* )
+							echo \
+"Please answer yes or no."
+							;;
+						esac
+					    done
+					    ARCHLIST="${ARCHLIST} $ans ${ARCH}"
+					    STATUS=ok
+					fi
+				    fi ;;
+				esac
+				case $STATUS in
+				error)
+					echo "
+${CMDNAME}: extraction error; $ARCH architecture entry ignored."
+					;;
+				esac
+				;;
+			    "clients" )
+				EXECDEF=$EXEC
+				PATHLIST="${PATHLIST} ${EXEC}"
+				ARCHLIST="${ARCHLIST} clients ${ARCH}"
+				;;
+			    * )
+				# ignore
+				echo "$ARCH architecture entry ignored."
+				;;
+			    esac
+			    break
+			    ;;
+					
+			* )
+			    echo "Exec pathname must start with \"/\""
+			    ;;
+			esac
+		done
+		;;
+	esac
+done
+rm -rf /tmp/PATHLIST /tmp/ARCHLIST
+echo "$ARCHLIST" > /tmp/ARCHLIST
+echo "$PATHLIST" > /tmp/PATHLIST
+#
+# Gather client info
+# $RESET on input causes current client info to be reset and ignored
+#
+RESET="^"
+case $ARCH in
+continue)
+	# already have client info.  Skip to setup_exec.
+	;;
+*)
+    #  get client info for all ARCHSTATES (execs and clients)
+    for ARCH in ${ARCHLIST}; do
+	case $ARCH in
+	share | noshare | execs | clients )
+	    # ignore keywords
+	    ;;
+	* )
+	    while :; do
+		case "$STATE" in
+		reset)
+			echo ">> $CLIENT entries ignored"
+			;;
+		esac
+		STATE=ok
+		echo
+		echo "Enter a $ARCH client name ? [ name | done ]: \c"
+		read CLIENT;
+		case "$CLIENT" in
+		"" )
+			;;
+		"none" | "done" )
+			break ;;
+		* )
+			#
+			# Verify that host and ether entries are present
+			#
+			echo
+			echo "Verifying Internet address..."
+			rm -rf /tmp/ipaddr
+			if [ "$DOMAIN" = "noname" -o "$DOMAIN" = "" ]; then
+				grep "[	 ]$CLIENT[	 ]" /etc/hosts |
+				    grep -v "^#"
+			else
+				ypmatch $CLIENT hosts
+			fi | awk '{ print $1 }' > /tmp/ipaddr
+			IPADDR=`cat /tmp/ipaddr`
+			rm -rf /tmp/ipaddr
+			case "$IPADDR" in
+			"")
+				echo "
+${CMDNAME}: can't find Internet address in /etc/hosts for \"${CLIENT}\""
+				echo
+				STATE=reset
+				;;
+			*)
+				echo "  $IPADDR $CLIENT"
+				;;
+			esac
+			#
+			# Verify Ethernet address
+			#
+			echo
+			echo "Verifying Ethernet address..."
+			rm -rf /tmp/etheraddr
+			if [ "$DOMAIN" = "noname" -o "$DOMAIN" = "" ]; then
+				grep "[	 ]$CLIENT[	 ]" /etc/ethers |
+				    grep -v "^#"
+			else
+				ypmatch $CLIENT ethers
+			fi | awk '{ print $1 }' > /tmp/etheraddr
+			ETHERADDR=`cat /tmp/etheraddr`
+			rm -rf /tmp/etheraddr
+			case "$ETHERADDR" in
+			"")
+				echo "
+${CMDNAME}: can't find Ethernet address in /etc/ethers for \"${CLIENT}\"\n"
+				echo
+				STATE=reset
+				;;
+			*)
+				echo "  $ETHERADDR $CLIENT"
+				;;
+			esac
+
+			case $STATE in
+			ok)
+			    while :; do
+				echo
+				echo \
+"Enter YP mode of $CLIENT ? [ master | slave | client | none ]: \c"
+				read CLIENTYP;
+				case "$CLIENTYP" in
+				"")
+					case "$CLIENTYPDEF" in
+					"")
+						;;
+					*)
+						CLIENTYP=$CLIENTYPDEF
+						echo "Using default \"$CLIENTYP\""
+						break ;;
+					esac ;;
+				"master" | "slave" | "client" | "none" )
+					CLIENTYPDEF=$CLIENTYP
+					break ;;
+				"$RESET")
+					STATE=reset
+					break ;;
+				* )
+					;;
+				esac
+			    done ;;
+			esac
+			case $STATE in
+			ok)
+			    while :; do
+				echo
+				echo "Enter swap size of $CLIENT ? \c"
+				read SWAP;
+				case "$SWAP" in
+				"$RESET")
+					STATE=reset
+					break ;;
+				[0-9]* )
+					SWAPDEF=$SWAP
+					break ;;
+				*)
+					if [ "$SWAP" = "" -a "$SWAPDEF" != "" ]; then
+						SWAP=$SWAPDEF
+						echo "Using default \"$SWAP\""
+						break
+					fi
+					echo "
+Swap size must start with a digit (\"$SWAP\" is not valid)
+Examples: 16M or 16m ==> 16 * 1048576 bytes
+	  16K or 16k ==> 16 * 1000 bytes
+	  16B or 16b ==> 16 * 512 bytes
+	  16         ==> 16 bytes )"
+					;;
+				esac
+			    done ;;
+			esac
+			case $STATE in
+			ok)
+			    while :; do
+				echo
+				echo "Enter root pathname of $CLIENT ? \c"
+				read ROOTPATH;
+				case "$ROOTPATH" in
+				"" )
+					case "$ROOTPATHDEF" in
+					"")
+						;;
+					*)
+						ROOTPATH=$ROOTPATHDEF
+						echo "Using default \"$ROOTPATH\""
+						break ;;
+					esac ;;
+				"$RESET")
+					STATE=reset
+					break ;;
+				*/$CLIENT )
+					echo \
+"Please give pathname without \"$CLIENT\" at end."
+					;;
+				/* )
+					ROOTPATHDEF=$ROOTPATH
+					break ;;
+				* )
+					echo \
+"Root pathname must start with \"/\""
+					;;
+				esac
+			    done ;;
+			esac
+			case $STATE in
+			ok)
+			    while :; do
+				echo
+				echo "Enter swap pathname of $CLIENT ? \c"
+				read SWAPPATH;
+				case "$SWAPPATH" in
+				"" )
+					case "$SWAPPATHDEF" in
+					"")
+						;;
+					*)
+						SWAPPATH=$SWAPPATHDEF
+						echo "Using default \"$SWAPPATH\""
+						break ;;
+					esac ;;
+				"$RESET")
+					STATE=reset
+					break ;;
+				*/$CLIENT )
+					echo \
+"Please give pathname without \"$CLIENT\" at end."
+					;;
+				/* )
+					SWAPPATHDEF=$SWAPPATH
+					break ;;
+				* )
+					echo \
+"Swap pathname must start with \"/\""
+					;;
+				esac
+			    done ;;
+			esac
+			case $STATE in
+			ok)
+			    while :; do
+				echo
+				echo "Enter dump pathname of $CLIENT (or \"none\") ? \c"
+				read DUMPPATH;
+				case "$DUMPPATH" in
+				"" )
+					case "$DUMPPATHDEF" in
+					"")
+						;;
+					*)
+						DUMPPATH=$DUMPPATHDEF
+						echo "Using default \"$DUMPPATH\""
+						break ;;
+					esac ;;
+				"$RESET")
+					STATE=reset
+					break ;;
+				*/$CLIENT )
+					echo \
+"Please give pathname without \"$CLIENT\" at end."
+					;;
+				/* | none )
+					DUMPPATHDEF=$DUMPPATH
+					break ;;
+				* )
+					echo \
+"Dump pathname must start with \"/\""
+					;;
+				esac
+			    done ;;
+			esac
+			case $STATE in
+			ok)
+			    while :; do
+				echo
+				echo "Enter home pathname of $CLIENT (or \"none\") ? \c"
+				read HOMEPATH;
+				case "$HOMEPATH" in
+				"" )
+					case "$HOMEPATHDEF" in
+					"")
+						;;
+					*)
+						HOMEPATH=$HOMEPATHDEF
+						echo "Using default \"$HOMEPATH\""
+						break ;;
+					esac ;;
+				"$RESET")
+					STATE=reset
+					break ;;
+				/* | none )
+					HOMEPATHDEF=$HOMEPATH
+					break ;;
+				* )
+					echo \
+"Home pathname must start with \"/\""
+					;;
+				esac
+			    done ;;
+			esac
+			case $STATE in
+			ok)
+			    while :; do
+				echo
+				echo "Information for $CLIENT ok ? [y/n] : \c"
+				read ans
+				case "$ans" in
+				"y" | "yes" )
+					break ;;
+				"n" | "no" )
+					STATE=reset
+					break ;;
+				* )
+					echo "Please answer yes or no."
+					;;
+				esac
+			    done ;;
+			esac
+			case $STATE in
+			ok)
+			    echo "$CLIENT"	>> /tmp/CLIENT.${ARCH}
+			    echo "$IPADDR"	>> /tmp/CLIENTIP.${ARCH}
+			    echo "$ETHERADDR"	>> /tmp/CLIENTETHER.${ARCH}
+			    echo "$CLIENTYP"	>> /tmp/CLIENTYP.${ARCH}
+			    echo "$SWAP"	>> /tmp/SWAP.${ARCH}
+			    echo "$ROOTPATH"	>> /tmp/ROOTPATH.${ARCH}
+			    echo "$SWAPPATH"	>> /tmp/SWAPPATH.${ARCH}
+			    echo "$DUMPPATH"	>> /tmp/DUMPPATH.${ARCH}
+			    echo "$HOMEPATH"	>> /tmp/HOMEPATH.${ARCH}
+			    ;;
+			esac
+			;;
+		esac
+	    done
+	    ;;
+	esac
+    done
+    ;;
+esac
+#
+# Prompt user attention last time before starting to build
+#
+while :; do
+        echo;echo "Are you ready to start the installation ? [y/n] : \c"
+        read READY;
+        case "${READY}" in
+        "y" | "yes" )
+                break ;;
+        "n" | "no" )
+                echo "
+Installation procedure terminates.
+You may continue by running this script and entering \"continue\" at the
+first prompt for architecture type."
+                exit 1 ;;
+        * )
+                echo;echo "Please answer only yes or no."
+        esac
+done
+
+#
+# Installation starts
+#
+ARCHSTATE=execs
+for CURRENTARCH in ${ARCHLIST}; do
+  case $CURRENTARCH in
+  execs | clients | share | noshare )
+    ARCHSTATE=$CURRENTARCH
+    ;;
+  * )
+    echo
+    echo "Beginning Installation for the ${CURRENTARCH} architecture."
+    #
+    # get path and read in release tape
+    #
+    set $PATHLIST
+    CURRENTPATH=$1
+    shift
+    PATHLIST="$*"
+    case "$ARCHSTATE" in
+    execs | share )
+	    SHAREPATH=${CURRENTPATH}/share
+	    ;;
+    noshare )
+	    SHAREPATH=none
+	    ;;
+    * )
+	    # if share directory exists, use it for clients
+	    if [ -d ${CURRENTPATH}/share ]; then
+		SHAREPATH=${CURRENTPATH}/share
+	    else
+		SHAREPATH=none
+	    fi
+	    ;;
+    esac
+    EXECPATH=${CURRENTPATH}/${CURRENTARCH}
+    case "$ARCHSTATE" in
+    execs | share | noshare )
+	    setup_exec $CURRENTARCH $EXECPATH $DRIVE $TAPEHOST $TAPEDEV \
+		$SHAREPATH
+	    STATUS=$?
+	    ;;
+    * )
+	    # do not setup these execs
+	    echo
+	    echo "[${CURRENTARCH} executables already installed]"
+	    STATUS=0
+	    ;;
+    esac
+    case ${STATUS} in
+    0)
+	echo
+	echo "Starting installation of ${CURRENTARCH} clients..."
+	echo
+	if [ -f /tmp/CLIENT.${CURRENTARCH} ]; then
+		#
+		# Read these files just once.
+		# The 'set' hacks are used to avoid using 'expr'
+		# counters, which are not built-in and take awhile
+		# to do as the loops get bigger.
+		# 
+		IPLIST=`cat /tmp/CLIENTIP.${CURRENTARCH}`
+		ETHERLIST=`cat /tmp/CLIENTETHER.${CURRENTARCH}`
+		YPLIST=`cat /tmp/CLIENTYP.${CURRENTARCH}`
+		SWAPLIST=`cat /tmp/SWAP.${CURRENTARCH}`
+		ROOTPATHLIST=`cat /tmp/ROOTPATH.${CURRENTARCH}`
+		SWAPPATHLIST=`cat /tmp/SWAPPATH.${CURRENTARCH}`
+		DUMPPATHLIST=`cat /tmp/DUMPPATH.${CURRENTARCH}`
+		HOMEPATHLIST=`cat /tmp/HOMEPATH.${CURRENTARCH}`
+		for i in `cat /tmp/CLIENT.${CURRENTARCH}`; do
+			set $IPLIST
+			IP=$1
+			shift
+			IPLIST="$*"
+
+			set $ETHERLIST
+			ETHER=$1
+			shift
+			ETHERLIST="$*"
+
+			set $YPLIST
+			YP=$1
+			shift
+			YPLIST="$*"
+
+			set $SWAPLIST
+			SWAP=$1
+			shift
+			SWAPLIST="$*"
+
+			set $ROOTPATHLIST
+			ROOTPATH=$1
+			shift
+			ROOTPATHLIST="$*"
+
+			set $SWAPPATHLIST
+			SWAPPATH=$1
+			shift
+			SWAPPATHLIST="$*"
+
+			set $DUMPPATHLIST
+			DUMPPATH=$1
+			shift
+			DUMPPATHLIST="$*"
+
+			set $HOMEPATHLIST
+			HOMEPATH=$1
+			shift
+			HOMEPATHLIST="$*"
+			#
+			# Create client
+			#
+			setup_client add/noYP $i $YP $SWAP \
+				$ROOTPATH $SWAPPATH $DUMPPATH \
+				$HOMEPATH $EXECPATH $SHAREPATH $CURRENTARCH
+			case $? in
+			0)
+				DIDACLIENT=yes
+				;;
+			*)
+				echo "
+ATTENTION: $CURRENTARCH client $i not installed."
+				echo
+				;;
+			esac
+		done
+	fi
+	;;
+    *)
+	echo
+	echo "ATTENTION: exec installation for $CURRENTARCH failed."
+	echo "           $CURRENTARCH clients not installed."
+	;;
+    esac
+    ;;
+  esac
+done
+case "$DIDACLIENT" in
+yes)
+	if [ "$DOMAIN" != "noname" -a "$DOMAIN" != "" -a -f ${YPMASTERPATH}/bootparams.time ]; then
+		echo
+		echo "Updating bootparams YP map..."
+		cd ${YPMASTERPATH}
+		make bootparams
+	elif [ "$DOMAIN" != "noname" -a "$DOMAIN" != "" -a ! -f ${YPMASTERPATH}/bootparams.time ]; then
+		if [ ! -f ${YPMASTERPATH}/bootparams.time- ]; then
+			echo "
+ATTENTION: /etc/bootparams on the yp master needs to be updated."
+		fi
+	fi ;;
+esac
+echo
+case "$ARCHLIST" in
+"")
+	echo "Nothing to install!"
+	;;
+*)
+	echo "Diskless Client Installation Completed."
+	;;
+esac
+exit 0

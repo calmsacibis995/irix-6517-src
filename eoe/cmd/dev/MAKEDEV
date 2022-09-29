@@ -1,0 +1,761 @@
+#!/sbin/make -kf
+#
+# Makefile for constructing the /dev directory
+#
+# $Revision: 1.351 $
+
+# for the ability to do arithmetic.
+SHELL=/sbin/ksh
+
+# see the targets at the end of this file for some cleanup
+# and security uses that are not automatically invoked.
+
+
+# NOTE: major #'s used in rules that use install must not have
+# any white space after the number
+
+# BLOCK device major device number values.
+B_HWGRAPH=0	# Used by hardware graph
+B_NFS=18	# 1st NFS block pseudo-device; See below comment XXXdiskless
+
+MAXPTY=10  	# enough to get started.  more are created by _getpty(3)
+
+
+# CHARACTER device major device number values.
+C_HWGRAPH=0	# Major number 0 is used by hardware graph
+# /dev/{mem,kmem,null,mmem}
+C_MM=1
+# /dev/tty
+C_SY=2
+# number of built-in tty ports (first set for all machines)
+C_DU_N1=4
+# port number where to start second set of tty ports
+C_DU_S2=45
+# number of extra built-in tty ports (MP machines only - 2 per CPU)
+C_DU_N2=12
+# System profiling device.
+C_PRF=7
+# streams clone driver.
+C_CLN=10
+# pty controller
+C_PTC=14
+C_PTC1=104
+C_PTC2=106
+C_PTC3=108
+C_PTC4=110
+# pty slave
+C_PTS=15
+C_IF_SL=31	# SLIP
+# /dev/zero
+C_ZERO=37
+# parallel port
+C_PLP=38
+# Kernel error logging device.
+C_KLOG=41
+# Inode monitor device
+C_IMON=42
+C_FSCTL=45	# file system pseudo-driver
+# graphics textport
+C_TPORT=46
+# Software semaphores
+C_USEMA=47
+C_IF_PPP=52	# PPP
+C_HDSP=53
+C_SHMIQ=54	# Shared memory input queue ( for the window system )
+# Shared memory input queue ( character device )
+C_QCNTL=55
+# Graphics Driver (streams interface)
+C_GFXS=56
+# Graphics Driver
+C_GFX=57
+# Postwait drier for Oracle performance
+C_POSTWAIT=206
+# new console driver
+C_CONSOLE=58
+
+# SCSI character majors
+C_USRBUS=198
+C_SYSCTLR=199
+C_MIDI=201
+C_IMIDI=202
+C_FLASH=204
+
+#Video 
+
+C_VIDEO1=9	# svideo/vino/devvid(sirius)/mvp video driver
+C_VIDEO2=203	# galileo/sirius video driver
+C_VIDEO3=256	# impact video driver
+C_VIDEO4=17	# vice video driver
+
+# Digital Media Streams
+C_DMS=248
+# Indigo2 Compression
+C_COSMO=254
+
+C_USRDMA=232
+C_CCSYNC=252	# CC Sync driver for EVEREST
+
+# duart driver, built-in /dev/ttyd*
+C_DU=260
+
+
+C_TPITCP=18	# TPI TCP    clonable STREAMS device 
+C_TPIUDP=19	# TPI UDP    clonable STREAMS device
+C_TPIIP=20	# TPI raw IP clonable STREAMS device
+C_TPIICMP=21	# TPI ICMP   clonable STREAMS device
+
+C_TCL=13	# TLI connectionless      loopback device 
+C_TCO=12	# TLI connection-oriented loopback device 
+C_TCOO=24	# TLI connection oriented loopback orderly release device
+
+C_SAD=33	# STREAMS Administrative Driver
+C_STRLOG=80	# STREAMS log device 
+
+C_IPFLTR=59	# IP packet filtering sevice
+
+# X local transport driver
+C_XCONN=265
+
+# common part of common install commands used to create nodes in target system
+# in general it is preferable to use install to create the devices, because
+# if they are already correct, it's faster.  install will not change modes
+# or owners if a device already exists with the correct type, major, and minor.
+# sometimes this is good, and sometimes it may require an extra chmod or
+# chown if they need to be "standard"
+INSTALL?=install
+INSCMD=$(INSTALL) -root "" -rawidb "" -f .
+
+# create a tty(-like) device, which should retain its previous mode and
+#	owner, if it had one.
+INSTTY=$(INSCMD) -m 666 -chr 
+
+
+all:	alldevs garbage
+
+# generate IDB entries--the absolute minimum so bcheckrc can do a MAKEDEV
+install:
+	$(INSTALL) -m 600 -idb mr -chr ${C_CONSOLE},0 -F dev console
+	$(INSTALL) -m 600 -idb mr -chr ${C_CONSOLE},0 -F dev syscon
+	$(INSTALL) -m 600 -idb mr -chr ${C_CONSOLE},0 -F dev systty
+	$(INSTALL) -m 666 -idb mr -chr ${C_MM},2 -F dev null
+	$(INSTALL) -m 666 -idb mr -chr ${C_ZERO},0 -F dev zero
+
+#minimal stuff
+mindevs: generic disks pty ttys flash
+
+# all of everything; the "garbage" target used with "all" above will
+# remove no longer supported devices that used to be made from alldevs
+#
+alldevs: mindevs tape fds hdsp if_sl if_ppp \
+	plp scsi usema fsctl midi video tpi ipfilter \
+	usreisa usrvme sysctlr sad usrdma dms ei ccsync postwait \
+	indycomp isdn xconn
+
+# machine dependent links, first makes all the devices that might be linked to
+links: disks tape
+
+# As in disks target, remove entries from no longer supported hardware
+tape: tps tapelinks
+
+
+# esdi, ipi, and smd no longer supported. So don't make them, and
+# remove any devices that might be left over.
+disks: dks disklinks
+
+# ONLY make the links, much faster when you just want to get the
+# tape device right, or are making a drive to boot as a non-standard
+# drive number (e.g. making a bootable top drive 2 on a Personal Iris
+#
+onlylinks: disklinks tapelinks
+
+
+# If root's device name contains a colon, we assume it is NFS and we are a
+# diskless machine.  The minor NFS device numbers are coupled to the order
+# in which the diskless kernel mounts things.  The major number attached
+# to /dev/root is not used.  The kernel picks one for NFS when it boots.
+# (XXXdiskless)
+#
+disklinks:
+	rootname=`/etc/devnm /`;					\
+	if expr "$$rootname" : '[^ ]*:' > /dev/null; then		\
+		rm -f root;						\
+		rm -f swap;						\
+		rm -f usr;						\
+                mknod root b ${B_NFS} 0;                                \
+                mknod swap b ${B_NFS} 2;                                \
+	else								\
+		rootdev=/hw/disk/root;					\
+		swapdev=/hw/disk/swap;					\
+		usrdev=/hw/disk/usr;					\
+		rrootdev=/hw/rdisk/root;				\
+		rswapdev=/hw/rdisk/swap;				\
+		rusrdev=/hw/rdisk/usr;					\
+		rvoldev=/hw/rdisk/volume_header;			\
+		rm -f root rroot swap rswap usr rusr rvh;		\
+		if [ -b $$rootdev ]; then				\
+			ln -s $$rootdev root;				\
+		fi;							\
+		if [ -c $$rrootdev ]; then				\
+			ln -s $$rrootdev rroot;				\
+		fi;							\
+		if [ -b $$swapdev ]; then				\
+			ln -s $$swapdev swap;				\
+		fi;							\
+		if [ -c $$rswapdev ]; then				\
+			ln -s $$rswapdev rswap;				\
+		fi;							\
+		if [ -b $$usrdev ]; then				\
+			ln -s $$usrdev usr;				\
+		fi;							\
+		if [ -c $$rusrdev ]; then				\
+			ln -s $$rusrdev rusr;				\
+		fi;							\
+		if [ -c $$rvoldev ]; then				\
+			ln -s $$rvoldev rvh;				\
+		fi;							\
+	fi;
+
+# We echo WHICH tape is being linked, in case they have more than
+# one tape on a system, since we use the first one we come to.
+# If there is already a /dev/tape and it exists in the eyes of mt, then
+# leave it alone.  Use nrtape because otherwise we might have
+# to wait a long time for a tape to rewind.
+# For the scsi tapes, look on each supported controller, checking
+# first to see if the device exists, so we don't get an mt error.
+#
+# The order of search is:
+#   Integral SCSI controllers, starting at controller 0, drive 1,
+#     incrementing drive number up to max and then controller number
+#
+# 9trk SCSI tapes links default to the variable blocksize device for
+#   compatibility with most other unix 9trk tapes; it also defaults to
+#   the highest density (6250).
+# DAT links default to variable mode;
+# Exabyte links default to fixed mode;
+# NOTE: (variable mode limits max single write to max blocksize, fixed doesn't).
+# IRIX 5.X note: if nrtape is old (3.X - 4.X) major number for tps driver,
+# do *NOT* preserve the old tape device, as the major # won't match the
+# new 5.X major numbers, and this will cause programs like 'bru' that
+# try to match major #'s up against the /dev/rmt devices a lot of grief...
+tapelinks:
+	@if /sbin/mt -t nrtape exist; then  \
+		set x`ls -ln nrtape` ; case "$$5" { \
+		23,|28,|83,|84,)  ;; \
+		*) exit 0;; \
+	} ; \
+	fi; \
+	rm -f tape nrtape tapes nrtapes tapens nrtapens; \
+	if test -d abi ; then :; \
+	else \
+		rm -rf abi; mkdir abi; chmod 755 abi ; \
+	fi; \
+	linkadap=65535; \
+	linktarg=0; \
+	set ` hinv | grep "Tape" | grep "on SCSI" | sed "s/://g" | \
+	( while read a b c targ e f g adap i; do \
+		if [ $$adap -ge 0 -a $$adap -lt $$linkadap ]; then \
+			linkadap=$$adap; \
+			linktarg=$$targ; \
+		elif [ $$adap -eq $$linkadap ]; then \
+			if [ $$targ -gt $$linktarg ]; then \
+				linktarg=$$targ; \
+			fi; \
+		fi; \
+	  done ; echo $$linkadap $$linktarg ) `; \
+	c=$$1; \
+	d=$$2; \
+	if /sbin/mt -t rmt/tps$${c}d$${d}nr exist; then \
+	   echo "\tSCSI tape unit $$d on controller $$c assumed for main tape device"; \
+	   set +e; stat="`2>&1 /sbin/mt -t rmt/tps$${c}d$${d}nr status`" ; set -e ; \
+	   case "$$stat" { \
+	   *Drive?type:*8mm*) \
+	       echo \\tln -fs rmt/tps$${c}d$${d} tape; ln -fs rmt/tps$${c}d$${d} tape; \
+	       echo \\tln -fs rmt/tps$${c}d$${d}nr nrtape; ln -fs rmt/tps$${c}d$${d}nr nrtape;; \
+	   *Drive?type:*DAT*) \
+	       echo \\tln -fs rmt/tps$${c}d$${d}v tape; ln -fs rmt/tps$${c}d$${d}v tape; \
+	       echo \\tln -fs rmt/tps$${c}d$${d}nrv nrtape; ln -fs rmt/tps$${c}d$${d}nrv nrtape;; \
+	   *Drive?type:*9?track*) \
+	       echo \\tln -fs rmt/tps$${c}d$${d}v.6250 tape; ln -fs rmt/tps$${c}d$${d}v.6250 tape; \
+	       echo \\tln -fs rmt/tps$${c}d$${d}nrv.6250 nrtape; ln -fs rmt/tps$${c}d$${d}nrv.6250 nrtape;; \
+           *Drive?type:*DLT*) \
+               echo \\tln -fs rmt/tps$${c}d$${d}v tape; ln -fs rmt/tps$${c}d$${d}v tape; \
+               echo \\tln -fs rmt/tps$${c}d$${d}nrv nrtape; ln -fs rmt/tps$${c}d$${d}nrv nrtape;; \
+	   *) \
+	       echo \\tln -fs rmt/tps$${c}d$${d} tape; ln -fs rmt/tps$${c}d$${d} tape; \
+	       echo \\tln -fs rmt/tps$${c}d$${d}nr nrtape; ln -fs rmt/tps$${c}d$${d}nr nrtape; \
+	       echo \\tln -fs rmt/tps$${c}d$${d}ns tapens; ln -fs rmt/tps$${c}d$${d}ns tapens; \
+	       echo \\tln -fs rmt/tps$${c}d$${d}ns abi/tape; ln -fs rmt/tps$${c}d$${d}ns abi/tape; \
+	       echo \\tln -fs rmt/tps$${c}d$${d}nrns nrtapens; ln -fs rmt/tps$${c}d$${d}nrns nrtapens;; \
+	   } ; \
+	   exit 0;  \
+	fi ; \
+	if hinv -c tape > /dev/null ; then  \
+		echo "Cannot find any tape device; link to tape not created."; fi
+
+# common stuff
+generic: anything
+	# zero needs to be made with install, because dynamic programs,
+	# including mknod, need it,, so if it's correct, as it always should
+	# be by the time this target is invoked, we don't want to remove and
+	# remake it.
+	$(INSCMD) -m 666 -chr ${C_ZERO},0 zero
+	$(INSCMD) -m 640 -chr ${C_MM},0 mem
+	$(INSCMD) -m 640 -chr ${C_MM},1 kmem
+	$(INSCMD) -m 666 -chr ${C_MM},2 null
+	$(INSCMD) -m 666 -chr ${C_MM},3 mmem
+	$(INSCMD) -m 622 -chr ${C_CONSOLE},0 console
+	$(INSCMD) -m 644 -chr ${C_PRF},0 prf
+	$(INSCMD) -m 644 -chr ${C_PRF},100 par
+	$(INSCMD) -m 644 -chr ${C_KLOG},0 klog
+	$(INSCMD) -m 640 -chr ${C_IMON},0 imon
+	$(INSCMD) -m 666 -chr ${C_SY},0 tty
+	$(INSCMD) -m 666 -chr ${C_TPORT},0 tport
+	$(INSCMD) -m 666 -chr ${C_CLN},${C_SHMIQ} shmiq
+	$(INSCMD) -m 666 -chr ${C_GFX},0 graphics
+	$(INSCMD) -m 666 -chr ${C_GFX},1 opengl
+	$(INSCMD) -m 666 -chr ${C_CLN},${C_GFXS} gfx
+	$(INSCMD) -m 666 -chr ${C_CLN},${C_STRLOG}  log
+	$(INSCMD) -m 666 -chr ${C_CLN},${C_STRLOG}  conslog
+	rm -rf syscon systty; umask 0; ln console syscon; ln console systty
+	# ensure owners and modes for these devices
+	chmod 666 zero null mmem tty tport shmiq graphics opengl gfx log conslog
+	chmod 640 kmem mem imon
+	chmod 644 klog par prf
+	chmod 622 console
+	chown root.sys zero null mmem tty tport shmiq graphics opengl gfx log \
+	  console conslog kmem mem imon klog par prf
+
+# Pseudo tty's
+pty: anything
+	$(INSCMD) -m 666 -chr ${C_CLN},${C_PTC} ptc
+	$(INSCMD) -m 666 -chr ${C_CLN},${C_PTC1} ptc1
+	$(INSCMD) -m 666 -chr ${C_CLN},${C_PTC2} ptc2
+	$(INSCMD) -m 666 -chr ${C_CLN},${C_PTC3} ptc3
+	$(INSCMD) -m 666 -chr ${C_CLN},${C_PTC4} ptc4
+	chmod 666 ptc*			# because install does not force it
+	if test -d pts ; then :;\
+	else \
+		rm -rf pts; umask 22; mkdir pts; \
+	fi
+	$(INSTTY) ${C_PTS},0-$(MAXPTY) ttyq
+	chown root.sys ptc* ttyq*	# clean any extra leftovers
+	chmod 600 ttyq*
+	rm -rf ptmx; ln ptc ptmx	# ptmx is the SVR4 master clone dev
+
+# Standard on-cpu tty's
+# Create symlinks to any tty files that exist in the hwgraph, as well as any
+# input directories. Also provide direct symlinks /dev/keybd /dev/mouse
+# /dev/dials and /dev/tablet for backward compatibility.
+ttys:	anything
+	@for tty_file in /hw/ttys/* ; do \
+		bname="`basename $$tty_file`" ; \
+		if [ -n "$$bname" -a "$$bname" != '*' ]; then \
+		rm -rf "$$bname" ; \
+		ln -s $$tty_file . ; \
+		else echo Missing ttys in /hw; \
+		fi ; \
+	done
+	@qnum=0;\
+	for input_dir in /hw/input* ; do \
+		dev_dir=`basename $$input_dir` ; \
+		if [ "$$dev_dir" != 'input*' ]; then \
+			if [ -l $$dev_dir -o ! -d $$dev_dir ]; then \
+				rm -f $$dev_dir ; \
+				(umask 22; mkdir $$dev_dir) ; \
+			fi ; \
+			rm -rf $$dev_dir/keyboard $$dev_dir/mouse ; \
+			if [ -c $$input_dir/keyboard ]; then \
+				ln -s $$input_dir/keyboard $$dev_dir/keyboard;\
+			fi ; \
+			if [ -c $$input_dir/mouse ]; then \
+				ln -s $$input_dir/mouse $$dev_dir/mouse ; \
+			fi ; \
+			$(INSCMD) -m 666 -chr ${C_QCNTL},$$qnum qcntl$$qnum; \
+			qnum=$$(( $$qnum + 1)); \
+		fi ; \
+	done
+	@if test -c /hw/input/keyboard ; then \
+		rm -rf keybd ; \
+		ln -s /hw/input/keyboard keybd ; \
+	fi
+	@for dev in mouse dials tablet ; do \
+		if test -c /hw/input/$$dev ; then \
+			rm -rf $$dev ; \
+			ln -s /hw/input/$$dev . ; \
+		fi ; \
+	done
+
+# scsi disk driver
+dks: anything
+	if [ -d dsk -a -l dsk ]; then :;\
+	else \
+		rm -rf dsk; \
+		if [ -d /hw/disk ]; then \
+			ln -s /hw/disk dsk; \
+		fi \
+	fi
+	if [ -d rdsk -a -l rdsk ]; then :;\
+	else \
+		rm -rf rdsk; \
+		if [ -d /hw/rdisk ]; then \
+			ln -s /hw/rdisk rdsk; \
+		fi \
+	fi
+
+# CC Sync driver for IP19,21,25
+ccsync: anything
+	set +e ; ccsync=`/sbin/hinv | grep "CC sync"`; set -e; \
+	if [ "$$ccsync" != "" ] ; then \
+		$(INSCMD) -m 666 -chr ${C_CCSYNC},256 ccsync; \
+	fi
+
+# user level vme devices
+usrdma: anything
+	@if test ! -d vme; then rm -rf vme; umask 22; mkdir vme;  fi
+	if [ `/sbin/uname -m` = IP19 -o `/sbin/uname -m` = IP21 -o `/sbin/uname -m` = IP25 ] ; then \
+		export _XPG=1; /sbin/hinv | grep "VME bus: adapter" | \
+			while read a b c adap d ; \
+			do \
+			minor=$$(( $$adap * 16 + 1)) ; \
+			$(INSCMD) -m 640 -chr ${C_USRDMA},$$minor vme/dma$${adap}; \
+		done; \
+	fi
+
+# user level vme devices
+usrvme: anything
+	@if test ! -d vme; then rm -rf vme; umask 22; mkdir vme;  fi
+	/sbin/hinv | grep "VME bus: adapter" | while read a b c adap d ; \
+	do \
+		set 16n 24n 32n 16s 24s 32s; \
+		export _XPG=1; for t in 8192 8448 8704 12288 12544 12800; do \
+			minor=$$(( $$t + $$adap)); \
+			$(INSCMD) -m 640 -chr ${C_USRBUS},$$minor mknod vme/vme$${adap}a$$1; \
+			shift; \
+		done; \
+	done
+
+usreisa: anything
+	@if test ! -d eisa; then rm -rf eisa; umask 22; mkdir eisa;  fi
+	/sbin/hinv | grep "EISA bus: adapter" | if read a b c adap d ; then\
+		set io mem; \
+		export _XPG=1; for t in 49152 49408; do \
+			minor=$$(( $$t + $$adap)); \
+			$(INSCMD) -m 640 -chr ${C_USRBUS},$$minor eisa/eisa$${adap}$$1 ;\
+			shift; \
+		done; \
+	fi
+
+dms: anything
+	rm -f dmrb
+	$(INSCMD) -m 666 -chr $(C_DMS),0 dms
+
+cosmo: anything
+	$(INSCMD) -m 666 -chr $(C_COSMO),0 cosmo
+
+indycomp: anything
+	if hinv | grep -s 'IndyComp' > /dev/null; then \
+	     $(INSCMD) -m 666 -chr $(C_INDYCOMP),0 indycomp; \
+	fi
+
+# isdn subdirectory.  MAKEDEV.isdn installed by isdn_eoe.sw.isdn
+isdn: anything
+sinclude MAKEDEV.isdn
+
+# smfd scsi floppy disk driver (char dev only), and r/w by the world
+# only make them for devices actually installed
+# For ABI, make abi/floppy as the first 1.44 MB floppy device also
+fds floppy: anything
+	@if [ -d rdsk -a -l rdsk ]; then :; \
+	else \
+		rm -rf rdsk; \
+		if [ -d /hw/rdisk ]; then \
+			ln -s /hw/rdisk rdsk; \
+		fi \
+	fi
+
+# generic scsi driver
+scsi: anything
+	if [ -d scsi -a -l scsi ]; then :; \
+	else \
+		rm -rf scsi; \
+		if [ -d /hw/scsi ]; then \
+			ln -s /hw/scsi scsi; \
+		fi \
+	fi
+
+# scsi tape driver
+tps: anything
+	@if [ -d rmt -a -l rmt ]; then :;\
+	else \
+		rm -rf rmt; \
+		rm -rf mt; \
+		if [ -d /hw/tape ]; then \
+			ln -s /hw/tape rmt; \
+			ln -s rmt mt; \
+		fi \
+	fi
+
+# SLIP
+if_sl: anything
+	$(INSCMD) -m 600 -chr ${C_CLN},${C_IF_SL} if_sl
+
+# PPP
+if_ppp: anything
+	$(INSCMD) -m 600 -chr ${C_CLN},${C_IF_PPP} if_ppp
+
+# Software semaphore device usema(7M)
+usema: anything
+	$(INSCMD) -m 666 -chr ${C_USEMA},0 usemaclone
+	$(INSCMD) -m 666 -chr ${C_USEMA},1 usema
+
+# Software device for X local transport
+xconn: anything
+	rm -f xconns xconnc
+	mknod xconns c ${C_XCONN} 0
+	mknod xconnc c ${C_XCONN} 1
+	chmod 0600 xconns
+	chmod 0666 xconnc
+
+# Software postwait device for Oracle (7M)
+postwait: anything
+	$(INSCMD) -m 666 -chr ${C_POSTWAIT},0 postwait
+	rm -f postwait
+	mknod postwait c ${C_POSTWAIT} 0
+	chmod 0777 postwait
+
+
+# Parallel Line Printer port
+plp: anything
+	if [ -d /hw/parallel ]; then \
+	    if hinv | grep -is 'EPP/ECP parallel port' > /dev/null; then \
+		rm -rf plp* ecp* epp*; \
+	        for plps in /hw/parallel/*; do \
+		    ln -s $$plps `basename $$plps`; \
+		    if [ `basename $$plps` = ecp ]; then \
+			ln -s $$plps plpbi; \
+		    fi ; \
+		done; \
+            elif hinv | grep -is 'bi-directional parallel port' > /dev/null; then \
+                rm -rf plp*; \
+                for plps in /hw/parallel/*; do \
+                    ln -s $$plps `basename $$plps`; \
+                done; \
+	    else \
+		rm -rf plp*; \
+		for plps in `ls /hw/parallel/plp*`; do \
+		    ln -s $$plps `basename $$plps`; \
+		done; \
+	    fi ; \
+	else \
+	    if hinv | grep -is 'EPC parallel port' >/dev/null; then \
+		rm -f plp* ; \
+		for ctlr in 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1 ; do \
+		    if hinv | grep -is "EPC parallel port: Ebus slot $$ctlr$$" >/dev/null; then \
+			$(INSCMD) -m 666 -u root -chr ${C_PLP},$$ctlr plp$$ctlr; \
+			if test ! -c plp ; then \
+			    ln -f plp$$ctlr plp ; \
+			fi ; \
+		    fi ; \
+		done ; \
+	    else \
+		rm -f plp; \
+		$(INSCMD) -m 666 -u root -chr ${C_PLP},0 plp; \
+		rm -f plpbi; \
+		$(INSCMD) -m 666 -u root -chr ${C_PLP},16 plpbi; \
+	    fi; \
+	fi; \
+	if [ ! -l plp ]; then \
+	    if [ -d /hw/parallel ]; then \
+		rm -rf plp; \
+		ln -s /hw/parallel/plp1 plp; \
+	    fi; \
+	fi
+
+# IP19,21,25 System Controller driver
+sysctlr: anything
+	if hinv | grep -is "IO[45]"  >/dev/null; then \
+		$(INSCMD) -m 600 -u root -chr ${C_SYSCTLR},0 sysctlr; \
+	fi;
+
+# IP19,21,25 Flash PROM driver
+flash: anything
+	rm -rf flash; \
+	if hinv | grep -is "IO[45]" >/dev/null; then \
+	    umask 22; mkdir flash; \
+	    umask 0; \
+	    for i in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
+		mknod flash/flash$$i c ${C_FLASH} $$i; \
+	    done; \
+	    chmod 600 flash/flash* ; \
+	fi
+
+hdsp: anything
+	if hinv -s -c audio > /dev/null || hinv -s -d divo > /dev/null; then \
+	    if test ! -d hdsp; then rm -rf hdsp; umask 22; mkdir hdsp; fi ; \
+	    for unit in 0 ; do \
+		    $(INSCMD) -m 666 -chr ${C_HDSP},2-17 hdsp/hdsp$${unit}r; \
+	        $(INSCMD) -m 666 -chr ${C_HDSP},0 hdsp/hdsp$${unit}master; \
+	        $(INSCMD) -m 666 -chr ${C_HDSP},256 hdsp/hdsp$${unit}events; \
+	        $(INSCMD) -m 600 -chr ${C_HDSP},1 hdsp/hdsp$${unit}control; \
+	    done ; \
+	fi
+
+#external interrupts
+ei: anything
+	rm -f ei; \
+	rm -f external_int; \
+	if [ -d external_int -a -l external_int ]; then :;\
+	else \
+		if [ -d /hw/external_int ]; then \
+			ln -s /hw/external_int . ; \
+			ln -s external_int/1 ei; \
+		fi \
+	fi
+
+fsctl: anything
+	rm -f fsctl
+	mknod fsctl c ${C_FSCTL} 0
+	chmod 600 fsctl
+
+# midi clone device
+midi: anything
+	rm -f midi imidi
+	mknod midi c ${C_CLN} ${C_MIDI}
+	mknod imidi c ${C_CLN} ${C_IMIDI}
+	chmod 666 midi
+	chmod 666 imidi
+
+video: anything
+# Starter Video
+	if hinv -c processor | grep -s 'IP20' > /dev/null; then \
+	rm -f video ; mknod video c ${C_VIDEO1} 0 ; chmod 666 video ; \
+	fi
+# Vino Video
+	if hinv -c processor | grep -s 'IP22' > /dev/null; then \
+	rm -f vino ; mknod vino c ${C_VIDEO1} 0 ; chmod 666 vino ; \
+	fi
+# Sirius Video and /dev/vid support for Sirius
+	if hinv -c processor | grep -s 'IP1[79]' > /dev/null || \
+		hinv -c processor | grep -s 'IP21' > /dev/null ; then \
+	rm -f vid ; mknod vid c ${C_VIDEO1} 0 ; chmod 666 vid ; \
+	rm -f Sirius ; mknod Sirius c ${C_VIDEO2} 0 ; chmod 666 Sirius ; \
+	fi
+# Galileo Video
+	if hinv -c processor | grep -s 'IP2[0268]' > /dev/null; then \
+	rm -f ev1 ; mknod ev1 c ${C_VIDEO2} 0 ; chmod 666 ev1 ; \
+	fi
+# IMPACT Video
+	if hinv -c processor | grep -s 'IP2[268]' > /dev/null; then \
+	rm -f mgv ; mknod mgv c ${C_VIDEO3} 0 ; chmod 666 mgv ; \
+	fi
+# O2 Video
+	if hinv -c processor | grep -s 'IP32' > /dev/null; then \
+	rm -f vice ; mknod vice c ${C_VIDEO4} 0 ; chmod 666 vice ; \
+	rm -f vicedms ; mknod vicedms c ${C_VIDEO4} 32 ; chmod 666 vicedms ; \
+	rm -f vicedbg ; mknod vicedbg c ${C_VIDEO4} 15 ; chmod 666 vicedbg ; \
+	rm -f mvp ; mknod mvp c ${C_VIDEO1} 0 ; chmod 666 mvp ; \
+	fi
+# Speedracer Pro Video
+# On IP30, link /dev/mgv to /hw/srv for backwards compatibility. 
+# /hw/srv is a link to canonical hwgraph vertex for video board.
+	if hinv -c processor | grep -s 'IP30' > /dev/null; then \
+		rm -f /dev/mgv; \
+		if [ -c /hw/srv ]; then \
+			ln -s /hw/srv /dev/mgv ; chmod 666 /dev/mgv ; \
+		fi; \
+	fi
+# Speedracer Personal Video
+# /hw/evo is a link to canonical hwgraph vertex for video board.
+	if hinv -c processor | grep -s 'IP30' > /dev/null; then \
+		rm -f /dev/evo; \
+		if [ -c /hw/evo ]; then \
+			ln -s /hw/evo /dev/evo ; chmod 666 /dev/evo ; \
+		fi; \
+	fi
+tpi: anything
+	rm -f tcp udp rawip icmp ticlts ticots ticotsord 
+	mknod tcp       c ${C_CLN} ${C_TPITCP}
+	mknod udp       c ${C_CLN} ${C_TPIUDP}
+	mknod rawip     c ${C_CLN} ${C_TPIIP}
+	mknod icmp      c ${C_CLN} ${C_TPIICMP}
+	mknod ticlts    c ${C_CLN} ${C_TCL}
+	mknod ticots    c ${C_CLN} ${C_TCO}
+	mknod ticotsord c ${C_CLN} ${C_TCOO}
+	chmod 666 tcp udp rawip icmp ticlts ticots ticotsord 
+
+sad: anything
+	rm -rf sad
+	umask 22; mkdir sad
+	mknod sad/user c $(C_SAD) 0
+	mknod sad/admin c $(C_SAD) 1
+	chmod 666 sad/user sad/admin
+
+ipfilter: anything
+	rm -f ipfilter
+	mknod ipfilter c ${C_IPFLTR} 0 
+	if [ -c ipfilter ] ; then \
+	    chmod 644 ipfilter; \
+	fi
+
+# Get rid of obsolete "garbage", from drivers no longer shipped,
+# or old names from older OS releases.  Leaving these can cause some
+# confusion
+garbage: anything
+# very old products, pre-6.2
+	rm -rf sat m33X25* queue audio cent
+# obsolete 3270 product
+	rm -rf t3270 t3270c0 t3270c1 t3270d0 t3270d1 t3270ms t3270lt t3270dt
+# obsolete IBM SNA SDLC product
+	rm -rf si1 si2 si3 si4 sipr1 sipr2 sipr3 sipr4 simaster lnktrace
+# obsolete IBM 5080 product
+	rm -rf gse
+# from irix5.3
+	rm -rf graphics_opengl
+
+
+# Used to force above rules to run, even if the target
+# exists (as opposed to what the rules create, cent for instance)
+anything:
+
+# This is not ever invoked automatically.
+owners: anything alldevs
+	chown -R root.sys .
+	chown lp.bin plp*
+
+# make secure; It is more restrictive than individual targets.
+# to make exactly the original target permissions, remove all
+# devices and remake them with "make removealldevices alldevs"
+# this deliberately does not depend on owners or alldevs
+# Some of these devices may not normally exist on some or all systems
+# This is not ever invoked automatically.
+permissions:
+	@echo \\tFixing device permissions to be restrictive in `pwd`,
+	@echo \\twith the common exceptions.
+	-chown -R root.sys .
+	-chown lp.bin plp*
+	-chmod -R og-w .
+	-chmod -R go-wr dsk rdsk scsi
+	-find . -type d -print | xargs chmod 755
+	# these are group readable
+	-chmod 640 swap
+	-chmod 640 hw/fetchop vme/dma* vme/vme* eisa/eisa*
+	# these must be 666 for correct operation
+	chmod 666 null zero tty log ptc ptc[1-4]
+	# these must be 666 for correct operation of SVR4 networking
+	-chmod 666 tcp udp rawip icmp ticlts ticots ticotsord sad/user sad/admin
+	# digital media devices
+	-chmod 666 dms cosmo indycomp video vino vid Sirius ev1 mgv midi imidi \
+		    hdsp/hdsp[0-9]*r[0-9]* hdsp/hdsp[0-9]*master \
+		    hdsp/hdsp[0-9]*events
+	# Other devices normally 666
+	-chmod 666 ccsync
+	# removable media devices are normally created mode 666
+	-chmod 666 rmt/tps* rdsk/fds[0-9]*
+
+# remove all device files, and any directories that are thereafter
+# This is not ever invoked automatically.
+# empty
+removealldevices:
+	find . -mount ! \( -type d -o -type f \) -print | xargs rm -f
+	find . -mount -depth -type d -print | xargs rmdir -ps
+	ls -ltR

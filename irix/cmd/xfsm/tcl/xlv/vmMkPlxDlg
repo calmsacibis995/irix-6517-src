@@ -1,0 +1,854 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	vmMkPlxDlg
+# Version:	$Revision: 1.9 $
+# Synopsis:	Encapsulates the dialog that allows the user to create a
+#		stand-alone plex.
+# Functions:	vmMkPlx:realize
+#		vmMkPlx:manage
+#		vmMkPlx:fill
+#		vmMkPlx:_infoFill
+#		vmMkPlx:clear
+#		vmMkPlx:setData
+#		vmMkPlx:setHost
+#		vmMkPlx:getData
+#		vmMkPlx:chkData
+#		vmMkPlx:_create
+#		vmMkPlx:_createWorkArea
+#		vmMkPlx:_dialogCb
+#		vmMkPlx:_popdownCb
+#		vmMkPlx:_accept
+#		vmMkPlx:_doAccept
+#		vmMkPlx:_cancel
+#		vmMkPlx:_save
+#		vmMkPlx:_newHostName
+#		vmMkPlx:_veNumChangeAction
+#		vmMkPlx:_vePartChangeAction
+#		vmMkPlx:_rowSelectAction
+#		vmMkPlx:_startChangeAction
+#		vmMkPlx:_updatePlexSum
+#		vmMkPlx:_partChangeAction
+#		vmMkPlx:_nextPrevAction
+#		vmMkPlx:_updateNextPrev
+#		vmMkPlx:_setPlexOnlyValue
+#		vmMkPlx:_setPlexAndVeValue
+#		vmMkPlx:_updatePlexGraph
+#		vmMkPlx:_startDrop
+#		vmMkPlx:_doTransfer
+#%COMMENT_END
+
+global	G_data
+if {! [info exists G_data(source,vmPtPnl)]} {
+	source $G_data(sourcedir)/vmPtPnl
+	set G_data(source,vmPtPnl) true
+}
+if {! [info exists G_data(source,vmPlxTblPnl)]} {
+	source $G_data(sourcedir)/vmPlxTblPnl
+	set G_data(source,vmPlxTblPnl) true
+}
+if {! [info exists G_data(source,vmPlxGraphPnl)]} {
+	source $G_data(sourcedir)/vmPlxGraphPnl
+	set G_data(source,vmPlxGraphPnl) true
+}
+if {! [info exists G_data(source,vmPlxSumPnl)]} {
+	source $G_data(sourcedir)/vmPlxSumPnl
+	set G_data(source,vmPlxSumPnl) true
+}
+
+#########################################
+#		Public			#
+#########################################
+proc vmMkPlx:realize { handle parent {mode create} } \
+{
+	global		_GW_mkplx _GD_mkplx
+
+	####	One time initialization
+	if {! [info exists _GD_mkplx(initialized)]} {
+		####	Make sure we don't go through this again
+		set _GD_mkplx(initialized) true
+
+		set _GD_mkplx(type)	plex
+
+		set _GD_mkplx(texts)	XLV_OBJ_NAME
+		set _GD_mkplx(labels)	XFS_HOST
+	}
+
+	if {! [info exists _GW_mkplx($handle,dialog)]} {
+		####	Per instance initialization
+		set _GD_mkplx($handle,mode)	$mode
+		if {$mode == "info"} {
+			set _GD_mkplx($handle,buttons) {cancel help}
+		} else {
+			set _GD_mkplx($handle,buttons) {accept apply save
+							cancel help}
+		}
+
+		set _GD_mkplx($handle,confirm)	false
+		trace variable _GD_mkplx($handle,confirm) w vmMkPlx:_doAccept
+
+		set _GW_mkplx($handle,dialog) [vmMkPlx:_create $handle $parent]
+		vmMkPlx:_rowSelectAction $handle $_GD_mkplx(type) 0 sel
+		vmMkPlx:_updatePlexGraph $handle $_GD_mkplx(type)
+
+		plxSum:setItemLabel $handle ves 1
+
+		####    This must happen after the dialog is realized
+		$_GW_mkplx($handle,dialog) realizeWidget
+
+		####	Dialog
+		$_GW_mkplx($handle,dialog) getValues -height height -width width
+		plxGrph:setNumPlexes $handle 1
+		set gw(current) [plxGrph:getWidth $handle current]
+		set gw(desired) [plxGrph:getWidth $handle desired]
+		plxGrph:setWidth $handle $gw(desired)
+		set width [expr $width + ($gw(desired) - $gw(current))]
+
+		.$_GW_mkplx($handle,dialog) setValues \
+				-minHeight [expr $height + 40] \
+				-minWidth $width
+
+		####	Panes
+		$_GW_mkplx($handle,buttons) getValues -height height
+		$_GW_mkplx($handle,buttons) setValues \
+				-paneMinimum $height \
+				-paneMaximum $height
+		$_GW_mkplx($handle,pane,plex) getValues -height height
+		$_GW_mkplx($handle,pane,plex) setValues \
+				-height [expr $height + 40] \
+				-paneMinimum $height
+		if {$mode != "info"} {
+			$_GW_mkplx($handle,pane,part) getValues -height height
+			$_GW_mkplx($handle,pane,part) setValues \
+					-paneMinimum $height
+		}
+
+		####    Register for Drag and Drop
+		$_GW_mkplx($handle,dialog) dropSiteRegister -dropProc \
+				"vmMkPlx:_startDrop $handle %dragContext \
+						$_GW_mkplx($handle,dialog)" \
+				-numImportTargets 1 \
+				-importTargets "COMPOUND_TEXT"
+	}
+}
+
+proc vmMkPlx:manage { handle } \
+{
+	global	_GW_mkplx _GD_mkplx
+
+	if {[info exists _GW_mkplx($handle,dialog)]} {
+		$_GW_mkplx($handle,dialog) manageChild
+		set _GD_mkplx($handle,accept) false
+	}
+}
+
+#########################################
+#	Public: Data In Routines	#
+#########################################
+proc vmMkPlx:fill { handle obj_list } \
+{
+	global	_GW_mkplx _GD_mkplx
+
+	if {[info exists _GW_mkplx($handle,dialog)] && $obj_list == ""} {
+		return 1
+	}
+
+	set obj [lindex $obj_list 0]
+	obj:parse $obj o_class o_host o_nm o_type
+
+	if {$o_class != "VOL" || [string toupper $o_type] != "PLEX"} {
+		if {$_GD_mkplx($handle,mode) == "create"} {
+			set op "create"
+		} elseif {$_GD_mkplx($handle,mode) == "edit"} {
+			set op "edit"
+		} else {
+			set op "information"
+		}
+		em:simpleMsg $handle error \
+		"Only plexes are valid for the $op operation."
+		return 0
+	} elseif {$o_host == "_TEMPLATE_"} {
+		if {[tu:read $o_class $o_nm data]} {
+			vmMkPlx:setData $handle [split $data \n]
+		}
+	} elseif {$_GD_mkplx($handle,mode) != "create"} {
+			if {! [vmMkPlx:_infoFill $handle $obj]} {
+				return 0
+			}
+	} else {
+		####	TODO
+		####	What happens during create?
+	}
+
+	return 1
+}
+
+proc vmMkPlx:_infoFill { handle obj } \
+{
+	global		_GW_mkplx _GD_mkplx
+
+	if {[catch {set objdata [xlvCmd objInfo $obj]} error]} {
+		regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		em:storeMsg $handle warning \
+		    "Could not get plex data for [obj:getName $obj].\n\t$nerror"
+		return 0
+	}
+	if {[catch {set synopsis [xlvCmd synopsis $obj]} error]} {
+		regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		em:storeMsg $handle warning \
+		    "Could not get plex data for [obj:getName $obj].\n\t$nerror"
+		return 0
+	}
+	if {[llength $synopsis] == 1} {
+		set synopsis [lindex $synopsis 0]
+	}
+
+	plxTbl:clear $handle
+
+	obj:parse $obj o_class o_host o_nm o_type
+	$_GW_mkplx($handle,XLV_OBJ_NAME) setValues -labelString $o_nm
+	$_GW_mkplx($handle,XFS_HOST) setValues \
+			-labelString [hu:getHostPlusDom $o_host]
+
+	if {! [xlv:parseData object [split $objdata \n] data_out]} {
+		return 0
+	}
+
+	set v_plexes [lassign $synopsis v_name v_type]
+	set p_plexes [lassign [lindex $v_plexes 0] p_name p_size p_num]
+	set p_plexes [lvarpop p_plexes 0]
+
+	set rnum 0
+	set ve_num $data_out(plex,ve_num)
+	plxTbl:_setTblVeCount $handle 0 $ve_num
+	loop i 0 $ve_num 1 {
+		lassign [lvarpop p_plexes] idx start end
+		lappend cells(plex) [list $ve_num \
+		    [lindex $data_out(plex,ve_type) $rnum] \
+		    [lindex $data_out(plex,ve_sunit) $rnum] \
+		    [lindex $data_out(plex,ve_start) $rnum] \
+		    [format "%.2f" [expr ($end - $start) / 2048.0]] \
+		    [lindex $data_out(plex,nparts) $rnum] \
+		    [lindex $data_out(plex,parts) $rnum]]
+
+		set ve_num ""
+		incr rnum
+	}
+
+	plxTbl:setData $handle $cells(plex)
+	plxSum:setData $handle $synopsis [split $objdata \n]
+	plxGrph:fillPlexes $handle $v_plexes blocks
+
+	return 1
+}
+
+proc vmMkPlx:clear { handle } \
+{
+	global	_GD_mkplx
+
+	plxSum:clear $handle
+	plxTbl:clear $handle
+	plxGrph:clear $handle
+	vmMkPlx:_updatePlexGraph $handle $_GD_mkplx(type)
+}
+
+proc vmMkPlx:setData { handle objdata } \
+{
+	global _GW_mkplx _GD_mkplx
+
+	if {! [xlv:parseData template $objdata dout]} {
+		return
+	}
+
+	ptPnl:markPartsAvail $handle [plxTbl:getParts $handle]
+	plxTbl:clear $handle
+
+	set ve_num [lindex $dout(plex,ve_num) 0]
+	plxTbl:_setTblVeCount $handle 0 $ve_num
+
+	plxSum:clear $handle
+	plxSum:setItemLabel $handle ves $ve_num
+
+	set rnum 0; set cells {}
+	loop j 0 $ve_num 1 {
+		lappend cells [list $ve_num \
+		    [lindex $dout(plex,ve_type) $rnum] \
+		    [lindex $dout(plex,ve_sunit) $rnum] \
+		    [lindex $dout(plex,ve_start) $rnum] \
+		    [format %.2f 0.0] \
+		    0 \
+		    ""]
+
+		set ve_num ""
+		incr rnum
+	}
+	plxTbl:setData $handle $cells
+}
+
+proc vmMkPlx:setHost { handle host } \
+{
+	global		_GW_mkplx _GD_mkplx
+
+	if {$_GD_mkplx($handle,mode) != "info"} {
+		$_GW_mkplx($handle,dialog) defineCursor watch
+		vmMkPlx:_newHostName $handle $host
+		$_GW_mkplx($handle,dialog) defineCursor ""
+		set _GD_mkplx($handle,XFS_HOST) $host
+		$_GW_mkplx($handle,XFS_HOST) setValues \
+				-labelString [hu:getHostPlusDom $host]
+	}
+}
+
+#########################################
+#	Public: Data Out Routines	#
+#########################################
+proc vmMkPlx:getData { handle dat } \
+{
+	global		_GW_mkplx _GD_mkplx
+	upvar $dat	data
+
+	set item XLV_OBJ_NAME
+	set val [string trim [$_GW_mkplx($handle,$item) getString]]
+	if {[cequal $val ""]} { set val . }
+	lappend data "plex $val"
+
+	plxTbl:getData $handle data
+
+	lappend data end
+	lappend data exit
+
+	return 1
+}
+
+proc vmMkPlx:chkData { handle } \
+{
+	global		_GW_mkplx _GD_mkplx
+	set rval	1
+
+	set item XLV_OBJ_NAME
+	if {[string trim [$_GW_mkplx($handle,$item) getString]] == ""} {
+		$_GW_mkplx($handle,$item)-label getValues -labelString val
+		em:storeMsg $handle error "\"$val\" is a required field."
+		set rval 0
+	}
+
+	if {! [plxTbl:chkData $handle plex]} {
+		set rval 0
+	}
+
+	if {! $rval} {
+		em:setMessageString $handle "Unable to create Plex."
+	}
+
+	return $rval
+}
+
+#########################################
+#		Private			#
+#########################################
+proc vmMkPlx:_create { handle parent } \
+{
+	global		_GW_mkplx _GD_mkplx _GD_resources
+	set name	vmMkPlx
+
+        set dialog [xmFormDialog $parent.$handle]
+	.$dialog popdownCallback "vmMkPlx:_popdownCb $handle"
+	set pane [xmPanedWindow $dialog.$name \
+			-sashWidth 1 \
+			-sashHeight 1 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form]
+
+	set pw [xmPanedWindow $pane.pane managed]
+	set form_upper [xmForm $pw.plexes]
+	set wa [vmMkPlx:_createWorkArea $handle $form_upper]
+	set plx_area [plxTbl:realize $handle $form_upper \
+			$_GD_mkplx(type) $_GD_mkplx($handle,mode)]
+	if {$_GD_mkplx($handle,mode) != "info"} {
+
+		set form_lower [xmForm $pw.form_lower -skipAdjust true]
+		set plx_grph [plxGrph:realize $handle $form_lower]
+		set pt_pnl [ptPnl:realize $handle $form_lower]
+
+		ptPnl:registerPartChangeAction $handle vmMkPlx:_partChangeAction
+		ptPnl:registerNextPrevAction $handle vmMkPlx:_nextPrevAction
+		ptPnl:manage $handle
+
+
+		$wa setValues		-topAttachment attach_form \
+					-leftAttachment attach_form \
+					-rightAttachment attach_form \
+					-bottomAttachment attach_none
+		$plx_area setValues	-topAttachment attach_widget \
+					-leftAttachment attach_form \
+					-rightAttachment attach_form \
+					-bottomAttachment attach_form \
+					-topWidget $wa \
+					-topOffset 10 \
+					-bottomOffset 5
+
+		$plx_grph setValues	-topAttachment attach_form \
+					-leftAttachment attach_none \
+					-rightAttachment attach_none \
+					-bottomAttachment attach_form \
+					-bottomOffset 5
+					
+		$pt_pnl setValues	-topAttachment attach_form \
+					-leftAttachment attach_widget \
+					-rightAttachment attach_form \
+					-bottomAttachment attach_form \
+					-bottomOffset 5 \
+					-leftWidget $plx_grph \
+					-leftOffset 10
+
+		$form_lower manageChild
+		set _GW_mkplx($handle,pane,part) $form_lower
+	} else {
+
+		set plx_grph [plxGrph:realize $handle $form_upper]
+
+		$plx_grph setValues	-topAttachment attach_form \
+					-leftAttachment attach_none \
+					-rightAttachment attach_form \
+					-bottomAttachment attach_form \
+					-bottomOffset 5
+		$plx_area setValues	-topAttachment attach_widget \
+					-leftAttachment attach_form \
+					-rightAttachment attach_widget \
+					-bottomAttachment attach_form \
+					-topWidget $wa \
+					-topOffset 10 \
+					-rightWidget $plx_grph \
+					-rightOffset 5 \
+					-bottomOffset 5
+		$wa setValues		-topAttachment attach_form \
+					-leftAttachment attach_form \
+					-rightAttachment attach_widget \
+					-bottomAttachment attach_none \
+					-rightWidget $plx_grph \
+					-rightOffset 10
+	}
+
+	set _GW_mkplx($handle,buttons) \
+		 [xfs:createDialogButtons $pane $_GD_mkplx($handle,buttons)]
+	foreach i $_GD_mkplx($handle,buttons) {
+		$_GW_mkplx($handle,buttons).$i \
+				activateCallback "vmMkPlx:_dialogCb $handle $i"
+	}
+
+	plxGrph:registerPlexAction $handle vmMkPlx:_setPlexOnlyValue
+	plxGrph:registerVeAction $handle vmMkPlx:_setPlexAndVeValue
+
+	plxTbl:registerRowSelectAction $handle vmMkPlx:_rowSelectAction
+	plxTbl:registerVeNumChangeAction $handle vmMkPlx:_veNumChangeAction
+	plxTbl:registerStartChangeAction $handle vmMkPlx:_startChangeAction
+	plxTbl:registerVePartChangeAction $handle vmMkPlx:_vePartChangeAction
+
+	$plx_grph manageChild
+	$wa manageChild
+	plxTbl:manage $handle
+	$form_upper manageChild
+	$_GW_mkplx($handle,buttons) manageChild
+	$pane manageChild
+
+	set _GW_mkplx($handle,pane,plex) $form_upper
+
+	return $dialog
+}
+
+proc vmMkPlx:_createWorkArea { handle parent } \
+{
+	global		_GW_mkplx _GD_mkplx _GD_resources
+
+	set form [xmForm $parent.wa]
+	set grid [sgiGrid $form.grid -numColumns 2 -numRows 2 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_none \
+			-bottomAttachment attach_none]
+
+	####	Host
+	set item XFS_HOST
+	xmLabel $grid.$item-label managed -row 0 -column 0
+	set _GW_mkplx($handle,$item) [xmLabel $grid.$item managed \
+				-row 0 -column 1]
+
+	####	Name
+	set item XLV_OBJ_NAME
+	xmLabel $grid.$item-label managed -row 1 -column 0
+	if {$_GD_mkplx($handle,mode) == "create"} {
+		set _GW_mkplx($handle,$item) [xmText $grid.$item managed \
+				-row 1 -column 1 \
+				-columns 26 \
+				-maxLength 32]
+		$_GW_mkplx($handle,$item) modifyVerifyCallback \
+				"xlv:validNameCb %doit %ptr %length"
+	} else {
+		set _GW_mkplx($handle,$item) [xmLabel $grid.$item managed \
+				-row 1 -column 1]
+	}
+
+	set sumpnl [plxSum:realize $handle $form]
+	if {$_GD_mkplx($handle,mode) == "create"} {
+		set loffset 60
+	} else {
+		set loffset 90
+	}
+        $sumpnl setValues \
+			-topAttachment attach_form \
+			-leftAttachment attach_widget \
+			-rightAttachment attach_none \
+			-bottomAttachment attach_none \
+			-topOffset 8 \
+			-leftWidget $grid \
+			-leftOffset $loffset
+
+	$grid columnResizable 0 false
+
+	$grid manageChild
+	$sumpnl manageChild
+
+	return $form
+}
+
+#########################################
+#	Dialog Callbacks		#
+#########################################
+proc vmMkPlx:_dialogCb { handle op } \
+{
+        global  	_GW_mkplx _GD_mkplx
+
+	switch $op {
+		accept {set _GD_mkplx($handle,unmanage) true
+			vmMkPlx:_accept $handle }
+		apply  {set _GD_mkplx($handle,unmanage) false
+			vmMkPlx:_accept $handle }
+		save {
+			svTmpl:realize vm ""
+			svTmpl:fill vm VOL vmMkPlx:_save $handle
+			svTmpl:manage vm
+		}
+		cancel { vmMkPlx:_cancel $handle }
+		help   { sgiHelpMsg $_GW_mkplx($handle,dialog) }
+	}
+}
+
+proc vmMkPlx:_popdownCb { handle } \
+{
+	global	_GD_mkplx
+
+	ptSrch:unmanage $handle
+
+	if {$_GD_mkplx($handle,mode) == "create"} {
+	    if {$_GD_mkplx($handle,accept) == "false"} {
+		####    Mark partitions as available
+		ptPnl:markPartsAvail $handle [plxTbl:getParts $handle]
+	    }
+	}
+}
+
+#########################################
+#	Callback Utilities		#
+#########################################
+proc vmMkPlx:_accept { handle } \
+{
+        global  	_GW_mkplx _GD_mkplx _GD_vmmCfrm
+
+	if {! [vmMkPlx:chkData $handle]} {
+		return
+	}
+	set data ""
+	if {! [vmMkPlx:getData $handle data]} {
+		return
+	}
+	set nm [string trim [$_GW_mkplx($handle,XLV_OBJ_NAME) getString]]
+	set host $_GD_mkplx($handle,XFS_HOST)
+
+	set _GD_mkplx(confirm,handle) $handle
+	set _GD_mkplx(confirm,data) $data
+	set _GD_mkplx(confirm,obj) "$host VOL $nm PLEX"
+
+	if {! [info exists _GW_mkplx($handle,confirm)]} {
+		set _GW_mkplx($handle,confirm) [xmQuestionDialog \
+				$_GW_mkplx($handle,dialog).confirm \
+				-messageAlignment alignment_center \
+				-okLabelString Yes \
+				-cancelLabelString No \
+				-dialogStyle dialog_full_application_modal \
+				-noResize true]
+		$_GW_mkplx($handle,confirm) okCallback \
+			"set _GD_mkplx($handle,confirm) true"
+		$_GW_mkplx($handle,confirm) cancelCallback \
+			"set _GD_mkplx($handle,confirm) false"
+	}
+
+	$_GW_mkplx($handle,confirm) setValues -messageString \
+		[format $_GD_vmmCfrm(vmMkPlx,msg) [hu:getHostPlusDom $host]]
+	$_GW_mkplx($handle,confirm) manageChild
+}
+
+proc vmMkPlx:_doAccept { vname element op} \
+{
+	global          _GW_mkplx _GD_mkplx
+
+	if {$element != ""} {
+		set vname ${vname}($element)
+	}
+	upvar $vname x
+
+	if {$x} {
+	    set handle	$_GD_mkplx(confirm,handle)
+	    set data	$_GD_mkplx(confirm,data)
+	    set obj	$_GD_mkplx(confirm,obj)
+
+	    $_GW_mkplx($handle,dialog) defineCursor watch
+	    $_GW_mkplx($handle,confirm) defineCursor watch
+
+	    if {[catch {set ec [xlvCmd create $obj [join $data "\n"]]} error]} {
+		regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		em:storeMsg $handle error \
+		"Unable to create stand-alone plex [obj:getName $obj].\n\t$nerror"
+	    } else {
+		####	Signal success
+		set _GD_mkplx($handle,accept) true
+
+		####    Mark partitions as used
+		ptPnl:markPartsInUse $handle [plxTbl:getParts $handle] used
+
+		####	Reload the list of available partitions
+		vmMkPlx:_newHostName $handle $_GD_mkplx($handle,XFS_HOST)
+
+		####	Get ready for the next one to create
+		vmMkPlx:clear $handle
+
+		####	Set the name to the next one in the series
+		$_GW_mkplx($handle,XLV_OBJ_NAME) setString \
+				[xfs:nextName [obj:getName $obj]]
+
+		####	Add the object to the icon panel
+		vmSrch:addObjects vm [list $obj]
+
+		if {$_GD_mkplx($handle,unmanage)} {
+			####	Unmanage the dialog
+			$_GW_mkplx($handle,dialog) unmanageChild
+		}
+	    }
+
+	    $_GW_mkplx($handle,confirm) defineCursor ""
+	    $_GW_mkplx($handle,dialog) defineCursor ""
+	}
+}
+
+proc vmMkPlx:_cancel { handle } \
+{
+        global  	_GW_mkplx
+
+	$_GW_mkplx($handle,dialog) unmanageChild
+}
+
+proc vmMkPlx:_save { handle nm unique } \
+{
+	set rval	1
+
+	set data ""
+	vmMkPlx:getData $handle data
+	if {$data != ""} {
+		set obj [list [list _TEMPLATE_ VOL $nm PLEX]]
+
+		if {[tu:write VOL $nm $obj [join $data "\n"]]} {
+			if {$unique} {
+				ip:fillPanel vm $obj
+			}
+		} else {
+			set rval 0
+		}
+	}
+
+	return $rval
+}
+
+#########################################
+#		Utilities		#
+#########################################
+proc vmMkPlx:_newHostName { handle host } \
+{
+	if {$host != ""} {
+		ptPnl:newPartList $handle $host
+	}
+}
+
+#########################################
+#	Plex Table Panel Actions	#
+#########################################
+####	The default args are necessary since this
+####	is also called from vmPlxTblPnl
+proc vmMkPlx:_veNumChangeAction { handle type {row 0} {count 1} } \
+{
+	vmMkPlx:_updatePlexSum $handle $type
+	vmMkPlx:_updatePlexGraph $handle $type
+	vmMkPlx:_updateNextPrev $handle
+}
+
+####	The default args are necessary since this
+####	is also called from vmPlxTblPnl
+proc vmMkPlx:_vePartChangeAction { handle type {row 0} {parts ""} } \
+{
+	ptPnl:markPartsAvail $handle $parts
+	ptPnl:setChosenListParts $handle ""
+	vmMkPlx:_updatePlexSum $handle $type
+	vmMkPlx:_updatePlexGraph $handle $type
+}
+
+proc vmMkPlx:_rowSelectAction { handle type row state } \
+{
+	global	_GD_mkplx
+
+	if {$state == "sel"} {
+		set parts [plxTbl:getPartsByRow $handle $row]
+		set lbl [plxTbl:getRowLabel $handle $row long plex ve]
+
+		if {$_GD_mkplx($handle,mode) != "info"} {
+			ptPnl:setChosenListParts $handle [split $parts]
+			ptPnl:setChosenListLabel $handle "" $plex $ve
+			vmMkPlx:_updateNextPrev $handle
+		}
+
+		plxGrph:selectVe $handle $plex $ve
+	}
+}
+
+proc vmMkPlx:_startChangeAction { handle type row value } \
+{
+	vmMkPlx:_updatePlexGraph $handle $type
+}
+
+proc vmMkPlx:_updatePlexSum { handle type } \
+{
+	plxSum:setItemLabel $handle ves [plxTbl:getVeCount $handle]
+	plxSum:setItemLabel $handle parts [plxTbl:getPartCount $handle]
+	plxSum:setItemLabel $handle size \
+			[format "%.2f" [plxTbl:getSize $handle]]
+}
+
+#########################################
+#	Part Table Panel Actions	#
+#########################################
+proc vmMkPlx:_partChangeAction { handle names sizes } \
+{
+	global	_GD_mkplx
+
+	plxTbl:setVeParts $handle $names $sizes
+	vmMkPlx:_updatePlexGraph $handle $_GD_mkplx(type)
+	vmMkPlx:_updatePlexSum $handle $_GD_mkplx(type)
+}
+
+proc vmMkPlx:_nextPrevAction { handle op } \
+{
+	set row [plxTbl:getCurrentRow $handle]
+	if {$op == "next"} {
+		incr row
+	} else {
+		incr row -1
+	}
+	plxTbl:selectRow $handle $row
+}
+
+proc vmMkPlx:_updateNextPrev { handle } \
+{
+	set rows [expr [plxTbl:getNumRows $handle] - 1]
+	set row [plxTbl:getCurrentRow $handle]
+
+	if {$row == $rows} {
+		set next false
+	} else {
+		set next true
+	}
+	if {$row == 0} {
+		set prev false
+	} else {
+		set prev true
+	}
+	ptPnl:validNextPrev $handle $next $prev
+}
+
+#########################################
+#	Plex Graph Panel Actions	#
+#########################################
+proc vmMkPlx:_setPlexOnlyValue { handle plex } \
+{
+	plxTbl:selectCurrentPlexVe $handle $plex 0
+}
+
+proc vmMkPlx:_setPlexAndVeValue { handle plex ve } \
+{
+	plxTbl:selectCurrentPlexVe $handle $plex $ve
+}
+
+proc vmMkPlx:_updatePlexGraph { handle type } \
+{
+	plxTbl:getGraphData $handle data
+	if {[info exists data]} {
+		plxTbl:getRowLabel $handle \
+			[plxTbl:getCurrentRow $handle] short plex ve
+		plxGrph:fillPlexes $handle $data
+		plxGrph:selectVe $handle $plex $ve
+	} else {
+		plxGrph:clear $handle
+	}
+}
+
+#########################################
+#	Drag and Drop			#
+#########################################
+proc vmMkPlx:_startDrop { handle dragContext w } \
+{
+	$dragContext dropTransferStart \
+		-dropTransfers {{COMPOUND_TEXT .vmMkPlx}} \
+		-numDropTransfers 1 \
+		-transferProc "vmMkPlx:_doTransfer $handle %closure {%value}"
+}
+
+proc vmMkPlx:_doTransfer { handle destination value } \
+{
+	global	_GD_mkplx
+
+	if {[ip:uniqueToObject [lindex $value 0] obj] && $obj != ""} {
+		if {[llength $value] == 1} {
+			if {($_GD_mkplx($handle,mode) == "info" && \
+			     [obj:isXfsmObject [lindex $obj 0] VOL PLEX]) || \
+			    ($_GD_mkplx($handle,mode) == "create" && \
+			     [obj:isXfsmTemplate [lindex $obj 0] VOL PLEX])} {
+				set no_msg 1
+				set rval [vmMkPlx:fill $handle $obj]
+			}
+		} else {
+			set multiple 1
+		}
+	}
+
+	if {! [info exists no_msg]} {
+	    set rval 0
+	    if {! [info exists multiple]} {
+		lappend m "An Illegal icon was dropped on this dialog."
+	    }
+	    if {$_GD_mkplx($handle,mode) == "info"} {
+		lappend m "Only one plex icon may be dropped on this dialog."
+	    } else {
+		lappend m "Only one plex template icon may be dropped on this dialog."
+	    }
+	    em:simpleMsg $handle error [join $m " @n @n "]
+	}
+	return $rval
+}

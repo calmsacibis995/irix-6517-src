@@ -1,0 +1,233 @@
+'\"! tbl | mmdoc
+'\"macro stdmacro
+.\" Copyright 1992, 1991 UNIX System Laboratories, Inc.
+.TH buf D4
+.SH NAME
+\f4buf\fP \- block I/O data transfer structure
+.SH SYNOPSIS
+.nf
+\f4#include <sys/types.h>
+#include <sys/proc.h>
+#include <sys/buf.h>
+#include <sys/ddi.h>
+\f1
+.fi
+.SH DESCRIPTION
+The \f4buf\fP structure is the basic data structure for block I/O
+transfers.
+.SH USAGE
+Each block I/O transfer has an associated buffer header.
+The header contains all the buffer control and status information.
+For drivers, the buffer header pointer is the sole
+argument to a block driver \f4strategy\fP(D2) routine.
+Do not depend on the size of the \f4buf\fP structure
+when writing a driver.
+.P
+It is important to note that a buffer header may be linked in multiple lists
+simultaneously.
+Because of this, most of the members in the buffer header
+cannot be changed by the driver, even when the buffer header is in one of the
+drivers' work lists.
+.P
+Buffer headers may be used by the system to describe a portion of the
+kernel data space for I/O for block drivers.
+Buffer headers are also used by the system for physical I/O
+for block drivers.
+In this case, the buffer describes a portion of user
+data space that is locked into memory (see \f4physiock\fP(D3)).
+.P
+Block drivers often chain block requests so that overall throughput for the
+device is maximized.
+The \f4av_forw\fP and the \f4av_back\fP members of the
+\f4buf\fP structure can serve as link pointers for chaining block
+requests.
+.SS Structure Definitions
+The \f4buf\fP structure contains the following members:
+.P
+.ft 4
+.TS
+lf4 2 lf4 2 lf4.
+uint64_t	b_flags;	/* Buffer status */
+struct buf	*b_forw;	/* Kernel/driver list link */
+struct buf	*b_back;	/* Kernel/driver list link */
+struct buf	*av_forw;	/* Driver work list link */
+struct buf	*av_back;	/* Driver work list link */
+unsigned int	b_bcount;	/* # of bytes to transfer */
+union {
+       caddr_t	b_addr;	/* Buffer's virtual address */
+} b_un;
+daddr_t	b_blkno;	/* Block number on device */
+unsigned int	b_resid;	/* # of bytes not transferred */
+clock_t	b_start;	/* Request start time */
+struct proc	*b_proc;	/* Process structure pointer */
+long	b_bufsize;	/* Size of allocated buffer */
+void	(*b_iodone)();	/* Function called by biodone */
+void	*b_iochain;	/* link pointer for iodone chain */
+dev_t	b_edev;	/* Expanded dev field */
+void	*b_private;	/* For driver's use in SVR4MP only*/
+.TE
+.ft 1
+.P
+The members of the buffer header available to test or set by a driver
+are described below:
+.P
+\f4b_flags\fP is a bitmask that
+stores the buffer status and tells the driver whether to read from or
+write to the device.
+To avoid an error condition,
+the driver must never clear the \f4b_flags\fP member or modify its value,
+except by setting or clearing individual flag bits as described below.
+.P
+Valid flags are as follows:
+.RS
+.IP \f4B_BUSY\fP 12n
+The buffer is in use.
+The driver may change this flag
+only if it acquired the buffer with \f4getrbuf\fP(D3),
+and if no I/O operation is in progress.
+.IP \f4B_DONE\fP
+The data transfer has completed.
+The driver should not change this flag.
+.IP \f4B_ERROR\fP
+The driver sets \f4B_ERROR\fP to indicate an error occurred during
+an I/O transfer.
+On systems where the \f4bioerror\fP(D3) function is available,
+drivers should not access this flag directly.
+.IP \f4B_PAGEIO\fP
+The buffer is being used in a paged I/O request.
+If \f4B_PAGEIO\fP
+is set, the \f4b_pages\fP field of the buffer header points to a
+list of page structures sorted by block location on the device.
+Also, the \f4b_un.b_addr\fP field of the
+buffer header is the offset into the first page of the page list.
+If \f4B_PAGEIO\fP is not set, the \f4b_pages\fP field of the buffer
+header is not used and the \f4b_un.b_addr\fP field of the buffer header
+contains the starting virtual address of the I/O request (in user
+address space if \f4B_PHYS\fP is set or kernel address space otherwise).
+The driver must not set or clear the \f4B_PAGEIO\fP flag.
+.IP \f4B_PHYS\fP
+The buffer header is being used for physical (direct) I/O to a user
+data area.
+The \f4b_un.b_addr\fP member contains the starting virtual
+address of the user data area.
+Note that \f4B_PHYS\fP and \f4B_PAGEIO\fP
+are never set simultaneously and must not be changed by the driver.
+.IP \f4B_READ\fP
+Data are to be read from the peripheral device into main memory.
+The driver may change this flag
+only if it acquired the buffer with \f4getrbuf\fP(D3), \f4geteblk\fP(D3),
+or \f4ngeteblk\fP(D3),
+and if no I/O operation is in progress.
+.IP \f4B_WRITE\fP
+Data are to be
+transferred from main memory to the peripheral device.
+\f4B_WRITE\fP is a pseudo-flag that occupies the same bit location as \f4B_READ\fP.
+\f4B_WRITE\fP cannot be directly tested; it is only detected as the absence
+of \f4B_READ\fP (\f4!(bp->b_flags&B_READ)\fP.)
+.RE
+.P
+\f4b_forw\fP and \f4b_back\fP may only be used by the driver if the
+buffer was acquired by the driver with the \f4getrbuf\fP routine.
+In that case, these members can be used to link the buffer
+into driver work lists.
+.P
+\f4av_forw\fP and \f4av_back\fP can be used by the driver to link
+the buffer into driver work lists.
+.P
+\f4b_bcount\fP specifies the number of bytes to be transferred
+for both paged and non-paged I/O requests.
+The driver may change this member.
+.P
+\f4b_un.b_addr\fP is either the virtual address of the I/O request, or an
+offset into the first page of a page list depending on whether \f4B_PAGEIO\fP
+is set.
+If it is set, the \f4b_pages\fP field of the buffer header
+points to a sorted list of page structures and \f4b_un.b_addr\fP
+is the offset into the first page.
+If \f4B_PAGEIO\fP is not set,
+\f4b_un.b_addr\fP is the virtual address from which data are read or to
+which data are written.
+It represents a user virtual address if \f4B_PHYS\fP is set, or a kernel
+virtual address otherwise.
+The driver may change this member.
+.P
+\f4b_blkno\fP identifies which logical block on the device
+is to be accessed.
+The driver may have to convert this logical block number to a physical
+location such as a cylinder, track, and sector of a disk.
+The driver may change this member
+only if it allocated the buffer via \f4geteblk\fP, \f4ngeteblk\fP,
+or \f4getrbuf\fP,
+and if no I/O operation is in progress.
+.P
+\f4b_resid\fP indicates the number of bytes not transferred.
+The driver must set this member prior to calling \f4biodone\fP(D3).
+.P
+\f4b_start\fP holds the time the I/O request was started.
+It is provided for the driver's use in calculating response time
+and is set by the driver.
+Its type, \f4clock_t\fP, is an integral type upon
+which direct integer calculations can be performed.
+It represents clock ticks.
+.P
+\f4b_proc\fP contains the process structure address for the
+process requesting an unbuffered (direct) data transfer to or from a user data
+area (this member is set to \f4NULL\fP when the transfer is buffered).
+The process table entry is used to perform proper virtual to
+physical address translation of the \f4b_un.b_addr\fP member.
+The driver should not change this member.
+.P
+\f4b_bufsize\fP contains the size in bytes of the allocated buffer.
+The driver may change this member
+only if it acquired the buffer with \f4getrbuf\fP,
+and if no I/O operation is in progress.
+.P
+\f4(*b_iodone)\fP identifies a specific driver routine to be
+called by the system when the I/O is complete.
+If a routine is specified, the \f4biodone\fP(D3) routine does not
+return the buffer to the system.
+The driver may change this member if no I/O operation is in progress.
+.P
+\f4(*b_iochain)\fP If b_iodone has been set by another driver layer, it is important
+to preserve its value and make sure it is called upon i/o completion.
+b_iochain is provied for this purpose.
+For example, a driver that wishes
+to use b_iodone should save the old value of b_iodone and b_iochain and
+write the address of these saved values into b_iochain and its completion
+routines address into b_iodone.
+When the completion routine is called,
+it should restore both b_iodone and b_iochain and call biodone() with
+the buffer again.
+.P
+\f4b_edev\fP contains the external device number of the device.
+The driver may change this member
+only if it allocated the buffer via \f4geteblk\fP, \f4ngeteblk\fP,
+or \f4getrbuf\fP,
+and if no I/O operation is in progress.
+.SS Warnings
+Buffers are a shared resource within the kernel.
+Drivers should only read or write the members listed in this
+section in accordance with the rules given above.
+Drivers that attempt to use undocumented members of the
+\f4buf\fP structure risk corrupting data in the kernel and on the
+device.
+.P
+DDI/DKI-conforming drivers may only use buffer headers that have been
+allocated using \f4geteblk\fP, \f4ngeteblk\fP, or \f4getrbuf\f1,
+or have been passed to the driver \f4strategy\fP routine.
+.SH REFERENCES
+biodone(D3),
+bioerror(D3),
+biowait(D3),
+brelse(D3),
+clrbuf(D3),
+freerbuf(D3),
+geteblk(D3),
+geterror(D3),
+getrbuf(D3),
+iovec(D4),
+ngeteblk(D3),
+physiock(D3),
+strategy(D2),
+uio(D4),
+uiophysio(D3X).

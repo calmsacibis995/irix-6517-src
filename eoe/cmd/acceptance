@@ -1,0 +1,1134 @@
+#!/bin/sh 
+# $Revison$ $Date: 1993/06/22 23:49:59 $
+#
+#****************************************************************
+# File:	    babylon.wpd:/usr/people/guest/acceptance 
+# 	    gate-testlady.wpd:/usr/tmp/acceptance 
+# Author:   Sue Liu
+# function: This script file is used as the basic acceptance test
+#           for sherwood alpha release, this script file
+#           must be run successfully in order to announce the
+#	    alpha to engineer.
+# Note:     1. To run this file, you must login the system as root
+#	    2. To run it just do ./acceptance or sh acceptance or
+#	       sh -x acceptance
+#	    3. The result log is in /usr/tmp/accept.log, the error log
+#	       is in /usr/tmp/accept_err.log
+#	    4. When the program ask you to confirm restart tellwm
+#	       if you have InteractivePlacement set to F already
+#	       you can enter cancel selection.
+#	    5. If you have a tape in the tape drive, and you need
+#	       the content of the tape, replace it with other tape
+#	       that you can abuse.
+#	    6. If you run this file and feel it's not enough, please
+#	       add more tests and mail me the information. I will
+#	       incorporate them into.
+#	    7. /usr/tmp/alpha is a program which extract the
+#	       software installation alpha number
+#	    8. You can turn on gtst by uncomment rungtst line
+#	    9. You can turn on netls by uncomment testnetls line
+#           10. If you interrupt this program during its run, program
+#	       will automaticlly catch the signal and do system enviroment
+#  	       restore, but try not aviod this anyway.
+# 	
+#*****************************************************************
+#
+HOST=`hostname`
+N=1
+ACCLOG=/usr/tmp/accept.log
+ERRLOG=/usr/tmp/accept_err.log
+CYP_HOST=bonnie.wpd.sgi.com
+JUNK1=/usr/tmp/junk1
+JUNK2=/usr/tmp/junk2
+JUNKD=/usr/tmp/junkdiff
+#
+
+# function to move the core file, if it exists
+#
+movecore () {
+	if [ -f /usr/tmp/core ]
+  	then
+        core_id=`file core | cut -c26-40 | sed "s/\'//g" `
+       	mv /usr/tmp/core core.$core_id
+    	fi
+}
+
+restore_env() {
+        mv /.Xresources.old /.Xresources 2> /dev/null
+        /usr/bin/X11/xrdb -load /.Xresources 2> /dev/null
+	mv /usr/lib/aliases.old /usr/lib/aliases 2> /dev/null
+	umount /usr/tmp/testlocal 2> /dev/null
+	rmdir /usr/tmp/testlocal 2> /dev/null
+	echo done !!!
+}
+
+# make sure this script is executed by root only
+#
+ID=`id | sed 's/).*$//' | sed 's/^.*(//'`
+if [ "$ID" != "root" ]
+then
+        echo "Accpetance test has to be run as root"
+        exit
+fi
+
+
+#
+# If system has tape installed, make sure user is aware of it 
+# warn the user for tape content
+#
+z=`/bin/mt status 2>&1 | grep Media | sed 's/	//g' |sed 's/ //g' |cut -c1-11`
+echo $z
+if test -n "$z"
+then
+        if [ "$z" = "Media:READY" ]
+        then
+		echo !!! Tape is in Tape Drive,data will be destroyed 
+		echo 'Do you want to replace the tape for testing <y or n> ,default y: \c'
+		read answer
+		if [ "$answer" = "n" ]
+		then
+			sleep 80
+		else
+			echo 'Please replace the tape now and rerun this test'
+			exit
+		fi
+	fi
+fi
+
+#
+xhost + 1> /dev/null 2> /dev/null
+#
+gfx=`hinv -c graphics`
+#
+
+# Modify system network 4Dwm and mail environment
+#
+cp /usr/lib/aliases /usr/lib/aliases.old
+if [ -n "$gfx" ]; then
+   if [ -f /.Xresources ]
+   then
+	cp /.Xresources /.Xresources.old
+	echo '4DWm*interactivePlacement: F' > /.Xresources
+   else
+	echo '4DWm*interactivePlacement: F' > /.Xresources
+	echo ' ' > /.Xresources.old
+   fi
+fi
+
+trap "restore_env; exit 1" 0 1 2 3 15
+
+#
+#
+if [ -n "$gfx" ]; then
+   if [ -f /.Xresources ]
+   then
+	/usr/bin/X11/xrdb -load /.Xresources
+	movecore;
+   fi
+   if [ -f /usr/bin/X11/tellwm ]
+   then
+	/usr/bin/X11/tellwm restart; movecore;
+   fi
+fi
+#
+# Setup Mail stuff
+if [ ! -f /usr/sbin/GETmail ]
+then
+        rcp guest@whizzer:/usr/lib/4Dmail/GETmail /usr/sbin
+fi
+
+#
+#
+if [ ! -f /usr/tmp/alpha ]
+then
+	rcp guest@babylon.wpd:/usr/people/guest/alpha /usr/tmp/alpha
+	ALPHA_NUM=`/usr/tmp/alpha`
+else
+	ALPHA_NUL=`/usr/tmp/alpha`
+fi
+
+
+# redirect all the standard output to a log file
+#
+exec 2>&1 > $ACCLOG
+echo $Revison$ $Date: 1993/06/22 23:49:59 $ 
+echo ' '$HOST' - Sherwood '$ALPHA_NUM' Acceptance Test Error Log ' >> $ERRLOG
+echo 'Program deteced error during acceptance are: ' >> $ERRLOG
+#
+echo ' '$HOST' - Sherwood '$ALPHA_NUM' Acceptance Test Result ' 
+echo ' ******************************************************\n '
+echo *****$N. uname -a: `uname -a`;
+if [ $? != 0 ]; then echo FAILED: uname -a >> $ERRLOG; fi 
+N=`expr $N + 1`; movecore;
+
+echo *****$N. date: `date`; 
+if [ $? != 0 ]; then echo FAILED: date >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo *****$N. hinv:; hinv 
+if [ $? != 0 ]; then echo FAILED: hinv >> $ERRLOG; fi
+N=`expr $N + 1`;  movecore;
+
+echo *****$N. sysinfo:; sysinfo 
+if [ $? != 0 ]; then echo FAILED: sysinfo >> $ERRLOG; fi
+N=`expr $N + 1`;  movecore;
+
+echo *****$N. versions -n :; versions -n
+if [ $? != 0 ]; then echo FAILED: versions -n >> $ERRLOG; fi
+N=`expr $N + 1`;  movecore; 
+
+echo *****$N.  /etc/chkconfig
+/etc/chkconfig -f yp on; /etc/chkconfig -f automount on; /etc/chkconfig
+if [ $? != 0 ]; then echo FAILED: chkconfig >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo *****$N. /usr/sbin/GETmail:; /usr/sbin/GETmail
+sleep 20
+if [ $? != 0 ]; then echo FAILED: GETmail >> $ERRLOG; fi
+N=`expr $N + 1`;  movecore;
+
+#
+# Test mail and Mail function
+#
+echo *****$N. run /bin/mail:; N=`expr $N + 1`; movecore;
+echo 'test /bin/mail from '$HOST':/usr/tmp/acceptance' > mailfile
+mail sue@wpd.sgi.com < mailfile
+if [ $? != 0 ]; then echo FAILED: mail >> $ERRLOG; fi
+N=`expr $N + 1`;  movecore;
+
+echo *****$N. run /usr/sbin/Mail:; N=`expr $N + 1`; movecore;
+echo 'test sherwood alpha /usr/sbin/Mail' > mailfile
+Mail -s 'Mail test - ignore it' sue@wpd.sgi.com < mailfile
+if [ $? != 0 ]; then echo FAILED: Mail >> $ERRLOG; fi
+N=`expr $N + 1`;  movecore;
+#
+#
+# Test C Compiler and Make
+#
+cat > ctest.c <<foo
+#include <stdio.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <sys/lock.h>
+#include <time.h>
+#include <sys/time.h>
+main()
+{
+        char *message;
+        struct timeval tp;
+        time_t t;
+
+        if (gettimeofday(&tp, 0) < 0)
+        {
+                printf("gettimeofday() failed.\n");
+                exit(1);
+        }
+
+        t = time(0);
+        printf("gettimeofday() returns: %d = %s\n",
+                tp.tv_sec, ctime(&tp.tv_sec));
+        printf("time() returns: %d = %s\n", t, ctime(&t));
+    	plock(PROCLOCK);
+    	exit(0);
+}
+foo
+#
+if [ -f /bin/make ]
+then
+	echo *****$N. test C compiler make command: 
+	/bin/make /usr/tmp/ctest
+	if [ $? != 0 ]; then echo FAILED: /bin/make /usr/tmp/ctest >> $ERRLOG;fi
+	./ctest
+	if [ $? != 0 ]; then echo FAILED: /usr/tmp/ctest >> $ERRLOG;fi 
+	N=`expr $N + 1`; movecore
+
+	echo *****$N. test strip command:; 
+	/usr/bin/strip ctest
+	if [ $? != 0 ]; then echo FAILED: /usr/bin/strip >> $ERRLOG;fi
+	N=`expr $N + 1`; movecore;
+else
+	echo 'No /bin/make installed on system'
+fi
+echo *****$N. test C program with curse lib: ; 
+cat > curse.c << foo
+#include <curses.h>
+#include <stdio.h>
+main()
+{
+        initscr();
+        move (LINES/2 -1 , COLS/4 -4);
+        addstr("Cursor in the middle - ");
+        refresh();
+        printf("hello world in C program test ok\n");
+        endwin();
+        exit(0);
+}
+foo
+
+/usr/bin/cc curse.c -lcurses -o curse
+if [ $? != 0 ]; then echo FAILED: cc curse.c -lcurses -o curse >> $ERRLOG;fi
+./curse
+if [ $? != 0 ]; then echo FAILED: /usr/tmp/curse >> $ERRLOG;fi
+N=`expr $N + 1`; movecore;
+
+#
+echo *****$N. test C++ program : 
+cat > ctest.c++ <<foo
+#include <CC/iostream.h>
+
+main()
+{
+ cout << "C++ program hello world test ok\n";
+}
+foo
+
+/usr/bin/CC ctest.c++
+if [ $? != 0 ]; then echo FAILED: CC ctest.c++ >> $ERRLOG;fi
+./a.out
+if [ $? != 0 ]; then echo FAILED: ./a.out >> $ERRLOG;fi
+N=`expr $N + 1`; movecore;
+#
+#
+# The following program only test when Graphics exist
+#
+# Test mailbox
+if [ -n "$gfx" ] ; then
+  if [ -f "/usr/sbin/mailbox" ] ; then
+    echo *****$N. /usr/sbin/mailbox:; 
+    env GLRES="*geometry: 70x70+250+0" /usr/sbin/mailbox
+    if [ $? != 0 ]; then echo FAILED: mailbox >> $ERRLOG; fi
+    N=`expr $N + 1`; movecore;
+    sleep 20
+    kill_id=`ps -ef | grep mailbox | grep -v grep | tail -1 | awk '{print $2}'`
+    if test -n "$kill_id"; then kill $kill_id;fi
+  else
+    echo *****$N. No /usr/sbin/mailbox isntalled on the system
+  fi
+#
+# Test Window Stuff
+  if [ -f "/usr/bin/X11/xterm" ] ; then
+    echo *****$N. /usr/bin/X11/xterm; 
+    /usr/bin/X11/xlswins > $JUNK1
+    env GLRES="*geometry: 180x100+400+50" /usr/bin/X11/xterm &
+    sleep 20
+    /usr/bin/X11/xlswins > $JUNK2; diff $JUNK1 $JUNK2 > $JUNKD
+    if test ! -s $JUNKD; then echo FAILED: xterm >> $ERRLOG; fi
+    N=`expr $N + 1`; movecore;
+    rm $JUNK1 $JUNK2 $JUNKD 
+    kill_id=`ps -ef | grep xterm | grep -v grep | tail -1 | awk '{print $2}'`
+    if test -n "$kill_id"; then kill -9 $kill_id;fi
+  else
+    echo *****$N. No /usr/bin/X11/xterm isntalled on the system
+  fi
+#
+# Test Graphics Cube demo program
+  if [ -f "/usr/demos/bin/cube" ] ; then
+    echo *****$N. /usr/demos/bin/cube; 
+    env GLRES="*geometry: 180x100+400+250" /usr/demos/bin/cube &
+    if [ $? != 0 ];  then echo FAILED: /usr/demos/bin/cube >> $ERRLOG; fi
+    N=`expr $N + 1`; movecore; 
+    sleep 20 
+    kill_id=`ps -ef | grep cube | grep -v grep | tail -1 | awk '{print $2}'`
+    if test -n "$kill_id"; then kill $kill_id;fi
+  else
+    echo *****$N. No /usr/demos/bin/cube isntalled on the system
+  fi 
+#
+# Test the gr_top program
+  if [ -f "/usr/sbin/gr_top" ] ; then
+    echo *****$N. /usr/sbin/gr_top; 
+    env GLRES="*geometry: 180x100+400+50" /usr/sbin/gr_top 
+    if [ $? != 0 ];  then echo FAILED: /usr/sbin/gr_top >> $ERRLOG; fi
+    N=`expr $N + 1`; movecore;
+    sleep 20
+    kill_id=`ps -ef | grep gr_top | grep -v grep | tail -1 | awk '{print $2}'`
+    if test -n "$kill_id"; then kill $kill_id;fi
+  else
+    echo *****$N. No /usr/sbin/gr_top isntalled on the system
+  fi
+#
+# Test gr_osview program
+  if [ -f "/usr/sbin/gr_osview" ] ; then
+    echo *****$N. /usr/sbin/gr_osview -a ; 
+    /usr/sbin/gr_osview -a 
+    if [ $? != 0 ]; then echo FAILED: /usr/sbin/gr_osview -a >> $ERRLOG; fi
+    N=`expr $N + 1`; movecore;
+    sleep 20
+    kill_id=`ps -ef | grep gr_osview | grep -v grep | tail -1 | awk '{print $2}'`
+    if test -n "$kill_id"; then kill $kill_id;fi
+  else
+    echo *****$N. No /usr/sbin/gr_osview isntalled on the system
+  fi
+#
+#
+# Test workspace program
+  if [ -f "/usr/sbin/workspace" ] ; then
+    echo *****$N. /usr/sbin/workspace;
+    /usr/sbin/workspace 
+    if [ $? != 0 ]; then echo FAILED: /usr/sbin/workspace >> $ERRLOG; fi
+    N=`expr $N + 1`; movecore;
+    sleep 40
+    kill_id=`ps -ef | grep workspace | grep -v grep | tail -1 | awk '{print $2}'`
+    if test -n "$kill_id"; then kill $kill_id;fi
+  else
+    echo *****$N. No /usr/sbin/workspace isntalled on the system
+  fi
+
+# Test vadmin program
+  if [ -f "/usr/sbin/vadmin" ] ; then
+    echo *****$N. /usr/sbin/vadmin;
+    /usr/bin/X11/xlswins > $JUNK1
+    /usr/sbin/vadmin &
+    sleep 40
+    /usr/bin/X11/xlswins > $JUNK2; diff $JUNK1 $JUNK2 > $JUNKD
+    if test ! -s $JUNKD; then echo FAILED: vadmin >> $ERRLOG; fi
+    N=`expr $N + 1`; movecore;
+    rm $JUNK1 $JUNK2 $JUNKD
+    kill_id=`ps -ef | grep vadmin | grep -v grep | tail -1 | awk '{print $2}'`
+    if test -n "$kill_id"; then kill $kill_id;fi
+  else
+    echo *****$N. No /usr/sbin/vadmin isntalled on the system
+  fi
+
+# Test showcase program
+  if [ -f "/usr/sbin/showcase" ] ; then
+    echo *****$N. /usr/sbin/showcase;
+   /usr/sbin/showcase 
+    if [ $? != 0 ]; then echo FAILED: /usr/sbin/showcase >> $ERRLOG; fi
+    N=`expr $N + 1`; movecore;
+    sleep 80
+    (killall showcase 1>&2) > /dev/null
+  else
+    echo *****$N. No /usr/sbin/showcase isntalled on the system
+  fi
+
+
+# Test xclock program
+  if [ -f "/usr/bin/X11/xclock" ] ; then
+    echo *****$N. /usr/bin/X11/xclock &
+    /usr/bin/X11/xlswins > $JUNK1
+    /usr/bin/X11/xclock -geometry 90x90+300+0 & 
+    sleep 20
+    /usr/bin/X11/xlswins > $JUNK2; diff $JUNK1 $JUNK2 > $JUNKD
+    if test ! -s $JUNKD; then echo FAILED: xclock >> $ERRLOG; fi
+    N=`expr $N + 1`; movecore;
+    rm $JUNK1 $JUNK2 $JUNKD
+    kill_id=`ps -ef | grep xclock | grep -v grep | tail -1 | awk '{print $2}'`
+    if test -n "$kill_id"; then kill $kill_id;fi
+  else
+    echo *****$N. No /usr/bin/X11/xclock isntalled on the system
+  fi
+#
+# Test xwininfo program
+  if [ -f "/usr/bin/X11/xwininfo" ] ; then
+    echo *****$N. /usr/bin/X11/xwininfo -root
+    /usr/bin/X11/xwininfo -root
+    if [ $? != 0 ]; then echo FAILED: xwinfino -root >> $ERRLOG; fi
+    N=`expr $N + 1`; movecore;
+  else
+    echo *****$N. No /usr/bin/X11/xwininfo isntalled on the system
+  fi
+#
+# Test wsh program 
+  if [ -f "/bin/wsh" ] ; then
+    echo *****$N. /bin/wsh
+    /bin/wsh 
+    if [ $? != 0 ]; then echo FAILED: /bin/wsh >> $ERRLOG; fi
+    N=`expr $N + 1`; movecore;
+    sleep 20
+    kill_id=`ps -ef | grep wsh | grep -v grep | tail -1 | awk '{print $2}'`
+    if test -n "$kill_id"; then kill $kill_id;fi
+  else
+    echo *****$N. No /bin/wsh isntalled on the system
+  fi
+#
+# Test gdiff program 
+  if [ -f "/usr/sbin/gdiff" ] ; then
+    echo *****$N. /usr/sbin/gdiff
+    /usr/bin/X11/xlswins > $JUNK1
+    /usr/sbin/gdiff $ACCLOG acceptance &
+    sleep 40
+    /usr/bin/X11/xlswins > $JUNK2; diff $JUNK1 $JUNK2 > $JUNKD
+    if test ! -s $JUNKD; then echo FAILED: /usr/sbin/gdiff >> $ERRLOG; fi
+    N=`expr $N + 1`; movecore;
+    rm $JUNK1 $JUNK2 $JUNKD 
+    kill_id=`ps -ef | grep gdiff | grep -v grep | tail -1 | awk '{print $2}'`
+    if test -n "$kill_id"; then kill $kill_id;fi
+  else
+    echo *****$N. No /usr/sbin/gdiff isntalled on the system
+  fi
+#
+#Test xman function
+  if [ -f "/usr/bin/X11/xman" ] ; then
+    echo *****$N. /usr/bin/X11/xman
+    /usr/bin/X11/xman & 
+    N=`expr $N + 1`; movecore;
+    sleep 50
+    kill_id=`ps -ef | grep xman | grep -v grep | tail -1 | awk '{print $2}'`
+    if test -n "$kill_id"; then kill $kill_id;fi
+  else
+    echo *****$N. No /usr/bin/X11/xman isntalled on the system
+  fi
+fi
+
+#
+# Test netls
+#
+#echo *****$N. test netls memory; N=`expr $N + 1`; movecore;
+#echo *****$N. test netls; N=`expr $N + 1`; movecore;
+#rcp guest@babylon.wpd:/usr/people/guest/testnetls /usr/tmp
+#sh /usr/tmp/testnetls
+#if [ $? != 0 ]; then echo FAILED: testnetls >> $ERRLOG; fi
+
+# Test Network Commands
+#
+echo *****$N. ping -q -c 100 babylon.wpd; 
+/usr/etc/ping -q -c 100 babylon.wpd
+if [ $? != 0 ]; then echo FAILED: ping -q -c 100 babylon.wpd >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+if [ ! -f /usr/sbin/netsnoop ]
+then
+	rcp guest@babylon.wpd:/usr/sbin/netsnoop /usr/sbin
+fi
+if [ -f /usr/sbin/netsnoop ]
+then
+	echo *****$N. netsnoop -c 100 
+	/usr/sbin/netsnoop -c 100 > /dev/null  
+	if [ $? != 0 ]; then echo FAILED: netsnoop -c 100 >> $ERRLOG; fi
+	N=`expr $N + 1`; movecore;
+fi
+
+echo *****$N. rsh babylon.wpd echo testing rsh ok
+rsh guest@babylon.wpd echo testing rsh ok
+if [ $? != 0 ]; then echo FAILED: rsh babylon.wpd echo testing rsh ok>> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo *****$N. netstat -in
+/usr/etc/netstat -in
+if [ $? != 0 ]; then echo FAILED: netstat -in >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo *****$N. nfsstat 
+/usr/etc/nfsstat 
+if [ $? != 0 ]; then echo FAILED: nfsstat >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo *****$N. rcp guest@babylon.wpd 10 times
+CNT=0
+while (test "$CNT" -lt "10")
+	do
+	CNT=`expr $CNT + 1`; movecore;
+	rcp guest@babylon.wpd:/usr/people/guest/{xv,ncar-cvis-92113016.gif} .
+	rm xv ncar-cvis-92113016.gif
+	done
+if [ $? != 0 ]; then echo FAILED: rcp >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo *****$N. /etc/mount /usr/tmp/testlocal
+if [ ! -d /usr/tmp/testlocal ]
+then
+	mkdir /usr/tmp/testlocal
+fi
+/etc/mount -t nfs orange.wpd:/usr/local /usr/tmp/testlocal
+if [ $? != 0 ]; then echo FAILED: mount /usr/tmp/testlocal >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+#
+# Test various utilities
+# Test pvquery
+if [ -f /testlocal/bin/pvquery ] 
+then
+    	echo *****$N. /testlocal/bin/pvquery 
+	/testlocal/bin/pvquery -O pd -P sherwood -s open -g asd-irix -p 1 -F
+	if [ $? != 0 ]; then echo FAILED: pvquery >> $ERRLOG; fi
+	N=`expr $N + 1`; movecore; 
+	sleep 40
+else
+        echo *****$N. No pvquery installed on the system; N=`expr $N + 1`; movecore; 
+fi
+
+# Test gtst
+if [ -n "$gfx" ]; then
+    if [ -d /usr/tmp/testlocal/gtst ]
+    then
+        echo *****$N. gtst Graphics test; 
+        echo ' '
+        cwd=`pwd`
+        cd /usr/tmp/testlocal/gtst
+#        ./rungtst
+	echo 'rungtst is disabled now, if you want to run uncomment ./rungtst'
+	if [ $? != 0 ]; then echo FAILED: /usr/tmp/testlocal/gtst >> $ERRLOG; fi
+        cd $cwd
+	N=`expr $N + 1`; movecore;
+    else
+         echo *****$N. No gtst installed on the system for Testing; N=`expr
+$N + 1`; movecore;
+    fi
+fi
+
+#
+if [ -f /testlocal/bin/rrn ]
+then
+	 echo *****$N. /testlocal/bin/rrn; 
+	if [ ! -f /.newsrc ]
+	then 
+		echo 'sgi.bugs.sherwood! ' > /.newsrc
+	fi
+env NNTPSERVER="fido.asd.sgi.com" /testlocal/bin/rrn -q <<!
+q
+q
+!
+	if [ $? != 0 ]; then echo FAILED: rrn >> $ERRLOG; fi
+	N=`expr $N + 1`; movecore;
+        sleep 20
+else
+	 echo *****$N. /testlocal/bin/rrn is not intalled; N=`expr $N + 1`; movecore;
+fi
+
+#
+# Test Some Basic Commands
+#
+echo *****$N. ps -el
+/sbin/ps -elf > /dev/null
+if [ $? != 0 ]; then echo FAILED: ps -el >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+ 
+echo *****$N.  df -k
+/bin/df -k
+if [ $? != 0 ]; then echo FAILED: df -k >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo *****$N.  mpadmin -s
+/usr/sbin/mpadmin -s
+if [ $? = -1 ]; then echo FAILED: mpadmin -s >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo *****$N.  /usr/sbin/ipcs
+/usr/sbin/ipcs 
+if [ $? != 0 ]; then echo FAILED: ipcs >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo *****$N.  /usr/sbin/rfind bonnie.wpd:/jake rfind
+/usr/sbin/rfind bonnie.wpd:/jake rfind 
+if [ $? != 0 ]; then echo FAILED: rfind >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo *****$N.  /usr/bin/dircmp 
+mkdir /usr/tmp/dir1; mkdir /usr/tmp/dir2
+(cat /usr/tmp/acceptance | head -10) > /usr/tmp/dir1/file1
+(cat /usr/tmp/acceptance | head -20) > /usr/tmp/dir2/file1
+/usr/bin/dircmp -d /usr/tmp/dir1 /usr/tmp/dir2
+if [ $? != 0 ]; then echo FAILED: dircmp >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+rm -rf /usr/tmp/dir1; rm -rf /usr/tmp/dir2
+
+echo *****$N.  /usr/sbin/runon 0 ls
+/usr/sbin/runon 0 ls > /dev/null
+if [ $? != 0 ]; then echo FAILED: runon 0 ls >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo *****$N.  size /usr/bin/man
+/usr/bin/size /usr/bin/man
+if [ $? != 0 ]; then echo FAILED: size /usr/bin/man >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo *****$N.  /usr/bin/nm -p /usr/tmp/tstshm | grep end > /dev/null
+rcp guest@babylon:/usr/people/guest/tstshm /usr/tmp/tstshm
+/usr/bin/nm -p /usr/tmp/tstshm > /dev/null
+N=`expr $N + 1`; movecore;
+
+echo *****$N.  time ls -lR /dev 
+/usr/bin/time sh -c 'ls -lR /dev | fgrep root > /dev/null'
+if [ $? != 0 ]; then echo FAILED: ls -lR /dev | grep root >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo *****$N.  timex find /bin -name \*bin\* -print > /dev/null
+/usr/bin/timex find /bin -name \*bin\* -print > /dev/null
+if [ $? != 0 ]; then echo FAILED: timex >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo *****$N.  pixie /bin/echo 
+/usr/bin/pixie /bin/echo 
+N=`expr $N + 1`; movecore;
+
+echo *****$N. ls -l /unix
+/bin/ls -l /unix
+if [ $? != 0 ]; then echo FAILED: ls -l /unix >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo *****$N. chmod 0777 /usr/tmp 
+chmod 0777 /usr/tmp
+if [ $? != 0 ]; then echo FAILED: chmod 0777 /usr/tmp >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo *****$N. chown sys.sys /usr/tmp 
+/bin/chown sys.sys /usr/tmp
+if [ $? != 0 ]; then echo FAILED: chown sys.sys /usr/tmp >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo *****$N. file /usr/lib/libc.so.1 
+/usr/bin/file /usr/lib/libc.so.1
+if [ $? != 0 ]; then echo FAILED: file /usr/lib/lic.so.1 >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo *****$N. '(more /etc/passwd | head)'
+(/usr/bin/more /etc/passwd | head) 
+if [ $? != 0 ]; then echo FAILED: more >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo *****$N. id, whoami, sort
+(/usr/bin/id; /usr/bin/whoami | /bin/sort)
+if [ $? != 0 ]; then echo FAILED: id,whoami,sort>> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo *****$N. find . -name acceptance -print
+if [ $? != 0 ]; then echo FAILED: /bin/find . -name acceptance -print >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo *****$N. gamma 
+/usr/sbin/gamma
+if [ $? != 0 ]; then echo FAILED: gamma >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo *****$N. /bin/tail -20 /usr/adm/SYSLOG
+/bin/tail -20 /usr/adm/SYSLOG
+if [ $? != 0 ]; then echo FAILED: tail >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo *****$N. /usr/bin/domainname
+/usr/bin/domainname
+if [ $? != 0 ]; then echo FAILED: domainname >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo *****$N. /usr/bin/rup -h | head
+(/usr/bin/rup -h | head)
+if [ $? != 0 ]; then echo FAILED: rup -h >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo *****$N. pwck
+pwck
+N=`expr $N + 1`; movecore;
+
+# Test sar command
+chkconfig sar on
+echo *****$N. chkconfig sar on
+su sys -c "/usr/lib/sa/sadc /usr/adm/sa/sa`date +%d`"
+if [ $? != 0 ]; then echo FAILED: chkconfig sar on >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo *****$N. /usr/bin/sar -A
+/usr/bin/sar -A
+if [ $? != 0 ]; then echo FAILED: sar -A >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+chkconfig sar off
+
+#
+# Test dbx
+#
+echo *****$N. /usr/bin/dbx a.out; N=`expr $N + 1`; movecore;
+dbx a.out <<! 
+list
+run
+quit
+y
+!
+if [ $? != 0 ]; then echo FAILED: dbx a.out >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+# 
+# Test shared memory program
+#
+echo *****$N. test shared memory; N=`expr $N + 1`; movecore;
+/usr/tmp/tstshm
+if [ $? != 0 ]; then echo FAILED: tstshm >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+#
+# Test Backup,Restore,tar,cpio,dd,dump,bru etc Utilities 
+#
+z=`/bin/mt status 2>&1 | grep Media | sed 's/	//g' |sed 's/ //g' |cut -c1-11`
+echo $z
+if test -n "$z"
+then
+        if [ "$z" = "Media:READY" ]
+        then
+		echo !!! Tape is in Tape Drive,data will be destroyed 
+		echo Replace the tape if you want! 
+		sleep 100 
+# Tape is in tape drive
+# Test Backup/Rrestore
+#
+	if [ ! -f /usr/sbin/Backup ] 
+	then
+		echo '/usr/sbin/Backup is not installed'   
+	else
+		echo *****$N. Backup/Restore test
+		cp /usr/bin/id /usr/tmp/tmp_id
+	        mt rew
+		Backup /usr/tmp/tmp_id
+if [ $? != 0 ]; then echo FAILED: /usr/sbin/Backup >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+		rm /usr/tmp/tmp_id
+		if [ ! -f /usr/sbin/Restore ]
+		then
+			echo '/usr/sbin/Restore is not installed '
+		else
+		        Restore /usr/tmp/tmp_id
+if [ $? != 0 ]; then echo FAILED: /usr/sbin/Restore >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+		        diff /usr/bin/id /usr/tmp/tmp_id > /usr/tmp/Backup_diff
+		        if test -s /usr/tmp/Backup_differnece
+		        then
+        		   echo 'FAILED: Backup/Restore, check Backup_diff file'>> $ERRLOG
+		        else
+        		   echo 'Backup/Restore test passed'
+       			   rm /usr/tmp/tmp_id /usr/tmp/Backup_diff
+			fi
+		fi
+	fi
+# Test tar
+#
+		echo *****$N. tar test
+		cp /sbin/date /usr/tmp/tmp_date
+		mt rew
+                tar cv /usr/tmp/tmp_date 
+if [ $? != 0 ]; then echo FAILED: tar cv >> $ERRLOG; fi
+                rm /usr/tmp/tmp_date
+		tar xv /usr/tmp/tmp_date
+if [ $? != 0 ]; then echo FAILED: tar xv >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+		diff /sbin/date /usr/tmp/tmp_date > /usr/tmp/tar_diff
+                if test -s /usr/tmp/tar_differnece
+                then
+                        echo 'FAILED: tar, check tar_diff file' >> $ERRLOG
+                        echo 'tar failed, check tar_diff file'
+                else
+                        echo 'tar test passed'
+                        rm /usr/tmp/tmp_date /usr/tmp/tar_diff
+                fi
+
+# Test cpio
+#
+		echo *****$N. cpio test
+		cp /sbin/hinv /usr/tmp/tmp_hinv
+		mt rew
+		ls /usr/tmp/tmp_hinv | cpio -omcB > /dev/tape
+	        rm /usr/tmp/tmp_hinv
+		cpio -icBdmuv < /dev/tape 
+if [ $? != 0 ]; then echo FAILED: cpio -icBdmuv >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+                diff /sbin/hinv /usr/tmp/tmp_hinv > /usr/tmp/cpio_diff
+                if test -s /usr/tmp/cpio_differnece
+                then
+                        echo 'FAILED: cpio, check cpio_diff file' >> $ERRLOG
+                else
+                        echo 'cpio test passed'
+                        rm /usr/tmp/tmp_hinv /usr/tmp/cpio_diff
+                fi
+
+# Test dd
+#
+		echo *****$N. dd test
+		cp /sbin/sh /usr/tmp/tmp_sh
+		mt rew
+		dd if=/usr/tmp/tmp_sh of=/dev/tape conv=sync 
+if [ $? != 0 ]; then echo FAILED: dd >> $ERRLOG; fi
+		rm /usr/tmp/tmp_sh
+		dd if=/dev/tape of=/usr/tmp/tmp_sh 
+if [ $? != 0 ]; then echo FAILED: dd >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+		cmp /sbin/sh /usr/tmp/tmp_sh > /usr/tmp/dd_diff
+		if test -s /usr/tmp/dd_diff
+		then
+                        echo 'FAILED: dd, check dd_diff file' >> $ERRLOG
+		else
+        		echo 'dd test passed'; rm /usr/tmp/tmp_sh
+       			 rm /usr/tmp/dd_diff
+		fi
+
+#
+# Test dump
+		echo *****$N. dump / 
+		mt rew
+		dump / 
+if [ $? != 0 ]; then echo FAILED: dump >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+		cat /etc/dumpdates 
+
+#
+# Test bru
+#
+		echo *****$N. bru test;  N=`expr $N + 1`; movecore;
+		cp /sbin/who /usr/tmp/tmp_who
+		mt rew
+		bru -c -f /dev/tape /usr/tmp/tmp_who
+if [ $? != 0 ]; then echo FAILED: bru -c -f >> $ERRLOG; fi
+		rm /usr/tmp/tmp_who
+		bru -x -f /dev/tape /usr/tmp/tmp_who
+if [ $? != 0 ]; then echo FAILED: bru -x -f >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+		diff /sbin/who /usr/tmp/tmp_who > /usr/tmp/bru_diff
+		if test -s /usr/tmp/bru_differnece
+		then
+                        echo 'FAILED: bru, check bru_diff file' >> $ERRLOG
+		else
+			echo 'bru test passed'
+			rm /usr/tmp/tmp_who /usr/tmp/bru_diff
+		fi
+	else
+#
+# When tape drive in not availble for tape is not inserted
+# Test tar
+		echo *****$N. tar test
+		cp /sbin/date /usr/tmp/tmp_date
+                tar cvf /usr/tmp/tar_date /usr/tmp/tmp_date
+if [ $? != 0 ]; then echo FAILED: tar>> $ERRLOG; fi
+                rm /usr/tmp/tmp_date
+		tar xvf /usr/tmp/tar_date
+if [ $? != 0 ]; then echo FAILED: tar >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+		diff /sbin/date /usr/tmp/tmp_date > /usr/tmp/tar_diff
+                if test -s /usr/tmp/tar_differnece
+                then
+                        echo 'FAILED: tar, check tar_diff file' >> $ERRLOG
+                        echo 'tar failed, check tar_diff file'
+                else
+                        echo 'tar test passed'
+                        rm /usr/tmp/tmp_date /usr/tmp/tar_diff
+			rm /usr/tmp/tar_date
+                fi
+
+# Test cpio
+#
+		echo *****$N. cpio test
+		cp /sbin/hinv /usr/tmp/tmp_hinv
+		/bin/ls /usr/tmp/tmp_hinv | cpio -omcB > /usr/tmp/cpio_hinv
+		file /usr/tmp/cpio_hinv
+	        rm /usr/tmp/tmp_hinv
+		cpio -icBdmuv < /usr/tmp/cpio_hinv
+if [ $? != 0 ]; then echo FAILED: cpio -icBdmuv >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+                diff /sbin/hinv /usr/tmp/tmp_hinv > /usr/tmp/cpio_diff
+                if test -s /usr/tmp/cpio_diff
+                then
+                        echo 'FAILED: cpio, check cpio_diff file' >> $ERRLOG
+                else
+                        echo 'cpio test passed'
+                        rm /usr/tmp/tmp_hinv /usr/tmp/cpio_diff
+			rm /usr/tmp/cpio_hinv
+                fi
+
+# Test dd
+#
+		echo *****$N. dd test
+		cp /sbin/sh /usr/tmp/tmp_sh
+		dd if=/usr/tmp/tmp_sh of=/usr/tmp/dd_sh
+if [ $? != 0 ]; then echo FAILED: dd >> $ERRLOG; fi
+		rm /usr/tmp/tmp_sh
+		dd if=/usr/tmp/dd_sh of=/usr/tmp/tmp_sh
+if [ $? != 0 ]; then echo FAILED: dd >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+		diff /sbin/sh /usr/tmp/tmp_sh > /usr/tmp/dd_diff
+		if test -s /usr/tmp/dd_diff
+		then 
+                        echo 'FAILED: dd, check dd_diff file' >> $ERRLOG
+		else
+        		echo 'dd test passed'; rm /usr/tmp/tmp_sh
+       			rm /usr/tmp/dd_diff /usr/tmp/dd_sh
+		fi
+
+#
+# Test dump
+		echo *****$N. dump / 
+		dump f /usr/tmp/tmp_root_dump / 
+if [ $? != 0 ]; then echo FAILED: dump f /usr/tmp/tmp_root_dump / >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+		rm /usr/tmp/tmp_root_dump
+#
+# Test bru
+#
+		echo *****$N. bru test
+		cp /sbin/who /usr/tmp/tmp_who
+		bru -c -f /usr/tmp/bru_who /usr/tmp/tmp_who
+if [ $? != 0 ]; then echo FAILED: bru -c -f >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+		rm /usr/tmp/tmp_who
+		bru -x -f /usr/tmp/bru_who /usr/tmp/tmp_who
+		diff /sbin/who /usr/tmp/tmp_who > /usr/tmp/bru_diff
+		if test -s /usr/tmp/bru_differnece
+		then
+			echo 'bru test failed, check bru_diff file'
+		else
+			echo 'bru test passed'
+			rm /usr/tmp/tmp_who /usr/tmp/bru_diff
+			rm /usr/tmp/bru_who
+		fi
+
+	fi
+fi
+
+#
+#
+# Run graphics test, allrout is from bam
+#
+if [ -n "$gfx" ]; then
+echo *****$N. allrout Graphics test
+rcp guest@babylon.wpd:/usr/people/guest/allrout.c .
+cc allrout.c -lgl -o allrout
+if [ $? != 0 ]; then echo FAILED: cc allrout.c -lgl -o allrout >> $ERRLOG; fi
+    if [ -f /usr/tmp/allrout ]
+    then
+        ./allrout
+	if [ $? != 0 ]; then echo FAILED: ./allrout >> $ERRLOG; fi
+	N=`expr $N + 1`; movecore;
+    fi
+fi
+#
+#
+###############################
+# perform Cypress Static Library compatibility test
+# The following static shared libary from Cypress are
+# tested. /usr/lib/libgl_s, /usr/lib/libX11_s, /lib/libc_s,
+# /usr/lib/libfm_s,/usr/lib/libXm_s_ca,/usr/lib/libXt_s
+# CYP_HOSTress command are tested on sherwood
+# Copy over the cmd from CYP_HOSTress machine
+###############################
+#
+#
+#Mailbox Test for /usr/lib/libgl_s, /usr/lib/libX11_s, /lib/libc_s
+#
+if [ -n "$gfx" ]; then
+cp /usr/sbin/mailbox /usr/sbin/mailbox.old
+rcp guest@$CYP_HOST:/usr/sbin/mailbox /usr/sbin/mailbox
+echo *****$N. check Cypress static shared libary on mailbox
+/usr/bin/odump -L /usr/sbin/mailbox
+/usr/sbin/mailbox
+if [ $? != 0 ]; then echo FAILED: Cypress mailbox binary >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+sleep 20
+kill_id=`ps -ef | grep mailbox | grep -v grep | tail -1 | awk '{print $2}'`
+if test -n "$kill_id"; then kill $kill_id; fi
+cp /usr/sbin/mailbox.old /usr/sbin/mailbox
+rm /usr/sbin/mailbox.old
+fi
+
+#
+#gr_top Test for /usr/lib/libfm_s,/usr/lib/libgl_s,/usr/lib/libX11_s,/lib/libc_s#
+if [ -n "$gfx" ]; then
+cp /usr/sbin/gr_top /usr/sbin/gr_top.old
+rcp guest@$CYP_HOST:/usr/sbin/gr_top /usr/sbin/gr_top
+echo *****$N. check Cypress static shared libary on gr_top
+/usr/bin/odump -L /usr/sbin/gr_top
+/usr/sbin/gr_top 
+if [ $? != 0 ]; then echo FAILED: Cypress gr_top binary >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+sleep 30
+kill_id=`ps -ef | grep gr_top | grep -v grep | tail -1 | awk '{print $2}'`
+if test -n "$kill_id"; then kill $kill_id; fi
+cp /usr/sbin/gr_top.old /usr/sbin/gr_top
+rm /usr/sbin/gr_top.old
+fi
+#
+
+#
+#pv test for /usr/lib/libXm_s_ca,/usr/lib/libXt_s,/usr/lib/libX11_s
+#
+if [ -n "$gfx" ]; then
+echo *****$N. check Cypress static shared libary on pv
+/usr/bin/odump -L /testlocal/bin/pv
+if [ -f /testlocal/bin/pv ]
+then
+        /testlocal/bin/pv 
+	if [ $? != 0 ]; then echo FAILED: Cypress pv binary >> $ERRLOG; fi
+	N=`expr $N + 1`; movecore;
+        sleep 50
+	kill_id=`ps -ef | grep pv | grep -v grep | tail -1 | awk '{print $2}'`
+	if test -n "$kill_id"; then kill $kill_id; fi
+else
+         echo *****$N. No PV installed on the system for Testing; N=`expr $N + 1`; movecore;
+fi
+fi
+
+
+#
+###############################
+# perform RISCOS binary compatiablity test
+# user should see a satellite image on screen
+###############################
+#
+if [ -n "$gfx" ]; then
+if [ ! -f /usr/tmp/xv ]
+then
+        rcp guest@babylon.wpd:/usr/people/guest/{xv,ncar-cvis-92113016.gif} .
+fi
+echo *****$N. RISCOS binary compatibility test
+elfdump -L /usr/tmp/xv
+/usr/bin/X11/xlswins > $JUNK1
+			 
+if test -n "$REMOTEHOST"
+then
+ env DISPLAY=$REMOTEHOST:0.0 /usr/tmp/xv /usr/tmp/ncar-cvis-92113016.gif &
+else
+ env DISPLAY=`hostname`:0.0 /usr/tmp/xv /usr/tmp/ncar-cvis-92113016.gif & 
+fi
+sleep 60
+/usr/bin/X11/xlswins > $JUNK2; diff $JUNK1 $JUNK2 > $JUNKD
+if test ! -s $JUNKD; then echo FAILED: RISCOS xv binary >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+rm $JUNK1 $JUNK2 $JUNKD
+kill_id=`ps -ef | grep xv | grep -v grep | tail -1 | awk '{print $2}'`
+if test -n "$kill_id"; then kill $kill_id; fi
+rm xv ncar-cvis-92113016.gif
+fi
+
+#
+#
+###############################
+# perform peripheral device tests
+###############################
+#
+rcp guest@babylon.wpd:/usr/people/guest/{systest,bash,transfertest} .
+echo *****$N. systest - peripheral test
+#/usr/tmp/systest
+if [ $? != 0 ]; then echo FAILED: systest >> $ERRLOG; fi
+N=`expr $N + 1`; movecore
+
+#
+
+echo *****$N. umount /usr/tmp/testlocal 
+/etc/umount /usr/tmp/testlocal
+if [ $? != 0 ]; then echo FAILED: umount /usr/tmp/testlocal >> $ERRLOG; fi
+N=`expr $N + 1`; movecore;
+
+echo ' '
+echo '**************************************************'
+echo '	All Automated Acceptance Tests Completed '
+echo '  Important!! For FAILURE REPORT please check accept_err.log'
+echo '  Now, The Acceptance Test Operator, please manually'
+echo '  check the following operations:'
+echo '  autoconfig'
+echo '  reboot'
+echo '  /etc/halt'
+echo '  /etc/init.d/network stop '
+echo '  /etc/init.d/network start '
+echo '  fsck certain file system '
+echo '  test vi or emacs '
+echo '**************************************************'
+echo ' '
+echo end time `date`
+
+echo 'Core dump detected during acceptance are:' >> $ERRLOG
+ls -l /usr/tmp/*core* >> $ERRLOG
+
+/usr/sbin/Mail -s ' '$ALPHA_NUM'-'$HOST'- '$ERRLOG' ' sue@wpd.sgi.com < $ERRLOG
+#
+# Clean up
+#
+for i in ctest.c ctest ctest.c++ a.out mailfile bash transfertest systest \
+tstshm curse.c curse alpha allrout.c allrout testnetls echo    
+do
+	if [ -f $i ]; then rm $i; fi
+done
+

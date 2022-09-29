@@ -1,0 +1,173 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	svTmpl.tlib
+# Version:	$Revision: 1.4 $
+# Synopsis:	Functions used to display error messages.
+# Packages:	SvTmpl-Base
+#
+#
+#%COMMENT_END
+
+
+#%COMMENT_BEGIN
+# Package:	SvTmpl-Base
+# Functions:	svTmpl:realize
+#		svTmpl:manage
+#		svTmpl:fill
+#		svTmpl:_create
+#		svTmpl:_dialogCb
+#		svTmpl:_modifyVerifyCb
+#
+# Function:	svTmpl:realize
+# Synopsis:	Creates a dialog and realizes it (if necessary).
+# Arguments:	- handle	An identifier that is used as a key for storing
+#                               (and later retrieving) the created widgets.
+#		- parent	The parent widget for the created dialog.
+#
+# Function:	svTmpl:manage
+# Synopsis:	Manages an instance of the dialog.
+# Arguments:	- handle	The identifier of the desired instance
+#				of the dialog.
+#
+# Function:	svTmpl:fill
+# Synopsis:	Manages an instance of the dialog.
+# Arguments:	- handle	The identifier of the desired instance
+#				of the dialog.
+#		- class		The class of template.
+#		- saveFunc	The function to call when the user accepts
+#				the operation.
+#		- saveHandle	The handle to call the save function with.
+#
+# Function:	svTmpl:_create
+# Synopsis:	Creates an XmSelectionDialog and defines callbacks for the
+#		dialog buttons.
+# Arguments:	- handle	An identifier that is used as a key for storing
+#                               (and later retrieving) the created widgets.
+#		- parent	The parent widget for the created dialog.
+#
+# Function:	svTmpl:_dialogCb
+# Synopsis:	The callback function defined on the dialog buttons.
+# Arguments:	- handle	An identifier that is used as a key for storing
+#                               (and later retrieving) the created widgets.
+#		- value		The value of the string in the XmTextField
+#				widget of the XmSelectionDialog.
+#		- op		Either "apply" or "ok", depending upon which
+#				dialog button the user selected.
+#
+# Function:	svTmpl:_modifyVerifyCb
+# Synopsis:	The callback function defined for the XmTextField widget.
+#		This is used to enforce rules upon the name for the file.
+# Arguments:	- pointer	The data that was entered.
+#		- length	The length of the pointer string.
+#		- doit		If set to 0, this will cancel the modification.
+#%COMMENT_END
+
+#@package: SvTmpl-Base	svTmpl:realize svTmpl:manage svTmpl:fill
+
+#########################################
+#	Public Procedures		#
+#########################################
+proc svTmpl:realize { handle parent } \
+{
+	global		_GW_tmpl
+
+	if {! [info exists _GW_tmpl($handle,dialog)]} {
+		set _GW_tmpl($handle,dialog) [svTmpl:_create $handle $parent]
+		$_GW_tmpl($handle,dialog) realizeWidget
+		$_GW_tmpl($handle,dialog) getValues -height height -width width
+		.$_GW_tmpl($handle,dialog) setValues \
+				-minWidth $width \
+				-minHeight $height
+	}
+}
+
+proc svTmpl:manage { handle } \
+{
+	global	_GW_tmpl; $_GW_tmpl($handle,dialog) manageChild
+}
+
+proc svTmpl:fill { handle class saveFunc saveHandle } \
+{
+	global		_GW_tmpl _GD_tmpl
+
+	set _GD_tmpl($handle,func) $saveFunc
+	set _GD_tmpl($handle,funcHandle) $saveHandle
+	set templates [tu:getTemplates $class]
+
+	set lst ""
+	foreach item $templates {
+		obj:parse $item o_class o_host o_nm o_type
+		lappend lst $o_nm
+	}
+
+	set _GD_tmpl($handle,items) [lsort $lst]
+
+	$_GW_tmpl($handle,dialog) setValues \
+			-listItems $_GD_tmpl($handle,items) \
+			-listItemCount [llength $_GD_tmpl($handle,items)]
+}
+
+#########################################
+#	Private Procedures		#
+#########################################
+proc svTmpl:_create { handle parent } \
+{
+	global		_GW_tmpl
+
+	set dialog [xmSelectionDialog $parent.$handle \
+			-listLabelString "Current Templates" \
+			-autoUnmanage false]
+
+	$dialog.Text modifyVerifyCallback \
+			"svTmpl:_modifyVerifyCb %ptr %length %doit"
+	$dialog okCallback "svTmpl:_dialogCb $handle %value ok"
+	$dialog applyCallback "svTmpl:_dialogCb $handle %value apply"
+	$dialog cancelCallback "$dialog unmanageChild"
+
+	return $dialog
+}
+
+proc svTmpl:_dialogCb { handle value op } \
+{
+	global		_GW_tmpl _GD_tmpl
+
+	####	Find out if this is a new template or if the
+	####	user wants to overwrite an existing template
+	if {[lsearch -exact $_GD_tmpl($handle,items) $value] == -1} {
+		set unique true
+	} else {
+		set unique false
+	}
+
+	if {[$_GD_tmpl($handle,func) $_GD_tmpl($handle,funcHandle) \
+					$value $unique] && $op == "ok"} {
+		$_GW_tmpl($handle,dialog) unmanageChild
+	}
+}
+
+proc svTmpl:_modifyVerifyCb { pointer length doit } \
+{
+	upvar $pointer	ptr
+	upvar $length	len
+	upvar $doit	do
+
+	loop i 0 $len 1 {
+		set ch [string index $ptr $i]
+		if {[ctype space $ch] || ([ctype punct $ch] && \
+		    $ch != "." && $ch != "-" && $ch != "_" && $ch != ",")} {
+			set do false
+		}
+	}
+}
+#@packend

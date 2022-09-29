@@ -1,0 +1,66 @@
+: "This script generates readonly"
+CC=${CC-cc}
+trap 'rm -f data data.[os] core r$$.s' 0
+echo ': "Make readonly data into text for sharing"' > readonly
+chmod 755 readonly
+if	${CC} -R -o data -Dconst= install/data.c > /dev/null 2>&1
+then	if	./data 2>/dev/null
+	then	:
+	else	echo '${CC-cc} -R -c "$@"' >> readonly
+		echo "#define const /* empty */" >> sh_config.h
+		exit 0
+	fi
+fi
+if	${CC} -Wa,-r -o data -Dconst= install/data.c > /dev/null 2>&1
+then	if	./data 2>/dev/null
+	then	:
+	else	echo '${CC-cc} -Wa,-r -c "$@"' >> readonly
+		echo "#define const /* empty */" >> sh_config.h
+		exit 0
+	fi
+fi
+if	${CC} -S -Dconst= install/data.c > /dev/null 2>&1
+then	data=text idat=code
+	for from in idat data
+	do	eval to=\$$from
+		if	grep $from data.s > /dev/null 2>&1 &&
+			sed -e "s/^\([ 	]*\.*\)$from/\1$to/" data.s >r$$.s &&
+			${CC} -o data r$$.s >/dev/null 2>&1
+		then	if ./data 2> /dev/null
+			then	:
+			else	cat >> readonly <<!!!
+error=0 CC=\${CC-cc}
+flags=
+while test '' != "\$1"
+do	case \$1 in
+	-*) flags="\$flags \$1";;
+	*)  break;;
+	esac
+	shift
+done
+for i in "\$@"
+do	x=\`basename "\$i" .c\`
+	\${CC} \$flags -S "\$i"
+	sed -e 's/^\([ 	]*\.*\)$from/\1$to/
+		s/\([^:][ 	]*\.*\)zero[ 	][ 	]*/\1set	.,.+/
+		s/\([^:][ 	]*\.*\)space[ 	][ 	]*4/\1byte 0,0,0,0/
+		s/\([^:][ 	]*\.*\)space[ 	][ 	]*3/\1byte 0,0,0/
+		s/\([^:][ 	]*\.*\)space[ 	][ 	]*2/\1byte 0,0/
+		s/\([^:][ 	]*\.*\)space[ 	][ 	]*1/\1byte 0/' "\$x.s" > data\$\$.s
+	mv data\$\$.s "\$x.s"
+	if	\${CC} -c "\$x.s"
+	then	rm -f "\$x.s"
+	else	error=1
+		\${CC} \${flags} -c "\$i"
+	fi
+done
+exit \$error
+!!!
+			exit 0
+			fi
+		fi
+	done
+fi
+: "Don't know how to do readonly, just compile"
+echo '${CC-cc} -c "$@"' >> readonly
+exit 0

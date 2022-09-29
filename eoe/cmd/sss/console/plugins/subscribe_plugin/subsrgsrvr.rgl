@@ -1,0 +1,1174 @@
+/*---------------------------------------------------------------------------*/
+/*                                                                           */
+/* Copyright 1992-1998 Silicon Graphics, Inc.                                */
+/* All Rights Reserved.                                                      */
+/*                                                                           */
+/* This is UNPUBLISHED PROPRIETARY SOURCE CODE of Silicon Graphics Inc.;     */
+/* contents of this file may not be disclosed to third parties, copied or    */
+/* duplicated in any form, in whole or in part, without the prior written    */
+/* permission of Silicon Graphics, Inc.                                      */
+/*                                                                           */
+/* RESTRICTED RIGHTS LEGEND:                                                 */
+/* Use,duplication or disclosure by the Government is subject to restrictions*/
+/* as set forth in subdivision (c)(1)(ii) of the Rights in Technical Data    */
+/* and Computer Software clause at DFARS 252.227-7013, and/or in similar or  */
+/* successor clauses in the FAR, DOD or NASA FAR Supplement. Unpublished -   */
+/* rights reserved under the Copyright Laws of the United States.            */
+/*                                                                           */
+/*---------------------------------------------------------------------------*/
+
+#ident           "$Revision: 1.5 $"
+
+#include "subsrg.h"
+#include <amevent.h>
+
+/*---------------------------------------------------------------------------*/
+/* Function Prototypes                                                       */
+/*---------------------------------------------------------------------------*/
+
+static int LogAvailEvent(char *, int, int);
+static int UpdateConfigData(char *, int, int);
+static int RunExitOps(char *, int, int);
+static __uint32_t InsertClass(class_data_t **, char *);
+int SUBSClassCheck(__uint32_t, int);
+static __uint32_t InsertType(class_data_t *, char *);
+static void FreeClassData(class_data_t *);
+static __uint32_t GetClassTypeData(char *, char *, int, class_data_t *);
+static __uint32_t RunProcess(CMDPAIR *, int, char *, int);
+static __uint32_t GetTypeData(CMDPAIR *, int, char *, int);
+static __uint32_t CheckSGMMode(void);
+static __uint32_t GetClassData(char *, int);
+void do_hanin(char *);
+
+/*---------------------------------------------------------------------------*/
+/*  Global declarations                                                      */
+/*---------------------------------------------------------------------------*/
+
+SubscribeClass_t  sssclasses[MAXINTERNALCLASSES] = {
+		  { 4000, CLASSSUBSCRIBEDINFULL, LogAvailEvent},
+		  { 4002, CLASSSUBSCRIBEDINFULL, UpdateConfigData},
+		  /*{ 4003, CLASSCANTBESUBSCRIBED, NULL},*/
+		  { 4004, CLASSCANTBESUBSCRIBED, NULL},
+		  {    0, 0, NULL},
+		  {    0, 0, NULL},
+		  {    0, 0, NULL}
+};
+
+
+/*---------------------------------------------------------------------------*/
+/* Report Generator Interfaces                                               */
+/*---------------------------------------------------------------------------*/
+
+/*---------------------------------------------------------------------------*/
+/* rgpgInit                                                                  */
+/*   Report Generator Initialization Routine                                 */
+/*---------------------------------------------------------------------------*/
+
+int RGPGAPI rgpgInit(sscErrorHandle hError)
+{
+    if(pthread_mutex_init(&seshFreeListmutex,0)) {
+        sscError(hError,szServerNameErrorPrefix,"Can't initialize mutex");
+        return 0;
+    }
+#ifdef INCLUDE_TIME_DATE_STRINGS
+    snprintf(szVersionStr,sizeof(szVersionStr),"%d.%d %s %s",MYVERSION_MAJOR,MYVERSION_MINOR,__DATE__,__TIME__);
+#else
+    snprintf(szVersionStr,sizeof(szVersionStr),"%d.%d",MYVERSION_MAJOR,MYVERSION_MINOR);
+#endif
+    return 1;
+}
+
+/*---------------------------------------------------------------------------*/
+/* rgpgDone                                                                  */
+/*   Report Generator Exit Routine                                           */
+/*---------------------------------------------------------------------------*/
+
+int RGPGAPI rgpgDone(sscErrorHandle hError)
+{
+    mySession *s;
+    FILE      *fp = NULL;
+    if(mutex_inited)
+    {
+        pthread_mutex_destroy(&seshFreeListmutex);
+        mutex_inited = 0;
+        while((s = sesFreeList) != 0)
+        {
+            sesFreeList = s->next;
+            free(s);
+        }
+        return 1; /* success */
+    }
+  return 0; /* error - not inited */
+}
+
+/*---------------------------------------------------------------------------*/
+/* rgpgCreateSesion                                                          */
+/*   Report Generator Session Creation Routine                               */
+/*---------------------------------------------------------------------------*/
+
+rgpgSessionID RGPGAPI rgpgCreateSesion(sscErrorHandle hError)
+{  mySession *s;
+   pthread_mutex_lock(&seshFreeListmutex);
+   if((s = sesFreeList) != 0) sesFreeList = s->next;
+   pthread_mutex_unlock(&seshFreeListmutex);
+   if(!s) s = (mySession*)malloc(sizeof(mySession));
+   if(!s)
+   { sscError(hError,szServerNameErrorPrefix,"No memory to create session in rgpgCreateSesion()");     return 0;
+   }
+   memset(s,0,sizeof(mySession));
+   s->signature = sizeof(mySession);
+   return (rgpgSessionID)s;
+}
+
+/*---------------------------------------------------------------------------*/
+/* rgpgDeleteSesion                                                          */
+/*   Report Generator Session Destroyer routine                              */
+/*---------------------------------------------------------------------------*/
+
+void RGPGAPI rgpgDeleteSesion(sscErrorHandle hError,rgpgSessionID _s)
+{ mySession *s = (mySession *)_s;
+  if(!s || s->signature != sizeof(mySession))
+  { sscError(hError,szServerNameErrorPrefix,"Incorrect session id in rgpgDeleteSesion()<br>\n");
+  }
+  else
+  { pthread_mutex_lock(&seshFreeListmutex);
+    s->next = sesFreeList; sesFreeList = s; s->signature = 0;
+    pthread_mutex_unlock(&seshFreeListmutex);
+  }
+}
+
+/*---------------------------------------------------------------------------*/
+/* rgpgGetAttribute                                                          */
+/*   Report Generator Attribute Retriever                                    */
+/*---------------------------------------------------------------------------*/
+
+char *RGPGAPI rgpgGetAttribute(sscErrorHandle hError,rgpgSessionID session, const char *attributeID, const char *extraAttrSpec,int *typeattr)
+{  char *s;
+
+   if(typeattr) *typeattr = RGATTRTYPE_STATIC;
+        if(!strcasecmp(attributeID,szVersion))            s = (char*)szVersionStr;
+   else if(!strcasecmp(attributeID,szTitle))              s = (char*)myLogo;
+   else if(!strcasecmp(attributeID,szUnloadTime))         s = (char*)szUnloadTimeValue;
+   else if(!strcasecmp(attributeID,szThreadSafe))         s = (char*)szThreadSafeValue;
+   else if(!strcasecmp(attributeID,szUnloadable))         s = (char*)szUnloadableValue;
+   else if(!strcasecmp(attributeID,szAcceptRawCmdString)) s = (char*)szAcceptRawCmdStringValue;
+   else
+   { sscError(hError,"%s No such attribute '%s' in rgpgGetAttribute()<br>\n",szServerNameErrorPrefix,attributeID);
+     return 0;
+   }
+   if(!s) sscError(hError,szServerNameErrorPrefix,"No memory in rgpgGetAttribute()<br>\n");
+   return s;
+}
+
+/*---------------------------------------------------------------------------*/
+/* rgpgFreeAttributeString                                                   */
+/*---------------------------------------------------------------------------*/
+
+void RGPGAPI rgpgFreeAttributeString(sscErrorHandle hError,rgpgSessionID session,const char *attributeID,const char *extraAttrSpec,char *attrString,int restype)
+{  if(((restype == RGATTRTYPE_SPECIALALLOC) || (restype == RGATTRTYPE_MALLOCED)) && attrString) free(attrString);
+}
+
+/*---------------------------------------------------------------------------*/
+/* rgpgSetAttribute                                                          */
+/*---------------------------------------------------------------------------*/
+
+void RGPGAPI rgpgSetAttribute(sscErrorHandle hError, rgpgSessionID session, const char *attributeID, const char *extraAttrSpec, const char *value)
+{  mySession *sess = (mySession *)session;
+
+   if(!strcasecmp(attributeID,szVersion) || !strcasecmp(attributeID,szTitle) ||
+      !strcasecmp(attributeID,szThreadSafe) || !strcasecmp(attributeID,szUnloadable) ||
+      !strcasecmp(attributeID,szUnloadTime))
+   { sscError(hError,szServerNameErrorPrefix,"Attempt to set read only attribute in rgpgSetAttribute()<br>\n");     return;
+   }
+
+   if(!strcasecmp(attributeID,szUserAgent) && value)
+   { sess->textonly = (strcasecmp(value,"Lynx") == 0) ? 1 : 0;
+   }
+
+   if(!sess || sess->signature != sizeof(mySession))
+   { sscError(hError,szServerNameErrorPrefix,"Incorrect session id in rgpgGetAttribute()<br>\n");
+     return;
+   }
+}
+
+static int UpdateConfigData(char *host, int proc, int class_id)
+{
+    time_t      mytime = time(0);
+    char        *tmpptr = NULL;
+    char        *tmpptr2 = NULL;
+    char        myhost[256];
+    char        sqlstr[1024];
+    char        mysysid[20];
+    char        remsysid[20];
+    __uint32_t  err = 0;
+    int         nrows = 0, ncols = 0;
+    int         pActID = 0;
+    char        systemcmd[256];
+
+    if ( !host ) return(0);
+    SGMNETIGetOffHostName(host, myhost);
+    snprintf(sqlstr, sizeof(sqlstr), 
+	     "select sys_id from system where hostname like '%s%s'",
+	     myhost, "%%");
+    err = SGMSSDBGetTableData(sqlstr, &tmpptr, &ncols, &nrows, "@", "|");
+    if ( err ) return(0);
+    else if ( !nrows || !tmpptr ) return(0);
+    else {
+	tmpptr2 = strtok(tmpptr, "@|");
+	if ( tmpptr2 ) {
+	    strncpy(remsysid, tmpptr2, sizeof(remsysid));
+            SGMIfree("UpdateConfig:1", tmpptr);
+        } else {
+	    SGMIfree("UpdateConfig:2", tmpptr);
+	    return(0);
+	}
+    }
+
+    snprintf(sqlstr, sizeof(sqlstr),
+	     "select sys_id from system where active = 1 and local = 1");
+
+    err = SGMSSDBGetTableData(sqlstr, &tmpptr, &ncols, &nrows, "@", "|");
+    if ( err ) return(0);
+    else if ( !nrows || !tmpptr ) return(0);
+    else {
+	tmpptr2 = strtok(tmpptr, "@|");
+	if ( tmpptr2 ) {
+	    strncpy(mysysid, tmpptr2, sizeof(mysysid));
+	    SGMIfree("UpdateConfig:1", tmpptr);
+	} else {
+	    SGMIfree("UpdateConfig:2", tmpptr);
+	    return(0);
+	}
+    }
+
+
+    /* Check if there is any rule that exists for Config Update */
+
+    if ( proc == SUBSCRIBEPROC ) {
+        snprintf(sqlstr, sizeof(sqlstr), 
+	"select action_id from event_action where action like '%s%s'",
+	"/usr/etc/confupdt -t", "%%");
+    } else {
+	snprintf(sqlstr, sizeof(sqlstr), 
+	"select action_id from event_actionref where class_id = %d"
+	" and sys_id = '%s'",
+	class_id, remsysid);
+    }
+
+    err = SGMSSDBGetTableData(sqlstr, &tmpptr, &ncols, &nrows, "@", "|");
+
+    if ( err ) return(0);
+    else if ( nrows == 0 )  {
+        if ( proc == UNSUBSCRIBEPROC ) return(0);
+	/* We didn't find any record in event_action.  Add one */
+	snprintf(sqlstr, sizeof(sqlstr), 
+	"insert into event_action values('%s',NULL, '', 1, 0, '%s',2,300,'root','Update Configuration from remote host', 1, 0)",
+	mysysid, "/usr/etc/confupdt -t %%S -o %%O %%H");
+
+	err = SGMSSDBSetTableData(sqlstr, "event_action", SSDB_REQTYPE_INSERT);
+	if ( err ) return(0);
+	else {
+	    snprintf(sqlstr, sizeof(sqlstr),
+	    "select action_id from event_action where action like '%s%s'",
+	    "/usr/etc/confupdt -t", "%%");
+
+	    err = SGMSSDBGetTableData(sqlstr, &tmpptr, &ncols, &nrows, "@", "|");
+	    if ( err ) return(0);
+	}
+    } 
+
+    tmpptr2 = strtok(tmpptr, "@|");
+    if ( tmpptr2 ) pActID = atoi(tmpptr2);
+    SGMIfree("UpdateConfig:3", tmpptr);
+
+    snprintf(sqlstr, sizeof(sqlstr), 
+	  "delete from event_actionref where sys_id = '%s' and class_id = %d"
+	  " and type_id = -1",
+	  remsysid, class_id);
+    SGMSSDBSetTableData(sqlstr, "event_actionref", SSDB_REQTYPE_DELETE);
+
+    if ( proc == SUBSCRIBEPROC ) {
+        snprintf(sqlstr, sizeof(sqlstr), 
+             "insert into event_actionref values('%s',NULL,%d,-1,%d)",
+	     remsysid, class_id, pActID);
+
+	err = SGMSSDBSetTableData(sqlstr, "event_actionref", SSDB_REQTYPE_INSERT);
+	if ( err ) return(0);
+        snprintf(systemcmd, sizeof(systemcmd), "/usr/sbin/configmon -g 2>/dev/null");
+        system(systemcmd);
+	snprintf(systemcmd, sizeof(systemcmd), "/usr/etc/confupdt %s 2>/dev/null &", host);
+	system(systemcmd);
+    }
+
+    return(SGMEXTISendSEMRuleConfig(pActID, 3));
+
+}
+
+/*---------------------------------------------------------------------------*/
+/* LogAvailEvent                                                             */
+/*   Logs an availmon event after completion of SUBSCRIBE/UNSUBSCRIBE        */
+/*---------------------------------------------------------------------------*/
+
+static int LogAvailEvent(char *host, int proc, int class_id)
+{
+    time_t   mytime = time(0);
+    char     availmsg[256];
+    char     myhost[256];
+
+    if ( !host ) return(0); 
+    SGMNETIGetOffHostName(host, myhost);
+    snprintf(availmsg, sizeof(availmsg), 
+	     "%d,%d,%d,%d,0,0,NULL,NULL,NULL,0,0,0,0,NULL,NULL",
+	     mytime,mytime,mytime,mytime);
+
+    if ( proc == SUBSCRIBEPROC ) {
+	return(SGMEXTISendToEventmon(myhost,REGISTER,availmsg));
+    } else {
+	return(SGMEXTISendToEventmon(myhost,DE_REGISTER,availmsg));
+    }
+}
+
+/*---------------------------------------------------------------------------*/
+/* RunExitOps                                                                */
+/*   Runs Exit operations for any specified class                            */
+/*---------------------------------------------------------------------------*/
+
+static int RunExitOps(char *host, int proc, int class)
+{
+    int    i = 0;
+    int    retcode = 0;
+
+    for (i = 0; i < MAXINTERNALCLASSES; i++ ) {
+	if ( sssclasses[i].class_id == class &&
+	     sssclasses[i].doexitop != NULL ) {
+	    retcode = (sssclasses[i].doexitop)(host, proc, 
+				      sssclasses[i].class_id);
+        }
+    }
+
+    return(retcode);
+}
+
+/*---------------------------------------------------------------------------*/
+/* InsertClass                                                               */
+/*   Inserts class data into the linked list                                 */
+/*---------------------------------------------------------------------------*/
+
+static __uint32_t InsertClass(class_data_t **pC, char *str)
+{
+    class_data_t   *pTmp = NULL;
+    class_data_t   *pTmp1 = NULL;
+    char           *pTmpClass = NULL, *pTmpLast = NULL;
+    int            pClass = 0;
+
+    if ( !pC || !str ) return(ERR(CLIENTERR, PARAMERR, INVALIDARGS));
+
+    pTmpClass = strtok_r(str, "|", &pTmpLast);
+
+    if ( !pTmpClass ) {
+	return(ERR(CLIENTERR, PARAMERR, INVALIDDATAPTR));
+    }
+
+    if ( (pTmp1 = (class_data_t *) calloc(1, sizeof(class_data_t))) == NULL )
+	return(ERR(CLIENTERR, OSERR, MALLOCERR));
+    
+    pTmp1->class_id = atoi(pTmpClass);
+
+    if ( pTmpLast )  
+        strncpy(pTmp1->class_desc, pTmpLast, sizeof(pTmp1->class_desc));
+
+    if ( *pC == NULL ) {
+	*pC = pTmp1;
+    } else {
+	pTmp = *pC;
+	while ( pTmp->next != NULL ) pTmp = pTmp->next;
+	pTmp->next = pTmp1;
+    }
+
+    return(0);
+}
+
+/*---------------------------------------------------------------------------*/
+/* SUBSClassCheck                                                            */
+/*   Checks Class parameters and returns appropriate values                  */
+/*---------------------------------------------------------------------------*/
+
+int SUBSClassCheck(__uint32_t Class, int flag)
+{
+    int   i = 0;
+
+    for ( i = 0; i < MAXINTERNALCLASSES; i++ ) {
+	if ( sssclasses[i].class_id == Class &&
+	     sssclasses[i].flag == flag ) return(1);
+    }
+
+    return(0);
+}
+
+/*---------------------------------------------------------------------------*/
+/* InsertType                                                                */
+/*   Inserts type data in the linked list                                    */
+/*---------------------------------------------------------------------------*/
+
+static __uint32_t InsertType(class_data_t *pC, char *str)
+{
+    class_data_t     *pCl = NULL;
+    type_data_t      *pType1 = NULL, *pType2 = NULL;
+    int              pClass = 0;
+    int              pType  = 0;
+    char             *pTmp1 = NULL, *pTmpLast = NULL;
+
+    if ( !pC || !str ) return(ERR(CLIENTERR, PARAMERR, INVALIDARGS));
+
+    pTmp1 = strtok_r(str, "|", &pTmpLast);
+
+    if ( pTmp1 ) {
+	pType = atoi(pTmp1);
+    } else {
+	return(ERR(CLIENTERR, PARAMERR, INVALIDDATAPTR));
+    }
+
+    pTmp1 = strtok_r(NULL, "|", &pTmpLast);
+
+    if ( pTmp1 ) {
+	pClass = atoi(pTmp1);
+    } else {
+	return(ERR(CLIENTERR, PARAMERR, INVALIDDATAPTR));
+    }
+
+    pCl = pC;
+
+    while ( pCl != NULL ) {
+	if ( pCl->class_id == pClass ) break;
+	pCl = pCl->next;
+    }
+
+    /* Found the class.  Now, lets look for type */
+
+    if ( !pCl ) return (ERR(CLIENTERR, PARAMERR, INVALIDDATAPTR));
+
+    pType1 = pCl->type;
+
+    if ( pType1 != NULL ) {
+	while (pType1->next != NULL ) {
+	    if ( pType1->type_id == pType ) break;
+	    pType1 = pType1->next;
+	}
+    } else {
+	if ((pType2 = (type_data_t *) calloc(1, sizeof(class_data_t)))==NULL )
+	    return(ERR(CLIENTERR, OSERR, MALLOCERR));
+	
+	pType2->type_id = pType;
+
+	if ( pTmpLast ) 
+	    strncpy(pType2->type_desc, pTmpLast, sizeof(pType2->type_desc));
+
+	pCl->type = pType2;
+	pCl->nooftypes++;
+	return(0);
+    }
+
+    if ( pType1->type_id != pType ) {
+	if ((pType2 = (type_data_t *) calloc(1, sizeof(class_data_t)))==NULL )
+	    return(ERR(CLIENTERR, OSERR, MALLOCERR));
+
+	pType2->type_id = pType;
+	if ( pTmpLast ) 
+	    strncpy(pType2->type_desc, pTmpLast, sizeof(pType2->type_desc));
+        
+	pType1->next = pType2;
+	pCl->nooftypes++;
+
+    } 
+
+    return(0);
+}
+
+/*---------------------------------------------------------------------------*/
+/* FreeClassData                                                             */
+/*   Frees up the class/type linked list                                     */
+/*---------------------------------------------------------------------------*/
+
+static void FreeClassData(class_data_t *pC)
+{
+    class_data_t    *myclass;
+    type_data_t     *mytype;
+
+    while ( (myclass = pC) != NULL ) {
+	pC = myclass->next;
+	while ( (mytype = myclass->type) != NULL ) {
+	    myclass->type = mytype->next;
+	    SGMIfree("SubsRGSrvr:1",mytype);
+	}
+	SGMIfree("SubsRGSrvr:2", myclass);
+    }
+}
+
+/*---------------------------------------------------------------------------*/
+/* GetClassTypeData                                                          */
+/*   For some classes, we need to subscribe to all events.  In such cases,   */
+/*   the type data request is delayed by one more screen and happens at      */
+/*   a later point.  This function facilitates that.                         */
+/*---------------------------------------------------------------------------*/
+
+static __uint32_t GetClassTypeData(char *host, char *sysid, int proc,
+				   class_data_t *class)
+{
+    char       buffer[1024];
+    __uint32_t err = 0;
+    char       *rptr = NULL;
+    int        nrows = 0, ncols = 0;
+    int        nobytes = 0;
+    char       *pTmp1 = NULL, *pTmp2 = NULL;
+
+
+    if ( !host || !class ) return(ERR(CLIENTERR, PARAMERR, INVALIDARGS));
+
+    if ( proc == SUBSCRIBEPROC ) {
+	snprintf(buffer, sizeof(buffer), 
+		 "select type_id,class_id,type_desc from event_type,system"
+		 " where system.active = 1 and system.local = 1 and "
+		 " system.sys_id = event_type.sys_id and "
+		 " event_type.class_id = %d", class->class_id);
+	err = SGMIRPCGetData(host, buffer, &rptr);
+	if ( err ) return(err);
+    } else if ( proc == UNSUBSCRIBEPROC ) {
+	if ( !sysid ) return(ERR(CLIENTERR, PARAMERR, INVALIDARGS));
+	snprintf(buffer, sizeof(buffer),
+		 "select type_id, class_id, type_desc from event_type "
+		 "where class_id = %d and sys_id = '%s' and enabled = 1",
+		 class->class_id, sysid);
+	err = SGMSSDBGetTableData(buffer, &rptr, &nrows, &ncols, "%&^","|");
+	if ( err ) return(SSSERR(CLIENTERR, SSDBERR, err));
+	else if ( !nrows || !rptr ) 
+	    return(SSSERR(CLIENTERR,SSDBERR,NORECORDSFOUND));
+    } else {
+	return(1);
+    }
+
+    /* We got all we want.  Now, lets populate class_data_t structure */
+
+    pTmp1 = rptr;
+
+    while ( (nobytes = MyStrTokR(pTmp1, buffer, &pTmp2)) > 0 ) {
+	if ( nobytes ) {
+	    if ( (err = InsertType(class, buffer)) != 0 ) break;
+	}
+	pTmp1 = NULL;
+    }
+
+    SGMIfree("SubsRGSrvr:3", rptr);
+    return(err);
+}
+
+/*---------------------------------------------------------------------------*/
+/* RunProcess                                                                */
+/*   This function performs the actual subscribe operation.                  */
+/*---------------------------------------------------------------------------*/
+
+static __uint32_t RunProcess(CMDPAIR *cmdp, int cmdpsize,
+                             char *hostname, int proc)
+{
+    __uint32_t    err = 0;
+    char          *rptr = NULL, *rptr1 = NULL;
+    char          *sysid = NULL;
+    int           nobytes = 0;
+    char          *classdata = NULL;
+    int           i = 0;
+    class_data_t  *myclass = NULL;
+    int           flag = 0;
+
+    for ( i = 0; i < cmdpsize; i++ ) {
+	if ( !strcasecmp(cmdp[i].keyname, FORMCLASSNAME) ) {
+	    if ( (err=InsertClass(&myclass, cmdp[i].value)) != 0 ) goto end;
+	} else if ( !strcasecmp(cmdp[i].keyname, "sys_id") ) {
+	    sysid = cmdp[i].value;
+	}
+    }
+
+    if ( myclass == NULL ) {
+	SUBSRGDisplayError(proc, PROCESSDATA, 0,
+	   "Web Server Error: Cannot get Class data for %s", hostname);
+	return(0);
+    }
+
+    flag =  SUBSClassCheck(myclass->class_id, CLASSSUBSCRIBEDINFULL);
+
+    /* Now, start looking at the types that are to be subscribed */
+
+    if ( flag ) {
+	err = GetClassTypeData(hostname, sysid,proc, myclass);
+	if ( err ) goto end;
+    } else {
+        for ( i = 0; i < cmdpsize; i++ ) {
+	    if ( !strcasecmp(cmdp[i].keyname, FORMTYPENAME) ) {
+	        if ( (err = InsertType(myclass, cmdp[i].value)) != 0 ) goto end;
+	    }
+        }
+    }
+
+    err = SGMSUBSISubscribe(myclass, hostname, proc);
+
+    if ( !err ) {
+        RunExitOps(hostname, proc, myclass->class_id);
+	SUBSRGDisplayConfirmation(hostname, proc, myclass);
+    }
+
+    end:
+	FreeClassData(myclass);
+        return(err);
+}
+
+/*---------------------------------------------------------------------------*/
+/* GetTypeData                                                               */
+/*   Responsible for displaying the second screen (after selecting the       */
+/*   class).  Displays all type information that needs to be subscribed/     */
+/*   unsubscribed.                                                           */
+/*---------------------------------------------------------------------------*/
+
+static __uint32_t GetTypeData(CMDPAIR *cmdp, int cmdpsize, 
+			      char  *hostname, int proc)
+{
+    char        sqlstr[1024];
+    __uint32_t  err = 0;
+    char        *rptr = NULL, *rptr1 = NULL;
+    int         nrows = 0, ncols = 0;
+    char        *sysid = NULL;
+    int         nobytes = 0;
+    char         class[10];
+    char        *classdata;
+    int         flag = 0;
+
+    memset(sqlstr, 0, sizeof(sqlstr));
+    memset(class, 0, sizeof(class));
+
+    /* Get all the hidden/normal variables first */
+
+    for ( nrows = 0; nrows < cmdpsize; nrows++) {
+	if ( !strcasecmp(cmdp[nrows].keyname, FORMCLASSNAME) ) {
+	    classdata = cmdp[nrows].value;
+	} else if ( !strcasecmp(cmdp[nrows].keyname, "sys_id") ) {
+	    sysid = cmdp[nrows].value;
+	}
+    }
+
+    /* Check whether we got the class data                    */
+
+    if ( classdata ) {
+	nobytes = sscanf(classdata, "%[0-9]|", class);
+    } else {
+	SUBSRGDisplayError(proc, GETTYPEDATA, 0,
+	    "Web Server Error: Cannot get Class data for %s", hostname);
+	return(0);
+    }
+
+    /* For both Subscribe & Unsubscribe, we need to get data from
+       SSDB regarding already existing classes & types           */
+
+    nrows = 0;
+
+    switch(proc)
+    {
+	case SUBSCRIBEPROC:
+
+	    if ( sysid && nobytes ) {
+	        snprintf(sqlstr, sizeof(sqlstr),
+		     "select type_id from event_type where "
+                     "class_id = %s and sys_id = '%s' and enabled = 1",
+		     class, sysid);
+	        err = SGMSSDBGetTableData(sqlstr,&rptr1,&nrows,&ncols,"@","|");
+
+	        if ( err ) return(SSSERR(CLIENTERR, SSDBERR, err));
+	    }
+
+	    /* Check whether class needs to be subscribed in full.  If
+	       Class needs to be subscribed in full, then, we don't 
+	       need to make an RPC Call to the system to get the types
+            */
+
+	    flag = SUBSClassCheck(atoi(class), CLASSSUBSCRIBEDINFULL);
+
+	    if ( flag ) {
+		if ( nrows ) {
+		    SUBSRGDisplayError(proc, GETTYPEDATA, 0,
+			"Selected Class (%s) already subscribed in full",
+			class);
+		    SGMIfree("SubsRGSrvr:4", rptr1);
+		    return(0);
+		} 
+	    } else {
+	        snprintf(sqlstr, sizeof(sqlstr),
+	           "select type_id,class_id,type_desc from event_type,system"
+	           " where system.active = 1 and "
+	           " system.local = 1 and "
+	           " system.sys_id = event_type.sys_id and "
+	           " event_type.class_id = %s", class);
+                err = SGMIRPCGetData(hostname, sqlstr, &rptr);
+	        if ( err ) {
+		    if ( rptr1 ) SGMIfree("SubsRGSrvr:5", rptr1);
+		    return(err);
+		}
+	    }
+
+	    /* We already have the types already subscribed in rptr1 */
+
+            SUBSRGDisplayHeader(1, 1, "SubEv", FORMTYPENAME, 
+				"/$sss/rg/subsrgsrvr~process");
+	    break;
+	case UNSUBSCRIBEPROC:
+	    if ( sysid && nobytes ) {
+	        snprintf(sqlstr, sizeof(sqlstr),
+		     "select type_id, class_id, type_desc from event_type "
+		     "where class_id = %s and sys_id = '%s' and enabled = 1",
+		     class, sysid);
+	        err=SGMSSDBGetTableData(sqlstr,&rptr1,&nrows,&ncols,"%&^","|");
+	        if ( err ) return(SSSERR(CLIENTERR, SSDBERR, err));
+	    }
+
+	    flag = SUBSClassCheck(atoi(class), CLASSSUBSCRIBEDINFULL);
+
+	    if ( nrows == 0 ) {
+		SUBSRGDisplayError(proc, GETTYPEDATA, 0,
+		    "Nothing to unsubscribe for Class (%s)", class);
+		return(0);
+	    } else if ( flag ) {
+		SGMIfree("SubsRGSrvr:6", rptr1);
+	    }
+
+	    SUBSRGDisplayHeader(1, 1, "SubEv", FORMTYPENAME,
+				"/$sss/rg/subsrgsrvr~process");
+	    break;
+	default:
+	    return(1);
+    }
+
+    /* At this point, rptr has all the data we need. Start displaying web
+       page.  Lets check whether we need to print anything at all */
+
+    if ( !flag ) { 
+        if ( proc == SUBSCRIBEPROC ) 
+	    nrows = SUBSRGCheckEntries(rptr, rptr1, GETTYPEDATA);
+	else 
+	    nrows = SUBSRGCheckEntries(rptr1, NULL, GETTYPEDATA);
+
+	if ( nrows < 0 ) {
+	    @row
+	    @cell
+	    @endcell
+	    @cell
+	    @ The following error happened in 
+	    @format "%s while retrieving Event Information :" (proc==SUBSCRIBEPROC?"Subscription":"Unsubscription")
+	    @ <ul>
+	    @ <li> There are currently no events available that can be
+	    @format " %s " (proc==SUBSCRIBEPROC?"subscribed":"unsubscribed")
+	    @ </ul>
+	    @endcell
+	    @endrow
+	    @row
+	    @cell colspan=2
+	    @ &nbsp;
+	    @endcell
+	    @endrow
+	    goto end;
+	}
+    }
+
+    @row
+    @cell
+    @endcell
+    @cell
+      @ Select as many events as you want to 
+      @ (un)subscribe to Support Group Manager:<p>
+
+      if ( flag ) {
+	  @format "<select name=\"%s\" size=2>\n" FORMTYPENAME
+	  @format "\t<option value=\"-1|%s|All Events\">All Events" class
+	  @format "</select>\n"
+      } else if ( proc == SUBSCRIBEPROC ) {
+	  SUBSRGPrintSelectBox(rptr,rptr1,FORMTYPENAME,GETTYPEDATA,flag);
+      } else {
+          SUBSRGPrintSelectBox(rptr1, NULL, FORMTYPENAME, GETTYPEDATA, 0);
+      }
+
+    @endcell
+    @endrow
+    @row
+    @cell colspan=2
+    @ &nbsp;
+    @endcell
+    @endrow
+    @row
+    @cell
+    @ &nbsp;
+    @endcell
+    @cell
+      @ <INPUT TYPE="SUBMIT" VALUE="   Accept   ">
+      @format "<INPUT TYPE=\"hidden\" name=\"%s\" value=\"%s\">" FORMHOSTNAME hostname
+      if (nobytes)
+          @format "<INPUT TYPE=\"hidden\" name=\"%s\" value=\"%s\">" "sys_id" sysid
+    @format "<INPUT TYPE=\"hidden\" name=\"%s\" value=\"%s\">" FORMCLASSNAME classdata
+    @format "<INPUT TYPE=\"hidden\" name=\"%s\" value=\"%s\">" "submit_type" (proc==SUBSCRIBEPROC?"subscribe":"unsubscribe")
+    @endcell
+    @endrow
+
+    end:
+    SUBSRGDisplayFooter(1, 1);
+    if ( rptr1 ) SGMIfree("SubsRGSrvr:7", rptr1);
+    if ( rptr  ) SGMIfree("SubsRGSrvr:8", rptr);
+    return(0);
+
+}
+
+/*---------------------------------------------------------------------------*/
+/* CheckSGMMode                                                              */
+/*   Checks whether machine is running as an SGM or an SEM                   */
+/*---------------------------------------------------------------------------*/
+
+static __uint32_t CheckSGMMode(void)
+{
+  __uint32_t    err = 0;
+    char       *rptr = NULL;
+    int         nrows = 0, ncols = 0;
+    int         retry = 0;
+
+AGAIN:
+    err = SGMSSDBGetTableData("select mode from sss_config",
+			      &rptr, &nrows, &ncols, " ", "|");
+    
+    if ( err ) return(0);
+    else if ( !nrows || !rptr ) return(0);
+
+    ncols = atoi(rptr);
+    SGMIfree("SubsRGSrvr:9", rptr);
+    if ( ncols == 2 ) return(1);
+    
+    if ( ncols == 1 && retry == 0 )
+    { /* Let's try to switch into SGM mode */
+      configure_sgm ("MODE 2");
+      retry = 1;
+      sleep (1);
+      goto AGAIN;
+    }
+    
+    return(0);
+}
+
+/*---------------------------------------------------------------------------*/
+/* GetClassData                                                              */
+/*   This function is responsible for displaying the first screen after a    */
+/*   user enters the hostname to subscribe/unsubscribe to.  This function    */
+/*   displays the class information to subscribe/unsubscribe to.             */
+/*---------------------------------------------------------------------------*/
+
+static __uint32_t GetClassData(char *hname, int proc)
+{
+    char        sqlstr[1024];
+    __uint32_t  err = 0;
+    char        *rptr = NULL;
+    int         nrows = 0, ncols = 0;
+    char        sysid[20];
+    char        hostname[512];
+    int         nobytes = 0;
+
+    memset(sqlstr, 0, sizeof(sqlstr));
+    memset(sysid, 0, sizeof(sysid));
+    memset(hostname, 0, sizeof(hostname));
+
+    if ( !SGMNETIGetOffHostName(hname, hostname) ) {
+        return(ERR(CLIENTERR, NETERR, INVALIDHOST));
+    }
+
+    /* First, try to get System Information for the host */
+
+    snprintf(sqlstr, sizeof(sqlstr),
+	"select sys_id from system where system.active = 1"
+	" and system.local = 0 and hostname like '%s%s'",
+	hostname, "%%");
+
+    err = SGMSSDBGetTableData(sqlstr,&rptr,&nrows,&ncols,"@","|");
+
+    if ( err ) return (SSSERR(CLIENTERR, SSDBERR, err));
+    else if (nrows == 0 && proc == UNSUBSCRIBEPROC) {
+	SUBSRGDisplayError(proc, GETCLASSDATA, 0,
+	    "Host data not found in Database for %s", hostname);
+        return(0);
+    } else if ( nrows > 1 ) {
+	SGMIfree("SubsRGSrvr:10", rptr);
+	SUBSRGDisplayError(proc, GETCLASSDATA, 0,
+	    "Multiple hosts match query for hostname %s.", hostname);
+	return(0);
+    } 
+
+    if ( rptr ) nobytes = sscanf(rptr, "@%[0-9A-Fa-f]|", sysid);
+
+    SGMIfree("SubsRGSrvr:11", rptr);
+    rptr = NULL;
+
+    switch(proc) 
+    {
+	case SUBSCRIBEPROC:
+	    snprintf(sqlstr, sizeof(sqlstr), 
+		     "select class_id, class_desc from event_class,system "
+		     "where system.active = 1 and system.local = 1 and "
+		     "system.sys_id = event_class.sys_id");
+
+	    err = SGMIRPCGetData(hostname, sqlstr, &rptr);
+	    if ( err ) return(err);
+
+            SUBSRGDisplayHeader(1, 1, "SubCl", FORMCLASSNAME, 
+			      "/$sss/rg/subsrgsrvr~gettypedata");
+	    break;
+	case UNSUBSCRIBEPROC:
+	    if ( !nobytes ) {
+	        SUBSRGDisplayError(proc, GETCLASSDATA, 0,
+	            "Cannot get system information for hostname %s", hostname);
+                return(0);
+            }
+
+	    snprintf(sqlstr, sizeof(sqlstr),
+			 "select class_id, class_desc from event_class "
+			 "where sys_id = '%s'",sysid);
+            err=SGMSSDBGetTableData(sqlstr,&rptr,&nrows,&ncols,"%&^",NULL);
+	    if ( err ) return(SSSERR(CLIENTERR, SSDBERR, err));
+	    else if ( nrows == 0 ) {
+		SUBSRGDisplayError(proc, GETCLASSDATA,0,
+		    "No events subscribed for Host %s", hostname);
+		return(0);
+	    } else if ( nrows && !rptr ) {
+		SUBSRGDisplayError(proc, GETCLASSDATA, 0,
+		    "Cannot extract Subscription information from DB for %s",
+		    hostname);
+		return(0);
+	    }
+
+            SUBSRGDisplayHeader(1, 1, "SubCl", FORMCLASSNAME, 
+			      "/$sss/rg/subsrgsrvr~gettypedata");
+	    break;
+	default:
+	    return(1);
+    }
+
+    /* At this point, rptr has all the data we need. Start displaying web
+       page */
+
+    if ( SUBSRGCheckEntries(rptr, NULL, GETCLASSDATA) < 0 ) {
+        @row
+        @cell
+        @endcell
+        @cell
+	    @ The following error happened in 
+	    @format "%s while retrieving Class Information :" (proc==SUBSCRIBEPROC?"Subscription":"Unsubscription")
+	    @ <ul>
+	    @ <li> There are currently no classes available that can be
+	    @format " %s " (proc==SUBSCRIBEPROC?"subscribed":"unsubscribed")
+	    @ </ul>
+        @endcell
+        @endrow
+        @row
+        @cell colspan=2
+        @ &nbsp;
+        @endcell
+        @endrow
+        goto end;
+    }
+
+    @row
+    @cell
+    @endcell
+    @cell
+      @ Select a class to search for events you would like to 
+      @ (un)subscribe to Support Group Manager:<p>
+
+      SUBSRGPrintSelectBox(rptr, NULL, FORMCLASSNAME, GETCLASSDATA, 0);
+
+    @endcell
+    @endrow
+    @row 
+    @cell colspan=2
+    @ &nbsp;
+    @endcell
+    @endrow
+    @row
+    @cell
+    @ &nbsp;
+    @endcell
+    @cell
+      @ <INPUT TYPE="SUBMIT" VALUE="   Accept   ">
+      @format "<INPUT TYPE=\"hidden\" name=\"%s\" value=\"%s\">" FORMHOSTNAME hostname
+      if (nobytes)
+          @format "<INPUT TYPE=\"hidden\" name=\"%s\" value=\"%s\">" "sys_id" sysid
+    @format "<INPUT TYPE=\"hidden\" name=\"%s\" value=\"%s\">" "submit_type" (proc==SUBSCRIBEPROC?"subscribe":"unsubscribe")
+    @endcell
+    @endrow
+
+    end:
+    SUBSRGDisplayFooter(1, 1);
+    SGMIfree("SubsRGSrvr:12", rptr);
+    SGMIfree("SubsRGSrvr:13", rptr);
+    return(0);
+}
+
+#if 0
+void do_hanin(char *hostname)
+{
+    char    *rptr = NULL;
+    char    *sqlstr[] = {
+      "select auth_host,auth_key,auth_mask,auth_pwd,auth_encr from sss_auth", 
+      "select * from event_class", 
+      "select type_id,class_id,sys_id from event_type", 
+      "select auth_host,auth_key,auth_mask,auth_pwd from sss_auth"
+      };
+    int     nrows = 0, ncols = 0;
+    int     i = 0;
+    int     err = 0;
+
+    @ <html>
+    @ <body>
+    for ( i = 0; i < 4; i++ ) {
+	@ <p>
+	@format "Select Statement : %s<br>\n" sqlstr[i]
+	/*err = SGMSSDBGetTableData(sqlstr[i],&rptr,&nrows,&ncols,"%&^",NULL);*/
+        err = SGMIRPCGetData(hostname, sqlstr[i], &rptr);
+	@format "Nrows = %d, Ncols = %d, err = %d<br>\n" nrows ncols err
+	@format "Data = %s<br>\n" rptr
+	SGMIfree("SubsRGSrvr:14", rptr);
+	@ </p>
+    }
+    @ </body>
+    @ </html>
+
+}
+#endif
+
+/*---------------------------------------------------------------------------*/
+/* rgpgGenerateReport                                                        */
+/*   Actual Report Generator                                                 */
+/*---------------------------------------------------------------------------*/
+
+int RGPGAPI rgpgGenerateReport(sscErrorHandle hError,rgpgSessionID session, int argc, char* argv[],char *rawCommandString,streamHandle result, char *userAccessMask)
+{  CMDPAIR cmdp[MAXKEYS];
+   int cmdpsize,i;
+   int   err = 0;
+   int   proc = 0, func = 0;
+   char  *remHost = NULL;
+
+   mySession *sess = (mySession *)session;
+
+   if(!sess || sess->signature != sizeof(mySession))
+   {
+     sscError(hError,szServerNameErrorPrefix,
+                     "Incorrect session id in rgpgGenerateReport()<br>\n");
+     return(RGPERR_SUCCESS);
+   }
+
+   if ( argc < 2 ) {
+       sscError(hError,szServerNameErrorPrefix,
+                     "Wrong number of arguments<br>\n");
+       return(RGPERR_SUCCESS);
+   }
+
+   if ( !strcasecmp(argv[1], "getclassdata") ) {
+       func = GETCLASSDATA;
+   } else if ( !strcasecmp(argv[1], "gettypedata") ) {
+       func = GETTYPEDATA;
+   } else if ( !strcasecmp(argv[1], "process") ) {
+       func = PROCESSDATA;
+   } else if ( !strcasecmp(argv[1], "hanindra") ) {
+       func = 20;
+   } else {
+       sscError(hError,szServerNameErrorPrefix,"Unrecognized argument<br>\n");
+       return(RGPERR_SUCCESS);
+   }
+
+   /*  Initialize The HTML Generator  */
+
+   if(createMyHTMLGenerator(result))
+   { sscError(hError,szServerNameErrorPrefix,
+                     "Can't open the HTML generator<br>\n");
+     return(RGPERR_SUCCESS);
+   }
+
+   /* Initialize Pair array (cmdpsize eq. number of valid pairs) */
+
+   cmdpsize = sscInitPair(rawCommandString,cmdp,MAXKEYS);
+
+   /* Set Browser type */
+
+   for(i = 0;(i = sscFindPairByKey(cmdp,i,szUserAgent)) >= 0;i++)
+       if ( !strcasecmp(cmdp[i].value,"Lynx")) sess->textonly = 1;
+
+   /* Lets look for submit_type.  We need to know it  */
+
+   for ( i = 0; (i = sscFindPairByKey(cmdp,i,"submit_type")) >=0; i++) {
+       if ( !strcasecmp(cmdp[i].value,"subscribe")) proc = SUBSCRIBEPROC;
+       else if (!strcasecmp(cmdp[i].value,"unsubscribe")) proc=UNSUBSCRIBEPROC;
+   }
+
+   /* We always need a hostname for every function.  Lets check for it */
+
+   for(i = 0;(i = sscFindPairByKey(cmdp,i,FORMHOSTNAME)) >=0; i++) {
+       remHost = cmdp[i].value;
+   }
+
+   if ( !remHost ) {
+       sscError(hError,szServerNameErrorPrefix,
+			 "Need to specify a hostname<br>\n");
+       goto end;
+   } else if ( !proc ) {
+       sscError(hError, szServerNameErrorPrefix,
+			 "No submit type specified.  Please select either Subscribe or Unsubscribe<br>\n");
+       goto end;
+   }
+
+   /* Lets try to INIT SSDB Interfaces.  If we can't do the INIT, we
+      can't proceed any further */
+
+   if ( (err = SGMSSDBInit(0)) != 0 ) {
+       sscError(hError, szServerNameErrorPrefix, 
+		     "Can't initialize Database Interfaces<br>\n");
+       goto end;
+   }
+
+   if ( !CheckSGMMode() ) {
+       SUBSRGDisplayError(proc, func, 0, 
+	   "Unable to determine whether Group Management functionality"
+	   " is enabled or disabled.  Are you running as a Group Manager ?"
+           " If running as a Group Manager, please check whether there "
+           " is a valid ESP license installed on the machine.");
+       goto end;
+   }
+
+   switch(func)
+   {
+       case GETCLASSDATA:
+	   if ( proc==SUBSCRIBEPROC) err = SGMAUTHIUpdateAuth(remHost);
+	   if ( !err ) 
+	       err = GetClassData(remHost, proc);
+	   break;
+       case GETTYPEDATA:
+	   err = GetTypeData(cmdp, cmdpsize, remHost, proc);
+	   break;
+       case PROCESSDATA:
+	   err = RunProcess(cmdp, cmdpsize, remHost, proc);
+	   break;
+#if 0
+       case 20:
+           do_hanin(remHost);
+           break;
+#endif
+       default:
+	   err = 1;
+	   break;
+   }
+
+   if ( err ) {
+       SUBSRGDisplayError(proc, func, err, NULL);
+   }
+
+   end:
+     /*SGMImemstats();*/
+     SGMSSDBDone(0);
+     deleteMyHTMLGenerator();
+     return(RGPERR_SUCCESS);
+}
+

@@ -1,0 +1,528 @@
+#! /bin/sh
+#
+#  setup_exec : script written to set up exec on a server.
+#
+#  usage: setup_exec archname path tapetype [tapehost] tapedev [sharepath]
+#
+#	@(#)setup_exec	1.1 88/06/08 4.0NFSSRC; from 1.29 88/03/11 D/NFS
+#
+#  	Copyright (c) 1987 by Sun Microsystems, Inc.
+#
+
+HOME=/; export HOME
+PATH=/bin:/usr/bin:/etc:/usr/etc:/usr/bsd:/usr/etc/netdisk
+
+CMDNAME=$0
+MYPATH="/usr/etc/netdisk"
+
+# Default action is to verify tape before every request by rewinding, reading
+# label, and the skipping to proper file.  This step could theoretically be
+# done only when a tape change is indicated.  However, some tape drives will
+# randomly seek to the wrong file if a skip is initiated after already reading
+# data from that drive.  Hence the reason for rewinding between each file.
+# If you want to speed things up by only verifying tapes at each tape change,
+# then change the "yes" to "no" in the DOVERIFY=yes line below.  Do this at
+# your own risk.
+DOVERIFY=yes
+
+# If $TAPE starts with /dev/ then $TAPEDEV will be that name.  Otherwise
+# tape device name $TAPEDEV constructed from ${NRTAPE}${TAPE}${DEVNO}
+#	NRTAPE	is the prefix (including rooted path name)
+#	TAPE	is the driver type taken from the command line
+#	DEVNO	is the suffix
+# The device name should be the non-rewinding tape device to use.
+NRTAPE="/dev/nr"
+DEVNO="0"
+# Default blocking factors (in units of 512-byte blocks)
+BS_QUARTER=126
+BS_HALF=20
+BS_DEFAULT=20
+
+USAGE="usage: ${CMDNAME} arch execpath tapetype [tapehost] tapedev [sharepath]
+where:
+	arch        = \"sun2\" or \"sun3\" or \"sun4\" ...
+        execpath    = full pathname of exec directory (e.g. /export/exec/sun3 )
+        tapetype    = \"local\" or \"remote\"
+	tapehost    = if remote, name of the host which has the tape drive
+        tapedev     = \"ar\" or \"st\" or \"mt\" or \"xt\" or \"/dev/???\"
+		      where \"???\" is the non-rewinding tape device to use
+	sharepath   = full pathname of directory for files shared between
+		      architectures (e.g. /export/exec/share)
+"
+
+#
+# Verify number of arguments
+#
+case $# in
+4 | 5 | 6)
+	;;
+*)
+	echo "${CMDNAME}: incorrect number of arguments."
+        echo "${USAGE}"
+        exit 1 ;;
+esac
+#
+# Get architecture name
+#
+ARCH=${1}; shift
+case "$ARCH" in
+"" )
+	echo "${CMDNAME}: invalid architecture type \"${ARCH}\"."
+	exit 1 ;;
+* )
+	;;
+esac
+#
+# Path name for exec/arch
+#
+EXECPATH=${1}; shift
+#
+# Check tape drive type : local or remote
+# If remote, check tape host
+#
+DRIVE=${1}; shift
+case "$DRIVE" in
+"local" | "l" )
+	DRIVE=local
+	TAPEHOST=""
+	;;
+"remote" | "r" )
+	case $# in
+	2 | 3 )
+		TAPEHOST=${1}; shift
+		DRIVE=remote
+		;;
+	*)
+		echo "${CMDNAME}: incorrect number of arguments."
+		echo "${USAGE}"
+		exit 1 ;;
+	esac
+	;;
+* )
+	echo "${CMDNAME}: invalid tape drive type \"${DRIVE}\"."
+	exit 1 ;;
+esac
+#
+# Check tape type : ar, st, mt, xt, or /dev/something
+# Note that block size is in standard units of 512-byte blocks.
+#
+TAPE=${1}
+case "$TAPE" in
+ar | ar${DEVNO} | nrar${DEVNO} )
+	TAPE=ar
+	BS=${BS_QUARTER}
+	;;
+ar8 | nrar8 )
+	TAPE=ar
+	DEVNO=8
+	BS=${BS_QUARTER}
+	;;
+st | st${DEVNO} | nrst${DEVNO} )
+	TAPE=st
+	BS=${BS_QUARTER}
+	;;
+st8 | nrst8 )
+	TAPE=st
+	DEVNO=8
+	BS=${BS_QUARTER}
+	;;
+${NRTAPE}ar[08] | ${NRTAPE}st[08] )
+	BS=${BS_QUARTER}
+	;;
+/dev/* )
+	# default block size since we don't know
+	BS=${BS_DEFAULT}
+	;;
+mt | xt | mt0 | xt0 | nrmt0 | nrxt0 )
+	TAPE=mt
+	BS=${BS_HALF}
+	;;
+mt8 | xt8 | nrmt8 | nrxt8 )
+	TAPE=mt
+	DEVNO=8
+	BS=${BS_HALF}
+	;;
+* )
+	echo "${CMDNAME}: invalid tape type \"${TAPE}\"."
+	exit 1 ;;
+esac
+case "$TAPE" in
+/dev/* )
+	TAPEDEV=$TAPE
+	;;
+* )
+	TAPEDEV=${NRTAPE}${TAPE}${DEVNO}
+	;;
+esac
+case $# in
+2 )
+	SHAREPATH=$2
+	;;
+1 )
+	SHAREPATH=none
+	;;
+*)
+	echo "${CMDNAME}: incorrect number of arguments."
+	echo "${USAGE}"
+	exit 1 ;;
+esac
+#
+# Preliminary work before installation starts
+#
+if [ "$DRIVE" = "remote" ]; then
+	DOMAIN=`domainname`
+        if [ "$DOMAIN" = "noname" -o "$DOMAIN" = "" ]; then
+                grep "[	 ]$TAPEHOST[	 ]" /etc/hosts > /dev/null 2>&1
+        else
+                ypmatch $TAPEHOST hosts > /dev/null 2>&1
+        fi
+	case $? in
+	0)
+		;;
+	*)
+                echo "${CMDNAME}: can't reach tapehost \"${TAPEHOST}\" !!"
+                exit 1 ;;
+        esac
+fi
+
+if [ -d ${EXECPATH} ]; then
+    echo "
+${CMDNAME}: ${EXECPATH} already exists.
+  You may select one of the following options:
+	abort	exit with error status
+	ok	exit with ok status
+	remove	remove existing tree, then continue
+	ignore	continue (load on top of existing tree)
+			? \c"
+    while :; do
+	read ans
+	case "$ans" in
+	"abort" )
+		echo "${CMDNAME}: aborting"
+		exit 1
+		;;
+	"ok" )
+		echo "${CMDNAME}: ok"
+		exit 0
+		;;
+	"remove" )
+		rm -rf ${EXECPATH}
+		if [ -d ${EXECPATH} ]; then
+			echo "${CMDNAME}: ${EXECPATH} not removed"
+			echo "${CMDNAME}: aborting"
+			exit 1
+		fi
+		echo "${EXECPATH} removed"
+		break ;;
+	"ignore" )
+		break ;;
+	* )
+		echo \
+"Please enter \"abort\" \"ok\" \"remove\" or \"ignore\" : \c"
+		;;
+	esac
+    done
+fi
+
+#
+# Determine optional software
+#
+if [ ! -f /tmp/EXTRACTLIST.${ARCH} ]; then
+	opt_software ${ARCH} ${TAPEDEV} ${TAPEHOST}
+	case $? in
+	0)
+		;;
+	*)
+		echo "
+${CMDNAME}: error in opt_software; ${ARCH} architecture not installed."
+		exit 1
+		;;
+	esac
+fi
+echo "
+Installation of ${ARCH} executable files begins :"
+
+if [ ! -d ${EXECPATH} ]; then
+	mkdir -p -m 755 ${EXECPATH}
+fi
+if [ ! -d ${EXECPATH} ]; then
+	echo "
+${CMDNAME}: can't make directory ${EXECPATH}."
+	echo "ATTENTION: ${ARCH} architecture not installed."
+	exit 1
+fi
+cd ${EXECPATH}
+case $SHAREPATH in
+none)
+	;;
+*)
+	if [ ! -d ${SHAREPATH} ]; then
+		mkdir -p -m 755 $SHAREPATH
+	fi
+	if [ ! -d $SHAREPATH ]; then
+		echo "
+${CMDNAME}: can't make directory $SHAREPATH."
+		echo "ATTENTION: shared files will be left in $EXECPATH/share."
+		SHAREPATH=none
+	else
+		# set temporary symlink during loading
+		rm -rf share
+		if [ -d share ]; then
+			rmdir share
+		fi
+		if [ -d share ]; then
+			echo "
+${CMDNAME}: can't remove directory $EXECPATH/share.
+ATTENTION: shared files will be left there instead of $SHAREPATH."
+			SHAREPATH=none
+		else
+			ln -s $SHAREPATH share
+		fi
+	fi
+	;;
+esac
+#
+# Extract software from release tape
+#
+STATE=IDENT
+LASTTAPE=none
+LASTFILE=0
+for OPT in `cat /tmp/EXTRACTLIST.${ARCH}`; do
+	# Make sure we are in state ENTRY if $OPT is "ENTRY"
+	# or state IDENT if $OPT is "IDENT"
+	case $OPT in
+	ENTRY)
+		case $STATE in
+		ENTRY)
+			STATE=NAME
+			continue ;;
+		*)
+			echo "
+${CMDNAME}: /tmp/EXTRACTLIST.${ARCH} out of sync.
+ATTENTION: ${ARCH} architecture not fully installed."
+			exit 1 ;;
+		esac ;;
+	IDENT)
+		case $STATE in
+		IDENT)
+			STATE=TITLE
+			continue ;;
+		*)
+			echo "
+${CMDNAME}: /tmp/EXTRACTLIST.${ARCH} out of sync.
+ATTENTION: ${ARCH} architecture not fully installed."
+			exit 1 ;;
+		esac ;;
+	esac
+	#
+	# Now assign the proper variable depending on the state.
+	# If we are in states ENTRY or IDENT at this point, then we
+	# are out of sync.
+	#
+	case $STATE in
+	ENTRY | IDENT)
+		echo "
+${CMDNAME}: /tmp/EXTRACTLIST.${ARCH} out of sync.
+ATTENTION: ${ARCH} architecture not fully installed."
+		exit 1 ;;
+	TITLE)
+		# Distribution name
+		TITLE=$OPT
+		STATE=VERSION
+		continue ;;
+	VERSION)
+		# Distribution version
+		VERSION=$OPT
+		STATE=ENTRY
+		echo "
+[Loading version ${VERSION} of ${ARCH} architecture.]"
+		continue ;;
+	NAME)
+		# Software name
+		NAME=$OPT
+		STATE=TAPENO
+		continue ;;
+	TAPENO)
+		# Release tape volume number
+		TAPENO=$OPT
+		STATE=FILENO
+		continue ;;
+	FILENO)
+		# File number on the tape (starting with 0)
+		FILENO=$OPT
+		STATE=WHERE
+		continue ;;
+	WHERE)
+		# Pathname to load on
+		WHERE=$OPT
+		STATE=STATUS
+		continue ;;
+	STATUS)
+		# "required" or "desirable" or "common" or "optional"
+		STATUS=$OPT
+		STATE=MOVABLE
+		continue ;;
+	MOVABLE)
+		# "movable" or "not_movable"
+		MOVABLE=$OPT
+		STATE=SIZE
+		continue ;;
+	SIZE)
+		# Size of this file
+		SIZE=$OPT
+		STATE=ENTRY
+		;;
+	esac
+	# We have a complete entry, so process it
+	case $NAME in
+	root)
+		#
+		# Only install the root prototype if it doesn't
+		# already exist.
+		#
+		if [ ! -d $MYPATH/proto/etc ]; then
+			LDDIR=${MYPATH}/proto
+			rm -rf ${LDDIR}
+			mkdir ${LDDIR}
+			chmod 755 ${LDDIR}
+			echo "
+Loading prototype root tree..."
+		else
+			# already exists, so skip it
+			continue
+		fi ;;
+	* )
+		case $WHERE in
+		/usr)
+			# go ahead and load in the EXEC directory
+			LDDIR=${EXECPATH}
+			;;
+		/usr/*)
+			# translate pathname into EXEC directory
+			LDDIR=`echo $WHERE | sed -e "s,^/usr/,,"`
+			case "$LDDIR" in
+			"")
+				LDDIR=${EXECPATH}
+				;;
+			*)
+				LDDIR=${EXECPATH}/${LDDIR}
+				mkdir -p -m 755 ${LDDIR}
+				;;
+			esac ;;
+		*)
+			#
+			# Try to relocate the software into the
+			# ARCH directory if we can
+			#
+			case $MOVABLE in
+			movable)
+				LDDIR=${EXECPATH}
+				;;
+			*)
+				echo "
+${CMDNAME}: Can't relocate loadpoint directory \"$WHERE\"
+	into ${EXECPATH}.
+ATTENTION: $STATUS \"$NAME\" software not installed."
+				continue ;;
+			esac ;;
+		esac ;;
+	esac
+	if [ ! -d $LDDIR ]; then
+		echo "
+${CMDNAME}: Directory \"${LDDIR}\" was not created.
+ATTENTION: $STATUS \"$NAME\" software not installed."
+		continue
+	fi
+	cd ${LDDIR}
+	#
+	# Only verify the tape if the current tape volume is different than
+	# the previous one, or if the current file number is not greater
+	# than the last one.
+	# Also, always do verify if DOVERIFY is anything but "no" (see comments
+	# at top of file).
+	#
+	if [ $DOVERIFY != no -o $TAPENO != $LASTTAPE -o $FILENO -le $LASTFILE ]
+	then
+		verify_tapevol_arch ${ARCH} ${TAPENO} ${TAPEDEV} ${TAPEHOST}
+		SKIP=$FILENO
+	else
+		# Same tape, so just skip to the correct file
+		SKIP=`expr $FILENO - $LASTFILE`
+	fi
+	extracting ${TAPEDEV} ${SKIP} ${BS} ${NAME} ${TAPEHOST}
+	LASTTAPE=$TAPENO
+	LASTFILE=$FILENO
+done
+rm -rf /tmp/EXTRACTLIST.${ARCH}
+#
+# rewind the last release tape
+#
+case "${TAPEHOST}" in
+"")
+	mt -t $TAPEDEV rew
+	;;
+*)
+	rsh $TAPEHOST -n mt -f $TAPEDEV rew
+	;;
+esac
+#
+# Update exports on server
+#
+if [ ! -f /etc/exports ]; then
+	> /etc/exports
+	chmod 644 /etc/exports
+fi
+RUN_EXPORTFS=no
+grep ${EXECPATH} /etc/exports >/dev/null 2>&1
+case $? in
+1)
+	echo "
+Updating /etc/exports to export $EXECPATH."
+	echo "#" >> /etc/exports
+	echo "${EXECPATH}" >> /etc/exports
+	RUN_EXPORTFS=yes
+	;;
+esac
+
+case $SHAREPATH in
+none)
+	;;
+*)
+	# clean up symlink, create empty mountpoint directory, check exports
+	rm -rf $EXECPATH/share
+	mkdir $EXECPATH/share
+	grep $SHAREPATH /etc/exports >/dev/null 2>&1
+	case $? in
+	1)
+		echo "
+Updating /etc/exports to export $SHAREPATH."
+		echo "#" >> /etc/exports
+		echo "${SHAREPATH}" >> /etc/exports
+		RUN_EXPORTFS=yes
+		;;
+	esac
+	;;
+esac
+
+case $RUN_EXPORTFS in
+yes)
+	if [ -f /usr/etc/exportfs ]; then
+		/usr/etc/exportfs -a
+		case $? in
+		0)
+			;;
+		*)
+			echo "
+ATTENTION: /etc/exports needs attention !"
+			echo "ATTENTION: fix /etc/exports and rerun exportfs !"
+			;;
+		esac
+	else
+		echo "
+ATTENTION: /usr/etc/exportfs does not exist !"
+	fi ;;
+esac
+
+echo "
+Installation of ${ARCH} executable files completed."
+exit 0

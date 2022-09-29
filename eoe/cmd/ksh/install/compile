@@ -1,0 +1,135 @@
+: default CC to /bin/cc on sun, cc otherwise
+if      test -f /bin/sun && /bin/sun
+then    CC=${CC-/bin/cc}
+else    CC=${CC-cc}
+fi
+CCFLAGS=${CCFLAGS--O}
+INSTALLROOT=${INSTALLROOT-$HOME}
+
+SRCDIR=${SRCDIR+$SRCDIR/}
+Install=${SRCDIR}install
+Include=${SRCDIR}include
+Shlib=${SRCDIR}shlib
+Sh=${SRCDIR}sh
+LIB=
+
+if	test -f /bin/univac && /bin/univac
+then	LDFLAGS="$LDFLAGS -h 200000"
+fi
+
+if	grep FLOAT sh_config.h > /dev/null 2>&1
+then	CCFLAGS="$CCFLAGS -DFLOAT"
+fi
+
+for i in adjust assign assnum cannon chkid convert findnod \
+	gettree strmatch growaray gsort linknod  namscan rjust \
+	streval tilde unassign utos valup optget
+do	if	test ! -f $i.o
+	then	if test -r "$Shlib/$i.c"
+		then	echo + "${CC} -c ${CCFLAGS} -DKSHELL -I. -I$Include $Shlib/$i.c"
+			${CC} -c ${CCFLAGS} -DKSHELL -I. -I$Include $Shlib/$i.c
+		else	echo "$Shlib/.c : file missing or not readable"
+			exit 1
+		fi
+	fi
+done
+
+if	test ! -r strdata.o -o ! -r ctype.o -o ! -r msg.o
+then	./readonly -DKSHELL -I. -I$Include $Shlib/strdata.c $Sh/ctype.c $Sh/msg.c
+fi
+
+ar rcuv libsh.a adjust.o assign.o assnum.o cannon.o chkid.o convert.o \
+	findnod.o gettree.o strmatch.o growaray.o gsort.o linknod.o \
+	namscan.o rjust.o strdata.o streval.o tilde.o unassign.o utos.o  \
+	valup.o optget.o
+(ranlib libsh.a) > /dev/null 2>&1
+
+FILES_opt='' SRC_opt='' LIBS_opt=$LIB
+for i in ESH VSH VFORK
+do	case $i in
+	ESH)	file=emacs;;
+	VSH)	file=vi;;
+	VFORK)	file=vfork;;
+	esac
+	if	grep $i sh_config.h > /dev/null 2>&1
+	then	FILES_opt="$FILES_opt $file.o"
+		SRC_opt="$SRC_opt $file"
+	fi
+done
+
+if	test -f /sys/apollo_logo
+then	FILES_opt="$FILES_opt apollo.o"
+	SRC_opt="$SRC_opt apollo"
+fi
+
+LIBS_opt="$LIBS_opt `grep '/lib/.*dir\.a' sh_config.h 2>/dev/null`"
+
+if	test -r /lib/libjobs.a
+then	LIBS_opt="$LIBS_opt /lib/libjobs.a"
+elif	test -r /usr/lib/libjobs.a
+then	LIBS_opt="$LIBS_opt /usr/lib/libjobs.a"
+fi
+: ultrix uses libi for setlocale
+if	test -r /lib/libi.a
+then	LIBS_opt="$LIBS_opt /lib/libi.a"
+elif	test -r /usr/lib/libi.a
+then	LIBS_opt="$LIBS_opt /usr/lib/libi.a"
+fi
+
+if	grep -c PDU sh_config.h > /dev/null 2>&1 && test -f /usr/lib/libpdu.a
+then	LIBS_opt="$LIBS_opt /usr/lib/libpdu.a"
+fi
+
+for i in arith args builtin cmd defs edit echo error \
+	expand fault history io jobs macro main name print \
+	service string  stak test word xec ${SRC_opt}
+do	if	test ! -f $i.o
+	then	if	test -r "$Sh/$i.c"
+		then	echo + "${CC} -c ${CCFLAGS} -DKSHELL -I. -I$Include $INC $Sh/$i.c"
+			${CC} -c ${CCFLAGS} -DKSHELL -I. -I$Include $INC $Sh/$i.c
+		else	echo "$Sh/.c : file missing or not readable"
+			exit 1
+		fi
+	fi
+done
+
+echo "${CC} $LDFLAGS -o ./ksh arith.o args.o builtin.o cmd.o ctype.o \
+	defs.o edit.o echo.o error.o expand.o fault.o history.o io.o jobs.o \
+	macro.o main.o msg.o name.o print.o service.o string.o \
+	stak.o test.o word.o xec.o ${FILES_opt} libsh.a ${LIBS_opt}"
+
+${CC} $LDFLAGS -o ./ksh arith.o args.o builtin.o cmd.o ctype.o \
+	defs.o edit.o echo.o error.o expand.o fault.o history.o io.o jobs.o \
+	macro.o main.o msg.o name.o print.o service.o string.o \
+	stak.o test.o word.o xec.o ${FILES_opt} libsh.a ${LIBS_opt} ||
+	{
+		x=$?
+		echo link edit failed
+		exit $x
+	}
+
+if	test ! -f suid_exec
+then	echo "${CC} -c ${CCFLAGS} -DKSHELL -I. -I$Include $Sh/suid_exec.c"
+	${CC} -c ${CCFLAGS} -DKSHELL -I. -I$Include $Sh/suid_exec.c
+	echo + "${CC} -o suid_exec suid_exec.o"
+	${CC} -o suid_exec suid_exec.o
+fi
+
+( mcs -d ./ksh ) 2> /dev/null
+
+if	test "$INSTALLROOT"
+then	echo + cp ./ksh $INSTALLROOT/bin
+	if	test -f $INSTALLROOT/bin/ksh
+	then	mv $INSTALLROOT/bin/ksh $INSTALLROOT/bin/OLDksh
+	fi
+	cp ./ksh $INSTALLROOT/bin
+	if	test ! -d $INSTALLROOT/etc
+	then	mkdir $INSTALLROOT/etc
+	fi
+	echo + cp ./suid_exec $INSTALLROOT/etc
+	cp ./suid_exec $INSTALLROOT/etc
+	echo + chown root $INSTALLROOT/etc/suid_exec
+	chown root $INSTALLROOT/etc/suid_exec > /dev/null 2>&1  && 
+		chmod 4711 $INSTALLROOT/etc/suid_exec > /dev/null 2>&1
+	exit 0
+fi

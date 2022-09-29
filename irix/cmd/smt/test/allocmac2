@@ -1,0 +1,144 @@
+#!/bin/sh
+
+# "$Revision: 1.2 $"
+
+# allocate a MAC address
+
+
+USAGE="$0: [-v] [-d database] -t type  -c num  -s serialnum  -u who"
+
+LCKDIR=/tmp
+DBFILE=$HOME/fddimacs
+RCDS=/tmp/rcds
+PREFIX="8:0:69:"
+
+umask 22
+
+#preserve error messages
+exec 2>&1
+
+while getopts "vd:t:c:s:u:" c; do
+    case $c in
+    v) if test -n "$verbose"; then
+	    verbose="$verbose"v
+	else
+	    verbose=-v
+	fi
+	if test x"$verbose" = "x-vv"; then
+	    set -x
+	fi
+	;;
+    d) DBFILE="$OPTARG";;
+    t) TYP="$OPTARG";;
+    c) CNT="$OPTARG";;
+    s) SNUM=`expr "$OPTARG" : '0*\(.*.\)'`;;
+    u) WHO="$OPTARG";;
+    \?) echo $USAGE; exit 1;;
+    esac
+done
+shift `expr $OPTIND - 1`
+if test $# != 0 -o "$TYP" = "" -o "$CNT" = "" \
+	-o "$SNUM" = "" -o "$WHO" = ""; then
+    echo $USAGE
+    exit 1
+fi
+
+WHERE="$REMOTEUSER@`expr $REMOTEHOST : '\(.*\).sgi.com'`"
+NOW=`date '+%m/%d/%y %H:%M'`
+
+DB=`basename $DBFILE`
+
+
+if test ! -w $DBFILE; then
+    echo "FAILED $DBFILE is not writable."
+    exit 1
+fi
+
+LCKFILE="$LCKDIR/$DB"
+MYLCKFILE="$LCKFILE.$$"
+rm -f $MYLCKFILE
+echo $$ > $MYLCKFILE
+trap "/bin/rm -f $MYLCKFILE; exit 1" 0 1 2 15
+
+limit=1
+while true; do
+    if test "$limit" -gt 5; then
+	echo "Failed to lock the database."
+	exit 1
+    fi
+    limit=`expr $limit + 1`
+    /bin/ln $MYLCKFILE $LCKFILE 2>/dev/null
+
+    other=`cat $LCKFILE`
+    if test "$other" = $$; then
+	break;
+    fi
+
+    if kill -0 "$other" 2>/dev/null; then : ;
+    else
+	logger -i "FDDI allocmac removing old lock file: `ls -l $LCKFILE`"
+	rm -f $LCKFILE
+    fi
+
+    logger -i "FDDI allocmac lock conflict: `ls -l $LCKFILE`"
+    sleep 1
+done
+trap "/bin/rm -f $MYLCKFILE $LCKFILE $DBFILE.bak $RCDS; exit 1" 0 1 2 15
+
+rm -f $DBFILE.bak $RCDS
+
+nawk 'BEGIN {
+	TYP = "'"$TYP"'"
+	CNT = '$CNT'
+	SNUM = "'"$SNUM"'"
+	INFO = "'"	by $WHO, $WHERE, $NOW"'"
+	found = 0
+    }
+
+    $2 ~ /^('$SNUM')|('$SNUM'-[0-9])$/ && $1 ~ /^'$PREFIX'.*='$TYP'$/ {
+	i = index($2, "-");
+	if (1 != 0)
+	    i = substr($2, i+1, 1)
+	if (alloc[i] == "") {
+	    alloc[i] = $0;
+	    found++;
+	    print $0 > "'$RCDS'"
+	}
+    }
+
+    NF == 1 && found<CNT && $1 ~ /^'$PREFIX'/ {
+	for (i = 0; i < CNT; i++) {
+	    if (alloc[i] == "")
+		break;
+	}
+	alloc[i] = ($0 "=" substr((TYP "          "), 1, 4) " " SNUM);
+	if (CNT > 1)
+	    alloc[i] = (alloc[i] "-" i);
+	alloc[i] = (alloc[i] INFO);
+	$0 =  alloc[i];
+	found++;
+	print $0 > "'$RCDS'"
+    }
+
+    {print $0}
+
+' $DBFILE > $DBFILE.bak
+
+if test $? != 0; then
+    echo FAILED
+    exit 1
+fi
+
+if cmp -s $DBFILE.bak $DBFILE; then :;
+else
+    mv $DBFILE.bak $DBFILE
+fi
+
+cat $RCDS
+if test `wc -l <$RCDS` != $CNT; then
+    echo "Failed:  No numbers available."
+    exit 1
+fi
+
+trap "/bin/rm -f $MYLCKFILE $LCKFILE $DBFILE.bak $RCDS; exit 0" 0 1 2 15
+exit 0

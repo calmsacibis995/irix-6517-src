@@ -1,0 +1,123 @@
+#!/usr/local/bin/perl
+#
+# IDE TRAM Memory test 
+# error report generator
+#
+# $Id: tramide,v 1.1 1995/09/12 01:13:31 shou Exp $
+
+## Include files
+require "getopts.pl";
+
+## Standard UIF
+&Getopts('hf:');
+if ($opt_h || ! defined $opt_f) {
+  print STDERR <<EOF;
+usage: $0 [-h] -f file
+  -f Input file
+  -h Usage
+EOF
+  exit 0;
+}
+
+$today=`date`;
+
+open(REP,"< $opt_f") || die "Can't open file: $opt_f";
+($junk,$boardId) = split('_',$opt_f);
+($junk,$boardId) = split('\.',$boardId);
+
+while (<REP>) {
+  if (/ERROR\*\*\*/){
+    $line = $_ . " ";
+    for ($i = 0; $i < 2; $i++) {
+      $_ = <REP>;
+      $_ = <REP> if (/- ERROR -/);
+      $line .= $_ . " ";
+    }
+    $line =~ s/[\;\n]/,/g;
+    ($tramno,$exp,$act,$page,$word,$sval,$tval) = &GetData($line);
+    $cmpd = $exp^$act;
+    $tmp{"$page:$tval:$sval:$cmpd:$tramno"} = join(':',$act,$exp);
+  }
+}
+
+#for (sort keys(%tmp)) {
+#  print "$_ $tmp{$_}\n";
+#}
+#exit(1);
+
+for (keys(%tmp)) {
+  ($act,$exp) = split(':',$tmp{$_});
+  ($page,$tval,$sval,$cmpd,$tramno) = split(':',$_);
+  $errors{$page} .= join(':',$tval,$sval,$act,$exp,$cmpd,$tramno) . "#";
+}
+
+#for (sort keys(%errors)) {
+#  print "$_ $errors{$_}\n";
+#}
+#exit(1);
+
+for $page (sort { $a <=> $b} keys(%errors)) {
+  @errgrp = split('#',$errors{$page});
+  $i=0; @bymember = ();
+  for $errmemb (@errgrp) {
+    ($tval,$sval,$act,$exp,$cmpd,$tramno) = split(':',$errmemb);
+    $bymember[$i++] = sprintf("%4s %4s %08x %08x %08x %4d\n",
+			      $tval,$sval,$act,$exp,$cmpd,$tramno);
+  }
+  @bymember = sort @bymember;
+  for (@bymember) {
+#    printf "%4s %s",$page,$_;
+    write;
+  }
+}
+close(REP);
+
+###############################################################
+
+sub GetData {
+  local($line) = @_;
+  local(@varr,@tmp);
+  local($label, $exp, $act, $tramno, $page, $word, $tval, $sval);
+
+  $line =~ s/[ *]//g;
+  @tmp=split(',',$line);
+
+  if ($#tmp != 7) {
+    print STDERR "Unexpected record length:\n";
+    print STDERR "Data = $line";
+    exit(2);
+  }
+
+  ($label, $exp)    = split(':',$tmp[1]);
+  ($label, $act)    = split(':',$tmp[2]);
+  ($label, $tramno) = split('\#',$tmp[3]);
+  ($label, $page)   = split(':',$tmp[4]);
+  ($label, $word)   = split(':',$tmp[5]);
+  ($label, $sval)   = split(':',$tmp[6]);
+  ($label, $tval)   = split(':',$tmp[7]);
+     
+  @varr = ($tramno,hex($exp),hex($act),hex($page),
+	   $word,$sval,$tval);
+}
+
+sub header {
+  printf "%4s %4s %4s %08s %08s %08s\n","Page","T","S","Actual","Expected","Diff";
+  printf "%4s %4s %4s %08s %08s %08s\n","-"x4,"-"x4,"-"x4,"-"x8,"-"x8,"-"x8;
+}
+
+###############################################################
+
+format STDOUT_TOP =
+@<<<<<<<<<<<<<<<<<<<<<<<<<<<  Board ID: @<<<<<<<<<<<  Page: @<<<
+$today,$boardId,$%
+
+             TRAM Error Report
+
+Page    T    S   Actual Expected     Diff TRAM#
+____ ____ ____ ________ ________ ________ _____
+.
+
+format STDOUT =
+@<<<<@<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+$page,$_
+.

@@ -1,0 +1,176 @@
+#!/sbin/sh
+####
+
+usage()
+{
+	echo "Usage $0 [-h hostname] [-t tapedevice] [directory_name/file_name]"
+	exit
+}
+####
+
+RDIR=""
+TP="/dev/tape"
+HN="localhost"
+FILE=""
+
+####
+if [ $# -gt 0 ]
+then
+	while [ $1 = "-h" -o $1 = "-t" ]
+	do
+		if [ $1 = "-h" ]
+		then
+			shift
+			if [ $# -lt 1 ]
+			then
+				usage
+			fi
+			HN=$1
+			shift
+			if [ $# -lt 1 ]
+			then
+				break
+			fi
+		fi
+		if [ $1 = "-t" ]
+		then
+			shift
+			if [ $# -lt 1 ]
+			then
+				usage
+			fi
+			TP=$1
+			shift
+			if [ $# -lt 1 ]
+			then
+				break
+			fi
+		fi
+	done
+fi
+
+####
+
+RDIR="$@"
+
+####
+
+if [ $HN = "localhost" ]
+then
+	ret=`mt -t $TP status 2>&1`
+else
+	ret=`(/usr/etc/ping -s 1 -c 1 $HN 2>&1)`
+	case "$ret" {
+		*100%?packet?loss*)	echo "Error: Unable to communicate with host:" "$HN" ;
+					exit ;;
+		}
+	ret=`(rsh guest@$HN -n mt -t $TP status 2>&1)`
+fi
+case "$ret" {
+	*Login?incorrect*)	echo "Error: guest login incorrect on:" "$HN" ;
+				exit ;;
+	*No?such?file*)		echo "Error: Tape device $TP not configured." ;
+				exit ;;
+	*Not?READY*)		echo "Error: There is no tape in the drive." ;
+				exit ;;
+	*Unknown?host*)		echo "Error: Host $HN is unknown." ;
+				exit ;;
+	*can*get?status*)	echo "Error: Cannot stat $TP." ;
+				exit ;;
+	*I/O?error*)		echo "Error: Unable to I/O on $TP." ;
+				exit ;;
+}
+sleep 2
+
+if [ $HN = "localhost" ]
+then
+	TPDEV="$TP"
+else
+	TPDEV="guest@$HN:$TP"
+fi
+
+
+# function to determine tape type.
+# assumes blocksize never > 256KB
+get_backup_type() {
+	rsh guest@$HN -n dd if=$TP bs=256k count=1 > /tmp/$$type 2>/dev/null
+	LANG=C ttype="`file /tmp/$$type`"
+	case "$ttype" {
+	*bru*) echo Backup is a bru archive
+		labelcmd="bru -g -f /tmp/$$type $RDIR"
+		xcmd="bru -xvj -ur -f $TPDEV"
+		;;
+	*xfsdump*) echo Backup is an xfsdump archive
+		labelcmd=
+		xcmd="xfsrestore -v verbose -r -f $TPDEV"
+		;;
+	*cpio*) echo Backup is a cpio archive
+		labelcmd="cpiolabel /tmp/$$type"
+		xcmd="cpio -iudvk -I $TPDEV $RDIR"
+		;;
+	*tar*) echo Backup is a tar archive
+		labelcmd="tarlabel /tmp/$$type"
+		xcmd="tar -vxRf $TPDEV $RDIR"
+		;;
+	*) echo Unable to determine backup type, assuming tar
+		labelcmd=tarlabel
+		xcmd="tar -vxRf $TPDEV $RDIR"
+		;;
+	}
+}
+
+# get label from a tar tape.
+# since tar has no real labels, we simply fake this one.
+# if it's written in the "sgi system backup format", it
+# has such a label, otherwise we fake it.
+# basicly, we assume the first file is small, and extract it.
+tarlabel()
+{
+		file="`tar Rtf $1 2>&1 | sed -n 1p`"
+		if [ $? -ne 0 ] #{
+		then
+			echo "Error trying to read label file"
+			return 0
+		fi #}
+		# get the label file; first file on tape
+		(cd /; tar Rxf $1 $file 2>/dev/null; if [ -f "$file" ]; 
+			then cat $file; rm -f $file; fi)
+		return 1;
+}
+
+# get label from a cpio tape.
+# since tar has no real labels, we simply fake this one.
+# if it's written in the "sgi system backup format", it
+# has such a label, otherwise we fake it.
+# basicly, we assume the first file is small, and extract it.
+cpiolabel()
+{
+		file="`cpio -ti -I $1 2>&1 | sed -n 1p`"
+		if [ $? -ne 0 ] #{
+		then
+			echo "Error trying to read label file"
+			return 0
+		fi #}
+		# get the label file; first file on tape
+		(cd /; cpio -i -I $1 $file >/dev/null 2>&1; if [ -f "$file" ]; 
+			then cat $file; rm -f $file; fi)
+		return 1;
+}
+
+trap 'rm -f /tmp/$$type; trap 0; exit 0' 0
+trap 'echo Interrupted; rm -f /tmp/$$type; trap 0; exit 1' 1 2
+
+cd /
+get_backup_type
+$labelcmd
+echo ""
+sleep 2
+echo "Restore started.  Please wait..."
+$xcmd
+
+if [ $? = 0 ]
+then
+	echo "\nRestore completed successfully."
+else
+	echo "\nRestore finished; errors occurred during recovery\007"
+fi

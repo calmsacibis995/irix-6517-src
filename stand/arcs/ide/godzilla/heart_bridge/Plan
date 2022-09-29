@@ -1,0 +1,231 @@
+#ident "ide/godzilla/heart_bridge/Plan: $Revision 1.1$"
+
+
+		bridge/heart level 1 system diags
+		=================================
+
+
+Summary
+-------
+
+This diag Plan details the diagnostics using the heart and the 
+bridge ASICs as a system. Memory, SCSI drive, serial port are also present 
+in the system.
+The bridge and heart are directly connected (without a crossbow ASIC).
+Initially, the processor is an R4k for emulation. Then it will be an R10k.
+For short, bridge will be referred to as B, heart as H.
+
+This plan is to be used and revised during the code writing process.
+
+
+Prerequisite
+============
+check the heart-bridge direct connect in the software (bit WidgetDirCon 
+in the Status Register).
+
+
+widget registers in heart
+=========================
+These registers describe heart as a widget.
+
+- Widget Identification Register:	uP to read the heart identification 
+					and check its part number; 
+					display its revision number 
+					and its manufacturer ID number.
+					(done in R/W tests)
+- Widget Status Register:		heart can be checked after transfers
+- Widget Error Upper/Lower Address Reg:	read when an error occurs
+
+>> How to create an error on an incoming packet?
+With F_BAD_LLP bit in control register.
+
+- Widget Control Register:		check the read-only fields (Sys-en and
+					Widget_id(3:0).
+					set the register to a "reasonable" val.
+
+- Widget Request Time-out Value Register:
+					set the register to a "reasonable" val.
+
+- Widget Error Command Word Register:	read and check that no error has 
+					occured (ERROR bit); then create
+					an incoming packet error, and read;
+					write to it and watch the widget error
+					type register be cleared.
+					write 0 to it and check it is cleared.
+
+- Widget LLP Configuration Register:	leave it alone! the Prom sets it.
+
+- Widget Target Flush Register:		H sends a few requests to B (say 
+					several reads from memory to SCSI?), 
+					H(uP?) reads from this register, 
+					waits for a zero to be returned.
+>> will that work?
+
+- Widget Interrupt Status Register:	not accessible by uP 
+
+- Widget Error Type Register:		Upon an error, check its type in 
+					this register.
+					check also that the (Bit 16: WidgetErr)
+					in the heart cause register is set.
+					NOTE: there is a lot of possible errors.
+					(if CohErr bit is set)
+>> can I force a coherency error?
+>> In general, which ones can be forced?
+
+- Widget Error Mask Register:		set this mask to isolate error in 
+					the Widget Error Type Register.
+
+- Widget PIO Error Upper/Lower Address Register:
+					generate an access error by writing to
+					a Widget read-only register :
+					check the PIO_WCR_AccessErr bit in the
+					the Widget Error Type Register.
+ 					and the logged error information in the
+					Widget PIO Error Address Lower/Upper 
+					Registers.
+					
+Test Sequences:
+---------------
+
+Bad LLP tests:
+--------------
+These tests exercise the heart and bridge retry and squash logic.
+two tests are described depending on which ASIC the F_BAD_LLP is set:
+ 		(a) = with F_BAD_LLP in B  	
+ 		(b) = with F_BAD_LLP in H  	
+The sequences are very detailed in the code itself (hb_badllp.c).
+
+
+PIO error test:
+----------------
+Similarly, do a PIO error test, and check the Widget PIO Error Upper/Lower 
+	Address Register instead of the Widget Error Upper/Lower Address Reg.
+	(by writing to a read-only register for instance)
+	And check the PIO_WCR_AccessErr bit in the Widget Error Type Register.
+
+
+Target Flush Register test:
+---------------------------
+XXX
+
+
+PCI to memory tests: RD/WR
+==========================
+- transfer data from PCI device (scsi?) to memory and back.
+	This is a level 2 test (i.e. involving a PCI device)
+
+
+widget to widget through heart tests 
+====================================
+- Widget Identification Register: 	other processor to probe for the
+					presence of other hearts in the system
+					in multi-cluster systems only
+
+
+- others ? XXX
+
+Flow Control registers
+======================
+
+QUESTION>> How can we test part of the functionality of these?
+Yau> We need to find a way to get Write Responses back to test it. I think
+bridge can do it. We may set graphic pipe head address to where bridge is.
+Steve, will this work?
+Miller> Not to sure what the question is but I take a guess, If you want to
+know does the bridge response to crosstalk write request w/ response packets?
+THe answer is yes the bridge will generate a write response packet after the
+write has been done.
+
+In summary, B is used as a widget sending packets to H.
+This must be done for both heads. The functionalities are the same.
+
+To get a packet from B:
+set the pipe head address in the Flow-Controlled Pipe Head 0/1 Address 
+Register to the B address and set the mask appropriately (what value? XXX); 
+write w/ response packets to B, 
+
+- Flow Control Credit Counter 0/1       set to a value smaller than the Credit 
+					bias. send a write w/response packet to B
+					Check that FC_CreditOut(0/1) bit 
+					in the status register is set.
+
+- Flow Control Mode Register            set FCPH_En to (1,1), to enable resource
+					set 0/1; set the credit bias to 36.
+					this is actually done last (like on/off)
+
+QUESTION>> what is the credit bias?
+Yau> It is a number for the maximum en-route graphics write packets.
+
+- Flow Control Timer Limit Register     check that content is loaded into the
+                                        timers when a loading condition is met
+					set to XXX
+- Flow-Controlled Pipe Head 0/1 Address Register    
+					written to when set to B addr
+
+>> what is a loading condition ?
+timer goes down to 0
+>> how do I let it count down to 0 ?
+
+- Flow Control Credit Counter 0/1
+
+Before the flow control for the Pipe Head 0 is enabled, this counter 
+should be loaded with a value which is (CreditBias + N). The number N 
+(N=36) is the number of the double-words in flight 
+to achieve maximum bandwidth for the pipe head.
+
+- Flow Control Timer 0/1                let it count down to 0 
+					and check that FC_TimeOut bit (1) 
+					is set in the Interrupt Status Register
+
+
+
+test sequence (for each head):
+------------------------------
+1. set the Address register to the B address of the register to be read in 5.
+2. load the Timer Limit Register
+3. load the Flow Control Credit Counter with a value that is greater than the
+	Credit bias
+4. enable the head with the Flow Control Mode Register
+5. write w/response a packet to B: read a B register for instance
+6. receive the response, i.e. the value of the B register
+7. check FC_TimeOut in the Interrupt Status Register and FC_CreditOut in the 
+	status register (both should be 0).
+8. repeat all steps with error conditions: time out and credit out conditions.
+	a credit out can be caused by setting the Flow Control Credit Counter
+	with a small value.
+	how can one create a time-out? XXX
+
+
+
+
+IO to heart interrupt register to uP interrupt register
+=======================================================
+In summary, the bridge generates an interrupt: watch the interrupt in the 
+heart interrupt register.
+
+HEART is the interrupt controller.
+B, as a widget, writes in the H widget Interrupt Status Register.
+The interrupt vector value should be within 3-49 ir 51-58.
+
+
+Sequence:
+---------
+I. Set-up
+enable the B interrupt with the B INT_ENABLE Register.
+Program a bit location for B in the H interrupt location (try all 
+possible positions): also, try a bad interrupt vector 
+Enable the B interrupt in the B INT_ENABLE register.
+poll the H interrupt status register.
+
+II. Cause an interrupt
+To get the bridge to generate an interrupt, access a bad/reserved 
+bridge register.
+
+III. check
+Verify the interrupt occured
+Repeat for a different interrupt vector.
+
+IV. if a bad interrupt vector was programmed:
+check IOR_IntVectErr and IOR_IntVectWarn in the H Widget error type register.
+
+

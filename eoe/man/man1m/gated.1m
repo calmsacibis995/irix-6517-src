@@ -1,0 +1,1709 @@
+.ds f. gated.man
+.\" tbl gated.8 | troff -man -
+.TH GATED 1M LOCAL
+.SH NAME
+gated \- gateway routing daemon
+.SH SYNOPSIS
+.B /usr/etc/gated
+[
+.BR \-t [ ierpuRH ]
+]
+[
+logfile
+]
+.SH DESCRIPTION
+.I Gated
+is a routing daemon
+that handles multiple routing protocols and replaces
+.IR routed (1M),
+.IR egpup (1M),
+and any routing daemon that
+speaks the HELLO routing protocol.
+.I Gated
+currently handles the
+RIP,
+EGP,
+and HELLO
+routing protocols.
+.I Gated
+can be configured to perform all routing protocols or any
+combination of the three.
+The configuration for
+.I gated
+is stored in the file
+.I /usr/etc/gated.conf.
+.SH "COMMAND LINE TRACING OPTIONS"
+.PP
+.I Gated
+can be invoked with a number of tracing flags and/or a log file.
+Tracing flags may also be specified in the configuration file with the
+``traceflags''
+clause.
+.I Gated
+forks and detaches itself from the controlling terminal unless tracing
+flags are specified without specifying a log file,
+in which case all
+tracing output is sent to the controlling terminal.
+The valid tracing flags are as follows:
+.TP 0.5i
+.B \-t
+If used alone,
+log all error messages,
+route changes and EGP packets
+sent and received.
+Using this flag alone turns on the
+.BR i ,
+.BR e ,
+.BR r ,
+and
+.B p
+trace flags automatically.
+When used with another flag,
+the
+.B \-t
+has no
+effect and only the accompanying flags are recognized.
+Note that when
+using other flags,
+.B \-t
+must be used with them.
+.TP
+.B i
+Log all internal errors and interior routing errors.
+.TP
+.B e
+Log all external errors due to EGP,
+exterior routing errors,
+and EGP
+state changes.
+.TP
+.B r
+Log all routing changes.
+.TP
+.B p
+Trace all EGP packets sent and received.
+.TP
+.B u
+When used with p, R, H or N, display the entire contents of routing packets
+sent and received.
+.TP
+.B R
+Trace all RIP packets sent or received.
+.TP
+.B H
+Trace all HELLO packets sent or received.
+.TP
+.B N
+Trace all SNMP transactions.
+.PP
+.I Gated
+always logs fatal errors.
+If no log file is specified and no
+tracing flags are set,
+all messages are sent to
+.I /dev/null.
+.SH "SIGNAL PROCESSING"
+.PP
+.I Gated
+catches a number of signals and performs specific actions.
+Currently
+.I gated
+does special processing with the
+SIGHUP,
+SIGINT
+and
+SIGUSR1
+signals.
+.PP
+When a SIGHUP is sent to
+.I gated
+and
+.I gated
+is invoked with trace flags and a log file,
+tracing is toggled off
+and the log file is closed.
+At this point the log file may be moved or removed.
+The next SIGHUP to
+.I gated
+will toggle the tracing on.
+.I Gated
+reads the configuration file and sets the tracing flags to those
+specified with the ``traceflags'' clause.
+If no
+``traceflags'' clause is specified tracing is resumed using the
+trace flags specified on the command line.
+The log file
+specified in the command line is created if necessary and the trace
+output is sent to that file.
+The trace output is appended to an already
+existing log file.
+This is useful for having rotating log files
+like those of the
+.IR syslog (1M)
+daemon.
+.PP
+Sending
+.I gated
+a SIGINT will cause a memory dump to be scheduled within the next sixty
+seconds.
+The memory dump will be written to the file
+.I /usr/tmp/gated_dump.
+.I Gated
+will finish processing pending routing updates
+before performing the memory dump.
+The memory dump contains a snapshot of the current
+.I gated
+status,
+including the interface configurations,
+EGP neighbor status and
+the routing tables.
+If the file
+.I /usr/tmp/gated_dump
+already exists,
+the memory dump will be appended to the existing file.
+.PP
+On receipt of a SIGUSR1,
+.I gated
+will reread selected information from the configuration file.
+This information currently includes the
+``announcetoAS'',
+``noannouncetoAS''
+and
+``validAS''.
+If no errors are
+detected the new configuration information is put into effect,
+if errors are detected,
+the configuration information is not changed.
+.I Gated
+will also check the interface status on receipt of a SIGUSR1.
+.SH "CONFIGURATION FILE OPTIONS FOR CONTROLLING TRACING OUTPUT"
+.PP
+.B "traceflags traceflag [traceflag] [traceflag] ..."
+.PP
+The clause tells the
+.I gated
+process what level of tracing output is desired.
+This option is read during
+.I gated
+initialization and whenever
+.I gated
+receives a SIGHUP.
+This option is overridden at initialization time if tracing flags are
+specified on the command line.
+The valid tracing flags are as follows:
+.TP 12
+.B internal
+Log all internal errors and interior routing errors.
+.TP
+.B external
+Log all external errors due to EGP,
+exterior routing errors,
+and EGP
+state changes.
+.TP
+.B route
+Log all routing changes.
+.TP
+.B egp
+Trace all EGP packets sent and received.
+.TP
+.B update
+When used with egp, rip, hello or snmp, display the contents of all routing
+packets sent and received.
+.TP
+.B rip
+Trace all RIP packets sent and received.
+.TP
+.B hello
+Trace all HELLO packets sent and received.
+.TP
+.B icmp
+Trace all ICMP redirect packets received.
+.TP
+.B snmp
+Trace all SNMP transactions.
+.TP
+.B stamp
+Print a timestamp to the log file every 10 minutes.
+.TP
+.B general
+A combination of ``internal'',
+``external'',
+``route''
+and ``egp''.
+.TP
+.B all
+Enable all of the above tracing flags.
+.PP
+If more than one ``traceflags'' clause is used,
+the tracing flags
+accumulate.
+.SH "DEFAULT CONFIGURATION"
+.I Gated
+normally reads configuration information from
+.I /usr/etc/gated.conf.
+If this file does not exist,
+.I gated
+assumes a default configuration file
+of:
+.nf
+.in +0.5i
+.B "RIP yes"
+.B "HELLO no"
+.B "EGP no"
+.in -0.5i
+.fi
+.PP
+In addition,
+if the configuration file does not exist,
+there is only one network interface,
+and a default route is installed in the kernel,
+.I gated
+will exit assuming that a simple default route is adequate.
+.SH "CONFIGURATION FILE OPTIONS FOR HANDLING ROUTING PROTOCOLS"
+.PP
+In this section,
+the numerous configuration options are explained.
+Each time the
+.I gated
+process is started,
+it reads the file
+.I /usr/etc/gated.conf to
+obtain its instructions on how routing will be managed with respect to
+each protocol.
+The configuration options are as follows:
+.PP
+.B "RIP {yes | no | supplier | pointopoint | quiet | gateway #}"
+.PP
+This tells the
+.I gated
+process how to perform the RIP routing protocol.
+Only one of the above
+RIP arguments is allowed after the keyword ``RIP''.
+If more than
+one is specified,
+only the first one is recognized.
+A list of the
+arguments to the RIP clause follows:
+.TP 12
+.B yes
+Perform the RIP protocol.
+Process all incoming RIP packets and supply
+RIP information every thirty seconds only if there are two or more
+network interfaces.
+.TP
+.B no
+Do not perform the RIP protocol.
+Do not perform RIP.
+.TP
+.B supplier
+Perform the RIP protocol.
+Process all incoming RIP packets and force
+the supplying of RIP information every thirty seconds no matter how
+many network interfaces are present.
+.TP
+.B pointopoint
+Perform the RIP protocol.
+Process all incoming RIP packets and force the
+supplying of RIP information every thirty seconds no matter how many
+network interfaces are present.
+When this argument is specified,
+RIP
+information will not be sent out in a broadcast packet.
+The RIP information
+will be sent directly to the gateways listed in the ``sourceripgateways''
+option described below.
+.TP
+.B quiet
+Process all incoming RIP packets,
+but do not supply any RIP information no
+matter how many network interfaces are present.
+.TP
+.BR gateway " #"
+Process all incoming RIP packets,
+supply RIP information every thirty
+seconds,
+and announce the default route (0.0.0.0) with a metric of #.
+The metric should be specified in a value that represents a RIP hopcount.
+With this option set,
+all other default routes coming from
+other RIP gateways will be ignored.
+The default route is only announced
+when actively peering with at least one EGP neighbor
+and therefore should only be used when EGP is used.
+.PP
+If no ``RIP'' clause is specified,
+RIP will not be performed.
+.PP
+.B "HELLO {yes | no | supplier | pointopoint | quiet| gateway #}"
+.PP
+This tells
+.I gated
+how to perform the HELLO routing protocol.
+The arguments parallel the RIP arguments,
+but do have some minor differences.
+Only one of the above
+HELLO arguments is allowed after the keyword ``HELLO''.
+If more than
+one is specified,
+only the first one is recognized.
+A list of the
+arguments to the HELLO clause follows:
+.TP 14
+.B yes
+Perform the HELLO protocol.
+Process all incoming HELLO packets and supply
+HELLO information every fifteen seconds only if there are two or more
+network interfaces.
+.TP
+.B no
+Do not perform the HELLO protocol.
+Do not perform HELLO.
+.TP
+.B supplier
+Perform the HELLO protocol.
+Process all incoming HELLO packets and force
+the supplying of HELLO information every fifteen seconds no matter how
+many network interfaces are present.
+.TP
+.B pointopoint
+Perform the HELLO protocol.
+Process all incoming HELLO packets and force the
+supplying of HELLO information every fifteen seconds no matter how many
+network interfaces are present.
+When this argument is specified,
+HELLO
+information will not be sent out in a broadcast packet.
+The HELLO information
+will be sent directly to the gateways listed in
+the ``sourcehellogateways''
+option described below.
+.TP
+.B quiet
+Process all incoming HELLO packets,
+but do not supply any HELLO information
+despite the number of network interfaces present.
+.TP
+.BR gateway " #"
+Process all incoming HELLO packets,
+supply HELLO information every
+fifteen seconds,
+and announce the default route (0.0.0.0) with a time
+delay of #.
+The time delay should be specified in milliseconds.
+The default route is only announced when actively peering with at least one
+of EGP neighbor,
+therefore should only be used when running EGP.
+.PP
+If no ``HELLO'' clause is specified,
+HELLO will not be performed.
+.PP
+.B "EGP {yes | no}"
+.PP
+This clause allows the processing of EGP by
+.I gated
+to be turned on or off.
+.TP
+.B no
+Do not perform any EGP processing.
+.TP
+.B yes
+Perform all EGP operations.
+.PP
+Please note that by default,
+EGP processing will take place.
+Therefore,
+if no ``EGP'' clause is specified,
+all EGP operations will take place.
+.PP
+.B "autonomoussystem #"
+.PP
+If performing the EGP protocol,
+this clause must be used to specify the
+autonomous system number (#).
+If not specified,
+.I gated
+will exit and give a fatal error message.
+.PP
+.B "egpmaxacquire #"
+.PP
+If performing the EGP protocol,
+this clause specifies the number of EGP
+peers with whom
+.I gated
+will be performing EGP.
+This number must be greater than zero and less
+than or equal to the number of EGP neighbors specified or
+.I gated
+will exit.
+If this clause is omitted,
+all EGP neighbors will be acquired.
+.TP 15
+.B egpneighbor
+.B gateway
+.nf
+.B "metricin metric"
+.B "egpmetricout egpmetric"
+.B "ASin asin"
+.B "ASout asout"
+.B "AS as"
+.B nogendefault
+.B acceptdefault
+.B "defaultout egpmetric"
+.B validate
+.B "intf interface"
+.B "sourcenet net"
+.B "gateway gateway"
+.fi
+.PP
+If performing the EGP protocol,
+this clause specifies with whom
+.I gated
+will be performing EGP.
+``Gateway'' can be either a symbolic name in
+.I /etc/hosts
+or an IP hostname in Internet dot
+(a.b.c.d)
+notation.
+Dot notation is recommended to avoid confusion.
+Each EGP neighbor will be
+acquired in the order listed in the configuration file.
+.PP
+The ``metricin'' option is used to specify the internal time delay to be used
+as a metric for all of the routes learned from this neighbor.
+It should
+be specified as a time delay from zero to 30000.
+If this option and the
+validate option are not used,
+the internal metric used is the EGP
+distance multiplied by 100.
+.PP
+The ``egpmetricout'' option is used to specify the EGP distance used for all
+nets advertised to this neighbor.
+It should be specified as an EGP
+distance in the range of 0 to 255.
+If this option is not specified,
+the internal time delay for each route will be converted to an EGP distance
+by division by 100 with distances greater than 255 being set to 255.
+.PP
+The ``ASin'' option is used to verify the autonomous system number of this
+neighbor.
+If the autonomous system number specified in neighbor
+acquisition packets does not verify an error message is generated
+refusing the connection.
+If this option is not specified,
+no verification of autonomous system numbers is done.
+.PP
+The ``ASout'' option is used to specify the autonomous system number in EGP
+packets sent to this neighbor.
+If not specified,
+the autonomous system
+specified in the ``autonomoussystem'' clause is used.
+This clause
+should not normally be used,
+it is reserved for a special situation
+interfacing between the ARPAnet and NSFnet.
+.PP
+The ``AS'' option is used to specify that autonomous system number
+that will be assigned to routes learned from this neighbor.
+If not specified,
+the autonomous system used in the EGP packets received from
+this neighbor will be used.
+This clause should not normally be used,
+it is reserved for a special situation interfacing between the ARPAnet and NSFnet.
+.PP
+The ``nogendefault'' option is used to specify this neighbor should not be
+considered for the internal generation of default when
+``RIP gateway'' or ``HELLO gateway'' is used.
+If not specified,
+the internal default will be generated when actively peering
+with this neighbor.
+.PP
+The ``acceptdefault'' option is used to specify that the default route
+(net 0.0.0.0)
+should be considered valid when received from this neighbor.
+If this option is not specified,
+the reception of the default route will
+cause a warning message to be printed and the route to be ignored.
+.PP
+The ``defaultout'' option is used to specify that the internally generated
+default may be passed to this EGP neighbor at the specified distance.
+The distance should be specified as an EGP distance from 0 to 255.
+A
+default route learned from another gateway will not be propagated to an
+EGP neighbor.
+Normally,
+no default route will be passed via EGP.
+The
+``acceptdefault'' option should not be specified when the
+``defaultout'' option is used.
+The egpmetric specified in the
+``egpmetricout'' option does not apply,
+the default route will
+always use the metric specified by the ``defaultout'' option.
+.PP
+The ``validate'' option is used to specify that all networks received from
+this EGP neighbor must be specified in ``validAS'' clause that also
+specifies the autonomous system of this neighbor.
+Networks not having
+a ``validAS'' clause will be ignored after a warning message is printed.
+.PP
+The ``intf'' option is used to specify the interface used to
+send EGP packets to this neighbor.
+This option is only required when
+there is no common net/subnet with this egpneighbor.
+This option
+currently is only present for testing purposes and does not imply correct
+operation when peering with an egpneighbor that does not share a common
+net/subnet.
+.PP
+The ``sourcenet'' option is used to specify the source network to
+be specified in EGP poll packets sent to this neighbor.
+If this option
+is not specified,
+the network (not subnet) of the interface used to
+communicate with this neighbor is used.
+This option is currently only
+present for testing purposes and does not imply correct operation when
+used.
+.PP
+The ``gateway'' option is used to specify the gateway to be used
+when installing routes learned from an EGP neighbor on a different
+network.
+Normally these routes would be ignored.
+This option is currently only present for testing purposes and
+correct operation can not be assured when it is used.
+.SH "CONFIGURATION FILE OPTIONS FOR HANDLING ROUTING INFORMATION"
+.PP
+The following configuration file options tell
+.I gated
+how to deal with both incoming and outgoing routing information.
+.PP
+.B "trustedripgateways gateway [gateway] [gateway] ....."
+.br
+.B "trustedhellogateways gateway [gateway] [gateway] ....."
+.PP
+When these clauses are specified,
+.I gated
+will only listen to RIP or HELLO information,
+respectively from these
+RIP or HELLO gateways.
+``gateway'' can be either a symbolic name
+from
+.I /etc/hosts
+or an IP host address in dot notation (a.b.c.d).
+Again,
+dot notation is recommended to eliminate confusion.
+Please note that
+the propagation of routing information is not restricted by this clause.
+.PP
+.B "sourceripgateways gateway [gateway] [gateway] ....."
+.br
+.B "sourcehellogateways gateway [gateway] [gateway] ....."
+.PP
+.I Gated
+will send RIP or HELLO information directly to the gateways specified.
+If ``pointopoint'' is specified in the ``RIP'' or ``HELLO''
+clauses mentioned above,
+.I gated
+will only send RIP or HELLO information to the
+specified gateways.
+.I Gated
+will NOT send out any information using the
+broadcast address.
+If ``pointopoint'' is not specified in those
+clauses and
+.I gated
+is supplying of RIP or HELLO information,
+.I gated
+will send information to the specified gateways
+as well as broadcasting it using a broadcast address.
+.PP
+.B "noripoutinterface intfaddr [intfaddr] [intfaddr] ....."
+.br
+.B "nohellooutinterface intfaddr [intfaddr] [intfaddr] ....."
+.br
+.B "noripfrominterface intfaddr [intfaddr] [intfaddr] ....."
+.br
+.B "nohellofrominterface intfaddr [intfaddr] [intfaddr] ....."
+.PP
+The above clauses turn protocols on and off on a per interface basis.
+``no{rip|hello}frominterface'' means that no
+RIP or HELLO information will be accepted coming into the listed interfaces
+from another gateway.
+``no{rip|hello}outinterface'' means that no
+RIP or HELLO knowledge will be sent out of the listed interfaces.
+``intfaddr'' should be in dot notation (a.b.c.d).
+.PP
+.B "passiveinterfaces intfaddr [intfaddr] [intfaddr] ....."
+.PP
+In order to dynamically determine if an interface is properly
+functioning,
+.I gated
+will time out an interface when no RIP,
+HELLO or EGP packets are being
+received on that particular interface.
+PSN interfaces send a RIP or
+HELLO packet to themselves to determine if the interface is properly
+functioning as the delay between EGP packets may be longer than the
+interface timeout.
+Interfaces that have timed out automatically have
+their routes re-installed when routing information is again received
+over the interface.
+The above clause stops
+.I gated
+from timing out the listed interfaces.
+The interfaces listed will
+always be considered up and working.
+If
+.I gated
+is not a RIP or HELLO
+supplier,
+all interfaces will not be aged and the
+``passiveinterfaces'' automatically applies to all interfaces.
+.PP
+.B "interfacemetric intfaddr metric#"
+.PP
+This feature allows the specification of an interface metric for the listed
+interface.
+On systems that support interface metrics,
+this clause will override the kernel's metric.
+On systems that do not have support for
+an interface metric,
+this feature allows the specification of one.
+The interface metric is added to the true metric of each route that comes in
+via routing information from the listed interface.
+The interface metric is also added to the true metric
+of any information sent out via the listed interface.
+The metric of directly attached interfaces is also set to
+the interface metric,
+routing information broadcast about directly
+attached nets will be based on the interface metric specified.
+This clause is required for each interface
+on which an interface metric is desired.
+.PP
+.B "reconstmetric intfaddr metric#"
+.PP
+This is a first attempt to throw hooks for fallback routing into
+.IR gated .
+If the above clause is used,
+the metrics of the routes contained in any
+RIP information coming into the listed interface will be set to the
+specified ``metric#''.
+Metric reconstitution should not be used lightly,
+since it could be a major contributor in the formation of
+routing loops.
+.B "USE THIS WITH EXTREME CAUTION."
+Any route that has a
+metric of infinity will not be reconstituted and left as infinity.
+.PP
+.B "fixedmetric intfaddr proto {rip|hello} metric#"
+.PP
+This is another attempt to throw hooks for fallback routing into
+.IR gated .
+If the above clause is used,
+all routing information sent out the
+specified interface will have a metric of ``metric#''.
+For RIP,
+specify the metric as a RIP hopcount from 0 to infinity.
+For HELLO,
+specify the metric as a HELLO delay in milliseconds from 0 to infinity.
+Any route that has a metric of infinity will be left as infinity.
+Fixed metrics should also be
+.B "USED WITH EXTREME CAUTION!"
+.PP
+.B "donotlisten net intf addr [addr] ... proto {rip|hello}"
+.br
+.B "donotlistenhost host intf addr [addr] ... proto {rip|hello}"
+.PP
+This clause reads as follows: keyword ``donotlisten'' followed by
+a network number,
+which should be in dot notation followed by keyword
+``intf''.
+Then a list of interfaces in dot notation
+precede the keyword ``proto'',
+followed by ``rip'' or ``hello''.
+.PP
+This means that any information regarding ``net'' coming in via
+the specified protocols AND from the specified interfaces will be ignored.
+The keyword ``all'' may be used after the keyword ``intf''
+to specify all interfaces on the machine.
+For example:
+.PP
+.ti +0.5i
+donotlisten 10.0.0.0 intf 128.84.253.200 proto rip
+.PP
+means that any RIP information about net 10.0.0.0
+coming in via interface 128.84.253.200 will be ignored.
+One clause is required for each net
+on which this restriction is desired.
+.PP
+.ti +0.5i
+donotlisten 26.0.0.0 intf all proto rip hello
+.PP
+means that any RIP and HELLO information about net 26.0.0.0 coming in via any
+interface will be ignored.
+.PP
+``donotlistenhost'' can be described the same way as above except
+that a host address is provided instead of a network address.
+Restrictions of the nature described above are applied to the specified
+host route learned of by the specified routing protocol.
+.PP
+.B "listen net gateway addr [addr] ... proto {rip|hello}"
+.br
+.B "listenhost host gateway addr [addr] ... proto {rip|hello}"
+.PP
+This clause reads as follows:
+keyword ``listen'' followed by a network number
+which should be in dot notation followed by keyword
+``gateway''.
+Then a list of gateways in dot notation
+should precede the keyword ``proto'',
+followed by ``rip'' or
+``hello''.
+.PP
+This means to only listen to information about network ``net''
+by the specified protocol(s) only from the listed ``gateways''.
+For example:
+.PP
+.ti +0.5i
+listen 128.84.0.0 gateway 128.84.253.3 proto hello
+.PP
+means that any HELLO information about net 128.84 coming in via gateway
+128.84.253.3 will be accepted.
+Any other information about 128.84 from any other gateway will be rejected.
+One clause is necessary for each net to be restricted.
+.PP
+.ti +0.5i
+listenhost 26.0.0.15 gateway 128.84.253.3 proto rip
+.PP
+means that any information about host 26.0.0.15 must come via RIP and from
+gateway 128.84.253.3.
+All other information regarding this host will be ignored.
+.PP
+.nf
+.B "announce net intf addr [addr] ... proto type [egpmetric #]"
+.B "announcehost host intf addr ... proto type [egpmetric #]"
+.B "noannounce net intf addr [addr] ... proto type [egpmetric #]"
+.B "noannouncehost host intf addr ... proto type [egpmetric #]"
+.fi
+.PP
+These clauses allow restriction of the networks and hosts
+announced and by which protocol.
+The
+``announce{host}'' and ``noannounce{host}'' clauses may not
+be used together on the same interface.
+With the
+``announce{host}'' clause,
+.I gated
+will only announce the nets or
+hosts that have an associated ``announce{host}'' clause with the
+appropriate protocol.
+With the ``noannounce{host}'' clause,
+.I gated
+will announce everything,
+EXCEPT those nets or hosts that have an
+associated ``noannounce{host}'' clause.
+This allows a choice of
+announcing only what is on the announce list or everything except those
+nets on the noannounce list on a per interface basis.
+.PP
+The arguments are the same as in the ``donotlisten'' clause except
+``egp'' may be specified in the ``proto'' field.
+``type'' can either be ``rip'',
+``hello'',
+``egp'',
+or any combination of the three.
+When ``egp'' is specified in the ``proto'' field,
+an egp metric must be specified.
+This is the metric at which
+.I gated
+will announce the listed net via EGP.
+.PP
+Please note that these are not static route entries.
+These restrictions will only apply if the net or host
+is learned via one of the routing protocols.
+If a restricted network suddenly becomes unreachable and goes away,
+announcement of this net will stop until it is learned again.
+.PP
+Currently,
+only one ``announce{host}'' or
+``noannounce{host}'' may be specified per network or host.
+It is not possible to announce a network or host via HELLO out one interface
+and via RIP out another.
+.PP
+Some examples:
+.PP
+.nf
+.in +0.5i
+announce 128.84 intf all proto rip hello egp egpmetric 0
+announce 10.0.0.0 intf all proto rip
+announce 0.0.0.0 intf 128.84.253.200 proto rip
+announce 35.0.0.0 intf all proto rip egp egpmetric 3
+.in -0.5i
+.fi
+.PP
+With only these four ``announce'' clauses in the configuration file,
+.I gated
+will only announce these four nets.
+It will announce 128.84.0.0 via RIP and HELLO to all interfaces and announce
+it via EGP with a metric of 0.
+Net 10.0.0.0 will be announced via RIP to all interfaces.
+Net 0.0.0.0 (default) will be announced by RIP out interface
+128.84.253.200 only.
+Net 35.0.0.0 will be announced via RIP to all interfaces
+and announced via EGP with a metric of 3.
+These are the only nets that
+will be broadcast by this gateway.
+Once the first ``announce''
+clause is specified,
+only the nets with ``announce'' clauses will be broadcast;
+this includes local subnets.
+Once an ``announce{host}'' or
+``noannounce{host}'' has an ``all'' specified after an
+``intf'',
+that clause is applied globally and the option of having
+per interface restrictions is lost.
+If no routing announcement restrictions are desired,
+``announce'' clauses should not be used.
+All information learned will then be propagated out.
+Please note that this has no affect on the information to which
+.I gated
+listens.
+Any net that does not have an ``announce'' clause
+is still added to the kernel routing tables,
+but it is not announced
+via any of the routing protocols.
+To stop nets from being added to the
+kernel the ``donotlisten'' clause may be used.
+.PP
+.in +0.5i
+.nf
+announce 128.84 intf 128.59.2.1 proto rip
+noannounce 128.84 intf 128.59.1.1 proto rip
+.fi
+.in -0.5i
+.PP
+The above clauses mean that on interface 128.59.2.1,
+only information
+about 128.84.0.0 will be announced via RIP,
+but on interface 128.59.1.1,
+all information will be announced,
+except 128.84.0.0 via RIP.
+.PP
+.nf
+.in +0.5i
+noannounce 128.84 intf all proto rip hello egp egpmetric 0
+noannounce 10.0.0.0 intf all proto hello
+.in -0.5i
+.fi
+.PP
+These clauses mean that except for the two specified nets,
+all nets will be propagated.
+Specifically,
+net 128.84.0.0 will not be announced on
+any interface via any protocols.
+Knowledge of 128.84.0.0 is not sent anywhere.
+Net 10.0.0.0 will not be announced via HELLO to any interface.
+This also implies that net 10.0.0.0 will be announced to every interface via
+RIP.
+This net will also be broadcast via EGP with a metric specified
+in the ``defaultegpmetric'' clause.
+.PP
+.B "defaultegpmetric #"
+.PP
+This is a default EGP metric to use when there are no routing restrictions.
+Normally,
+with no routing restrictions,
+.I gated
+announces all networks learned via HELLO or RIP via EGP with this
+specified default EGP metric.
+If this clause is not used,
+the default EGP metric is set to 255,
+which would make any EGP advertised
+route of this nature be ignored.
+When there are no routing restrictions,
+any network with a
+direct interface is announced via EGP with a metric of 0.
+Note that this does not include subnets,
+but only the non-subnetted network.
+.PP
+.B "defaultgateway gateway proto [metric metric] {active|passive}"
+.PP
+This default gateway is installed in the kernel routing tables during
+initialization and reinstalled whenever information about the default
+route is lost.
+This route is installed with the time delay equivalent of a RIP metric
+of 15 unless another metric is specified with the metric option.
+.PP
+If `RIP gateway' or `HELLO gateway' are in use this default route is
+deleted when successfully peering with an EGP neighbor not specified for
+``nogendefault''.
+.PP
+An ``active'' default route will be overridden by any other default
+route learned via another routing protocol.
+A ``passive'' default
+route will only be overridden by a default route with a lower metric.
+.PP
+An ``active'' default route will not be propagated in routing updates,
+a ``passive'' default route will be propagated.
+.PP
+``gateway'' should be an address in dot notation.
+``metric'' is optional and should be a metric in the specified protocol
+between zero and infinity,
+if not specified a RIP metric of 15 is used.
+``proto'' should be either ``rip'',
+``egp'',
+or
+``hello''.
+The ``proto'' field initializes the protocol
+by which the route was learned.
+Although in this case it is unused,
+but the field is remains for consistency.
+.PP
+.B "net netaddr gateway addr metric hopcnt {rip|egp|hello}"
+.br
+.B "host hostaddr gateway addr metric hopcnt {rip|egp|hello}"
+.PP
+The following clauses install a static route to net ``netaddr'' or
+host ``hostaddr'' through gateway ``addr'' at a metric of
+``hopcnt'' learned via either
+RIP,
+HELLO,
+or
+EGP.
+As usual,
+dot notation is recommended for the addresses.
+This route will be
+installed in the kernel's routing table and will never be affected by
+any other gateway's RIP or HELLO announcements.
+The protocol by which
+it was learned is important if the route is to be announced via EGP.
+If the protocol is ``rip'' or ``hello'' and there are no routing restrictions,
+then this route will be announced by EGP with a metric of
+``defaultegpmetric''.
+If the protocol is ``egp'' and there are no routing restrictions,
+then this route will be announced by EGP with a metric of ``hopcnt''.
+.PP
+.B "egpnetsreachable net [net] [net] ....."
+.PP
+This option was left in as a ``soft restriction''.
+It cannot be used
+when the ``announce'' or ``noannounce'' clauses are used.
+Normally,
+with no restrictions,
+.I gated
+announces all routes learned from RIP and HELLO via EGP.
+The
+``egpnetsreachable''
+clause restricts EGP announcement to those
+nets listed in the clause.
+The metric used for the HELLO and RIP
+learned routes is the value given in the
+``defaultegpmetric''
+clause.
+If this clause does not specify a value,
+the value is set to 255.
+With the ``egpnetsreachable'' clause,
+individual unique EGP
+metrics may not be set for each net.
+The ``defaultegpmetric'' is
+used for all networks except those that are directly connected,
+which use a metric of 0.
+.PP
+.B "martiannets net [net] [net] ..."
+.PP
+This clause appends to
+.I gated's
+list of ``martian'' networks.
+``Martian'' networks are
+those known to be invalid and should be ignored.
+When
+.I gated
+hears about one of these networks through any means,
+it will immediately ignore it.
+If ``external'' tracing is enabled,
+a message will be printed to the trace log.
+Multiple occurrences of the
+``martiannets''
+clause accumulate.
+.PP
+An initial list of ``martian'' networks is coded into gated.
+This list contains
+127.0.0.0,
+128.0.0.0,
+191.253.0.0,
+192.0.0.0,
+223.255.255.0,
+and
+224.0.0.0.
+.SH "CONFIGURATION FILE OPTIONS FOR AUTONOMOUS SYSTEM ROUTING"
+.PP
+In the internal routing tables,
+.I gated
+maintains the autonomous system number from which each route was learned.
+Autonomous systems are used only when an exterior routing
+protocol is in use,
+in this case EGP.
+Routes are tagged with the
+autonomous system number of the EGP peer from which they were learned.
+Routes learned via the interior routing protocols,
+RIP and HELLO,
+are tagged with the autonomous system number specified in the
+``autonomoussystem''
+clause.
+.PP
+.I Gated
+normally does not propagate routes learned from exterior routing
+protocols to interior routing protocols.
+Historically this is because
+of the ARPANET core EGP speakers which do not have adequate validation
+of routing information they receive.
+Some of the following clauses
+allow exterior routes to be propagated via interior protocols.
+Therefore it is imperative that utmost care be taken when allowing the
+propagation of exterior routes.
+.PP
+The following clauses provide
+limited control over routing based on autonomous system number.
+.PP
+.B "validAS net AS as metric metric"
+.PP
+The ``validAS'' clause is used for validation of networks from
+certain AS.
+When an EGP update is received from a neighbor which has
+the ``validate'' option specified on the associated
+``egpneighbor'' clause a ``validAS'' clause is searched for
+specifying that network and the autonomous system number
+of the EGP neighbor.
+If the appropriate ``validAS'' clause is located,
+the network is considered for addition to the routing table with the
+specified metric.
+If a ``validAS'' clause is not located,
+a warning message is printed and the network is ignored.
+.PP
+A network may be specified in several ``validAS'' clauses as being
+associated with several different autonomous systems.
+.PP
+.B "announcetoAS as0 {restrict|norestrict} ASlist as1 as2 as3 ..."
+.br
+.B "noannouncetoAS as0 {restrict|norestrict} ASlist as1 as2 as3 ..."
+.PP
+The ``announcetoAS'' and ``noannouncetoAS'' control the
+exchanging of routing information between different autonomous systems.
+Normally
+.I gated
+will not propagate routing information between autonomous systems.
+The exception to this is that routes learned from
+.IR gated 's
+own autonomous system via RIP and HELLO will be propagated via EGP.
+These clauses allow information learned via EGP from one autonomous
+system to be propagated via EGP to another autonomous system or via RIP
+and HELLO to
+.IR gated 's
+own autonomous system.
+.PP
+If the ``announcetoAS'' clause is specified,
+information learned via EGP from autonomous systems
+.IR as1 ,
+.IR as2 ,
+.IR as3 ,
+\&...
+will be propagated
+to autonomous system
+.IR as0 .
+If
+.IR gated 's
+own autonomous system,
+as specified in the
+``autonomoussystem''
+clause,
+is specified as
+.IR as0 ,
+this information will be propagated via
+RIP
+and
+HELLO.
+Routing information from autonomous systems not specified in the
+ASlist will not be propagated to autonomous system
+.IR as0 .
+.PP
+If the ``noannouncetoAS'' clause is specified,
+information learned
+via EGP from all autonomous systems except
+.IR as1 ,
+.IR as2 ,
+.IR as3 ,
+\&...
+will be propagated to autonomous systems
+.IR as0 .
+If
+.IR gated 's
+own autonomous system is specified as
+.IR as0 ,
+this information will not be
+propagated via RIP and HELLO.
+.PP
+The ``[no]restrict'' option controls the application of
+``announce'' and ``noannounce'' clauses to the propagation
+of routes to different autonomous systems.
+If ``restrict'' is specified,
+normal announcement restrictions do apply,
+if
+``norestrict'' is specified,
+announcement restrictions are not considered,
+all routes from the source autonomous systems are propagated
+to the destination autonomous system.
+.PP
+Only one ``announcetoAS'' or ``noannounceAS'' clause may be
+specified per target autonomous system.
+.SH "NOTES ON CONFIGURATION OPTIONS"
+If EGP is being used when supplying the default route
+(via ``RIP gateway'' or ``HELLO gateway'')
+and all EGP neighbors are lost,
+the default route will not be advertised until at least one EGP neighbor
+is regained.
+.PP
+With the complexity of the current network topology
+and with many back-door paths to networks,
+the use of routing restrictions is recommended.
+With the current routing strategies,
+it is easy for illegal or invalid
+networks to penetrate into the ARPAnet Core or the NSFnet backbone.
+Using routing restrictions does take a little more maintenance time and
+routing restrictions are not the long term answer,
+but,
+for now,
+in order to be good Internet players,
+we must use them.
+.PP
+.SH "GATED INTERNAL METRICS"
+.I Gated
+stores all metrics internally as a time delay in milliseconds to
+preserve the granularity of HELLO time delays.
+The internal delay ranges
+from 0 to 30000 milliseconds with 30000 representing infinity.
+Metrics from other protocols are translated to and from a time delay as they are
+received and transmitted.
+EGP distances are not comparable to HELLO and RIP metrics
+but are stored as a time delay internally for comparison
+with other EGP metrics.
+The conversion factor between EGP distances and
+time delays is 100.
+RIP and interface metrics are translated to and from
+the internal time delays with the use of the following translation tables:
+.LP
+.TS
+.if \n+(b.=1 .nr d. \n(.c-\n(c.-1
+.de 35
+.ps \n(.s
+.vs \n(.vu
+.in \n(.iu
+.if \n(.u .fi
+.if \n(.j .ad
+.if \n(.j=0 .na
+..
+.nf
+.nr #~ 0
+.if n .nr #~ 0.6n
+.ds #d .d
+.if \(ts\n(.z\(ts\(ts .ds #d nl
+.fc
+.nr 33 \n(.s
+.rm 80 81 82 83 84 85 86 87
+.nr 80 0
+.nr 31 0
+.nr 32 0
+.nr 38 \w0
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w1
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w101
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w149
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w220
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w326
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w482
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w714
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w1058
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w1568
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w2323
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w3441
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w5098
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w7553
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w11191
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w16580
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w24565
+.if \n(31<\n(38 .nr 31 \n(38
+.80
+.rm 80
+.nr 60 \n(31
+.nr 38 \n(60+\n(32
+.if \n(38>\n(80 .nr 80 \n(38
+.if \n(38<\n(80 .nr 60 +(\n(80-\n(38)/2
+.nr 81 0
+.nr 38 \w-
+.if \n(81<\n(38 .nr 81 \n(38
+.nr 38 \w-
+.if \n(81<\n(38 .nr 81 \n(38
+.nr 38 \w-
+.if \n(81<\n(38 .nr 81 \n(38
+.nr 38 \w-
+.if \n(81<\n(38 .nr 81 \n(38
+.nr 38 \w-
+.if \n(81<\n(38 .nr 81 \n(38
+.nr 38 \w-
+.if \n(81<\n(38 .nr 81 \n(38
+.nr 38 \w-
+.if \n(81<\n(38 .nr 81 \n(38
+.nr 38 \w-
+.if \n(81<\n(38 .nr 81 \n(38
+.nr 38 \w-
+.if \n(81<\n(38 .nr 81 \n(38
+.nr 38 \w-
+.if \n(81<\n(38 .nr 81 \n(38
+.nr 38 \w-
+.if \n(81<\n(38 .nr 81 \n(38
+.nr 38 \w-
+.if \n(81<\n(38 .nr 81 \n(38
+.nr 38 \w-
+.if \n(81<\n(38 .nr 81 \n(38
+.nr 38 \w-
+.if \n(81<\n(38 .nr 81 \n(38
+.nr 38 \w-
+.if \n(81<\n(38 .nr 81 \n(38
+.nr 38 \w-
+.if \n(81<\n(38 .nr 81 \n(38
+.nr 38 \w-
+.if \n(81<\n(38 .nr 81 \n(38
+.81
+.rm 81
+.nr 82 0
+.nr 31 0
+.nr 32 0
+.nr 38 \w0
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w100
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w148
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w219
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w325
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w481
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w713
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w1057
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w1567
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w2322
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w3440
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w5097
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w7552
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w11190
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w16579
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w24564
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w30000
+.if \n(31<\n(38 .nr 31 \n(38
+.82
+.rm 82
+.nr 62 \n(31
+.nr 38 \n(62+\n(32
+.if \n(38>\n(82 .nr 82 \n(38
+.if \n(38<\n(82 .nr 62 +(\n(82-\n(38)/2
+.nr 38 \wTime Delay-\n(80-1n-\n(81-1n-\n(82
+.if \n(38>0 .nr 38 \n(38/2
+.if \n(38<0 .nr 38 0
+.nr 60 +\n(38/2
+.nr 80 +\n(38
+.nr 81 +\n(38
+.nr 83 0
+.nr 38 \wRIP metric
+.if \n(83<\n(38 .nr 83 \n(38
+.nr 31 0
+.nr 32 0
+.nr 38 \w0
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w1
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w2
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w3
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w4
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w5
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w6
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w7
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w8
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w9
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w10
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w11
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w12
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w13
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w14
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w15
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w16
+.if \n(31<\n(38 .nr 31 \n(38
+.83
+.rm 83
+.nr 63 \n(31
+.nr 38 \n(63+\n(32
+.if \n(38>\n(83 .nr 83 \n(38
+.if \n(38<\n(83 .nr 63 +(\n(83-\n(38)/2
+.nr 84 0
+.84
+.rm 84
+.nr 85 0
+.85
+.rm 85
+.nr 86 0
+.nr 38 \wRIP metric
+.if \n(86<\n(38 .nr 86 \n(38
+.nr 31 0
+.nr 32 0
+.nr 38 \w0
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w1
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w2
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w3
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w4
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w5
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w6
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w7
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w8
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w9
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w10
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w11
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w12
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w13
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w14
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w15
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w16
+.if \n(31<\n(38 .nr 31 \n(38
+.86
+.rm 86
+.nr 66 \n(31
+.nr 38 \n(66+\n(32
+.if \n(38>\n(86 .nr 86 \n(38
+.if \n(38<\n(86 .nr 66 +(\n(86-\n(38)/2
+.nr 87 0
+.nr 38 \wTime Delay
+.if \n(87<\n(38 .nr 87 \n(38
+.nr 31 0
+.nr 32 0
+.nr 38 \w0
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w100
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w148
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w219
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w325
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w481
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w713
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w1057
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w1567
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w2322
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w3440
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w5097
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w7552
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w11190
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w16579
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w24564
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w30000
+.if \n(31<\n(38 .nr 31 \n(38
+.87
+.rm 87
+.nr 67 \n(31
+.nr 38 \n(67+\n(32
+.if \n(38>\n(87 .nr 87 \n(38
+.if \n(38<\n(87 .nr 67 +(\n(87-\n(38)/2
+.nr 38 1n
+.nr 79 0
+.nr 40 \n(79+(0*\n(38)
+.nr 80 +\n(40
+.nr 60 +\n(40
+.nr 41 \n(80+(1*\n(38)
+.nr 81 +\n(41
+.nr 42 \n(81+(1*\n(38)
+.nr 82 +\n(42
+.nr 62 +\n(42
+.nr 43 \n(82+(3*\n(38)
+.nr 83 +\n(43
+.nr 63 +\n(43
+.nr 44 \n(83+(3*\n(38)
+.nr 84 +\n(44
+.nr 45 \n(84+(3*\n(38)
+.nr 85 +\n(45
+.nr 46 \n(85+(3*\n(38)
+.nr 86 +\n(46
+.nr 66 +\n(46
+.nr 47 \n(86+(3*\n(38)
+.nr 87 +\n(47
+.nr 67 +\n(47
+.nr TW \n(87
+.if t .if \n(TW>\n(.li .tm Table at line 1229 file gated.man is too wide - \n(TW units
+.fc  
+.nr #T 0-1
+.nr #a 0-1
+.eo
+.de T#
+.ds #d .d
+.if \(ts\n(.z\(ts\(ts .ds #d nl
+.mk ##
+.nr ## -1v
+.ls 1
+.ls
+..
+.ec
+.ta \n(82u \n(83u \n(86u \n(87u 
+.nr 31 \n(.f
+.nr 35 1m
+\&\h'|\n(40u'Time Delay\h'|\n(43u'RIP metric\h'|\n(44u'\h'|\n(45u'\h'|\n(46u'RIP metric\h'|\n(47u'Time Delay
+.ta \n(60u \n(81u \n(62u \n(63u \n(66u \n(67u 
+.nr 31 \n(.f
+.nr 35 1m
+\&\h'|\n(40u'0\h'|\n(41u'-\h'|\n(42u'0\h'|\n(43u'0\h'|\n(44u'\h'|\n(45u'\h'|\n(46u'0\h'|\n(47u'0
+.ta \n(60u \n(81u \n(62u \n(63u \n(66u \n(67u 
+.nr 31 \n(.f
+.nr 35 1m
+\&\h'|\n(40u'1\h'|\n(41u'-\h'|\n(42u'100\h'|\n(43u'1\h'|\n(44u'\h'|\n(45u'\h'|\n(46u'1\h'|\n(47u'100
+.ta \n(60u \n(81u \n(62u \n(63u \n(66u \n(67u 
+.nr 31 \n(.f
+.nr 35 1m
+\&\h'|\n(40u'101\h'|\n(41u'-\h'|\n(42u'148\h'|\n(43u'2\h'|\n(44u'\h'|\n(45u'\h'|\n(46u'2\h'|\n(47u'148
+.ta \n(60u \n(81u \n(62u \n(63u \n(66u \n(67u 
+.nr 31 \n(.f
+.nr 35 1m
+\&\h'|\n(40u'149\h'|\n(41u'-\h'|\n(42u'219\h'|\n(43u'3\h'|\n(44u'\h'|\n(45u'\h'|\n(46u'3\h'|\n(47u'219
+.ta \n(60u \n(81u \n(62u \n(63u \n(66u \n(67u 
+.nr 31 \n(.f
+.nr 35 1m
+\&\h'|\n(40u'220\h'|\n(41u'-\h'|\n(42u'325\h'|\n(43u'4\h'|\n(44u'\h'|\n(45u'\h'|\n(46u'4\h'|\n(47u'325
+.ta \n(60u \n(81u \n(62u \n(63u \n(66u \n(67u 
+.nr 31 \n(.f
+.nr 35 1m
+\&\h'|\n(40u'326\h'|\n(41u'-\h'|\n(42u'481\h'|\n(43u'5\h'|\n(44u'\h'|\n(45u'\h'|\n(46u'5\h'|\n(47u'481
+.ta \n(60u \n(81u \n(62u \n(63u \n(66u \n(67u 
+.nr 31 \n(.f
+.nr 35 1m
+\&\h'|\n(40u'482\h'|\n(41u'-\h'|\n(42u'713\h'|\n(43u'6\h'|\n(44u'\h'|\n(45u'\h'|\n(46u'6\h'|\n(47u'713
+.ta \n(60u \n(81u \n(62u \n(63u \n(66u \n(67u 
+.nr 31 \n(.f
+.nr 35 1m
+\&\h'|\n(40u'714\h'|\n(41u'-\h'|\n(42u'1057\h'|\n(43u'7\h'|\n(44u'\h'|\n(45u'\h'|\n(46u'7\h'|\n(47u'1057
+.ta \n(60u \n(81u \n(62u \n(63u \n(66u \n(67u 
+.nr 31 \n(.f
+.nr 35 1m
+\&\h'|\n(40u'1058\h'|\n(41u'-\h'|\n(42u'1567\h'|\n(43u'8\h'|\n(44u'\h'|\n(45u'\h'|\n(46u'8\h'|\n(47u'1567
+.ta \n(60u \n(81u \n(62u \n(63u \n(66u \n(67u 
+.nr 31 \n(.f
+.nr 35 1m
+\&\h'|\n(40u'1568\h'|\n(41u'-\h'|\n(42u'2322\h'|\n(43u'9\h'|\n(44u'\h'|\n(45u'\h'|\n(46u'9\h'|\n(47u'2322
+.ta \n(60u \n(81u \n(62u \n(63u \n(66u \n(67u 
+.nr 31 \n(.f
+.nr 35 1m
+\&\h'|\n(40u'2323\h'|\n(41u'-\h'|\n(42u'3440\h'|\n(43u'10\h'|\n(44u'\h'|\n(45u'\h'|\n(46u'10\h'|\n(47u'3440
+.ta \n(60u \n(81u \n(62u \n(63u \n(66u \n(67u 
+.nr 31 \n(.f
+.nr 35 1m
+\&\h'|\n(40u'3441\h'|\n(41u'-\h'|\n(42u'5097\h'|\n(43u'11\h'|\n(44u'\h'|\n(45u'\h'|\n(46u'11\h'|\n(47u'5097
+.ta \n(60u \n(81u \n(62u \n(63u \n(66u \n(67u 
+.nr 31 \n(.f
+.nr 35 1m
+\&\h'|\n(40u'5098\h'|\n(41u'-\h'|\n(42u'7552\h'|\n(43u'12\h'|\n(44u'\h'|\n(45u'\h'|\n(46u'12\h'|\n(47u'7552
+.ta \n(60u \n(81u \n(62u \n(63u \n(66u \n(67u 
+.nr 31 \n(.f
+.nr 35 1m
+\&\h'|\n(40u'7553\h'|\n(41u'-\h'|\n(42u'11190\h'|\n(43u'13\h'|\n(44u'\h'|\n(45u'\h'|\n(46u'13\h'|\n(47u'11190
+.ta \n(60u \n(81u \n(62u \n(63u \n(66u \n(67u 
+.nr 31 \n(.f
+.nr 35 1m
+\&\h'|\n(40u'11191\h'|\n(41u'-\h'|\n(42u'16579\h'|\n(43u'14\h'|\n(44u'\h'|\n(45u'\h'|\n(46u'14\h'|\n(47u'16579
+.ta \n(60u \n(81u \n(62u \n(63u \n(66u \n(67u 
+.nr 31 \n(.f
+.nr 35 1m
+\&\h'|\n(40u'16580\h'|\n(41u'-\h'|\n(42u'24564\h'|\n(43u'15\h'|\n(44u'\h'|\n(45u'\h'|\n(46u'15\h'|\n(47u'24564
+.ta \n(60u \n(81u \n(62u \n(63u \n(66u \n(67u 
+.nr 31 \n(.f
+.nr 35 1m
+\&\h'|\n(40u'24565\h'|\n(41u'-\h'|\n(42u'30000\h'|\n(43u'16\h'|\n(44u'\h'|\n(45u'\h'|\n(46u'16\h'|\n(47u'30000
+.fc
+.nr T. 1
+.T# 1
+.35
+.TE
+.if \n-(b.=0 .nr c. \n(.c-\n(d.-21
+.PP
+.SH "NOTES ON IMPLEMENTATION SPECIFICS"
+In the
+.I gated
+configuration file,
+all references to POINT-TO-POINT interfaces
+must use the DESTINATION address.
+.PP
+All protocols have a two minute hold down.
+When a routing update
+indicates that the route in use is being deleted,
+.I gated
+will not delete the route for two minutes.
+.PP
+Changes can be made to the interfaces and
+.I gated
+will notice them without having to restart the process.
+If the
+netmask,
+subnetmask,
+broadcast address,
+or interface metric are changed,
+the interface should be marked down with
+.IR ifconfig (1M),
+then marked up at least thirty seconds later.
+Flag changes do not require the interface to be brought down and back up.
+.PP
+RIP propagates and listens to host routes,
+thus allowing the consistent handling of PTP links.
+The RIP_TRACE commands are also supported.
+.PP
+Subnet interfaces are supported.
+Subnet information will only be
+propagated on interfaces to other subnets of the same network.
+For example,
+if there is a gateway between two class B networks,
+the subnet routes for each respective class B net
+are not propagated into the other class B net.
+Just the class B network number is propagated.
+.PP
+.I Gated
+listens to host and network REDIRECTs and tries to take an action
+on the REDIRECT for its own internal tables that parallels the kernel's action.
+In this way,
+the redirect routine in
+.I gated
+parallels the Berkeley kernel redirect routine as closely as possible.
+Unlike the Berkeley kernel,
+.I gated
+times out routes learned via
+a REDIRECT after six minutes.
+The route is then deleted from the kernel routing tables.
+This helps keep the routing tables more consistent.
+Any route that was
+learned via a REDIRECT is NOT announced by any routing protocol.
+.PP
+The
+.I gated
+EGP code verifies that all nets sent and received are valid class
+A,
+B
+or
+C
+networks per the EGP specification.
+Information about networks
+that do not meet these criteria is not propagated.
+If an EGP update packet contains information about a network
+that is not either class
+A,
+B
+or
+C,
+the update is considered to be in error and is ignored.
+.PP
+.SH FILES
+.PD 0
+.TP 2i
+.B /usr/etc/gated.conf
+configuration file.
+.TP
+.B /usr/tmp/gated_dump
+memory dump file
+.TP
+.B /usr/etc/gated
+.I gated
+itself
+.PD
+.PP
+.SH "SEE ALSO"
+.IR routed (1M)
+.br
+.nf
+RFC827	EXTERIOR GATEWAY PROTOCOL (EGP)
+RFC888	"STUB" EXTERIOR GATEWAY PROTOCOL
+RFC891	DCN Local-Network Protocols (HELLO)
+RFC904	Exterior Gateway Protocol Formal Specification
+RFC911	EGP GATEWAY UNDER BERKELEY UNIX 4.2
+.fi
+.br
+'\".SH "AUTHORS"
+'\"Mark Fedor (1986-1987)
+'\".br
+'\"Jeffrey C Honig
+'\".br
+.SH CREDITS
+This program was derived from Paul Kirton's EGP for UNIX,
+UC at Berkeley's
+.IR routed (1M),
+and HELLO routines by Mike Petry at the
+University of Maryland.

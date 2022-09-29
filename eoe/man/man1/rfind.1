@@ -1,0 +1,1351 @@
+'\"macro stdmacro
+.if n .pH g1.rfind @(#)rfind	30.7 of 3/21/86
+.nr X
+.if \nX=0 .ds x} RFIND 1 "Directory and File Management Utilities" "\&"
+.if \nX=1 .ds x} RFIND 1 "Directory and File Management Utilities"
+.if \nX=2 .ds x} RFIND 1 "" "\&"
+.if \nX=3 .ds x} RFIND "" "" "\&"
+.TH \*(x}
+.SH NAME
+rfind \- remote find
+.SH SYNOPSIS
+.B rfind
+.RB [ \-debug ]
+file-system
+search-expression
+.SH DESCRIPTION
+.I rfind\^
+is a fast, client-server adaptation
+of the
+.IR find (1)
+command.
+It maps the specified 
+.I file-system
+name
+to a host machine, and submits
+the
+.I search-expression
+to the
+.IR rfindd (1M)
+daemon running on that host, for
+evaluation over the specified
+.IR file-system .
+The
+.IR rfindd (1M)
+daemon searches
+side files
+for the requested information,
+and returns it to
+.IR rfind (1)
+for display on stdout.
+These side files were previously created by the
+.IR fsdump (1M)
+command, and contain
+information about a particular
+.I file-system
+.PP
+If the
+.B -debug
+option is specified,
+then
+.I rfind
+will display the result
+of parsing the
+.I file-system
+and
+.I search-expression
+on stdout.
+.SS File-System
+The
+.I file-system
+to be searched may be specified in one of
+three forms: canonical, alias or local path.
+Only one
+.I file-system
+may be specified.
+Remaining arguments are considered
+to be part of the
+.IR search-expression .
+.PP
+If the
+.I file-system
+argument contains a colon ':' character,
+then it is considered to be in
+.BR "canonical form" .
+The portion of the name before the first ':'
+is taken as the network hostname, and the remaining characters
+after this ':' are taken as the full pathname of
+the file system subtree to searched.
+For example, the command:
+.P
+.RS 6
+rfind bonnie.wpd:/cypress/att/usr/src foo.c
+.RE
+.P
+will send a request to the
+.IR rfindd (1M)
+daemon on the host bonnie.wpd,
+to search for the file foo.c below the directory
+/cypress/att/usr/src (staying within whatever
+file system contains this path).
+.PP
+If the
+.I file-system
+argument does not contain a ':' character,
+then a list of standard locations is
+searched in an attempt to resolve
+the
+.I file-system
+as an
+.BR alias .
+Four places are searched, in order:
+.TP 4
+1)
+the file referenced by the
+.BR RFIND_ALIASES
+environment variable, if any
+.TP 4
+2)
+the file
+.BR /etc/rfind.aliases
+.TP 4
+3) 
+the NIS (Yellow Pages) map called rfind.aliases
+.TP 4
+4)
+a hardwired internal list which aliases "root" and "usr" to
+"localhost:/" and "localhost:/usr", respectively.
+.PP
+The first of these places to specify a mapping for the
+.I file-system
+alias is used.
+See the comments in the file
+.BR /etc/rfind.aliases 
+for a description of that file's format.
+.PP
+If the
+.I file-system
+argument is neither in canonical
+form nor an alias,
+then it is considered to be a
+.BR "local path"
+to either an EFS, XFS or NFS directory
+or other file.  The path need not
+begin with a slash.
+Any referenced symbolic links are
+fully resolved where possible
+to their final target.
+.PP
+The inode named by the local path is examined.  If it resides
+on an "efs" or "xfs" file system, then the request
+is sent to
+.IR rfindd (1M)
+on the localhost for resolution.
+If it resides on an "nfs" file system, then
+the file
+.BR /etc/mtab
+is examined to determine the hostname of
+the server to send the request to.
+For example, the command:
+.P
+.RS 6
+rfind /cypress/att/usr/src foo.c
+.RE
+.P
+will, in the case that bonnie.wpd:/cypress is mounted
+to /cypress (or, if /cypress is a symlink, to the
+target of that symlink), send the same
+request as the previous example.
+If the named inode is in an automounted
+(see
+.IR automount (1M))
+file system, then that file system
+will be automounted if it wasn't already.
+The local mount point need not be
+isomorphic with the server's
+pathname for this file system.
+.PP
+If none of these mechanisms succeeds,
+then
+.IR rfind (1)
+displays a list of all known aliases
+on its error output and exits
+with non-zero status.
+.SS Search-Expression
+.I rfind\^
+accepts a boolean
+.IR search-expression ,
+written in the primaries given below,
+that has a syntax similar
+to that of the
+.IR find (1)
+command.
+.PP
+In the descriptions, the argument
+.I n\^
+is used as a decimal integer
+where
+.BI + n\^
+means strictly greater than
+.IR n ,
+.BI \- n\^
+means strictly less than
+.I n\^
+and
+.I n\^
+means exactly
+.IR n .
+Valid expressions are:
+.TP 16
+.BI \-name " file\^"
+True if
+.I file\^
+matches as many trailing components
+of the current file's pathname
+as are specified in the pattern
+.IR file .
+The wildcard characters
+\f3[\f1,
+\f3!\f1,
+\f3\-\f1,
+\f3?\f1
+and
+\f3*\f1
+may be used to specify filename patterns.
+See the section
+.I "File Name Generation"
+of
+.IR sh (1)
+for their usage.
+If the first character of
+.I file\^
+is
+the slash
+\f3/\f1
+character,
+then all components of the
+current file's pathname must match.
+.TP 16
+.BI \-root " path\^"
+True if the current file is located
+in the
+.I file-system
+hierarchy
+somewhere under the
+directory specified by
+.IR path .
+If
+.IR path
+specifies a file that
+is not a directory,
+then this primary is
+true for just that
+specified file.
+.TP 16
+.BI \-perm " [" \- ]\f2onum\^\f1
+True if the file permission flags
+exactly
+match the
+octal number
+.I onum\^
+(see
+.IR chmod (1)).
+If
+.I onum\^
+is prefixed by a minus sign,
+only the bits that are set in
+.I onum\^
+are compared with the file permission flags,
+and the expression evaluates true if they match.
+.TP 16
+.BI \-type " c\^"
+True if the type of the file is
+.IR c ,
+where
+.I c\^
+is
+.BR b ,
+.BR c ,
+.BR d ,
+.BR l ,
+.BR p ,
+.BR f ,
+or
+.B s
+for
+block special file, character special file,
+directory, symbolic link, fifo (a.k.a named pipe), plain file, or
+socket respectively.
+.TP 16
+.BI \-links " n\^"
+True if the file has
+.I n\^
+links.
+.TP 16
+.BI \-user " uname\^"
+True if the file belongs to the user
+.IR uname .
+If
+.I uname\^
+is numeric and does not appear as a login name in the
+.B /etc/passwd
+file, it is taken as a decimal user \s-1ID\s0.
+.TP 16
+.BI \-group " gname\^"
+True if the file belongs to the group
+.IR gname .
+If 
+.I gname\^
+is numeric and does not appear in the
+.B /etc/group
+file, it is taken as a decimal group \s-1ID\s0.
+.TP 16
+.BI \-size " \f2n\fP[" c ]
+True if the file is
+.I n\^
+blocks long (512 bytes per block).
+If
+.I n
+is followed by a
+.BR c ,
+the size is in characters.
+.TP 16
+.BI \-inum " n\^"
+True if
+.I n\^
+is the inode number of the file.
+If
+.I \-inum\^
+is used to display a single
+inode (that is, if the
+.I n\^
+inode number specified is
+not prefixed with a
+.B +
+or 
+.BR \- ),
+and if the current inode
+has multiple links,
+then the pathname of only one
+of the links is available for
+printing.
+.TP 16
+.BI \-atime " n\^"
+True if the file has been accessed in
+.I n\^
+days
+(see
+.IR stat (2)
+for a description of which file operations change the access time of a
+file).
+.TP 16
+.BI \-mtime " n\^"
+True if the file has been modified in
+.I n\^
+days
+(see
+.IR stat (2)
+for a description of which file operations change the modification time of a
+file).
+.TP 16
+.BI \-ctime " n\^"
+True if the file has been changed in
+.I n\^
+days
+(see
+.IR stat (2)
+for a description of which file operations change the change time of a
+file).
+.TP 16
+.B \-print
+Always true;
+causes the current path name to be printed.
+.TP 16
+.B \-ls
+Always true;
+causes current pathname to be printed
+together with its associated statistics.  These
+include (respectively) inode number,
+protection mode, number of
+hard links, user, group, size in bytes, and
+modification time.  If the file is a special file the
+size field will instead contain the major and
+minor device numbers.  If the file is a symbolic
+link the pathname of the linked-to file is printed
+preceded by
+.IR -> .
+The format is identical to
+that of
+.IR "ls -lid" ,
+however the formatting
+is done internally, without executing the
+.IR ls
+program.
+.TP 16
+.BI \-printf " format\^"
+Always true;
+causes information about the current file
+to be printed using the specified
+.IR format .
+The
+.I format
+is a character string that contains three kinds
+of objects:
+1) plain characters, which are simply copied
+to the output stream,
+2) the C-like escape sequences
+\f3\\b\f1, \f3\\f\f1, \f3\\n\f1, \f3\\r\f1, \f3\\t\f1 and \f3\\v\f1,
+which are converted (see
+.IR echo (1)
+for their meaning),
+and 3) conversion specifications,
+each of which results in displaying
+in decimal or string form
+the value of a particular attribute
+of the current file.
+The conversion specifications recognized
+are described below in the section
+.IR "\\s-1Printf Format\\s+1" .
+.TP 16
+.BI \-ncheck " n\^"
+True if
+.I n\^
+is the inode number of the current file.
+Causes the inode number and full pathname
+for each link to the current file to
+be displayed in the fixed format
+"%i\\t%P\\n"
+for each link to the current file.
+The output resembles that from
+the
+.IR ncheck (1)
+command.
+.TP 16
+.BI \-none
+Always true;
+suppresses the default
+.B \-print
+operator in the case that
+none of
+the operators
+.BR \-ls ,
+.BR \-print ,
+.BR \-printf ,
+or
+.B \-ncheck
+were supplied.
+.TP 16
+.BI \-newer " path\^"
+True if
+the current file has been modified more recently than the argument
+.IR path .
+The file specified by
+.I path
+must be root based,
+and reference a file within the
+.I file-system
+that is being searched.
+See
+.IR stat (2)
+for a description of which file operations change the modification time of a
+file.
+.TP 16
+.BI \-anewer " path\^"
+True if current file has been accessed more recently than the 
+argument
+.IR path .
+The file specified by
+.I path
+must be root based,
+and reference a file within the
+.I file-system
+that is being searched.
+See
+.IR stat (2)
+for a description of which file operations change the access time of a
+file.
+.TP 16
+.BI \-cnewer " path\^"
+True if current file has been changed more recently
+than the argument
+.IR path .
+The file specified by
+.I path
+must be root based,
+and reference a file within the
+.I file-system
+that is being searched.
+See
+.IR stat (2)
+for a description of which file operations change the change time of a
+file.
+.TP 16
+.B \-depth
+Always true;
+causes descent of the directory hierarchy to be done
+so that all entries in a directory are
+acted on 
+before the directory itself.
+.TP 16
+.B \-prune
+Always true;
+has the side effect of pruning the search tree at the current file.
+If the current path name is a directory,
+.I rfind
+will not descend below directory.
+.TP 16
+.B \-follow
+Always true; causes the underlying file of a symbolic link
+to be checked rather than the symbolic link itself.
+.TP 16
+.B \-showdots
+Always true; causes the conventional
+"." and ".." entries of each directory
+to become visible.
+Normally these entries are suppressed
+unless explicitly named by path or inode number.
+.TP 16
+.B \-changed
+True if executing the
+.IR stat (2)
+system call from the
+.IR rfindd (1M)
+daemon on the full pathname of the
+current file yields a result
+that does not have the same
+file type, modification time, change time and size
+values
+as were observed for the current file
+when it was last examined by
+.IR fsdump (1M).
+In the case that the current file is a directory,
+then the logic of the
+.B \-changed
+operator is optimized for use by
+.IR ptools (1),
+a software source control tool
+used internally by Silicon Graphics,
+and involves executing the
+.IR stat (2)
+system call for every directory that
+contains any link
+(hard or symbolic) of any file
+contained within the current directory.
+.TP 16
+.B \-newdiradd " format\^"
+True if executing the 
+.IR stat (2)
+system call from the
+.IR rfindd (1M)
+daemon on the full pathname of the
+current file yields a result
+that does not have the same
+file type, modification time, change time and size
+values
+as were observed for the current file
+when it was last examined by
+.IR fsdump (1M)
+and that it is a directory which contains subdirectories
+which previously did not exist or were of a different type.
+The information about these directories is printed using 
+the specified format.
+.TP 16
+.BI \-stcount
+Always true;
+subtree count - increments running subtree total
+by a count of one.
+The subtree options
+are described below in the section
+.IR "\\s-1Subtree Options\\s+1" .
+.TP 16
+.BI \-stsize
+Always true;
+subtree size - increments running subtree total
+by the number of blocks in the current file.
+The subtree options
+are described below in the section
+.IR "\\s-1Subtree Options\\s+1" .
+.TP 16
+.BI \-sttotal " threshold\^"
+True if the running subtree total exceeds the
+specified decimal
+.IR threshold ,
+or if the running subtotal is non-zero and the
+current path being evaluated is the final,
+root path.
+If true, copies the running subtotal to the aggregate
+subtotal, and zeros the running subtotal.
+The subtree options
+are described below in the section
+.IR "\\s-1Subtree Options\\s+1" .
+.TP 16
+.BI \-exit " status\^"
+If executed during the course of evaluating the
+.IR search-expression ,
+causes
+.IR rfind (1)
+to exit immediately
+with the specified decimal
+.IR status .
+.TP 16
+.BI ( " expression " )
+True if the parenthesized expression is true
+(parentheses are special to the shell and must be escaped).
+.PP
+The primaries may be combined using the following operators
+(in order of decreasing precedence):
+.TP 4
+1)
+The negation of a primary
+.RB ( !
+is the unary
+.I not\^
+operator).
+.TP 4
+2)
+Concatenation of primaries
+(the
+.I and\^
+operation
+is implied by the juxtaposition of two primaries).
+The
+.I and\^
+operator may also be specified as
+.BR \-a .
+.TP 4
+3)
+Alternation of primaries
+.RB "(" \-o " is the"
+.I or\^
+operator).
+.SS "Printf Format"
+This section describes the conversion
+specifications accepted by the
+.BI \-printf " format"
+option.
+Each conversion specification consists
+of the character
+.B %
+and a single following conversion character.
+Numeric quantities are output in decimal,
+except for permissions, which are octal.
+.PP
+The conversion specifications and their meanings are:
+.PP
+.TP 10
+\f3%a\fP,\f3%c\fP,\f3%m\fP
+The access (atime), change (ctime) or modification (mtime)
+time stamps for the current file, as seconds since the epoch.
+.TP
+\f3%u\fP,\f3%g\fP
+The numeric user (uid) or group (id) for the current file.
+.TP
+.BR %p
+The octal permissions (mode, including type) for the current file.
+.TP
+.BR %n
+The number of links to the current file.
+.TP
+.BR %i
+The inode number of the current file.
+.TP
+.BR %s
+The size in bytes of the current file.
+.TP
+.BR %e
+The NFS internal generation number (gen) of the current file.
+.TP
+.BR %d
+For block and character special files, the major/minor
+device (rdev) of the current file.
+For other file types, this is zero.
+.TP
+.BR %x
+For directory and regular files, the number of EFS extents.
+For other file types, this is zero.
+.TP
+.BR %N
+The actual number of links observed when
+.IR fsdump (1M)
+traversed the
+.IR file-system .
+This will usually be the same value as for
+.BR %n ,
+above, unless either a concurrent update
+caused inconsistent data to be captured
+(rare but allowed), or
+.IR fsdump (1M)
+lacked permissions to scan part of the
+directory structure (in which case,
+inode contents are still available,
+but names are not).
+The
+.IR fsdump (1M)
+command runs setuid root
+only long enough to obtain
+a read only file descriptor
+on the
+target
+.IR file-system
+in order to read inode contents,
+then restores
+its invoker's privileges.
+.TP
+.BR %E
+For directories, the number of directory
+entries observed when
+.IR fsdump (1M)
+traversed the
+.IR file-system .
+.TP
+.BR %S
+The number of active inodes
+below this inode in the
+.I file-system
+hierarchy.
+This value is only non-zero for directories.
+The conventional "." and ".." directory
+entries are included in this count.
+.TP
+.BR %I
+The total number of active inodes
+in the
+.IR file-system .
+.TP
+.BR %M
+The pathname of the mount point
+on which the current
+.I file-system
+was mounted when
+.I fsdump
+examined it.
+.TP
+.BR %Q
+One of the "file environment" attributes:
+a quick and dirty checksum of just the first
+8 bytes of each 512 block of the file,
+plus the inode number of the file.
+.TP
+.BR %Y
+One of the "file environment" attributes:
+If the current file is a symbolic link,
+displays the path contained in the link file.
+If the file is not a symbolic link, or
+its contents could not be read by
+.IR fsdump (1M) ,
+then displays the empty string.
+.TP
+.BR %U
+Aggregate subtree total - see
+further the section
+.IR "\\s-1Subtree Options\\s+1" .
+.TP
+.BR %R
+One of the "file environment" attributes:
+the top-of-trunk RCS delta number.
+This value is maintained for files that
+appear to be RCS ,v files,
+and is the empty string for other files.
+.TP
+.BR %T
+One of the "file environment" attributes:
+the top-of-trunk RCS date stamp.
+This value is maintained for files that
+appear to be RCS ,v files,
+and is the empty string for other files.
+.TP
+.BR %L
+One of the "file environment" attributes:
+the user name of the locker of locked
+RCS ,v files.  For any other file,
+this is the empty string.
+.TP
+.BR %A
+One of the "file environment" attributes:
+the user name of the author of
+the RCS top-of-trunk delta.
+For other files, this is the
+empty string.
+.TP
+.BR %D
+The pathname of the directory
+containing the current file,
+or dirname.
+.TP
+.BR %B
+The basename of the current file.
+.TP
+.BR %P
+The full pathname of the current file.
+.TP
+.BR %W
+The canonical full pathname of the current file.
+If the
+.I file-system
+argument to
+.I rfind
+passes through a symlink,
+then
+the "%P" format will show you
+a pathname relative to the
+path provided in the
+.I file-system
+argument, whereas
+"%W" will show you the canonical
+pathname, free of symlinks.
+.TP
+.BR %Z
+The full pathname of the new subdirectory within the current file.
+.TP
+.BR %%
+Same as %.
+.SS "Subtree Options"
+The
+.BR \-stcount ,
+.BR \-stsize
+and
+.BR \-sttotal
+options, together with the
+.BR \-printf
+"%U" format,
+provide a mechanism to group subtrees of
+the searched tree by sizes or counts.
+The
+.BI \-sttotal
+option implies the
+.BI \-depth
+option.
+The
+.I rfind
+command maintains two internal
+values, the running subtotal
+and the aggregate subtotal.
+Both values are initialized to zero.
+.P
+The running subtotal is maintained during
+the recursive depth first search
+so that for directories it is always
+the total values not already aggregated
+for the subtree below the directory,
+and for other files, it is always
+the value for just that file.
+The aggregate subtotal is reset to zero
+before evaluating the
+.I search-expression
+for each file.
+.P
+Whenever the
+.BR \-stcount
+option is evaluated,
+it increments the running subtotal by one.
+.P
+Whenever the
+.BR \-stsize
+option is evaluated,
+it increments the running subtotal by
+the size in blocks of the current file.
+.P
+Whenever, for an individual file or for
+a subtree, the
+.BR \-sttotal
+option is evaluated and the current
+running subtotal exceeds the
+.IR threshold
+specified on the
+.BI \-sttotal
+option, then
+the running subtotal is copied
+to the aggregate subtotal,
+and the running subtotal is reset to zero.
+When evaluating the
+.I search-expression
+for the
+final (top) directory of the search
+(namely, the directory specified or implied by the
+.BI \-root
+option), the
+.BI \-sttotal
+option copies any non-zero running subtotal
+to the aggregate subtotal,
+even if it does not exceed the
+specified
+.IR threshold ,
+and evaluates as true if a copy was done.
+.P
+The
+.BR \-printf
+"%U" format displays the
+current value of the aggregate subtotal.
+.P
+These options are intended to be used together.
+Typically one of either the
+.BI \-stcount
+or
+.BI \-stsize
+option is used to increment the running subtotal,
+along with the
+.BI \-sttotal
+option to copy the running subtotal to the
+aggregate subtotal whenever the
+threshold is reached,
+along with the
+.BR \-printf
+"%U" format
+to display the aggregate subtotal.
+.P
+For example, one could determine where, in a large RCS based
+source tree, the recent (say, in the last day) changes to
+RCS/*,v files were clustered, with the command:
+.P
+.RS 6
+rfind cypress 'RCS/*,v' -mtime -1 -stcount -o -type d -sttotal 10 -printf "%U\\t%P\\n"
+.RE
+.P
+The output from the above command might look like:
+.P
+.RS 6
+14	/cypress/att/usr/src/cmd/motif/clients/4Dwm/RCS
+.br
+13	/cypress/att/usr/src/cmd/motif/sgi/book
+.br
+12	/cypress/att/usr/src/cmd/X11R4/mit/fonts.pcf/bdf/75dpi/RCS
+.br
+16	/cypress/att/usr/src/cmd/X11R4/mit
+.br
+17	/cypress/att/usr/src/cmd/demo
+.br
+14	/cypress/att/usr/src/cmd
+.br
+11	/cypress/att/usr/src/man
+.br
+10	/cypress/att/usr/src/gfx/lib/libgl/LIGHT/asmgfx/RCS
+.br
+11	/cypress/att/usr/src/gfx/lib/libgl/LIGHT/cgfx/RCS
+.br
+14	/cypress/att/usr/src/gfx
+.br
+32	/cypress/att/usr/src
+.br
+10	/cypress/bsd/src/etc/timed/RCS
+.br
+1	/cypress
+.RE
+.P
+The above output shows the several subtrees containing 10 or more
+changed RCS/*,v files, with the number of such files in the
+first column.
+.P
+For another example, one could determine where disk space was
+being used on the root file system with the command:
+.P
+.RS 6
+rfind root -stsize -sttotal 1000 -printf "%U\\t%P\\n" 
+.RE
+.P
+This command produces output like the following:
+.P
+.RS 6
+1374    /bin/wsh
+.br
+1201    /bin/news_server
+.br
+4991    /bin
+.br
+3551    /etc/gl
+.br
+3651    /etc
+.br
+2192    /stand/ide
+.br
+2817    /unix
+.br
+1961    /
+.RE
+.P
+From this output, one can see that three
+individual files, /bin/wsh, /bin/news_server and /unix, exceeded
+the 1000 block threshold, that most of the remaining
+disk space is in use by files under the directories
+/bin, /etc/gl, /etc and /stand/ide, and that
+1961 blocks of data resides somewhere else
+on the root file system.
+.SS Defaults
+To make interactive use
+easier,
+.I rfind
+supports several default options and primaries in the
+.IR search-expression .
+.IP 1) 4
+A default leading option of
+.B "\-root /rootpath"
+is supplied,
+where /rootpath is the mount point implied
+by the first argument to
+.IR rfind .
+.IP 2) 4
+The
+.I search-expression
+is parsed from left to right in two phases.
+.IP 3) 4
+Unexpected arguments
+in the first phase
+that begin
+with the
+.RB ' / '
+character are supplied
+a default
+.B \-root
+option.
+.IP 4) 4
+The
+.BI \-root " path\^"
+primaries
+constructed during
+the first phase
+are automatically
+separated from each other by
+the
+.B \-o
+operator.
+.IP 5) 4
+The first phase ends at
+the first argument that
+is neither an explicit
+.B \-root
+nor starts with the
+.RB ' / '
+character.
+.IP 6) 4
+At the end of the first phase,
+an automatic opening
+.B (
+parenthesis is inserted,
+so that the entire list of
+.B \-o
+separated roots just built
+is concatenated (implying the
+.B \-a
+operator)
+with the expression resulting
+from the second phase.
+.IP 7) 4
+Unexpected arguments in the second phase
+that do not begin with the
+.RB ' \- '
+character are supplied
+a default
+.B \-name
+option.
+.IP 8) 4
+At the end of the second phase,
+sufficient closing
+.B )
+parentheses are supplied
+to match any unmatched
+opening
+.BR (
+parentheses.
+.IP 9) 4
+Finally, if none of the operators
+.BR \-ls ,
+.BR \-print ,
+.BR \-printf ,
+.BR \-none
+or
+.BR \-ncheck
+appeared,
+a default
+.BR \-print
+operator is supplied.
+.HP
+The result of the above defaults is that the
+command:
+.PP
+.RS 6
+rfind cypress ed.c
+.RE
+.PP
+is automatically expanded into the equivalent command:
+.PP
+.RS 6
+rfind cypress \-root /cypress -a  \\( \-name ed.c \\) \-print
+.RE
+.PP
+and that the command:
+.PP
+.RS 6
+rfind bugs /d1/Bugs /d1/alphabugs 1234
+.RE
+.PP
+is automatically expanded into the command:
+.PP
+.RS 6
+rfind bugs \-root /d1 -a \\( \-root /d1/Bugs \-o \-root /d1/alphabugs \\) -a \\( \-name 1234 \\) \-print
+.RE
+.SS Performance
+The
+.I rfindd (1M)
+daemon dynamically selects from
+several available search
+strategies in order to provide
+optimum performance.
+.IP 1) 4
+The
+.BI \-root " path\^"
+option may be used to specify
+a small portion of the
+.IR file-system
+to be searched.
+.IP 2) 4
+The
+.BI \-name " file\^"
+option
+may take advantage of
+a secondary sort index
+by file basename.
+The first wildcard character
+\f3[\f1,
+\f3?\f1
+or
+\f3*\f1
+in the basename of the
+provided name
+terminates the portion of the
+basename which is used to restrict
+the search.
+.IP 3) 4
+If the
+.BI \-inum " n\^"
+or
+.BI \-ncheck " n\^"
+options are used,
+then direct and rapid lookup is possible.
+.IP 4) 4
+If the either of the options
+.BR \-prune
+or
+.BR \-depth
+are used,
+then this disables the above
+search strategies (2) by name
+and (3) by inode number.
+.PP
+Small searches that are able to take advantage
+of one of the above search strategies often
+complete in less than 1 second.  Large searches
+that require walking a large tree can take
+up to several minutes,
+depending primarily on server performance.
+.PP
+The selection of search strategy is based on
+dynamically computed weights, so two
+.IR rfind (1)
+commands that are syntactically identical
+may be accomplished by different strategies
+depending for example on the relative
+size of the subtrees specified by
+.BI \-root " path\^"
+options and the relative portion
+of the name space covered by
+.BI \-name " file\^"
+options.
+.PP
+The order of output
+is dependent on the search order.
+In the case that the secondary
+sort index by file basename is used,
+the output will not appear
+to have any particular order.
+.SS "Comparison to find(1)"
+The
+.IR rfind (1)
+has the following new options
+that are not available in the
+.IR find (1)
+command:
+.BR \-root ,
+.BR \-ls ,
+.BR \-printf ,
+.BR \-none ,
+.BR \-ncheck ,
+.BR \-showdots ,
+.BR \-stcount ,
+.BR \-stsize ,
+.BR \-sttotal ,
+.BR \-changed
+and
+.BR \-exit .
+.PP
+The following
+.IR find (1)
+options are not
+available in
+.IR rfind (1):
+.BR \-cpio ,
+.BR \-ok ,
+.BR \-exec ,
+.BR \-local
+and
+.BR \-mount .
+Since the preferred way to create
+cpio archives is to use the
+.IR cpio (1)
+command itself, perhaps
+receiving filenames via
+a pipe
+from the
+.IR find (1)
+command,
+it did not seem worthwhile
+to maintain the obsolete
+variant of
+.IR cpio
+that is embedded in the
+.IR find (1)
+command.
+Since the
+.IR rfind (1)
+uses
+.IR rpc (3R)
+with minimal authentication,
+the
+.BR \-ok
+and
+.BR \-exec
+options would have presented
+unacceptable security compromises.
+Since the
+.IR rfind (1)
+command only works on a single
+.IR file-system ,
+the
+.BR \-local
+and
+.BR \-mount
+options are effectively always on.
+.PP
+The
+.IR find (1)
+searches in realtime
+on multiple file systems,
+whereas
+.IR rfind (1)
+searches the previously created
+side file
+of a single file system.
+.PP
+The
+.IR find (1)
+command is a single process
+utility,
+whereas the
+.IR rfind (1)
+command is the frontend
+of client-server utility.
+.PP
+Searching a large file system
+is many times faster with
+.IR rfind (1)
+than with
+.IR find (1).
+.PP
+The
+.BI \-name " file\^"
+option of
+.IR rfind (1)
+supports multiple components
+in the
+pattern
+.IR file .
+.PP
+The command line defaults
+simplify the use
+of
+.IR rfind (1).
+.SS Examples
+To find all files named 'find*' in Cypress:
+.PP
+.RS 6
+rfind cypress 'find*'
+.RE
+.PP
+To display all character special devices on the root file
+system except those under any \f3dev\fP directory:
+.PP
+.RS 6
+rfind root \-type d \-name dev \-prune \-o \-type c \-print
+.RE
+.PP
+To find all symbolic links that point off
+the current file system (or point nowhere):
+.PP
+.RS 6
+rfind cypress -follow -type l
+.RE
+.PP
+To display the grand total number of blocks contained
+in all files and (recursively) directories within a
+directory subtree rooted at $P, where $P is the canonical
+(symlink free) absolute (root based) path to the top
+of the subtree:
+.PP
+.RS 6
+rfind $P -stsize $P -sttotal 1 -printf "%U\\t%P\\n"
+.RE
+.PP
+The output of the above command is similar to the output of:
+.PP
+.RS 6
+du -s $P
+.RE
+.PP
+.SH FILES
+.TP 25
+/etc/rfind.aliases
+List of
+.I file-system
+mappings.
+.TP 25
+/etc/passwd
+\s-1UID\s+1 information supplier
+.TP 25
+/etc/group
+\s-1GID\s+1 information supplier
+.SH "SEE ALSO"
+chmod(1),
+cpio(1),
+echo(1),
+find(1),
+fsdump(1M),
+ncheck(1),
+rfindd(1M),
+sh(1),
+test(1).
+.br
+stat(2),
+umask(2),
+rpc(3R),
+fs(4).
+.SH BUGS
+Do not use
+the
+.B \-prune
+option with either of the
+.BR \-depth
+or
+.BR \-sttotal
+options,
+because the alternative tree walk order
+used by these
+options confuses the
+logic of the
+.B \-prune
+option,
+causing
+the wrong
+.I file-system
+subtree
+to be pruned.
+.\"	@(#)rfind.1	6.3 of 9/2/83
+.Ee
+'\".so /pubs/tools/origin.att

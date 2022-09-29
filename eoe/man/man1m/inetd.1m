@@ -1,0 +1,364 @@
+'\"macro stdmacro
+.\" Copyright (c) 1985 Regents of the University of California.
+.\" All rights reserved.  The Berkeley software License Agreement
+.\" specifies the terms and conditions for redistribution.
+.\"
+.\"	@(#)inetd.1m	6.4 (Berkeley) 5/26/86
+.\"
+.if n .pH man1.inetd @(#)inetd	30.3 of 2/1/86
+.nr X
+.if \nX=0 .ds x} INETD 1M "Silicon Graphics" "\&"
+.if \nX=1 .ds x} INETD 1M "Source Code Control System Utilities"
+.if \nX=2 .ds x} INETD 1M "" "\&"
+.if \nX=3 .ds x} INETD "" "" "\&"
+.TH \*(x}
+.UC 6
+.SH NAME
+inetd \- Internet ``super\-server'' 
+.SH SYNOPSIS
+.B /usr/etc/inetd
+[ 
+.B \-R
+.I rate
+]
+[
+.B \-d
+]
+[ 
+.B \-l
+.I qlen
+]
+[
+.B \-s
+]
+.br
+    [ configuration-file ]
+.SH DESCRIPTION
+When 
+.I inetd
+is started at boot time by
+.IR /etc/init.d/network ,
+it reads its configuration information from the 
+.IR /etc/inetd.conf
+and listens for connections on certain
+internet sockets.  When a connection is found on one
+of its sockets, it decides what service the socket
+corresponds to, and invokes a program to service the request.
+After the program is
+finished, it continues to listen on the socket (except in some cases which
+will be described below).  Essentially,
+.I inetd
+allows running one daemon to invoke several others,
+reducing load on the system.
+.SH OPTIONS
+.TP
+.B \-R
+This option controls the maximum number of times a service can be invoked
+in one minute; the default is 1000.
+.TP
+.B \-d
+This option turns on debugging information.  Note that this can confuse
+some applications; use this cautiously.
+.TP
+.B \-f
+This option is no longer supported and will simply cause a warning message
+to be included in the syslog if used.
+.TP
+.B \-l
+This option changes the listen queue length used for TCP sockets.  By default
+this value is 255.
+.TP
+.B \-s
+Causes inetd to just parse the configuration file (default is /etc/inetd.conf)
+and report any errors.  Do not need superuser privileges to run inetd
+using this option.
+.PP
+To specify a different configuration file, put its pathname in the file
+.IR /etc/config/inetd.options .
+.SH "CONFIGURATION FILE
+Each line of the configuration file must be a valid service or a comment.
+Comments are denoted by a ``#'' at the beginning of a line.
+Each field in a line must be specified, 
+with values for each field separated by a tab or a space.  
+The fields are as follows:
+.br
+	service name
+.br
+	socket type
+.br
+	protocol
+.br
+	wait/nowait
+.br
+	user
+.br
+	server program
+.br
+	server program arguments
+.PP
+There are three types of services that 
+.I inetd
+can start: standard, RPC and TCPMUX.
+A standard service has a well-known port assigned to it and
+is listed in 
+.I /etc/services\^
+or the NIS
+.I services
+map
+(see \f2services\f1(4));
+it may be a service that implements an official Internet standard or is a
+BSD Unix-specific service.
+RPC services use the Sun RPC calls as the transport; such services
+are listed in 
+.I /etc/rpc\^
+or the NIS
+.I rpc
+map
+(see \f2rpc\f1(4)).
+TCPMUX services are nonstandard services that do not have a 
+well-known port assigned to them.
+They are invoked from
+.I inetd 
+when a program connects to the ``tcpmux'' well-known port and specifies
+the service name.  
+This feature is useful for adding locally-developed servers.
+.PP
+For standard Internet services, the
+.I "service name"
+field is the name of a valid service in
+the 
+.IR services (4)
+database.
+For ``internal'' services (discussed below), the service
+name
+.I must
+be the official name of the service (that is, the first field in
+.IR /etc/services ).
+For RPC services, the value of the
+.I "service name" 
+field consists
+of the RPC service name, followed by a slash and either a version
+number or a range of version numbers (e.g., mountd/1).
+For TCPMUX services, the value of the
+.I "service name" 
+field consists of the string ``tcpmux'' followed by a slash and the
+locally-chosen service name. 
+If the service name begins with a ``+'', it indicates
+.I inetd 
+will handle the initial handshake with the requesting program,
+otherwise the service is responsible for the handshake.
+(The handshake is described in the
+.I inetd
+section in the 
+.I IRIX Network Programming Guide\c
+\&.)
+The service names listed in 
+.I /etc/services
+and the name ``help'' 
+are reserved.
+The ``help'' name causes
+.I inetd
+to list available TCPMUX services.
+Private protocols should use a service name that has a high chance of
+being unique.  A good practice is to prefix the service name with
+the name of your organization.
+Multiple versions of a protocol can suffix the service name with a
+protocol version number.
+.PP
+The
+.I socket type
+should be one of ``stream'', ``dgram'', or ``raw'', 
+depending on whether the socket is a stream, datagram, or raw socket.
+TCPMUX services must use ``stream.''
+.PP
+The
+.I protocol
+must be a valid protocol as given in
+.I /etc/protocols
+(see \f2protocols\f1(4)).
+Examples might be ``tcp'' or ``udp''.
+For RPC services, the field consists of the string ``rpc'' followed
+by a slash and the name of the protocol (e.g., rpc/tcp or rpc/udp for an
+RPC service using the TCP or UDP protocol as a transport mechanism. If 2 
+RPC services use the same server program with different protocol such as 
+tcp or udp, the 2 services need to be based on protocol lexicographic order).
+TCPMUX services must use ``tcp.''
+.PP
+The 
+.I wait/nowait 
+entry specifies whether the server that is invoked by
+.I inetd
+will take over the socket associated with the service access
+point, and thus whether
+.I inetd
+should wait for the server to exit
+before listening for new service requests.  Datagram servers must use
+wait, as they are always invoked with the original datagram socket
+bound to the specified service address.  These servers must read at
+least one datagram from the socket before exiting.  If a datagram
+server connects to its peer, freeing the socket so 
+.I inetd
+can received
+further messages on the socket, it is said to be a ``multi-threaded''
+server; it should read one datagram from the socket and create a new
+socket connected to the peer.  It should fork, and the parent should
+then exit to allow
+.I inetd
+to check for new service requests to spawn
+new servers.  Datagram servers which process all incoming datagrams
+on a socket and eventually time out are said to be single-threaded.
+.IR Talkd (8)
+is an example of the single-threaded datagram server.  
+.IR Tftpd (8)
+is an example of a multi-threaded
+datagram server.
+.PP
+Servers using stream sockets generally are multi-threaded and use the
+nowait entry.  Connection requests for these services are accepted by
+inetd, and the server is given only the newly-accepted socket
+connected to a client of the service.  Most stream-based services
+operate in this manner.  Stream-based servers that use wait are
+started with the listening service socket, and must accept at least
+one connection request before exiting.  Such a server would normally
+accept and process incoming connection requests until a timeout.
+RPC services usually wait.
+TCPMUX services must use nowait.
+.PP
+The
+.I user
+field should contain the user name of the user as whom the server
+should run.  This allows for servers to be given less permission
+than root.
+.PP
+The
+.I "server program"
+field should contain the pathname of the program which is to be
+executed by
+.I inetd
+when a request is found on its socket.  If
+.I inetd
+provides this service internally, this field should
+be ``internal''.
+For non-internal services,
+the arguments to the server program should be just as they
+normally are, starting with argv[0], which is the name of
+the program.  
+There is a limit of 11 arguments per program (including argv[0]).
+A `?' character, placed just before the server program pathname,
+causes 
+.I inetd
+to suppress error logging of a missing server.
+As shipped,
+.IR /etc/inetd.conf
+uses `?' to suppress error logging for servers that are
+included in optional software packages. 
+.PP
+.I Inetd
+provides several trivial services internally by use of
+routines within itself.  These services are ``echo'',
+``discard'', ``chargen'' (character generator), ``daytime''
+(human readable time), ``time'' (machine readable time,
+in the form of the number of seconds since midnight, January
+1, 1900), and ``tcpmux'' (service multiplexor).   
+All of these services are TCP-based.  For
+details of these services, consult RFCs 862, 863, 864, 867, 868, and 1078.
+.PP
+.I Inetd
+rereads its configuration file when it receives a hangup signal, SIGHUP.
+Services may be added, deleted or modified when the configuration file
+is reread.
+To disable a service, add the comment character ``#'' at the beginning
+of the service's line in inetd.conf and send SIGHUP to 
+.I inetd
+with the command 
+.Ex
+/etc/killall \-HUP  inetd
+.Ee
+.SH "ERROR MESSAGES"
+.I Inetd
+logs error messages using
+.IR syslog (3B).
+Important error messages and their explanations are:
+.Ex
+\f2service\fP/\f2protocol\fP server failing (looping), service terminated.
+.Ee
+The number of requests for the specified service in the past minute
+exceeded the limit. The limit exists to prevent a broken program
+or a malicious user from swamping the system.
+This message may occur for several reasons:
+1) there are lots of hosts requesting the service within a short time period,
+2) a 'broken' client program is requesting the service too frequently,
+3) a malicious user is running a program to invoke the service in
+a 'denial of service' attack, or
+4) the invoked service program has an error that causes clients
+to retry quickly.
+Use the
+.B \-R 
+option,
+as described above, to change the rate limit.
+Once the limit is reached, the service will be
+reenabled automatically in 10 minutes.
+.sp
+.Ex
+\f2service\fP/\f2protocol\fP: \No such user '\f2user\fP', service ignored
+\f2service\fP/\f2protocol\fP: getpwnam: \f2user\fP: No such user
+.Ee
+No entry for \f2user\fP exists in the \f2passwd\fP file. The first message
+occurs when
+.I inetd
+(re)reads the configuration file. The second message occurs when the
+service is invoked.
+.sp
+.Ex
+\f2service\fP: can't set uid \f2number\fP
+\f2service\fP: can't set gid \f2number\fP
+.Ee
+The user or group ID for the entry's \f2user\fP is invalid.
+.sp
+.Ex
+too many services: open-file limit reached.
+.Ee
+The number of services in the configuration file exceeds the
+number of file descriptors that 
+.I inetd 
+can keep open.
+Unnecessary services must be removed or commented out or
+the kernel must be reconfigured to
+increase the limit (the NOFILES parameter in \f2/var/sysgen/master.d/kernel\fP.)
+.SH "EXAMPLES"
+.PP
+Here are several example service entries for the various types of services
+.Ex
+\s-1ftp          stream tcp     nowait root  /usr/etc/ftpd         ftpd -l
+ntalk        dgram  udp     wait   root  /usr/etc/talkd        talkd
+rusersd/1    dgram  rpc/udp wait   root  /usr/etc/rpc.rusersd  rusersd
+tcpmux/+date stream tcp     nowait guest /bin/date             date\s+1
+.Ee
+.SH NOTE
+If NIS is enabled on your system, 
+.I inetd 
+uses the NIS equivalents of
+.I /etc/services
+and
+.IR /etc/rpc .
+Make sure your NIS server's
+.I services 
+and 
+.I rpc 
+databases contain the entries listed in these files.
+.SH NOTES
+.B inetd
+has a limit of 512 characters per line of the configuration file.
+Exceeding this limit may cause inetd to terminate abnormally.
+.PP
+If both TCP and UDP services are listed for an RPC service, the TCP service
+should be listed first.
+.SH "SEE ALSO"
+ftpd(1M), rexecd(1M), rlogind(1M), rshd(1M),
+telnetd(1M), tftpd(1M).
+.sp .5v
+sockets programming chapter in the
+.IR "IRIX Network Programming Guide" .
+.sp .5v
+RFCs are available from the Network Information Center at 
+SRI International, Menlo Park, CA.

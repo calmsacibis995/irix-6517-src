@@ -1,0 +1,188 @@
+.if n .pH ddi.rm/d2/gen/srv @(#)srv	43.15 of 12/9/92
+.\" Copyright 1992, 1991 UNIX System Laboratories, Inc.
+.TH srv D2
+.IX "\f4srv\fP(D2)"
+.SH NAME
+\f4srv\fP \- service queued messages
+.SH SYNOPSIS
+.nf
+.na
+.ft 4
+#include <sys/types.h>
+#include <sys/stream.h>
+#include <sys/stropts.h>
+#include <sys/ddi.h>
+.sp 0.25
+int \f2prefix\fPrsrv(queue_t *\f2q\fP);  /* read side */
+.sp 0.25
+int \f2prefix\fPwsrv(queue_t *\f2q\fP);  /* write side */
+.ft 1
+.ad
+.fi
+.SS Arguments
+.RS 0
+.IP "\f2q\fP"
+Pointer to the queue.
+.RE
+.SH DESCRIPTION
+The \f4srv\fP (service) routine may be included
+in a STREAMS module or driver for a number of reasons.
+It provides greater control over the flow of
+messages in a stream by allowing the module or driver to reorder messages,
+defer the processing of some messages, or fragment and reassemble messages.
+The service routine also provides a way
+to recover from resource allocation failures.
+.SS "Return Values"
+Ignored
+.SH USAGE
+This entry point is optional,
+and is valid for STREAMS drivers and modules only.
+.P
+A message is first passed to a module's or driver's
+\f4put\fP(D2) routine, which may or may not process it.
+The \f4put\fP routine
+can place the message on the queue for processing by the service routine.
+.P
+Once a message has been enqueued, the STREAMS scheduler 
+calls the service routine at some later time.
+Drivers and modules should not depend
+on the order in which service procedures are run.
+This is an implementation-dependent
+characteristic.
+In particular, applications should not rely on service procedures running
+before returning to user-level processing.
+.P
+Every STREAMS queue [see \f4queue\fP(D4)] has limit
+values it uses to implement flow control.
+High and low water marks are checked to stop and restart
+the flow of message processing.
+Flow control limits apply only between two adjacent queues
+with service routines.
+Flow control occurs by service routines following
+certain rules before passing messages along.
+By convention, high priority
+messages are not affected by flow control.
+.P
+STREAMS messages can be defined to have up to 256 different
+priorities to support some networking protocol requirements
+for multiple bands of data flow.
+At a minimum, a stream must distinguish between normal (priority band
+zero) messages and high priority messages (such as \f4M_IOCACK\fP).
+High priority messages are always placed at the head of the
+queue, after any other high priority messages already enqueued.
+Next are messages from all included priority bands, which are
+enqueued in decreasing order of priority.
+Each priority band has its own flow control limits.
+By convention, if
+a band is flow-controlled, all lower priority bands are
+also stopped.
+.P
+Once a service routine is called by the STREAMS scheduler it must
+provide for processing all messages on its queue,
+restarting itself if necessary.
+Message processing must continue
+until either the queue is empty,
+the stream is flow-controlled, or an allocation error occurs.
+Typically, the service routine will switch on the message type, which
+is contained in \f4mp->b_datap->db_type\fP, taking different actions
+depending on the message type.
+.P
+For singlethreaded modules and drivers,
+the framework for the canonical service procedure algorithm is as follows:
+.RS 0
+.nf
+.ft 4
+queue_t *q;
+mblk_t *mp;
+.sp 0.2
+while ((mp = getq(q)) != NULL) {
+	if (mp->b_datap->db_type > QPCTL ||
+	   canput(q->q_next)) {
+		/* process the message */
+		putnext(q, mp);
+	} else {
+		putbq(q, mp);
+		return;
+	}
+}
+.ft 1
+.fi
+.RE
+.sp 0.2
+If the singlethreaded module or driver cares about priority bands,
+the algorithm becomes:
+.RS 0
+.nf
+.ft 4
+queue_t *q;
+mblk_t *mp;
+.sp 0.2
+while ((mp = getq(q)) != NULL) {
+	if (mp->b_datap->db_type > QPCTL ||
+	   bcanput(q->q_next, mp->b_band)) {
+		/* process the message */
+		putnext(q, mp);
+	} else {
+		putbq(q, mp);
+		return;
+	}
+}
+.ft 1
+.ft 1
+.fi
+.RE
+.sp 0.2
+Each STREAMS module and driver can have a read and write service routine.
+If a service routine is not needed (because the \f4put\fP routine
+processes all messages), a \f4NULL\fP pointer should be placed
+in the module's \f4qinit\fP(D4) structure.
+.P
+If the service routine finishes running because of any reason other than
+flow control or an empty queue, then it must explicitly arrange for its
+rescheduling.
+For example, if
+an allocation error occurs during the processing of a message, the
+service routine can put the message back on the queue with \f4putbq\fP, and,
+before returning, arrange to have itself
+rescheduled [see \f4qenable\fP(D3)] at some later time [see \f4bufcall\fP(D3)
+and \f4itimeout\fP(D3)].
+.P
+Service routines can be interrupted by \f4put\fP routines,
+unless the processor interrupt level is raised.
+.P
+Only one copy of a queue's service routine will run at a time.
+.P
+Drivers and modules should not call service routines directly.
+\f4qenable\fP(D3) should be used to schedule service routines to run.
+.P
+Drivers (excepting multiplexors) should free any messages they do not recognize.
+.P
+Modules should pass on any messages they do not recognize.
+.P
+Drivers should fail any unrecognized \f4M_IOCTL\fP messages by converting them into
+\f4M_IOCNAK\fP messages and sending them upstream.
+.P
+Modules should pass on any unrecognized \f4M_IOCTL\fP messages.
+.P
+Service routines should never put high priority messages back on their queues.
+.SS "Synchronization Constraints"
+Service routines do not have user context and so may not call
+any function that sleeps.
+.SH REFERENCES
+.na
+\f4bcanput\fP(D3),
+\f4bufcall\fP(D3),
+\f4canput\fP(D3),
+\f4datab\fP(D4),
+\f4getq\fP(D3),
+\f4msgb\fP(D4),
+\f4pcmsg\fP(D3),
+\f4put\fP(D2),
+\f4putbq\fP(D3),
+\f4putnext\fP(D3),
+\f4putq\fP(D3),
+\f4qenable\fP(D3),
+\f4qinit\fP(D4),
+\f4queue\fP(D4),
+\f4itimeout\fP(D3)
+.ad

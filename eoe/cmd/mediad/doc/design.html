@@ -1,0 +1,260 @@
+<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML//EN">
+<HTML VERSION="2.0">
+<HEAD>
+<!-- WEBMAGIC VERSION NUMBER="2.0.1" -->
+<!-- WEBMAGIC TRANSLATION NAME="ServerRoot" SRC="/var/www/htdocs/" DST="/" -->
+<!-- WEBMAGIC TRANSLATION NAME="ProjectRoot" SRC="./" DST="" -->
+<TITLE>Moose Mediad Design Document </TITLE>
+</HEAD>
+<BODY>
+<H1>Moose Mediad Design Document</H1>
+<H2>Goals</H2>
+<H3>No Objectserver</H3>
+<P>The moose release will not have objectserver to kick around any more. mediad/banyan
+is tightly coupled to the objectserver, so new mediad needs new functions
+and interfaces to provide the functionality that objectserver previously
+provided.</P>
+<H3>Non-SCSI devices</H3>
+<P>The moose's floppy is on a parallel port, not SCSI. Mediad/banyan is 100%
+SCSI oriented. Moose mediad must also support non-SCSI devices such as the
+floppy.</P>
+<H3>Icons Stay Alive</H3>
+<P>Mediad/banyan stops monitoring devices when an application such as cdplayer
+or SoftWindows takes exclusive use of a device, and is unable to update
+the desktop's icon states. Moose mediad should continue to sniff device
+state and update its clients even when those apps are running.</P>
+<H3>Easily Extensible</H3>
+<P>Mediad/banyan supports 3 types of filesystem on 7 types of device. It has
+3 * 7 = 21 places where it recognizes a particular filesystem on a particular
+device. That's getting unwieldy to maintain. We expect more devices and
+more filesystems in the future, so new mediad should not require M *N places
+where filesytems are recognized. Instead, we should have an M + N design.</P>
+<P>Also, moose mediad should let us release support for a new device, e.g.
+in a patch, without re-releasing all devices. That should prevent, or at
+least reduce, rev locking between devices.</P>
+<H3>Better Device Alias Support</H3>
+<P>Under Irix, a particular device can be referred to by several different
+names. E.g., <SAMP>/dev/scsi/sc0d4l0</SAMP>, <SAMP>/dev/rdsk/dks0d4vol</SAMP>, and <SAMP>/dev/dsk/dks0d4s7</SAMP> all refer to the same disk. Mediad recognizes device name aliases in an
+ad hoc way, and this is a continuing maintenance problem.</P>
+<H3>Support Hybrid/Partitioned Media</H3>
+<P>Mediad/banyan assumes that every disk has exactly one file system on it.
+That's not true in the case of partitioned disks nor hybrid CD-ROMs. Moose
+mediad should be able to mount any/all partitions, and should let the user
+control which one(s) are mounted.</P>
+<P>In the first release, it will not be possible to mount more than one partition
+at a time.</P>
+<H3>Performance</H3>
+<P>Moose mediad should use no more system resources (memory, CPU, I/O bandwidth)
+than mediad/banyan. Mediad/banyan's CPU and I/O consumption are negligible,
+so the only real concern is resident size.</P>
+<H2>Design Overview</H2>
+<P>Moose mediad's basic design metaphor is a device, filesystem, and client
+interface independent core with many ancillary modules. The core implements
+mediad's basic logic and has interfaces to all the ancillary modules. The
+ancillary modules are either in the form of DSOs, where we want to be able
+to field-extend various modules, or linked into the mediad executable, where
+we don't want field-extensibility.</P>
+<H3>Device/Partition Addressing</H3>
+<P>Rather than referring to devices by name (<SAMP>/dev/<I>whatever</I></SAMP>) or by SCSI controller/ID/LUN, moose mediad defines a <B>DeviceAddress</B> as an abstract type, whose concrete subtypes are <B>SCSIAddress</B> and <B>ParallelAddress</B>. More subtypes can be defined as needed. The SCSIAddress is, sure enough,
+composed of <B><I>&lt;controller, ID, LUN&gt;</I></B>. Since moose has a single parallel port, a ParallelAddress is unique. DeviceAddresses
+may be compared for equality, using <CODE>operator ==</CODE>. There are routines to convert a H/W inventory record or a SCSI triple to a DeviceAddress.</P>
+<P>A <B>PartitionAddress</B> on a device is defined as the tuple <B><I>&lt;DeviceAddress, format, number&gt;</I></B>, where <B><I>DeviceAddress</I></B> is as defined above, <B><I>format</I></B> is an enum of the known filesystem formats, and <B><I>number</I></B> is the partition number of that particular format. Partition numbers are
+defined per-format. E.g., DOS uses 1-4 for primary partitions and 5-8 for
+extended partitions. The constant <CODE>PartitionAddress::WholeDisk</CODE> can be used as a partition number. Note that a PartitionAddress does not
+specify sector numbers. In some cases, an address exists when there is no specific device to attach it to,
+and no specific sector numbers. Weird, but necessary.</P>
+<P>Both DeviceAddress and PartitionAddress are values. By that I mean that
+instances can be created and destroyed without side effects.</P>
+<H3><A NAME="DSOs">Device DSOs</A></H3>
+<P>Each supported device has a separate DSO containing the code that knows
+how to talk to that specific device and also describing that device's features.
+Each DSO has a routine named &quot;instantiate&quot; which looks at a <B>DeviceInfo</B> record and decides whether that DSO knows that device. If so, the instantiate
+routine returns a pointer to new <B>Device</B> object. Otherwise, it returns nil.</P>
+<P>Device objects are derived from class <B>Device</B>. Look at <KBD>Device.H</KBD> to see the exact interface of a device.</P>
+<H3>Format DSOs</H3>
+<P>Each supported filesystem format has a separate DSO containing the code
+that can recognize that format. Each format DSO has an &quot;inspect&quot; routine
+that is called to inspect a device for filesystems of that format. When
+the inspect routine finds one or more filesystems, it instantiates Partitions
+by calling <CODE>Partition::create()</CODE>, then instantiates Volumes by calling <CODE>SimpleVolume::create()</CODE>.</P>
+<H3>Mediad Core</H3>
+<P>The mediad core scans the hardware inventory and attempts to instantiate
+a Device subclass on each record in the inventory. When it finds a supported
+device, it creates a <B>DeviceMonitor</B> to watch that device. The DeviceMonitor accesses the hardware through the
+Device subclass. The DeviceMonitor also generates events on insertion, ejection,
+mount, and dismount, and responds to commands to eject, lock or unlock devices.</P>
+<H3>Client Interfaces</H3>
+<P>There are three client interfaces. They are the <B>CompatClient</B>, the <B>MonitorClient</B>, and <B>FsdClient</B> interfaces. CompatClient is the same interface as mediad/banyan supported.
+MonitorClient is a new interface which describes the state of all removable
+devices and volumes in the system, and generates events when that state
+changes. FsdClient monitors changes to /etc/fsd.auto through the miracle
+of fam, and changes mediad's behavior when that file changes.</P>
+<H3>Invocation and Command Line Arguments</H3>
+<P>Mediad supports most of the command line arguments implemented by mediad/banyan.
+It also is hard-linked to the /usr/sbin/eject command, and it can also be
+invoked by inetd, in the case where a remote MonitorClient wants to see
+the system state, but mediad isn't already running.</P>
+<H3>Mediad Objects</H3>
+<P>Since mediad is object oriented, it makes sense to describe its design in
+terms of its objects. Each class is described in detail in its header file.</P>
+<H3>Support Classes</H3>
+<P>These classes provide nifty support functions for the rest of mediad.</P>
+<H4>Enumerable</H4>
+<P>Several classes are subclasses of <B>Enumerable</B>. By subclassing Enumerable, a class gets a variety of methods for enumerating
+its instances. To access all elements sequentially, use <CODE>first()</CODE>, <CODE>next()</CODE>, <CODE>prev()</CODE> and <CODE>last()</CODE>. To access elements nonsequentially, use <CODE>index()</CODE>, <CODE>nth()</CODE> and <CODE>count()</CODE>.</P>
+<H4>Scheduler and friends</H4>
+<P>The <B>Scheduler</B> is based on <CITE>select(2)</CITE>. A module can create a <B>Task</B> to be executed at some time or at regular intervals, or it can create an <B>IOHandler</B>, which will be called when a descriptor becomes ready for I/O. IOHandler
+is abstract - the three concrete subclasses are <B>ReadHandler</B>, <B>WriteHandler</B>, and <B>ExceptHandler</B>.</P>
+<H4>FAMonitor and subclasses</H4>
+<P><B>FAMonitor</B> is an abstract class of &quot;filesystem entity monitored by FAM&quot;. The two subclasses
+are <B>FileMonitor</B> and <B>DirectoryMonitor</B>. When the file or directory is changed, the FAMonitor's callback is called.</P>
+<H4>DSReq</H4>
+<P><B>DSReq</B> is a wrapper around the <CODE>dsreq_t</CODE>; see <CITE>dslib(3X)</CITE>. The DSReq has the property that it automatically opens and closes the <KBD>/dev/scsi</KBD> device - there's no need to keep track of who opened it and who closes
+it, and there's no way to introduce bugs by forgetting to put <CODE>dsclose()</CODE> into one code path.</P>
+<H4>Log</H4>
+<P>The <B>Log</B> class logs messages to syslog or to standard error.</P>
+<H3>Devices, Partitions, Volumes and Addresses</H3>
+<H4>DeviceAddress, SCSIAddress, PartitionAddress</H4>
+<P>These are described above in the Design Overview section.</P>
+<H4>DeviceInfo</H4>
+<P>When mediad is probing for devices, it creates a <B>DeviceInfo</B> record and hands it to each of the device DSOs' instantiate routines. The
+DeviceInfo is a grab bag of potentially useful info. It includes a H/W inventory
+record, a DeviceAddress, and, for SCSI devices, the result of a SCSI INQUIRY
+command.</P>
+<H4>Device</H4>
+<P><B>Device</B> is the abstract superclass from which device objects are derived. It has
+a bunch of methods for obtaining info about the device and for controlling
+the device.</P>
+<P>Devices are enumerated. Whenever a MonitorClient receives an event, mediad
+sends it a list of all Device objects. So a Device object is only created
+when there's a real device that mediad is really monitoring.</P>
+<P>Each device has three methods for returning its name. The methods are <CODE>short_name()</CODE>, <CODE>ftr_name()</CODE> and <CODE>dev_name()</CODE>. This is ugly, but necessary.</P>
+<P>The <B>short name</B> is the common name of the device. It corresponds to objectserver's resourceObject
+name attribute. Prepend a &quot;/&quot; to it to form the device's default mount point.
+The short name has no punctuation characters. (e.g., <SAMP>CDROM</SAMP>, <SAMP>floppy2</SAMP>)</P>
+<P>The <B>ftr name</B> is the name as it appears in the file type rules. Devices don't necessarily
+have unique ftr names. For example, three CD-ROM drives would all have <SAMP>cdrom</SAMP> as their ftr name.</P>
+<P>The <B>dev name</B> is the name of the <KBD>/dev</KBD> entry that should be used to open that device. The dev_name method takes
+a filesystem format and a partition number as an argument. So, for example, <CODE>CDROM::fmt_name(FMT_CDDA, WholeDisk)</CODE> returns <KBD>/dev/scsi/sc<I>&lt;whatever&gt;</I></KBD>, while <CODE>CDROM::fmt_name(FMT_EFS, 7)</CODE> returns <KBD>/dev/dsk/dks<I>&lt;whatever&gt;</I>s7</KBD>.</P>
+<H4>Partition</H4>
+<P>A <B>Partition</B> is a piece of a disk. A partition has a format associated with it, either
+one of the filesystem formats or &quot;raw&quot;. It also has sector info: sector
+size, starting sector, and number of sectors. The last two are 64 bit integers.</P>
+<P>Every device with media has one partition in raw format that describes the
+total capacity of the media.</P>
+<P>Partitions are enumerated. Whenever a MonitorClient receives an event, mediad
+sends it a list of all Partition objects. So a Partition object is only
+created when there's a real partition on a disk.</P>
+<H4>Volume, SimpleVolume</H4>
+<P>A <B>Volume</B> is a lot like a filesystem. Volume is an abstract base class. A volume
+has one or more Partitions, a label, and info about how to mount it, in
+the form of a <CODE>struct mntent</CODE>.</P>
+<P><B>SimpleVolume</B> is the concrete subclass of Volume. It's a volume with one partition. Mediad
+does not currently support multi-partition volumes, but the structure is
+in place to add that support by defining a new subclass of Volume.</P>
+<P>Volumes are enumerated. Whenever a MonitorClient receives an event, mediad
+sends it a list of all Volume objects. So a Volume object is only created
+when there's a real volume on disk(s). The volume doesn't have to be mounted.</P>
+<H3>Core Objects</H3>
+<H4>MediaDaemon</H4>
+<P><B>MediaDaemon</B> is the object that probes for devices in the system and creates DeviceMonitors to monitor them. There is exactly one MediaDaemon object.</P>
+<H4>DeviceMonitor</H4>
+<P><B>DeviceMonitor</B> is the object that monitors one device. It wakes up periodically and checks
+the device's state. When a medium is inserted, the DeviceMonitor calls each
+of the FormatDSOs to inspect the medium. The FormatDSOs may create Volumes
+and Partitions. When a medium is ejected, the DeviceMonitor destroys any
+Volumes or Partitions associated with that device.</P>
+<P>A DeviceMonitor responds to several commands, <CODE>activate()</CODE>, <CODE>deactivate()</CODE>, <CODE>suspend()</CODE>, <CODE>resume()</CODE>, and <CODE>eject()</CODE>. Eject is obvious. Activate/deactivate occur in response to <CITE>libmediad</CITE>'s release/get exclusive use functions. Suspend/resume occur when <KBD>mon=on/off</KBD> is set in <KBD>/etc/fsd.auto</KBD>.</P>
+<H4>DeviceLibrary, FormatLibrary</H4>
+<P>These are silly classes that maintain a list of all the device DSOs and
+format DSOs. Both DSO libraries look in <KBD>/usr/lib/devicelib</KBD>, and find all files matching a pattern, either <KBD>dev_*.so</KBD> or <KBD>fmt_*.so</KBD>, respectively.</P>
+<H4>DSO, DeviceDSO, FormatDSO</H4>
+<P><B>DSO</B> is the abstract base class for a Dynamic Shared Object. It has methods
+to load/unload, and to look up a symbol. These are just thin wrappers around
+dlopen, dlclose and dlsym. The concrete subclasses are <B>DeviceDSO</B> and <B>FormatDSO</B>.</P>
+<P>DeviceDSO has a method, <CODE>instantiate()</CODE>, that calls the DSO's instantiation routine. DeviceDSO maintains a reference
+count of the number of instances each DSO has so that a DSO won't be unloaded
+while instances exist.</P>
+<P>FormatDSO has a method, <CODE>inspect()</CODE>, that calls the DSO's inspection routine.</P>
+<H3>Client Interfaces</H3>
+<H4>CompatListener, CompatClient</H4>
+<P>The <B>CompatListener</B> listens for client connections from clients using the mediad/banyan interface.
+It listens on a Unix domain socket. When it gets a connection, it creates
+a CompatClient object. There is only one CompatListener object.</P>
+<P>The <B>CompatClient</B> object handles a single session with an old-style client. Each session
+consists of a single request-response pair. These are the requests.</P>
+<UL>
+<LI><VAR>MSG_EJECT</VAR>
+<LI><VAR>MSG_TEST</VAR>
+<LI><VAR>MSG_TERM</VAR>
+<LI><VAR>MSG_SUSPENDON</VAR>
+<LI><VAR>MSG_SUSPENDOFF</VAR>
+<LI><VAR>MSG_SETLOGLEVEL</VAR>
+<LI><VAR>MSG_STARTENTRY</VAR>
+<LI><VAR>MSG_STOPENTRY</VAR>
+</UL>
+<H4>RPCListener, MonitorClient</H4>
+<P>The <B>RPCListener</B> listens for RPC connections from monitor clients. When it gets one, it
+creates a MonitorClient object. There is only one RPCListener object. The
+protocol used is TCP/IP, so mediad will accept connections from remote clients.
+(But only if the <KBD>share_devices</KBD> chkconfig option is on.)</P>
+<P>A <B>MonitorClient</B> object handles a single session with a monitor client. When it first connects,
+and when certain events happen, it sends a message to the client. These
+are the events.</P>
+<UL>
+<LI><VAR>MCE_NO_EVENT</VAR>
+<LI><VAR>MCE_INSERTION</VAR>
+<LI><VAR>MCE_EJECTION</VAR>
+<LI><VAR>MCE_REFORMAT</VAR>
+<LI><VAR>MCE_MOUNT</VAR>
+<LI><VAR>MCE_DISMOUNT</VAR>
+<LI><VAR>MCE_NO_EVENT</VAR>
+</UL>
+<P>Each MonitorClient registers itself to receive callbacks from the mediad
+core. The callbacks occur when a DeviceMonitor detects that a medium has
+been inserted, ejected, or reformatted, and when mediad mounts or dismounts
+a filesystem.</P>
+<P>The message sent to the client is XDR-encoded. It has two main parts: an
+event record and the system state. The event record has an event code and
+either a device number (for an <VAR>MCE_INSERTION</VAR>, <VAR>MCE_EJECTION</VAR>, or <VAR>MCE_REFORMAT</VAR> event) or a volume number (for <VAR>MCE_MOUNT</VAR> or <VAR>MCE_DISMOUNT</VAR>). The system state is a list of all devices, all partitions, and all volumes
+known to mediad, along with a variety of attributes about each.</P>
+<H4>FSDMonitor</H4>
+<P>The <B>FSDMonitor</B> is not yet implemented. It will monitor <KBD>/etc/fsd.auto</KBD> for changes using fam, and it will update mediad's state appropriately.
+I'm not sure how it will work yet.</P>
+<H3>DSOs</H3>
+<H4>Device DSOs</H4>
+<P>This section to be written. Ought to describe what the DSOs do in detail,
+as they are <A HREF="#DSOs">above</A>.</P>
+<H4>Format DSOs</H4>
+<P>Ditto.</P>
+<H2>Compact Discs</H2>
+<P>This section to be written. CDs are ugly, and our CD support is ugly too.</P>
+<H3>Invocation</H3>
+<P>Mediad can be invoked several different ways. The executable figures out
+how it was invoked and does the right thing.</P>
+<P>Normally, mediad is started at boot time from <KBD>/etc/init.d/mediad</KBD>. In this mode, it scans the system for monitorable devices and, if it finds
+any, sits and monitors them.</P>
+<P>Mediad may also be invoked by <CITE>inetd(1M)</CITE>, in response to a monitor client's attempt to connect. In this case, mediad
+tries to forward the connection to the real mediad, and if it can't, it
+replies that there are no removable devices.</P>
+<P>Mediad is also linked to the <KBD>eject</KBD> command. When invoked as eject, mediad tries to send an eject message to
+the real mediad, using the CompatClient interface. If there is no other
+mediad running, mediad probes the specific device requested, finds its DeviceDSO,
+and tells the DeviceDSO to eject the medium. This has the advantage that
+the same code is executed whether or not mediad is running, and eject is
+automatically extended to new devices when mediad is.</P>
+<P>Mediad can be invoked from the command line with a variety of options. Some
+of the more common ones are:</P>
+<UL>
+<LI><KBD>mediad -k</KBD>
+<LI><KBD>mediad -f</KBD>
+<LI><KBD>mediad -l N</KBD>
+<LI><KBD>mediad -p /dev/<I>&lt;whatever&gt;</I> <I>&lt;mountpoint&gt;</I></KBD>
+<LI><KBD>mediad -r /dev/<I>&lt;whatever&gt;</I></KBD>
+</UL>
+<H2>Exclusive Use</H2>
+<P>This section is to be written. Briefly, the exclusive use problem has been
+solved, by changing all the clients that use it. Icons should be live all
+the time. (It's not tested yet.) </P>
+</BODY>
+</HTML>

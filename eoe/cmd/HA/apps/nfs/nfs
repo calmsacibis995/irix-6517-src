@@ -1,0 +1,240 @@
+#! /sbin/sh
+#ident "$Revision: 1.8 $"
+#
+# installed as /var/ha/resources/interfaces
+#
+# Exit codes:
+#	1: This script called illegally
+#	2: Configuration file is incorrect
+#	3: Command exited with non-zero return code
+#
+
+HA_DIR=/var/ha/actions
+if [ X$TESTING = Xok ]; then
+    echo "Executing nfs script"
+fi
+CONF=$HA_DIR/common.vars
+
+# Source in common variables
+. $CONF
+
+if [ $# -ne 2 ]; then
+    ${LOGGER} "Illegal syntax: checksum and argument required"
+    ${LOGGER} "Usage: $0 <checksum> <argument>"
+    exit 1;
+fi
+
+#
+# Verify that argument #2 is one of a well-defined set.
+#
+if [ $2 != "giveback" -a $2 != "takeback" -a $2 != "takeover" -a $2 != "giveaway" ]; then
+    ${LOGGER} "Illegal argument: must be giveback, giveaway, takeback, or takeover"
+    ${LOGGER} "Usage: $0 <checksum> <argument>"
+    exit 1;
+fi
+
+#
+# Checksum our take on config file with that known by the node controller/appmon
+#
+CNF_CHKSUM=$1
+CHKSUM=`$CFG_SUM`
+if [ $CNF_CHKSUM != $CHKSUM ]; then
+    ${LOGGER} "Checksum mismatch [argument: $CNF_CHKSUM] [file: $CHKSUM]"
+    exit 1;
+fi
+HOST=`hostname`
+
+
+print_err()
+{
+    if [ $1 -ne 0 ]; then
+	${LOGGER} "ERROR: $2"
+	exit 3;
+    else
+	if [ X${TESTING} = Xok ]; then
+	    echo $2
+	fi
+    fi
+}
+
+
+#
+# Remember that the old interface name must not exist when we do this.
+# Unexportfs any filesystem for which we are secondary.
+#
+giveback()
+{
+    for i in `$CFG_INFO ${T_NFS}`
+    do
+	SEARCH="$CFG_INFO ${T_NFS}${CFG_SEP}${i}${CFG_SEP}${T_FILESYSTEM}"
+	FILESYSTEM=`$SEARCH`
+	if [ $? -eq 1 ]; then
+	    ${LOGGER} "$0: Trouble finding local filesystem for nfs filesystem ($SEARCH)"
+	    exit 2;
+	fi
+
+	SEARCH="$CFG_INFO ${T_FILESYSTEM}${CFG_SEP}${FILESYSTEM}${CFG_SEP}${T_BACKUP}"
+	BACKUP_NODE=`$SEARCH`
+	if [ $? -eq 1 ]; then
+	    ${LOGGER} "$0: Trouble finding backup node for local filesystem ($SEARCH)"
+	    exit 2;
+	fi
+
+	SEARCH="$CFG_INFO ${T_NFS}${CFG_SEP}${i}${CFG_SEP}${T_EXPORTPT}"
+	EXPORT_PT=`$SEARCH`
+	if [ $? -eq 1 ]; then
+	    ${LOGGER} "$0: Trouble finding export-point for nfs filesystem ($SEARCH)"
+	    exit 2;
+	fi
+
+	# If I am the secondary for this mount point
+	if [ $BACKUP_NODE = $HOST ]; then
+	    EXEC="exportfs -u $EXPORT_PT"; `$EXEC`
+	    print_err $? "$EXEC"
+	fi
+    done
+}	# giveback()
+
+
+#
+# Remember that the old interface name must not exist when we do this.
+# Unexportfs any filesystem for which we are primary.
+#
+giveaway()
+{
+    for i in `$CFG_INFO ${T_NFS}`
+    do
+	SEARCH="$CFG_INFO ${T_NFS}${CFG_SEP}${i}${CFG_SEP}${T_FILESYSTEM}"
+	FILESYSTEM=`$SEARCH`
+	if [ $? -eq 1 ]; then
+	    ${LOGGER} "$0: Trouble finding local filesystem for nfs filesystem ($SEARCH)"
+	    exit 2;
+	fi
+
+	SEARCH="$CFG_INFO ${T_FILESYSTEM}${CFG_SEP}${FILESYSTEM}${CFG_SEP}${T_SERVER}"
+	SERVER_NODE=`$SEARCH`
+	if [ $? -eq 1 ]; then
+	    ${LOGGER} "$0: Trouble finding server node for local filesystem ($SEARCH)"
+	    exit 2;
+	fi
+
+	SEARCH="$CFG_INFO ${T_NFS}${CFG_SEP}${i}${CFG_SEP}${T_EXPORTPT}"
+	EXPORT_PT=`$SEARCH`
+	if [ $? -eq 1 ]; then
+	    ${LOGGER} "$0: Trouble finding export-point for nfs filesystem ($SEARCH)"
+	    exit 2;
+	fi
+
+	# If I am the secondary for this mount point
+	if [ X${SERVER_NODE} = X${HOST} ]; then
+	    EXEC="exportfs -u $EXPORT_PT"; `$EXEC`
+	    print_err $? "$EXEC"
+	fi
+    done
+}	# giveaway()
+
+
+#
+# Takeover
+#
+# Remember that the old interface name must not exist when we do this.
+# Unexport and unmount any filesystem for which we are secondary.
+#
+# should be sorted   XXXmiken
+#
+takeover() {
+    for i in `$CFG_INFO ${T_NFS}`
+    do
+	SEARCH="$CFG_INFO ${T_NFS}${CFG_SEP}${i}${CFG_SEP}${T_FILESYSTEM}"
+	FILESYSTEM=`$SEARCH`
+	if [ $? -eq 1 ]; then
+	    ${LOGGER} "$0: Trouble finding local filesystem for nfs filesystem ($SEARCH)"
+	    exit 2;
+	fi
+
+	SEARCH="$CFG_INFO ${T_FILESYSTEM}${CFG_SEP}${FILESYSTEM}${CFG_SEP}${T_BACKUP}"
+	BACKUP_NODE=`$SEARCH`
+	if [ $? -eq 1 ]; then
+	    ${LOGGER} "$0: Trouble finding backup node for local filesystem ($SEARCH)"
+	    exit 2;
+	fi
+
+	SEARCH="$CFG_INFO ${T_NFS}${CFG_SEP}${i}${CFG_SEP}${T_EXPORTPT}"
+	EXPORT_PT=`$SEARCH`
+	if [ $? -eq 1 ]; then
+	    ${LOGGER} "$0: Trouble finding export-point for nfs filesystem ($SEARCH)"
+	    exit 2;
+	fi
+
+	SEARCH="$CFG_INFO ${T_NFS}${CFG_SEP}${i}${CFG_SEP}${T_EXPORT}"
+	EXPORT_OPTIONS=`$SEARCH`
+	if [ $? -eq 1 ]; then
+	    ${LOGGER} "$0: Trouble finding export options for nfs filesystem ($SEARCH)"
+	    exit 2;
+	fi
+
+	# If I am the secondary for this mount point
+	if [ X${BACKUP_NODE} = X${HOST} ]; then
+	    EXEC="exportfs -i -o ${EXPORT_OPTIONS} ${EXPORT_PT}"; `$EXEC`
+	    print_err $? "$EXEC"
+	fi
+    done
+}	# takeover()
+
+
+# Remember that the old interface name must not exist when we do this.
+# Unexport and unmount any filesystem for which we are secondary.
+#
+# should be sorted
+#
+takeback() {
+    for i in `$CFG_INFO ${T_NFS}`
+    do
+	SEARCH="$CFG_INFO ${T_NFS}${CFG_SEP}${i}${CFG_SEP}${T_FILESYSTEM}"
+	FILESYSTEM=`$SEARCH`
+	if [ $? -eq 1 ]; then
+	    ${LOGGER} "$0: Trouble finding local filesystem for nfs filesystem ($SEARCH)"
+	    exit 2;
+	fi
+
+	SEARCH="$CFG_INFO ${T_FILESYSTEM}${CFG_SEP}${FILESYSTEM}${CFG_SEP}${T_SERVER}"
+	SERVER_NODE=`$SEARCH`
+	if [ $? -eq 1 ]; then
+	    ${LOGGER} "$0: Trouble finding server-node for nfs filesystem ($SEARCH)"
+	    exit 2;
+	fi
+
+	SEARCH="$CFG_INFO ${T_NFS}${CFG_SEP}${i}${CFG_SEP}${T_EXPORTPT}"
+	EXPORT_PT=`$SEARCH`
+	if [ $? -eq 1 ]; then
+	    ${LOGGER} "$0: Trouble finding export-point for nfs filesystem ($SEARCH)"
+	    exit 2;
+	fi
+
+	SEARCH="$CFG_INFO ${T_NFS}${CFG_SEP}${i}${CFG_SEP}${T_EXPORT}"
+	EXPORT_OPTIONS=`$SEARCH`
+	if [ $? -eq 1 ]; then
+	    ${LOGGER} "$0: Trouble finding export options for nfs filesystem ($SEARCH)"
+	    exit 2;
+	fi
+
+	# If I am the secondary for this mount point
+	if [ X${SERVER_NODE} = X${HOST} ]; then
+	    EXEC="exportfs -i -o ${EXPORT_OPTIONS} ${EXPORT_PT}"; `$EXEC`
+	    print_err $? "$EXEC"
+        fi
+    done
+}	# takeback()
+
+
+# main()
+if [ $2 = "giveback" ]; then
+	giveback;
+elif [ $2 = "takeover" ]; then
+	takeover;
+elif [ $2 = "takeback" ]; then
+	takeback;
+elif [ $2 = "giveaway" ]; then
+	giveaway;
+fi
+

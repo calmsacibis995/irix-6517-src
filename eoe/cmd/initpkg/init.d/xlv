@@ -1,0 +1,137 @@
+#! /sbin/sh
+#Tag 0x00000f00
+
+# XLV control
+# "$Revision: 1.26 $"
+
+always=true
+revive_opt=""
+
+startup_xlv ()
+{
+	#
+	# Get user-supplied command arguments.
+	#
+	2>/dev/null read xlv_labd_opt < /etc/config/xlv_labd.options
+	2>/dev/null read assemble_opt < /etc/config/xlv_assemble.options
+	2>/dev/null read xlv_plexd_opt < /etc/config/xlv_plexd.options
+
+	#
+	# Get the local nodename directly from the
+	# /etc/sys_id file. Cannot use hostname(1)
+	# because the system name may not be set yet.
+	#
+	if [ -f /etc/sys_id ] ; then
+		read name < /etc/sys_id
+		name=${name%%.*}
+	else
+		name="IRIS"
+	fi
+
+	if /sbin/chkconfig verbose ; then
+		echo "Starting XLV:"
+		assemble_opt="$assemble_opt -t"
+		xlv_labd_opt="$xlv_labd_opt -v"
+	else
+		assemble_opt="$assemble_opt -q"
+	fi
+
+	# Start the plex revive daemon with a max of 4
+	# concurrent revives. This daemon needs to be
+	# started before any mirrored volumes are assembled.
+	#
+	if [ -x /sbin/xlv_plexd ]
+	then
+		if [ "$always" = "true" ] ; then
+			killall xlv_plexd > /dev/null 2>&1
+			/sbin/suattr -C CAP_DEVICE_MGT+ip -c "/sbin/xlv_plexd -m 4 -w 1 $xlv_plexd_opt"
+		else
+			ps -ef | grep -v grep | grep xlv_plexd > /dev/null 2>&1
+			if [ $? != 0 ] ; then
+				/sbin/suattr -C CAP_DEVICE_MGT+ip -c "/sbin/xlv_plexd -m 4 -w 1 $xlv_plexd_opt"
+			fi
+		fi
+	fi
+
+
+	# Set the geometry of the logical volume.
+	#
+	/sbin/suattr -C CAP_DEVICE_MGT+ip -c "/sbin/xlv_assemble -h $name $revive_opt $assemble_opt"
+
+	# Make sure that any configuration files written by xlv_assemble
+	# are written to disk.
+	/sbin/sync
+
+	# Start the label daemon. Note that we start it
+	# after running xlv_assemble because xlv_labd
+	# will only hang around if there are logical volumes.
+	#
+	if [ -x /sbin/xlv_labd ]
+	then
+		# The label daemon could have been automatically
+		# started by xlv_assemble when it kicked off revives.
+		#
+		if [ ! -p /etc/.xlv_labd_fifo ] ; then
+			/sbin/suattr -C CAP_SCHED_MGT,CAP_MEMORY_MGT,CAP_DEVICE_MGT+ip -c "/sbin/xlv_labd $xlv_labd_opt"
+		fi
+	fi
+}
+
+
+#
+# M a i n
+#
+
+case $1 in
+'init')
+	#
+	# init process
+	#
+	# Remove cruft from the last time system
+	# was restarted.
+	#
+	rm -rf /etc/.xlv_plexd_request_fifo > /dev/null 2>&1
+	rm -rf /etc/.xlv_labd_fifo > /dev/null 2>&1
+	rm -rf /dev/xlv > /dev/null 2>&1
+	rm -rf /dev/rxlv > /dev/null 2>&1
+
+	#
+	# During the "init" phase, xlv_assemble must be
+	# doing a full revive. This allows root volume
+	# to be made consistent.
+	#
+	revive_opt="-f"
+
+	startup_xlv
+	;;
+
+'start')
+	#
+	# (Re)Start operation
+	#
+	# Set $always to "false" because we don't want to
+	# start xlv daemons multiple times.
+	#
+	always=false
+
+	startup_xlv
+	;;
+
+'stop')
+	#
+	# Shutdown operation
+	#
+	if /sbin/chkconfig verbose ; then
+		echo "Shutting down XLV:"
+	fi
+	# /sbin/suattr -C CAP_DEVICE_MGT+ip -c "/sbin/xlv_shutdown"
+
+	# Stop the label daemon
+	killall xlv_plexd > /dev/null 2>&1
+	killall xlv_labd > /dev/null 2>&1
+	;;
+
+*)
+	echo "usage: /etc/init.d/xlv {init|start|stop}"
+	;;
+esac

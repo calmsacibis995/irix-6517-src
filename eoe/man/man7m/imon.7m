@@ -1,0 +1,121 @@
+'\"macro stdmacro
+.if n .pH ts
+.nr X
+.if \nX=0 .ds x} IMON 7M "" "\&"
+.if \nX=1 .ds x} IMON 7M ""
+.if \nX=2 .ds x} IMON 7M "" "\&"
+.if \nX=3 .ds x} IMON "" "" "\&"
+.TH \*(x}
+.SH NAME
+imon \- inode monitor device
+.SH SYNOPSIS
+.B "#include <sys/imon.h>"
+.br
+.B /dev/imon
+.br
+.SH DESCRIPTION
+The inode monitor driver is a pseudo device driver which enables a user
+level program to monitor filesystem activity on a file by file basis.
+The application program expresses interest in specific files by means of an
+.I ioctl
+request that specifies the pathname of the file and an indication of
+what types of events are to be monitored.
+As various actions take place on a file in which interest has
+been expressed, \f2imon\fP posts events through a queue that
+may be read via the
+.I read
+system call.
+.SS "Events"
+Calls to \f2read\fP return an integral number of imon queue elements.  Each
+queue element has the structure given below.
+.sp
+.nf
+typedef struct {
+	ino_t		qe_inode;	 /* inode number of file  */
+	dev_t		qe_dev;		 /* device of file  */
+	intmask_t	qe_what;	 /* what events occurred  */
+	} qelem_t;
+.fi
+.sp
+The \f3qe_inode\fP is a key that uniquely describes every file within
+a filesystem and matches the \f3st_ino\fP
+field of the file's \f2stat\fP structure
+(see
+.IR stat (4)
+).  The \f3qe_dev\fP field similarly matches the st_dev field of the file's
+\f2stat\fP structure.  These two fields together uniquely describe a
+file in the system.  The third field, \f3qe_what\fP, contains a bit-mask
+describing what event or events took place on that file.  The possible
+events are:
+.TP 15m
+\f3IMON_CONTENT\fP
+The contents or size of the file have changed.  This is typically caused
+by a \f2write\fP(2) call made by some process.
+.TP 15m
+\f3IMON_ATTRIBUTE\fP
+The mode or ownership have changed on the file.  This is typically caused
+by a \f2chown\fP(2) or \f2chmod\fP(2) system call.
+.TP 15m
+\f3IMON_DELETE\fP
+The last link to the file has gone away.  When this event is sent, all
+interest in the file is implicitly revoked.  Note that if a process has
+the file open when it is removed from the directory structure,
+this event will not be generated until the file is closed.
+.TP 15m
+\f3IMON_EXEC\fP
+The file represents an executable command
+and a process has started executing that command.  If multiple instances
+of the same command are subsequently started, an event is not generated.
+Therefore, the \f3IMON_EXEC\fP event only means that at least one process
+is executing from that file.
+When an interpreted executable (see\f2execve\fP(2)) is executed,
+then IMON_EXEC events are generated both for the interpreted script
+and for the interpreter.
+.TP 15m
+\f3IMON_EXIT\fP
+The last process executing the file has exited.
+.TP 15m
+\f3IMON_OVER\fP
+The \f2imon\fP event queue has overflowed.  When this occurs, the
+client process must re-express interest in each file to determine its
+true state.
+.SS Controls
+The following structure is used by the \f3IMONIOC_EXPRESS\fP and
+\f3IMONIOC_REVOKE\fP controls described below.
+.sp
+.nf
+typedef struct {
+	char *		in_fname;	 /* pathname */
+	struct stat *	in_sb;		 /* optional status return buffer */
+	intmask_t	in_what;	 /* what types of events to send  */
+	} interest_t;
+.fi
+.TP 15m
+\f3IMONIOC_EXPRESS\fP
+Express interest in the file whose name is given in \f3in_fname\fP.
+If \f3in_fname\fP represents a symbolic link, the action takes place
+on the link itself, not the file to which it points.  Only
+events in the bit-mask \f3in_what\fP will be generated.  The \f3in_sb\fP
+field optionally points to a \f2stat\fP(4) buffer that will be filled in
+with the current state of the file.  This allows the \f2imon\fP client
+to atomicly express interest and get the current state of a file.
+Multiple calls may be made on the same file and have a cumulative effect.
+.TP 15m
+\f3IMONIOC_REVOKE\fP
+Revoke interest in the file whose name is given by \f3in_fname\fP.  The
+\f3in_what\fP field is used to determine which interests will be revoked.
+As with \f3IMONIOC_EXPRESS\fP,
+multiple calls may be made on the same file and have a cumulative effect.
+.TP 15m
+\f3IMONIOC_QTEST\fP
+Returns the number of events waiting to be read in the event queue.
+.SH BUGS
+Files in an NFS mounted filesystem will only generate
+events for things that happen as a result of local activity; changes
+made remotely on the NFS server will not be seen through \f2imon\fP.
+.SH CAVEATS
+The \f2imon\fP driver is intended to be used only by the file access
+monitoring daemon (fam) and the interface is likely to change in future
+releases.  Client programs should communicate with fam for monitoring
+services, not with \f2imon\fP directly.
+'\".so /pubs/tools/origin.sgi

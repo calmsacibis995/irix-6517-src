@@ -1,0 +1,417 @@
+.TH bootp 1M "January 12, 1987"
+.SH NAME
+bootp \- server for Internet Bootstrap Protocol
+.SH SYNOPSIS
+.nf
+\f3/usr/etc/bootp\f1 [ \f3\-d\f1 ] [ \f3\-f\f1 ]
+.fi
+.SH DESCRIPTION
+.I bootp
+is a server that supports the Internet Bootstrap
+Protocol (BOOTP).
+This protocol
+is designed to allow a (possibly diskless)
+client machine to determine its own Internet address,
+the address of a boot server, and the name of an
+appropriate boot file to be loaded and executed.
+BOOTP does not provide the actual transfer of the
+boot file,
+which is typically done with a simple file transfer
+protocol such as TFTP.
+A detailed protocol specification for BOOTP
+is contained in RFC 951,
+which is available from the Network Information Center.
+.PP
+The BOOTP protocol uses UDP/IP as its transport mechanism.
+The BOOTP server receives service requests
+at the UDP port indicated in the ``bootp'' service description
+contained in the file
+.I /etc/services
+(see
+.IR services (4)).
+The BOOTP server is started by
+.IR inetd (1M) ,
+as configured in the
+.I inetd.conf
+file.
+.PP
+The basic operation of the BOOTP protocol is
+a single packet exchange as follows:
+.IP 1. 4n
+The booting client machine broadcasts a BOOTP request packet to the
+BOOTP server UDP port, using
+a UDP broadcast or the equivalent thereof.
+The request packet includes the following information:
+.RS
+.sp .8v
+.nf
+requester's network hardware address
+requester's Internet address (optional)
+desired server's name (optional)
+boot filename (optional)
+.fi
+.RE
+.IP 2. 4n
+All the BOOTP
+servers on the same network as the client machine receive
+the client's request.
+If the client has specified a particular
+server, then only that server responds.
+.IP 3. 4n
+The server looks up the requester in its configuration file
+by Internet address or network hardware address, in that
+order of preference.
+(The BOOTP configuration file is described below.)
+If the Internet address was not specified by the
+requester and a configuration
+record is not found, the server looks
+in the
+.I /etc/ethers
+file (see
+.IR ethers (4))
+for an entry with the client's network hardware address.
+If an entry is found, the server checks the hostname
+of that entry against the
+.I /etc/hosts
+file (see
+.IR hosts (4))
+in order to complete the network hardware address to
+Internet address mapping.
+If the BOOTP request does not include the client's
+Internet address and the server is unable to translate
+the client's network hardware address into an Internet address
+by either of the two methods described,
+the server does not respond to the request.
+.IP 4. 4n
+The server performs name translation on the boot filename
+requested and then checks for the
+presence of that file.
+If the file is present, then the server sends a response
+packet to the requester that includes the following information:
+.RS
+.sp .8v
+.nf
+requester's Internet address
+server's Internet address
+Internet address of a gateway to the server
+server's name
+vendor-specific information (not defined by the protocol)
+.fi
+.RE
+.IP
+If the boot file is missing, the server returns a response
+packet with a null filename but only if the request was specifically
+directed to that server.
+The pathname translation is:
+if the boot filename is rooted, use it as is; else concatenate
+the root of the boot subtree, as specified
+by the BOOTP configuration file, followed by the filename supplied
+by the requester, followed by a period and the requester's
+hostname.
+If that file is not present, remove the trailing period
+and hostname and try again.
+If no boot filename is requested, use the default boot file
+for that host from the configuration table.
+If there is no default specified for that host, use the general
+default boot filename, first with
+.I .hostname
+as a suffix and then without.
+Note that
+.IR tftpd (1M)
+must be configured to allow access to the boot file (see the
+.IR tftpd (1M)
+reference page for details).
+.SS Options
+The \f3\-d\fP option causes
+.I bootp
+to generate debugging messages.
+All messages from
+.I bootp
+go through
+.IR syslogd (1M),
+the system logging daemon.
+.PP
+The \f3\-f\fP option enables the forwarding
+function of
+.IR bootp .
+Refer to the following section, ``Booting through
+Gateways,'' for an explanation.
+.SS "Bootp Configuration File"
+In order to perform its name translation and address
+resolution functions,
+.I bootp
+requires configuration information
+that it gets from an ASCII file called
+.I /usr/etc/bootptab
+and from other system configuration files like
+.I /etc/ethers
+and
+.IR /etc/hosts .
+Here is a sample
+.I bootptab
+file:
+.Ex
+# /usr/etc/bootptab:  database for bootp server
+#
+# Blank lines and lines beginning with '#' are ignored.
+#
+# Root of boot subtree:
+/usr/local/boot
+.sp .8v
+# Default bootfile:
+unix
+.sp .8v
+%%
+.sp .8v
+# The remainder of this file contains one line per client
+# interface with the information shown by the table headings
+# below. The 'host' name is also tried as a suffix for the
+# 'bootfile' when searching the boot directory.
+# (e.g., bootfile.host)
+#
+# host	htype	haddr		iaddr		bootfile
+.sp .8v
+IRIS	  1	01:02:03:8a:8b:8c	192.0.2.1		unix
+.Ee
+The fields of each line can be separated by variable
+amounts of white space (blanks and tabs).
+The first section, up to the line beginning \f3%%\f1, defines the
+place where
+.I bootp
+looks for boot files when the client requests a boot file using
+a nonrooted pathname.
+The second section of the file is used for mapping client network hardware
+addresses into Internet addresses.
+Up to 512 hosts can be specified.
+The
+.I htype
+field should always have a value of 1 for now; this
+indicates that the hardware address is a 48-bit Ethernet address.
+The
+.I haddr
+field is the Ethernet address of the system in question expressed
+as six hexadecimal bytes separated by colons.
+The
+.I iaddr
+field is the 32-bit Internet address of the system expressed in
+standard Internet dot notation (see
+.IR inetd (3N)).
+Each line in the second section can also specify a default boot
+file for each specific host.
+In the example above,
+if the host called
+.I unixbox
+makes a BOOTP request with no boot file specified, the server
+selects the first of the following that it finds:
+.Ex
+/usr/local/boot/unix.unixbox
+/usr/local/boot/unix
+.Ee
+The length of the boot filename must not exceed 127 characters.
+.PP
+It is not necessary to create a record for every potential client
+in the
+.I bootptab
+file.
+The only constraint is that
+.I bootp
+responds only
+to a request from a client if it can deduce the client's
+Internet address.
+There are three ways that this can happen:
+.sp .8v
+.PD 0
+.IP \(bu 3
+The client
+already knows its Internet address and includes it in the BOOTP
+request packet.
+.IP \(bu 3
+There is an entry in
+.I /usr/etc/bootptab
+that matches the client's network hardware address.
+.IP \(bu 3
+There are entries in the
+.I /etc/ethers
+and
+.I /etc/hosts
+files (or their NIS equivalents)
+that allow the client's network hardware address to be
+translated into an Internet address.
+.PD
+.SS "Booting through Gateways"
+Since the BOOTP request is distributed using a UDP broadcast,
+it is only received by other hosts on the
+same network as the client.
+In some cases the client may wish to boot from a host
+on another network.
+This can be accomplished by using the forwarding function
+of BOOTP servers on the local network.
+To use BOOTP forwarding, there must be a
+.I bootp
+process running in a gateway machine on the local network.
+A gateway machine is simply a machine
+with more than one network interface board.
+The gateway
+.I bootp
+must be invoked with the \f3\-f\fP option
+to activate forwarding.
+Such a forwarding
+.I bootp
+resends any BOOTP request
+it receives that asks for a specific host by name, if that
+host is on a different network from the client that sent
+the request.
+The BOOTP server forwards the packet using the full routing capabilities
+of the underlying IP layer in the kernel, so the forwarded
+packet is automatically routed to the requested
+BOOTP server if the kernel routing tables
+contain a route to the destination network.
+.SH DIAGNOSTICS
+The BOOTP server logs messages using the system logging daemon,
+.IR syslogd (1M).
+The actual disposition of these messages depends on the
+configuration of
+.I syslogd
+on the machine in question.
+Consult
+.IR syslogd (1M)
+for further information.
+.PP
+.I bootp
+can produce the following messages:
+.sp .8v
+.PD 0
+.TP
+\f7\'get interface config\' ioctl failed (\f2message\f7)\f1
+.TP
+\f7\'get interface netmask\' ioctl failed (\f2message\f7)\f1
+.TP
+\f7getsockname failed (\f2message\f7)\f1
+.TP
+\f7forwarding failed (\f2message\f7)\f1
+.TP
+\f7send failed (\f2message\f7)\f1
+.TP
+\f7set arp ioctl failed\f1
+Each of the above messages means that a system call
+has returned an error unexpectedly.
+Such errors usually cause
+.I bootp
+to terminate.
+The
+.I message
+is the appropriate standard system error message.
+.PD
+.TP
+\f7less than two interfaces, \-f flag ignored\f1
+Warning only (debug mode).
+Means that the \f3\-f\fP option was specified
+on a machine that is not a gateway.
+Forwarding only works on gateways.
+.TP
+\f7request for unknown host \f2xxx\f7 from \f2yyy\f1
+Information only.
+A BOOTP request was received asking for host
+.IR xxx ,
+but that host is not in the host database.
+The request was generated by
+.IR yyy ,
+which can be given as a hostname or
+an Internet address.
+.TP
+\f7request from \f2xxx\f7 for 'fff'\f1
+Information only.
+.I bootp
+logs each request for a boot file.
+The host
+.I xxx
+has requested boot file
+.IR fff .
+.TP
+\f7can't access boot file fff (\f2message\f7)\f1
+A request has been received for the boot file
+.IR fff ,
+but that file is not accessible.
+.TP
+\f7reply boot filename fff too long\f1
+The filename length
+.I fff
+exceeds the BOOTP protocol limit of 127 characters.
+.TP
+\f7reply boot file fff\f1
+Information only.
+.I bootp
+has selected the file
+.I fff
+as the boot file to satisfy a request.
+.TP
+\f7can't reply to dd.dd.dd.dd (unknown net)\f1
+This
+.I bootp
+has generated a response to a client
+and is trying to send the response directly
+to the client (that is, the request did
+not get forwarded by another
+.IR bootp ),
+but none of the network interfaces on this
+machine is on the same directly connected network as the client
+machine.
+.TP
+\f7reply: can't find net for dd.dd.dd.dd\f1
+The server is acting as BOOTP forwarder and
+has received a datagram
+with a client address that is not on a directly connected network.
+.TP
+\f7can't open /usr/etc/bootptab\f1
+The
+.I bootp
+configuration file is missing or has wrong permissions.
+.TP
+\f7(re)reading /usr/etc/bootptab\f1
+Information only.
+.I bootp
+checks the modification date of the configuration
+file on the receipt of each request and rereads
+it if it has been modified since the last time it was read.
+.TP
+\f7bad hex address: \f2xxx\f1\f7 at line \f2nnn\f1\f7 of bootptab\f1
+.PD 0
+.TP
+\f7bad internet address: \f2sss\f1\f7 at line \f2nnn\f1\f7 of bootptab\f1
+.TP
+\f7string truncated: \f2sss\f1\f7, on line \f2nnn\f1\f7 of bootptab\f1
+These messages mean that the format of the
+BOOTP configuration file is not valid.
+.PD
+.TP
+\f7\'hosts\' table length exceeded\f1
+There are too many lines in the second section of the BOOTP
+configuration file.
+The current limit is 512.
+.TP
+\f7can't allocate memory\f1
+A call to
+.IR malloc (3C)
+failed.
+.TP
+\f7gethostbyname(\f2sss\f7) failed (\f2message\f7)\f1
+A call to
+.IR gethostbyname (3N)
+with the argument
+.I sss
+has failed.
+.TP
+\f7gethostbyaddr(\f2dd.dd.dd.dd\f7) failed (\f2message\f7)\f1
+A call to
+.IR gethostbyaddr (3N)
+with the argument
+.I dd.dd.dd.dd
+has failed.
+.SH "SEE ALSO"
+inetd(1M),
+rarpd(1M),
+syslogd(1M),
+tftpd(1M),
+ethers(4),
+hosts(4),
+services(4).

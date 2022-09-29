@@ -1,0 +1,1277 @@
+
+		Everest IP19 PROM release 7 notes
+		---------------------------------
+
+Version 1.4
+
+	Please send comments to Steve Whitney, stever@wpd, x1525
+
+-----------------------------------------------------------------------------
+
+Contents:
+
+	* Summary of the Power-on Process
+
+	* The System Controller Debug Switches (contains new debug switches)
+
+	* POD mode (contains two new rev 7 prom commands)
+
+	* Niblet
+
+	* PROM LEDs (NOW IN BINARY! plus some changes)
+
+	* PROM Diagnostic Messages (new messages and their diagnostic codes
+				    have been added)
+
+	* PROM System Controller Messages (now contains error messages)
+
+	* Hints
+
+-----------------------------------------------------------------------------
+
+MAJOR CHANGES
+
+	NEW IN REV 6:
+
+	Plugging this prom in and loading an appropriate flash rom and
+	kernel will move your serial console from the leftmost DB-9
+	connector on the filter board to the rightmost!  Be sure to use
+	an up-to-date kernel and IO4 PROM version 0.93 or higher.
+	
+	A workaround for a new A3 bug is enabled in this prom.
+
+	Memory configuration handles broken banks now.  If a bank fails
+	to respond after it has been configured in, we reconfigure memory
+	without it.
+
+	The system controller now displays much more helpful messages for
+	error conditions.
+
+	Three new debug switches are available.  (See the System Controller
+	section).
+
+	Processor type is stored correctly by the prom.
+
+	NEW IN REV 7:
+
+	DISABLED PROCESSORS NOW FLASH ALL 6 LEDS
+
+	Completely new memory configuration algorithm handles three
+	board situations properly and interleaves different SIMM types with the
+	same size together
+
+	Fixed the NO_DIAGS won't boot Unix bug.
+
+	Fixed the "fail to detect broken scaches" bug
+
+	Fixed ECC disabling bug
+
+	Removed the A chip rev 3 workaround
+
+	Hard disable bad CPUs unless the NO_DIAGS debug switch is set
+
+	Handle more bytes of debug switch info from the system controller
+
+	Fixed a bug in flash_leds
+
+	Fixed bus tag testing for four megabyte secondary caches and improved
+	bus tag failure diagnostic information.
+
+	Fixed a manufacturing mode debug switch bug.
+
+	NEW IN REV 10:
+
+	Rearbitration when the master CPU fails now works!
+
+	There are now basic IO diagnostics.
+
+	Cool new scrolling messages on failures.
+
+-----------------------------------------------------------------------------
+
+			Power-on Summary
+			----------------
+
+In this document, I will present some basic user's information about the
+IP19 prom as well as some insight as to what's going on under the hood.
+We'll start with a brief description of the events that transpire after
+you turn on the keyswitch or press reset.
+
+At this point, the only way you can tell what a processor is doing is via the
+six LEDs it has on the edge of the processor card.  Each processor "slice"
+of the IP19 board has its own independently-controlled LEDs which represent
+its status.  At reset, all LEDs are on.  After that, the CPU sets them to
+various other values.
+
+			Per Processor Tests
+			-------------------
+
+First, each processor goes through some really basic processor initialization-
+clearing registers, cache tags, etc.  After that, it begins to run very simple
+power-on diagnostics to check out its local ASICs (CC chip, A chip).  If any
+of these tests fail in a detectable way (i.e. not a hang), the processor will
+flash a pattern on its LEDs.
+
+After testing its ASICs, the processor attempts to access the Everest bus
+by sending interrupts to itself.  Even looped-back interrupts go out to the
+bus.  Again, failure results in flashing LEDs.
+
+After we have checked out our local ASICs and the interrupt channels, we
+have everything necessary to arbitrate for bootmaster.  Only one processor
+can initialize the shared system resources such as memory and IO boards so
+we elect a "boot master."
+
+Boot master selection is based on a time delay scaled by the slot number
+a processor number is in and also by its slice.  It works in such a way that
+the active processor in the lowest numbered slice of the lowest numbered
+slot becomes master.  For example, if there are processors in board 2 -
+slices 1 and 3 and board 4 - slices 0, 1, and 2, the processor in slot 2,
+slice 1 becomes boot master.
+
+If the master processor reads the NVRAM hardware inventory information and
+discovers that it is supposed to be disabled, it abdicates, allowing the next
+eligible processor to become master.  If the master is the last processor
+active, it will not abdicate unless it fails diagnostics.
+
+			Boot Master Code
+			----------------
+
+Next the boot master broadcasts an interrupt to all of the other processors
+telling them that they are slave processors (the slave code is described later).
+The master can then go on to configure the system.  The master starts
+initiates a protocol with the system controller to let it know which CPU is
+master.  The system controller can only communicate with one processor at a
+time so we cannot send any messages to it until it knows where the master is.
+
+Now, we test the primary data cache and use it as a stack to run C code.
+Without a stack, we can only use the processor's registers for data storage
+so nested procedure calls and manipulation of complicated data (e.g. memory
+configuration) is very difficult.  A failure here causes boot master
+rearbitration.
+
+The first global resource the master must configure is the system console,
+one of the serial ports on the IO4 board.  In order to do this, it must
+choose a master IO4 board.  The master IO4 is always the IO board in the
+highest numbered slot (unless the "use second IO4 switch is set").  We run
+the IA/ID chip tests, check this board for a working EPC chip, check the
+integrity of the NVRAM (to get the baud rate and enable/disable information),
+initialize the console there, and print our header message.  The IP19 prom
+is smart enough to re-enable the last CPU if all are disabled or re-enable
+all memory banks if fewer than 32 megabytes of RAM are enabled.
+
+Next we initialize the "evconfig" structure.  Evconfig contains information
+about what's in each EBus slot, the state of these things, and whether or
+not they are enabled.  A user may set an NVRAM variable which will disable
+one or more system resources (currently a memory bank or processor).
+This can be done from POD or the IO4 prom command monitor via the enable and
+disable commands.  The POD versions only change the RAM settings while the
+IO4 prom versions actually set the NVRAM.
+
+After locating and configuring the master IO4 board, we're ready to set up
+memory.  The prom records the amount of memory in each bank of all available
+memory boards in the system and performs a memory configuration algorithm.
+It groups together banks of each size and attempts to interleave the
+memory to improve performance.  In order to make performance uniform
+across all system memory, the prom uses the highest interleave factor
+that will allow it to configure all banks uniformly.
+
+There is a poorly tested NVRAM variable called "fastmem" which tells the prom
+to try to interleave memory "optimally" rather than uniformly.  This may or
+may not improve performance, but if it does, it also makes performance less
+stable.  Multiple runs of the same code will be more likely to run at
+different speeds.  "Fastmem" can be set from the IO4 prom command monitor.
+
+Before configuring memory, the prom runs the memory board's built-in self-test,
+a.k.a. BIST, on all boards.  Banks that fail BIST are not included in the
+configuration.  BIST has the side-effect of zeroing memory and storing good ECC
+bits in it.  On older revisions of the MA chip (rev. 0), it is necessary to
+run the BIST, let it fail, reset the machine, and decline to run BIST.  The
+prom only presents the "BIST?" prompt on such machines.
+
+After configuring memory, the PROM runs several memory tests on the
+configured RAM.  Upon a memory failure, the PROM reconfigures memory
+without the affected banks.  This continues until all tests pass or there's
+no memory left to configure out.  If all memory is configured out in
+this way, there may be a problem with the master CPU.  Try again with the
+first CPU (or board) disabled - see fdisable/fenable commands in POD mode - 
+you wont' be able to get to the IO4 prom.
+
+Next, we test and initialize the CC chip's "bus tags," and write the
+evconfig structure out to memory.  At this point, we move our stack into
+uncached memory and continue testing the system.
+
+Now that the stack is no longer in the data cache, we can test the caches.
+Current IP19 proms run a single secondary cache test that tests the
+scache as a one megabyte RAM.  Future IO4 proms will test the tags
+independently and will test write-backs.  Future IO4 proms will also test
+the i-cache.
+
+Finally, we're ready to check on the slave processors.  We wait for
+them to finish their testing (or for a timeout) and display the results
+of the testing.   If the processors have not stored a result value, we
+assume that they cannot access memory.  If they hang in a particular test, we
+assume that that test failed.
+
+Processors that fail diagnostics are disabled, and we go on to load the
+IO4 prom.
+
+			SLAVE CODE
+			----------
+
+Until now, we have only discussed the role of the master processor.  The
+slave processors enter a loop where they wait for instructions from the
+master processor.  The first instruction they are given is a request to
+update their entries in evconfig.  The slaves store their processor type,
+cache size, speed, etc.  Next they start their power-on diagnostics updating
+their diagnostic result value, or "diagval," as they go.  The slaves
+currently run the same set of tests as the master: data cache, secondary
+cache, and bus tag tests.  Future versions will run the same set of tests
+mentioned for the master.
+
+Slaves can also be sent interrupts to launch them into a given piece of
+code.  This technique is used by the "niblet" tests (mentioned below) as
+well as by the IO4 prom to prepare slaves to run Unix.
+
+			FATAL FAILURES
+			--------------
+
+Upon fatal failures such as no enable memory or an IA chip test failure,
+the PROM scrolls a descriptive message across the system controller LCD
+display and displays a "disgnostic code."  These codes can be used to
+diagnose the problem in more depth than the message alone.  Upon IO failures,
+the CPU goes into POD mode on the CC UART.  On memory failures, the master
+CPU goes into POD mode.  Pressing Enter on the serial console clears the
+scrolling message and allow the user to type commands.
+
+The diagnostic codes are listed below.
+
+----------------------------------------------------------------------------
+
+			The Debug Switches
+			------------------
+
+The system controller has a mode, accessible only from "manager mode,"
+which allows the user to set a number of "virtual dipswitches."
+As of the December 17th release of the system controller firmware,
+there have are sixteen debug switches instead of eight.  The "lab settings"
+are the leftmost eight, and the "software" settings are the rightmost.
+The switches are numbered from the right starting from zero as shown:
+
+
+		f e d c b a 9 8 7 6 5 4 3 2 1 0
+
+The software switches work as follows:
+
+7
+The "Manu-mode" switch is used to send all IP19prom console output to
+the external UART on the system controller.  This mode will eventually
+be used in manufacturing to debug systems which can't reach the IO4 UART.
+In current PROMS, this switch also forces the POD mode switch since the
+IO4 prom doesn't use the system controller UART.
+
+6
+The "No boot master arbitration" switch keeps the system controller from
+selecting a processor with which to communicate.  This makes it possible
+to communicate with individual processors via the "CC UART" connectors on
+the edge of the IP19 boards.
+
+5
+The "POD mode" switch forces the IP19 prom to stop initialization just
+before it would have loaded the IO4 prom and jump to POD mode instead.
+This is useful on a system with a bad IO4 prom or a bad IO board.
+
+4
+The "No diagnostics" switch prevents the system from running power-on
+diagnostics.  This switch should only be used by software developers
+who are constantly bringing systems up and down.  Otherwise, it can
+mask failures and cause system damage.
+
+3
+In PROM release 6, this becomes the "use defaults" switch.  This switch
+will override the console baudrate setting and use 9600 instead.  It may
+also override certain other settings.  (Not implemented in PROM revision 4.)
+
+2
+In PROM release 6, this becomes the "don't clear memory" switch.  It's
+useful for debugging things like the machines that won't take an NMI.
+
+1
+In PROM release 6, this becomes the "boot from second IO4" switch.  If you
+have a machine with a bad flash ROM in the highest slot, simply move the
+console connection, flip this switch, and boot from the next IO4.
+
+0
+In PROM release 7, this becomes the debug switch.  So far, it is used only
+by the IO4 prom.
+
+-----------------------------------------------------------------------------
+
+			    POD Mode
+
+During bring-up and in the event of unexpected exceptions or diagnostic
+failures,  the PROM can drop into a special command interpreter.  This
+interface, known as the Power-On Diagnostics mode, or POD mode, provides a
+simple interface through which a user can examine and modify the state of
+the machine.  The commands provided by POD MODE are listed below.  All
+numerical inputs should be entered in hex and need not be prefixed with '0x'.
+
+The POD mode prompt is "POD xx/yy>" where xx is the slot number of the
+current processor, and yy is its "slice" on the IP19 board.
+
+Commands with an asterisk (*) are new to release 6 or 7.
+
+        wb ADDRESS VALUE
+        wh ADDRESS VALUE
+        ww ADDRESS VALUE
+        wd ADDRESS VALUE -- Write the value into a byte, half, word,
+                            or doubleword at the given address.
+                            Currently the values written must be 32-bit or
+                            smaller values.
+        db ADDRESS
+        dh ADDRESS
+        dw ADDRESS
+        dd ADDRESS       -- Display the contents of the byte, halfword, word,
+                            or doubleword at the given address.
+
+			NOTE: The display and write memory commands continue
+				to the next address by default.  To quit,
+				type a "q" and return instead of just
+				return.  Typing a period causes the read
+				or write to march on through memory on its
+				own.
+
+        wr REG VALUE     -- Write the given value into the register specified.
+	dr REG		 -- Display the value in the specified register.
+
+				Register names for read/write include:
+	
+				  sp: stack pointer
+				  sr: r4000 status register
+				  cause: r4000 cause register
+				  epc: Exception program counter
+				  eepc: error exception program counter
+				  config: r4000 config register
+				  wh: watchhi register
+				  wl: watchlo register
+				  
+				Registers that can only be displayed:
+
+				  all: all r4000 general purpose registers
+					and selected coprocessor 0 registers.
+				  rX: where 0 <= X <= 31
+
+				Please note that some of the general purpose
+				registers are not saved correctly in the
+				current version of the IP19prom.
+
+        dc SLOT REG      -- Displays the value of the specified Everest
+                            configuration register.
+	wc SLOT REG VAL	 -- Writes the value to the specified Everest config
+			    register.
+	j ADDRESS	 -- Jumps to the specified address
+	j1 ADDRESS PARM	 -- Jumps to the address passing the parameter supplied.
+	j2 ADDRESS...	 -- Jumps to the address passing two parameters.
+        info             -- Displays the slot and processor number of the
+                            processor and prints out a description of the
+                            system configuration (as provided by SenseConfig).
+        reset            -- Reset the system.
+        sload            -- Download Motorola S-record 3 code through the
+			    serial port.
+	srun		 -- Like sload but it runs too.
+        sloop (COMMAND)  -- Performs a 'scope loop of the following single
+			    command.  Sloop runs the specified command until a
+                            key is pressed.
+        loop TIMES (COMMAND)
+                         -- Performs a nonzero number of iterations of COMMAND,
+			    which can be any legal command line (semicolon
+			    separated).
+*       mem START END    -- Performs a memory test starting with address START.
+			    END is the first address not tested.  Now if
+			    you specify an address with the high bit unset,
+			    POD ors in 0xa0000000.  No more TLB misses.
+	scache ITER DE	 -- Performs ITER iterations of a basic secondary
+			    cache test with the r4000's DE bit set to the
+			    value provided.
+	dmc SLOT	 -- Displays the memory board configuration for
+			    the board in the specified slot
+	dio SLOT	 -- Displays the IO4 board configuration for
+			    the board in the specified slot
+*	devc SLOT | all	 -- Display the "evconfig" structure entry for this slot
+			    or all slots.  This structure contains what the
+			    prom believes to be in that slot and its current
+			    status.  Now, it also displays total memory
+			    and the current debug switch settings as well
+			    as strings explaining "diagvals" and prom
+			    revision numbers.
+	disable SLOT UNIT
+			 -- Disables UNIT of the board in SLOT (see enable).
+*	fdisable SLOT UNIT
+			 -- Forcibly disable a unit.  For CPUs, this means
+			    writing the A chip enable register.  For memory
+			    and IO adapters, it means removing the unit from
+			    the evconfig structure.
+	enable SLOT UNIT -- Enable UNIT of the board in SLOT specified.
+			    This command changes the "enable" field of the
+			    evconfig structure for the chosen unit.
+			    In future prom revisions, this will probably
+			    change the value in NVRAM.
+*	fenable SLOT UNIT
+			 -- Forcibly enable a unit.  For CPUs, this means
+			    writing the A chip enable register.  For memory
+			    and IO adapters, it means forcing the correct
+			    value to be stored in the evconfig structure.
+	reconf		 -- Reconfigures memory using the currently enabled
+			    banks.
+	bist		 -- Runs the memory Built-In Self-Test.
+*	ecc		 -- Decode the information in the Cache_error
+			    register after a cache error exception
+			    (This works again in rev 6.)
+	si SLOT CPU LVL  -- Send a level LVL interrupt to the processor in
+			    the specified slot and slice.
+	td PARM		 -- Displays the specified TLB entry.  "lo" and "hi"
+			    display the low and high halves of the TLB
+			    to make the output fit on a 24-line terminal.
+			    "all" displays the entire TLB.
+	clear		 -- Clears memory and CC chip error registers.
+			    CC chip errors are printed after each prompt
+			    until cleared.
+*	decode		 -- Displays the memory slot and bank number a given
+			    physical address belongs to.  (Can now accept
+			    up to just under 4 gigabyte addresses!)
+	walk LO HI CONT	 -- Walks a bit through every word of the address
+			    range specified with HI being the first address
+			    not tested.  CONT indicates whether to continue
+			    after failures (1 = continue, 0 = stop on errors).
+	slave		 -- Causes this processor to enter slave mode.
+	wx BLOC OFF VAL  -- Write VAL to the address created by adding the
+			    value of OFF to the value of BLOC multiplied by 256.
+			    This command uses R4000 64-bit addressing to
+			    allow uncached access to all of memory.
+	dx		 -- Prints the value contained in the address created
+			    by combining BLOC and OFF as above.
+	io		 -- Loads and executes the IO4 prom in the master IO4
+			    board.
+	why		 -- Prints a string explaining why we entered POD mode.
+	niblet SET	 -- Run the specified set of Niblet tests (see below).
+			    The usual test sets are numbered 0-9.
+	gm		 -- Go to memory mode.  This moves the stack into
+			    cached memory instead of an "isolated."  Niblet
+			    requires you to execute this command before
+			    running it.  This command changes the prompt to
+			    "Mem xx/xx>"
+	select SLICE	 -- When the system is in "manu-mode," all processors
+			    on the board selected by the system controller
+			    receive any input intended for the selected
+			    processor.  This is due to a design limitation
+			    of the IP19.  This results in four processors
+			    executing any command intended for just one.
+			    POD handles this by providing the select command.
+			    Select allows the user to select a "slice" which
+			    will be able to answer commands.  All other CPUs
+			    on the board will be temporarily disabled until
+			    the next select.  Selecting slice ff disables
+			    selection and allows all CPUs to respond to 
+			    input.
+ 	?                -- Displays the list of commands.
+
+
+------------------------------------------------------------------------------
+
+				Niblet
+				------
+
+Niblet is a very small, symmetric multiprocessing kernel with separate
+virtual address spaces for its processes.  It was originally intended
+as a verification tool, but we have found it useful for testing new
+boards as well.  Eventually, it will be called automatically from the
+IO4 prom, but it is also available from the POD prompt in the IP19 prom.
+
+NOTE:
+        Niblet may not run as intended if the various processors on
+the system are running different versions of the IP19 prom.  You're
+okay if the processors launch successfully.
+
+The various tests available from the "niblet n" command are really
+combinations of niblet tests.  That's why Niblet reports "Supertest passed"
+and "Supertest FAILED."  A list of the basic Niblet tests and a table
+of which tests are contained in each supertest follows.
+
+Basic Niblet Tests:
+-------------------
+
+INVALID:
+        Invalidates random TLB entries to cause more varied interactions.
+COUNTER:
+        Just runs until a certain instruction count is reached and passes.
+        The count is proportional to the niblet process ID.
+MPMON:
+        Test monotonicity of Everest reads and writes.
+MPINTADD:
+        Two processors add values to a common variable, hit a barrier,
+        and check the final sum.
+MPINTADD_4:
+        Four processor version of MPINTADD.
+MPSLOCK:
+        A software locking protocol test.
+MPHLOCK:
+        Tests load-linked and store-conditional by grabbing a lock, storing
+        a process ID into a protected location, waiting for a delay to
+        expire, and checking that the correct process ID is still there.
+        Multiple processors try this so a failure should result in a CPU
+        reading the wrong PID.
+MEMTEST:
+        Tests a range of memory by writing a value based on a process ID
+        to a range of memory and then checking it.  This version's range
+        is small enough to fit in a secondary cache.
+BIGMEM:
+        Same as above but the set is larger than one megabyte.
+PRINTTEST:
+        Tests Niblet context-switching.  Runs very quickly.  Mostly a sanity
+        test.
+BIGINTADD_4:
+        Same as MPINTADD_4 but runs for many, many iterations.
+BIGROVE:
+        A roving producer-consumer test that runs for many, many iterations.
+BIGHLOCK:
+        Same as MPHLOCK but runs for many, many iterations.
+
+Niblet "Supertests":
+	(Only tests 0-9 are useful without a connection to the system controller
+	UART.)
+
+niblet 0:
+        Runs one copy of the "INVALID" process.  Should always pass almost
+        immediately.
+
+niblet 1:
+        Runs {INVALID, COUNTER, COUNTER}.  Takes some time.  One process will
+        finish in about half the time that the other two take.
+
+niblet 2:
+        Runs {MPMON, MPMON}.  Takes disproportionately longer on a
+        single processor than on an MP machine.
+
+niblet 3:
+        Runs {MPINTADD, INVALID, MPINTADD}.  Takes disproportionately longer
+        on a single processor than on an MP machine.
+
+niblet 4:
+        Runs {MPSLOCK, MPSLOCK, INVALID}.
+
+niblet 5:
+        Runs {MPROVE, MPSLOCK, MPROVE, MPSLOCK, INVALID}.
+
+niblet 6:
+        Runs {MPSLOCK, MPMON, INVALID, MPSLOCK, MPMON}.  Takes disproportionate-        ly longer on a single processor than on an MP machine.
+
+niblet 7:
+        Runs {MPROVE, MPROVE}.
+
+niblet 8:
+        Runs {INVALID, MPMON, MPMON, MPROVE, MPROVE, MPROVE, MPINTADD,
+        MPINTADD, MPHLOCK, MPHLOCK} for a total of 10 processes.
+niblet 9:
+        Runs {MPINTADD_4, MPINTADD_4, MPINTADD_4, MPINTADD_4, INVALID,
+        MPROVE, MPROVE, MPROVE, MPHLOCK, MPHLOCK, MPSLOCK, MPSLOCK} for
+        a total of 12 processes.
+
+niblet a:
+        Runs {MEMTEST, MEMTEST, MEMTEST, MEMTEST, MEMTEST}.  This test is
+        designed as an overnight test.  It will take hours to complete.
+
+niblet b:
+        Runs {BIGMEM, BIGMEM, BIGMEM, INVALID, INVALID, INVALID} for a total
+        of 6 processes.  It too, takes hours to complete the memory tests,
+        but the supertest will never complete since there are three
+        INVALID processes.  They exit when they are the last process on
+        the system.
+
+niblet c:
+        Runs {PRINTTEST,  PRINTTEST, PRINTTEST, PRINTTEST,
+        PRINTTEST,  PRINTTEST, PRINTTEST, PRINTTEST,
+        PRINTTEST,  PRINTTEST, PRINTTEST, PRINTTEST,
+        PRINTTEST,  PRINTTEST}  This is really a Niblet sanity test
+	(as is niblet 0).
+
+niblet d:
+        This is the big MP stress test.  It runs {BIGINTADD_4, BIGINTADD_4,
+        BIGINTADD_4, BIGINTADD_4, INVALID, BIGROVE, BIGROVE, BIGROVE,
+        BIGHLOCK, BIGHLOCK, BIGMEM, BIGMEM, BIGMEM, INVALID}.  This
+        test runs 14 processes for a number of hours.  It's intended as
+        an overnight (or other long period of time) MP stress test.
+
+                        Niblet Fundamentals
+			-------------------
+
+NOTE: Niblet displays all of its output (with the exception of the final
+result) to the CC UART so it's only visible in "manu-mode" or "no boot master
+arbitration" mode.
+
+
+Number of CPUS to include:
+
+        Niblet attempts to run its tests on all processors that were
+present when the PROM set up the machine.  That means that if a processor
+has been forced into POD mode by pressing control-P, that processor will
+be included in Niblet's processor count and niblet will never pass its
+first barrier.  The timeout code hasn't been implemented yet so this
+results in a hung system.  A processor can be forced back into slave mode
+by typing the POD "slave" command.  
+
+	Niblet is limited to 15 CPUs at a time.  The user can control which
+CPUs run niblet with the enable and disable comamnds.
+
+Scheduling and process migration:
+
+        As long as there are more processes than processors, Niblet
+processes will migrate.  This is the reason that there are three copies of
+INVALID in "niblet b."  As long as that test is run on fewer than six
+processors, tests will migrate eventually.  The timing has to be right, though.
+On fewer processors, tests will migrate more often.
+
+        If there are ever more processors than processes, one or more
+processors will go into a loop waiting for the supertest to complete.  You
+can tell that processors are in this state because they will print,
+"No processes left to run - twiddling."
+
+Test completion:
+
+        Since Niblet is intended to run with one UART per processor, it
+only prints failure messages to the processor on which a test fails.  The
+processor hosting the failing process will print all pertinent information
+and then send an interrupt to the other processors.  This means that the
+other processors will only say, "Niblet FAILED on an interrupt."  The
+real cause of the failure is available on the processor where it happened.
+This is particularly important with a Niblet failure due to a nonzero
+ERTOIP register since it can only be read by the processor on which the
+error occurred.  That processor will print, "ERTOIP is nonzero!
+(ERTOIP, CAUSE, EPC)" followed by the values of ERTOIP, CAUSE, and EPC.
+
+        The master processor will always complete with a message of the
+form, "Supertest PASSED/FAILED" followed by "Niblet Complete."
+
+        None of the 13 Niblet tests in the IP19 prom should ever print
+a "Supertest FAILED." message under normal circumstances.
+
+	NOTE: Running a test in manufacturing mode yields more information
+as processors print to their local UARTS.  In "manumode" you can selectively
+watch CPUs.
+
+-----------------------------------------------------------------------------
+
+		PROM LEDS and What They Mean
+		----------------------------
+
+The values that follow are for the PROM LEDs that I mentioned above.
+They are guaranteed to be valid for 19 PROM release 1 (12/15/92), but
+they will most likely remain so.
+
+If you see a constant value displayed on the LEDs, convert the binary
+into a decimal number and look it up in the following list under PLED_xxx.
+Flashing values should appear under FLED_xxx.
+
+There are a couple of additional modes in addition to the constant and 
+single-flashing-value modes.  What a processor is in the IP19 slave loop,
+it cycles between 9 and 6.  The master processor in POD mode cycles between
+1 and 2 when it's using the UART on the CC chip.  On the EPC UART, it displays
+a constant value.
+
+Slave mode (five vertical slices are shown.  The topmost LED is most
+significant):
+
+	0	0	0	0	0
+	0	0	0	0	0
+	1	0	1	0	1	etc.
+	0	1	0	1	0
+	0	1	0	1	0
+	1	0	1	0	1
+
+		    Time ->
+
+Master mode on CC UART:
+
+	0	0	0	0	0
+	0	0	0	0	0
+	0	0	0	0	0	etc.
+	0	0	0	0	0
+	0	1	0	1	0
+	1	0	1	0	1
+
+		    Time ->
+
+The following comes straight from a PROM header file so it's somewhat
+raw.  Note that the most significant bit of an LED value is the top LED.
+
+#define PLED_CLEARTAGS                  1	(000001)
+/* Clearing the primary data cache tags */
+
+#define PLED_CKCCLOCAL                  2	(000010)
+/* Testing CC chip local registers */
+
+#define PLED_CCLFAILED_INITUART         3	(000011)
+/* Failed the local test but trying to initialize the UART anyway */
+
+#define PLED_CCINIT1                    4	(000100)
+/* Initializing the CC chip local registers */
+
+#define PLED_CKCCCONFIG                 5	(000101)
+/* Testing the CC chip config registers (requires a usable bus to pass) */
+/* NOTE: Hanging in this test usually means that the bus clock has failed.
+ *      Check the oscillator.
+ */
+
+#define PLED_CCCFAILED_INITUART         6	(000110)
+/* Failed the config reg test but trying to initialize the UART anyway */
+
+#define PLED_NOCLOCK_INITUART           7	(000111)
+/* CC clock isn't running init uart anyway */
+
+#define PLED_CCINIT2                    8	(001000)
+/* Initializing the CC chip config registers */
+
+#define PLED_UARTINIT                   9	(001001)
+/* Initializing the CC chip UART */
+/* NOTE: Hanging in this test usually means that the UART clock is bad.
+ *      Check the connection to the system controller.
+ */
+
+#define PLED_CCUARTDONE                 10	(001010)
+/* Finished initializing the CC chip UART */
+
+#define PLED_CKACHIP                    11	(001011)
+/* Testing the A chip registers */
+
+#define PLED_AINIT                      12	(001100)
+/* Initializing the A chip */
+
+#define PLED_CKEBUS1                    13	(001101)
+/* Checking the EBus with interrupts. */
+
+#define PLED_SCINIT                     14	(001110)
+/* Initializing the system controller */
+
+#define PLED_BMARB                      15	(001111)
+/* Arbitrating for a bootmaster */
+
+#define PLED_BMASTER                    16	(010000)
+/* This processor is the bootmaster */
+
+#define PLED_CKEBUS2                    17	(010001)
+/* In second EBus test.  Run only by the master */
+
+#define PLED_POD                        18	(010010)
+/* Setting up this CPU slice for POD mode */
+
+#define PLED_PODLOOP                    19	(010011)
+/* Entering POD loop */
+
+#define PLED_CKPDCACHE1                 20	(010100)
+/* Checking the primary data cache */
+
+#define PLED_MAKESTACK                  21	(010101)
+/* Creating a stack in the primary data cache */
+
+#define PLED_MAIN                       22	(010110)
+/* Jumping into C code - calling main() */
+
+#define PLED_CKIAID                     23	(010111)
+/* Check IA and ID chips on master IO4 */
+
+#define PLED_CKEPC                      24	(011000)
+/* Check EPC chip on master IO4 */
+
+#define PLED_IO4INIT                    25	(011001)
+/* Initializing the IO4 prom */
+
+#define PLED_NVRAM                      26	(011010)
+/* Getting NVRAM variables */
+
+#define PLED_FINDCONS                   27	(011011)
+/* Checking the path to the EPC chip which will contain the console UART */
+
+#define PLED_CKCONS                     28	(011100)
+/* Testing the console UART */
+
+#define PLED_CONSINIT                   29	(011101)
+/* Setting up the console UART */
+
+#define PLED_CONFIGCPUS                 30	(011110)
+/* Configuring out CPUs that are disabled */
+
+#define PLED_CKRAWMEM                   31	(011111)
+/* Checking out raw memory (running BIST) */
+
+#define PLED_CONFIGMEM                  32	(100000)
+/* Configuring memory */
+
+#define PLED_CKMEM                      33	(100001)
+/* Checking configured memory */
+
+#define PLED_LOADPROM                   34	(100010)
+/* Loading IO4 prom */
+
+#define PLED_CKSCACHE1                  35	(100011)
+/* First pass of secondary cache testing - test the scache like a RAM */
+
+#define PLED_CKPICACHE                  36	(100100)
+/* Check the primary instruction cache */
+
+#define PLED_CKPDCACHE2                 37	(100101)
+/* check the primary data cache writeback mechanism */
+
+#define PLED_CKSCACHE2                  38	(100110)
+/* check the secondary cache writeback mechanism */
+
+#define PLED_CKBT                       39	(100111)
+/* Check the bus tags */
+
+#define PLED_BTINIT                     40	(101000)
+/* Clear the bus tags */
+
+#define PLED_CKPROM                     41	(101001)
+/* Checksum the IO prom */
+
+#define PLED_INSLAVE                    42	(101010)
+/* This CPU is entering slave mode */
+
+#define PLED_PROMJUMP                   43	(101011)
+/* Jumping to the IO prom */
+
+#define PLED_SLAVEJUMP                  44	(101100)
+/* A slave is jumping to the IO4 PROM slave code */
+
+#define PLED_NMIJUMP			45	(101101)
+/* This CPU has jumped into the kernel's NMI handling code. */
+
+/*
+ * Failure mode LED values.  If the Power-On Diagnostics
+ * find an unrecoverable problem with the hardware,
+ * they will call the flash leds routine with one of
+ * the following values as an argument.  There's one PLED LED
+ * setting hiding down here because of an error made earlier.
+ */
+
+#define FLED_CANTSEEMEM                 46	(101110)
+/* Flashed by slave processors if they take an exception while trying to
+ * write their evconfig entries.  Often means the processor's getting D-chip
+ * parity errors.
+ */
+
+#define FLED_NOUARTCLK                  47	(101111)
+/* The CC UART clock is not running.  No system controller access is possible.
+ */
+
+#define FLED_IMPOSSIBLE1                48	(110000)
+/* We fell through one of the supposedly unreturning subroutines.
+ * Really shouldn't be possible.
+ */
+
+#define FLED_DEADCOP1                   49	(110001)
+/* Coprocessor 1 is dead - not seeing this doesn't mean it works. */
+
+#define FLED_CCCLOCK                    50	(110010)
+/* The CC clock isn't running */
+
+#define FLED_CCLOCAL                    51	(110011)
+/* Failed CC local register tests */
+
+#define FLED_CCCONFIG                   52	(110100)
+/* Failed CC config register tests */
+
+#define FLED_ACHIP                      53	(110101)
+/* Failed A Chip register tests */
+
+#define FLED_BROKEWB                    54	(110110)
+/* By the time this CPU had arrived at the bootmaster arbitration barrier,
+ * the rendezvous time had passed.  This implies that a CPU is running too
+ * slowly, the ratio of bus clock to CPU clock rate is too high, or a bit
+ * in the CC clock is stuck on.
+ */
+
+#define FLED_BADDCACHE                  55	(110111)
+/* This CPU's primary data cache test failed */
+
+#define FLED_BADIO4                     56	(111000)
+/* The IO4 board is bad - can't get to the console. */
+
+/* Exception failure mode values */
+#define FLED_UTLBMISS                   57	(111001)
+/* Took a TLB Refill exception */
+
+#define FLED_XTLBMISS                   58	(111010)
+/* Took an extended TLB Refill exception */
+
+#define PLED_WRCONFIG                   59	(111011)
+/* Writing evconfig structure:
+ *      The master CPU writes the whole array
+ *      The slaves only write their own entries.
+ */
+
+#define FLED_GENERAL                    60	(111100)
+/* Took a general exception */
+
+#define FLED_NOTIMPL                    61	(111101)
+/* Took an unimplemented exception */
+
+#define FLED_ECC                        62	(111110)
+/* Took a cache error exception */
+
+#define FLED_DISABLED			63	(111111)
+/* Disabled processors will flash all of their LEDs */
+
+-----------------------------------------------------------------------------
+
+		PROM Diagnostic Messages
+		------------------------
+
+These messages can be printed as a result of prom diagnostics and as
+reasons for entering POD mode.  The numbers on the left are "diagnostic"
+codes which are displayed on the LCD panel.
+
+
+CODE  MEANING
+
+Success:
+000    Device passed diagnostics.
+
+Cache tests:
+001    Failed dcache1 data test.
+002    Failed dcache1 addr test.
+003    Failed scache1 data test.
+004    Failed scache1 addr test.
+005    Failed icache data test.
+006    Failed icache addr test.
+007    Dcache test hung.
+008    Scache test hung.
+009    Icache test hung.
+
+Memory tests:
+040    Memory built-in self-test failed.
+041    No working memory was found.
+042    Memory address line test failed.
+043    Memory data line test failed.
+044    Bank failed configured memory test.
+045    Slave hung writing to memory.
+046    Bank disabled due to downrev MA chip.
+047    A bus error occurred during MC3 config.
+048    A bus error occurred during MC3 testing.
+049    PROM attempted to disable the same bank twice.
+050    Not enough memory to load the IO4 PROM.
+051    No memory boards were recognized.
+052    Bank forcibly re-enabled by the PROM.
+
+Ebus tests:
+060    CPU doesn't get interrupts from CC.
+061    Group interrupt test failed.
+062    Lost a loopback interrupt.
+063    Bit in HPIL register stuck.
+
+IO4 tests:
+070    No working IO4 is present.
+071    Bad checksum on IO4 PROM.
+072    Bad entry point in IO4 PROM.
+073    IO4 PROM claims to be too long.
+074    Bad entry point in IO4 PROM.
+075    Bad magic number in IO4 PROM.
+078    Bus error while downloading IO4 PROM.
+079    No EPC chip found on master IO4.
+080    Bus error while configuring IO4.
+081    Bus error during IA register test.
+082    Bus error during IA PIO test.
+083    IA chip register test failed.
+084    Wrong error reported for bad PIO.
+085    IA error didn't generate interrupt.
+086    IA error generated wrong interrupt.
+087    EPC register test failed.
+088    Bus error on map RAM rd/wr test.
+089    Bus error on map RAM address test.
+090    Bus error on map RAM walking 1 test.
+091    Bus error during map RAM testing.
+092    Map RAM read/write test failed.
+093    Map RAM address test failed.
+094    Map RAM walking 1 test failed.
+095    EPC UART loopback test failed.
+
+IP19 tests:
+120    CPU can't access memory
+123    CC bus tag data test failed.
+124    CC bus tag addr test failed.
+125    CPU forcibly re-enabled by the PROM.
+
+Miscellaneous:
+240    CPU writing configuration info.
+246    CPU testing dcache.
+247    CPU testing icache.
+248    CPU testing scache.
+249    CPU initializing caches.
+250    CPU returning from master's code.
+251    Unexpected exception.
+252    A nonmaskable interrupt occurred.
+253    POD mode switch set or POD key pressed.
+253    Unspecified diagnostic failure.
+254    Diagnostic value unset.
+255    Device not present.
+
+The following messages appear on the system controller display when
+diagnostics fail or as status:
+
+CODE  System Controller Short Message
+
+003   SCACHE FAILED!
+004   SCACHE FAILED!
+001   DCACHE FAILED!
+002   DCACHE FAILED!
+005   ICACHE FAILED!
+006   ICACHE FAILED!
+040   MC3 CONFIG FAILED!
+041   NO GOOD MEMORY FOUND
+042   MC3 CONFIG FAILED!
+043   MC3 CONFIG FAILED!
+044   MC3 READBACK ERROR!
+047   MC3 CONFIG FAILED!
+048   MC3 CONFIG FAILED!
+049   MC3 CONFIG FAILED!
+050   INSUFFICIENT MEMORY!
+051   NO MEM BOARDS FOUND!
+070   NO IO BOARDS FOUND!
+071   IO4PROM FAILED!
+072   IO4PROM FAILED!
+073   IO4PROM FAILED!
+074   IO4PROM FAILED!
+075   IO4PROM FAILED!
+078   IO4PROM FAILED!
+079   NO EPC CHIP FOUND!
+080   IO4 CONFIG FAILED!
+081   MASTER IO4 FAILED!
+082   MASTER IO4 FAILED!
+083   MASTER IO4 FAILED!
+084   MASTER IO4 FAILED!
+085   MASTER IO4 FAILED!
+086   MASTER IO4 FAILED!
+088   MASTER IO4 FAILED!
+089   MASTER IO4 FAILED!
+090   MASTER IO4 FAILED!
+091   MASTER IO4 FAILED!
+092   MASTER IO4 FAILED!
+093   MASTER IO4 FAILED!
+094   MASTER IO4 FAILED!
+087   EPC CHIP FAILED!
+095   EPC UART FAILED!
+123   BUS TAGS FAILED!
+123   BUS TAGS FAILED!
+124   BUS TAGS FAILED!
+250   Reentering POD mode
+251   PROM EXCEPTION!
+252   PROM NMI HANDLER
+253   CPU in POD mode.
+
+These are the long, scrolling messages:
+
+CODE  System Controller Long Message
+
+040   Memory board configuration has failed.  Cannot load IO PROM.
+041   All memory banks had to be disabled due to test failures.
+042   The address line self-test failed.  Cannot continue.
+043   Memory board configuration has failed.  Cannot load IO PROM.
+044   Memory board configuration has failed.  Cannot load IO PROM.
+047   Memory board configuration has failed.  Cannot load IO PROM.
+048   Memory board configuration has failed.  Cannot load IO PROM.
+049   The PROM was unable to disable failing memory banks.
+050   You must have at least 32 megabytes of working memory to load the IO PROM
+051   The IP19 PROM did not recognize any memory boards in the system.
+070   The IP19 PROM did not recognize any IO4 boards in the system.
+071   Diagnostics detected a problem with your IO4 PROM.
+072   Diagnostics detected a problem with your IO4 PROM.
+073   Diagnostics detected a problem with your IO4 PROM.
+074   Diagnostics detected a problem with your IO4 PROM.
+075   Diagnostics detected a problem with your IO4 PROM.
+078   An exception occurred while downloading the IO4 PROM to memory.
+079   There must be an EPC chip on the IO board in the highest-numbered slot.
+080   An exception occurred while configuring an IO board.
+081   The IA chip on the master IO4 board has failed diagnostics.
+082   The IA chip on the master IO4 board has failed diagnostics.
+083   The IA chip on the master IO4 board has failed diagnostics.
+084   The IA chip on the master IO4 board has failed diagnostics.
+085   The IA chip on the master IO4 board has failed diagnostics.
+086   The IA chip on the master IO4 board has failed diagnostics.
+088   The IA chip on the master IO4 board has failed diagnostics.
+089   The IA chip on the master IO4 board has failed diagnostics.
+090   The IA chip on the master IO4 board has failed diagnostics.
+091   The IA chip on the master IO4 board has failed diagnostics.
+092   The IA chip on the master IO4 board has failed diagnostics.
+093   The IA chip on the master IO4 board has failed diagnostics.
+094   The IA chip on the master IO4 board has failed diagnostics.
+087   The EPC chip on the master IO4 board has failed diagnostics.
+251   The PROM code took an unexpected exception.
+252   The PROM received a nonmaskable interrupt.
+
+-----------------------------------------------------------------------------
+
+IP19 PROM SYSTEM CONTROLLER STANDARD MESSAGES:
+
+Starting System...
+  Displayed once bootmaster arbitration has completed.  Indicates that the
+  master processor has started up correctly and is capable of communicating
+  with the system controller.
+
+EBUS diags 2..
+  Displayed immediately before we run the secondary EBUS diagnostics.  The
+  secondary EBUS diagnostics stress the interrupt logic and the EBUS. 
+
+PD Cache test..
+  Displayed immediately before we run the primary data cache test.
+ 
+Building stack..
+  Displayed before we attempt to set up the cache as the stack.  If this
+  is the last message displayed, there is probably something wrong with
+  the master processor.
+
+Jumping to MAIN
+  Displayed before we switch into the C main subroutine. 
+ 
+Initing Config Info
+  Displayed before we attempt to do initial hardware probing and set up
+  the everest configuration information data structure.  In this phase,
+  we simply read out the SYSCONFIG register and set the evconfig fields
+  to rational default values.
+
+Setting timeouts..
+  Displayed before we attempt to write to the various board timeout registers.
+  Everest requires that all of the boards be initialized with consistent
+  timeout values, and that these timeout values be written before we actually
+  do reads or writes to the boards (we're safe so far because we have only
+  touched configuration registers; this will change when we start talking to
+  IO4 devices). 
+
+Initing master IO4..
+  Displayed before we attempt to do basic initialization for all of the 
+  IO4's in the system.  Basic initialization consists of writing the 
+  large and small window registers, setting the endianness, setting up
+  error interrupts, clearing the IBUS and EBUS error registers, and 
+  examining the IO adapters.
+
+Initing EPC...
+  Displayed before we do the first writes to the master EPC.  This routine
+  clears the EPC error registers and takes all EPC devices out of reset.
+
+Initing EPC UART
+  Displayed when we first enter the UART configuration code. 
+
+Initing UART Chan B
+  Displayed before we begin initializing UART chan B's control registers.
+
+Initing UART Chan A
+  Displayed before we begin initializing UART chan A's control registers.
+
+Reading inventory..
+  Displayed before we attempt to read the system inventory out the IO4 
+  NVRAM.  If the inventory is invalid or we can't read it for some reason,
+  we initialize the inventory fields with appropriate default values.
+
+Running BIST..
+  Displayed before we run the memory hardware's built-in self test.   
+
+Configuring memory..
+  Displayed before we actually configure the banks into a legitimate 
+  state.
+
+Testing memory..
+  Printed before we start executing the memory post-configuration tests.
+  These tests simply check that memory was configured correctly.
+ 
+Testing Bus Tags..
+  Checks and initializes the CC bus tags, which are used by the CC chip
+  to determine whether it should pass a coherency transaction on to a
+  particular processor.
+
+Writing CFGINFO..
+  Displayed before we try writing the everest configuration information 
+  into main memory.
+
+Initing MPCONF blk..
+  Displayed before we initialize the everest MP configuration blocks
+  for all of the processors.
+
+Testing S Cache...
+  Displayed before we begin testing the secondary cache on all of the
+  processors.
+ 
+S Cache passed.
+  Secondary cache test passed.
+
+Checking slaves...
+  Displayed when we check each slave processor to determine whether it
+  is alive and whether it passed its diagnostics.
+
+Loading IO4 PROM..
+  Displayed when we download the IO4 PROM from the IO4 flash proms into
+  main memory.
+
+-----------------------------------------------------------------------------
+
+MISCELLANEOUS HINTS:
+
+	If a CPU hangs flashing its LEDs, it will still accept a 
+control-p (^p) character from its CC UART and go into POD mode.  To do
+this, you must either connect to it through the system controller or
+directly, via the four pin IPI9 connector (with "no boot master arbitration"
+switched on in the system controller).
+
+	Processors in the "slave" loop displaying a repeating pattern of
+four LEDs with two on at a time can also be interrupted with a control-p
+on their CC UART.  They will then attempt to enter POD mode.  Of course,
+they may be too broken to do this, in which case, you'll see a different
+failure LED value.
+
+	The System controller displays the state of the various processors
+on its display.  The characters associated with the processors are as
+follows:
+
+		'B' = processor is bootmaster.
+		'+' = processor is operational.
+		' ' = processor is not present or seriously broken.
+		'X' = processor fails diagnostics.
+		'D' = processor is disabled in NVRAM.
+
+	There are some new addresses you can jump to in the IP19 prom to
+get certain otherwise difficult effects:
+
+	0xbfc00008:	Restart the PROM.
+	0xbfc00010:	Go back to IP19 PROM slave mode.
+	0xbfc00018:	Go into POD mode using the CC UART for I/O.
+	0xbfc00020:	Go into POD mode using the IO4 UART for input.
+	0xbfc00028:	Flash all LEDs and loop endlessly.
+
+	The IO4 prom now has a POD command to get you to POD mode.  It's
+no longer necessary to type "goto 0xbfc00020."
+
+EAROM VARIABLES:
+
+	The IP19 prom looks in various locations in EAROM to find
+system configuration parameters.  Many of these also affect Unix.
+Here are their names and addresses:
+
+#define EV_EBUSRATE0_LOC        0xb9000100      /* EBUS freq (Hz) LSB */
+#define EV_EBUSRATE1_LOC        0xb9000108      /* EBUS freq (Hz) byte 1 */
+#define EV_EBUSRATE2_LOC        0xb9000110      /* EBUS freq (Hz) byte 2 */
+#define EV_EBUSRATE3_LOC        0xb9000118      /* EBUS freq (Hz) MSB */
+#define EV_PGBRDEN_LOC          0xb9000120      /* Piggyback Rd Enbl bit */
+#define EV_CACHE_SZ_LOC         0xb9000128      /* Size of secondary cache
+						 * 0x14 == 1M
+						 * 0x16 == 4M
+						 */
+#define EV_IW_TRIG_LOC          0xb9000130      /* IW_TRIG value */
+#define EV_RR_TRIG_LOC          0xb9000138      /* RR_TRIG value */
+#define EV_EPROCRATE0_LOC       0xb9000140      /* CPU freqency (Hz) LSB */
+#define EV_EPROCRATE1_LOC       0xb9000148      /* CPU freqency (Hz) byte 1 */
+#define EV_EPROCRATE2_LOC       0xb9000150      /* CPU freqency (Hz) byte 2 */
+#define EV_EPROCRATE3_LOC       0xb9000158      /* CPU freqency (Hz) MSB */
+#define EV_RTCFREQ0_LOC         0xb9000160      /* RTC frequency (Hz) LSB */
+#define EV_RTCFREQ1_LOC         0xb9000168      /* RTC frequency (Hz) byte 2 */
+#define EV_RTCFREQ2_LOC         0xb9000170      /* RTC frequency (Hz) byte 3 */
+#define EV_RTCFREQ3_LOC         0xb9000178      /* RTC frequency (Hz) MSB */
+#define EV_WCOUNT0_LOC          0xb9000180      /* EAROM Write count LSB */
+#define EV_WCOUNT1_LOC          0xb9000188      /* EAROM Write count MSB */
+#define EV_ECCENB_LOC           0xb9000190      /* CC chip ECC enable flag */
+
+------------------------------------------------------------------------------

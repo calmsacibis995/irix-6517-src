@@ -1,0 +1,106 @@
+# Note.	Based on cmdcommondefs from the IRIX 6.1 $ROOT.
+#
+# $Revision: 2.8 $
+#
+# Commondefs and commonrules for building multiple versions with
+# different binary formats or Instruction Set Architectures (ISAs).
+#
+# Optionally set LLDIRT for things to be removed from the top
+# level directory by "make clobber".
+#
+# Place source and generic makefile in ./src --- NOTE --- no building
+# is ever done in ./src
+#
+# Choose the ISAs you want, some of the common ones are
+#		32 - for the ucode/MIPS ABI
+#		64 - for 64 bit
+#	       N32 - for the new 32 bit ABI
+# and set STYLES_TO_BUILD to some sumset of these.
+#
+# For each ISA (e.g. FOO), create a versiondefs in the current directory
+# e.g. ./FOOversiondefs.  The generic makefile in src should
+#		include versiondefs
+# and the top level rules will make directories and juggle symbolic links
+# using tlink.
+#
+
+#ifndef STYLES_TO_BUILD
+STYLES_TO_BUILD	= 32
+#endif
+
+# Add ISA formats as required
+ISAVERSIONS	=
+#if !empty(STYLES_TO_BUILD:M32*)
+ISAVERSIONS	+= 32
+#endif
+#if !empty(STYLES_TO_BUILD:M64*)
+ISAVERSIONS	+= 64
+#endif
+#if !empty(STYLES_TO_BUILD:MN32*)
+ISAVERSIONS	+= N32
+#endif
+
+ISAVERSIONS	+= $(BUILDLIB)
+
+#
+# include normal commondefs
+#
+include $(ROOT)/usr/include/make/commondefs
+
+SUBDIRS	= $(ISAVERSIONS)
+LDIRT	= 32 64 N32 BUILD $(LLDIRT)
+
+# remove _M1, _M2, ... etc from DEF_OBJECT_STYLE
+#
+DEF_ISAVERSION	= $(DEF_OBJECT_STYLE:S/_M1//:S/_M2//:S/_M3//)
+
+#
+# backwards compatibility support for pre-6.1 defs and rules
+#
+#ifndef TLINK
+TLINK	= $(TOOLROOT)/usr/sbin/tlink
+#endif
+
+#
+# The ISAVERSIONS dirs are created by tlinking the source files,
+# [Mm]akefiles, etc.
+# We also exclude ISAVERSIONS itself to prevent infinite recursion by tlink.
+# 
+TLINKXARGS = -x '^.*\.[oai]$$' -x '^.*\.so$$' -x '$(MKDEPFILE)'
+
+#
+# Common targets.  The basic idea is that a make in the current (base)
+# directory will descend into subdirectories as necessary
+#	default		- tlink as needed, descend and make default
+# 	rmtargets	- do nothing, there are no targets here
+#	clobber		- remove the tlinked stuff
+#	clean		- descend and make clean
+#
+
+default! $(PRE_TARGETS) $(ISAVERSIONS) $(LTARGETS)
+
+rmtargets!
+
+clobber!
+	$(SUBDIRS_MAKERULE)
+	rm -rf $(LDIRT)
+
+clean!
+	$(SUBDIRS_MAKERULE)
+
+.ORDER: $(ISAVERSIONS)
+
+COMMONPREF=isa
+include $(COMMONRULES)
+
+#
+# Create the alternate version directory with tlink, descend into there
+# and make.
+#
+$(ISAVERSIONS)!
+	$(TLINK) -r $(TLINKXARGS) src $(.TARGET)
+	-[ ! -s $(.TARGET)/versiondefs ] && \
+	ln -sf ../$(.TARGET)versiondefs $(.TARGET)/versiondefs
+	cd $(.TARGET); $(MAKE)
+
+.MAKE:$(ISAVERSIONS)

@@ -1,0 +1,126 @@
+#!/sbin/sh
+#ident	"$Revision: 1.2 $"
+
+PROG=`basename $0`
+USAGE="Usage: $PROG [-abidir DIR -missing -extra -libname NAME] file"
+CHECKER_ABIDIR=${CHECKER_ABIDIR:-/usr/lib/abi/data}
+TMPDIR=${TMPDIR:-/var/tmp}
+OUTPUT=$TMPDIR/output.$$
+CHECKFILE=$TMPDIR/check.$$
+TMPOUTPUT=$TMPDIR/tmpoutput.$$
+MISSING=1
+EXTRA=1
+LIBNAME_GIVEN=0
+
+trap "rm -f $OUTPUT $CHECKFILE $TMPOUTPUT; exit 1" 1 2 13 15
+
+while [ $# -gt 1 ]
+do
+	case "$1" in
+	-libname)
+		LIBNAME_GIVEN=1;
+		shift;
+		if [ $# -gt 1 ]
+		then
+			LIBNAME=$1; shift
+		else
+			echo $USAGE >&2
+			exit 1;
+		fi;;
+	-abidir)
+		shift;
+		if [ $# -gt 1 ]
+		then
+			CHECKER_ABIDIR=$1; shift
+		else
+			echo $USAGE >&2
+			exit 1;
+		fi;;
+	-missing)
+		MISSING=1;
+		EXTRA=0;
+		shift;;
+	-extra)
+		MISSING=0;
+		EXTRA=1;
+		shift;;
+	*)	
+		echo $USAGE >&2
+		exit 1;;
+	esac
+done
+
+
+if [ $# -ne 1 ]
+then
+	echo $USAGE >&2
+	exit 1
+fi
+
+if [ ! -f $1 ]
+then
+	echo "$PROG: cannot access file $1" >&2
+	exit 1
+fi
+
+if [ $LIBNAME_GIVEN -eq 0 ]
+then
+	LIBNAME=`basename $1`
+fi
+
+nm -p $1 | sed -e "s/^[0-9A-Za-z]* //p" -e "s/^[ 	]*//p" | awk '\
+	BEGIN { prev = 1 } \
+	NF == 0 { prev = 0 } \
+	NF > 0 { \
+		if (prev != 0) { \
+			print $0 \
+		} else { \
+			prev = 1 \
+		} \
+	}' | awk '{ \
+			if (($1 == "T") || \
+				($1 == "D") || \
+				($1 == "B") || \
+				($1 == "A") || \
+				($1 == "G") || \
+				($1 == "S") || \
+				($1 == "R") || \
+				($1 == "C") || \
+				($1 == "E")) { \
+				print $2 \
+			} \
+		}' | sort -u | egrep -v "^\.bss$|^\.data$|^\.rdata$|^\.sbss$|^\.sdata$|^\.text$" > $OUTPUT
+
+if [ $MISSING -eq 1 ] || [ $EXTRA -eq 1 ]
+then
+	grep -v "^#" $CHECKER_ABIDIR/$LIBNAME.names | sort -u > $CHECKFILE
+fi
+
+if [ $MISSING -eq 1 ]
+then
+	comm -23 $CHECKFILE $OUTPUT > $TMPOUTPUT
+	if [ `wc -l < $TMPOUTPUT` -ne 0 ]
+	then
+		if [ $EXTRA -eq 1 ]
+		then
+			echo "The following ABI routines are missing from the library:"
+		fi
+		cat $TMPOUTPUT
+	fi
+fi
+
+
+if  [ $EXTRA -eq 1 ]
+then
+	comm -13 $CHECKFILE $OUTPUT | grep -v "^_" > $TMPOUTPUT
+	if [ `wc -l < $TMPOUTPUT` -ne 0 ]
+	then
+		if [ $MISSING -eq 1 ]
+		then
+			echo "\nThe following public routines are not part of the ABI:"
+		fi
+		cat $TMPOUTPUT
+	fi
+fi
+
+rm -f $OUTPUT $CHECKFILE $TMPOUTPUT

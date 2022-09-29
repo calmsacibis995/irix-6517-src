@@ -1,0 +1,132 @@
+#!/usr/bin/perl
+#
+# gr_top emulation (plus two color options: [-Ffg] [-Ttitle])
+#
+
+# Minimal Security:
+$ENV{'PATH'} = '/usr/sbin:/usr/bin:/bin';
+$ENV{'IFS'} = " \t";
+$top = '/usr/sbin/top';
+
+#
+# default wsh params
+#
+@min_max = ('-min', '80x6', '-max', '80x200');
+@geom = ('-geometry', '80x18');		# Default geometry
+
+# require 'getopts.pl'; # can't rely on this being installed...
+
+sub Getopts {
+    local($argumentative) = @_;
+    local(@args,$_,$first,$rest);
+    local($errs) = 0;
+    local($[) = 0;
+
+    @args = split( / */, $argumentative );
+    while(@ARGV && ($_ = $ARGV[0]) =~ /^-(.)(.*)/) {
+	($first,$rest) = ($1,$2);
+	$pos = index($argumentative,$first);
+	if($pos >= $[) {
+	    if($args[$pos+1] eq ':') {
+		shift(@ARGV);
+		if($rest eq '') {
+		    ++$errs unless @ARGV;
+		    $rest = shift(@ARGV);
+		}
+		eval "\$opt_$first = \$rest;";
+	    }
+	    else {
+		eval "\$opt_$first = 1";
+		if($rest eq '') {
+		    shift(@ARGV);
+		}
+		else {
+		    $ARGV[0] = "-$rest";
+		}
+	    }
+	}
+	else {
+	    print STDERR "Unknown option: $first\n";
+	    ++$errs;
+	    if($rest ne '') {
+		$ARGV[0] = "-$rest";
+	    }
+	    else {
+		shift(@ARGV);
+	    }
+	}
+    }
+    $errs == 0;
+}
+
+sub usage {
+	die "Usage: gr_top [-nrows] [-iint] [-ppntsz] [-Bbg] [-Ffg] [-Ttitle]
+	rows		Number of processes to display (window height)
+	int		Screen update interval (in seconds)
+	pntsz		font point size
+	bg		Background color (e.g: purple)
+	fg		Foreground (text) color
+	title		Title bar color
+";
+}
+
+#
+# Get command line options
+#
+&Getopts('i:n:B:F:T:p:') || &usage;
+
+if ($opt_i) {			# interval in seconds
+    if ($opt_i =~ /^\d+$/) {
+	@int = ('-s', $opt_i);
+    } else {
+	print STDERR "-i$opt_i: bad value: interval should be an integer\n";
+	&usage;
+    }
+} else {
+	@int = ('-s5');
+}
+
+if ($opt_n) {			# number of lines
+    if ($opt_n =~ /^\d+$/) {
+	$opt_n += 6;				# Add space for system info
+	@geom = ('-geometry', "80x$opt_n");
+    } else {
+	print STDERR "-n$opt_n: bad value: rows should be an integer\n";
+	&usage;
+    }
+}
+
+if ($opt_p) {			# font point size
+    if ($opt_p =~ /^\d+$/) {
+	@font = ('-xrm', "gr_top.Font: -*-screen-medium-*-*--$opt_p-*-*-*-*-*-*-*");
+    } else {
+	print STDERR "-p$opt_p: bad value: point-size should be an integer\n";
+	&usage;
+    }
+} else {
+    @font = ('-xrm', 'gr_top.Font: -sgi-screen-medium-r-normal--14-140-72-72-m-70-iso8859-1');
+}
+
+if ($opt_B) {			# background color
+    @bg = ('-bg', $opt_B);
+}
+if ($opt_F) {			# foreground color
+    @fg = ('-fg', $opt_F);
+}
+if ($opt_T) {			# title color
+    @title = ('-bold', $opt_T);	# (printed by 'top' in standout mode)
+}
+
+#
+# Call top in a xwsh window
+#
+if (fork == 0) {			# detach window from invoking shell
+	exec 'xwsh', '-name', 'gr_top',
+	@min_max, @geom, @font, @bg, @fg, @title,
+	'-holdonerror', '-noscrollbar', '-ut', '-nopgrp',
+	'-title', 'gr_top',
+	 '-e', $top, @int;
+
+	# NOTREACHED
+	die "gr_top: failed to exec xwsh: $!\n";
+}

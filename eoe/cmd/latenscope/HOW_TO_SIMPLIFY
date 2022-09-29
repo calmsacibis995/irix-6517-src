@@ -1,0 +1,501 @@
+
+Chris Pirazzi 12/18/97
+
+the TOT of latenscope is 1.2 in the kudzu (IRIX 6.5) tree as I write
+this.
+
+latenscope was written when the kernel callstack profiler had no WRAP
+EOB mode.  latenscope can be a HUGE amount simpler than it is now if
+one uses the WRAP mode.
+
+this would reduce bugs and increase features.
+
+I won't have time to update latenscope.  someone else reading this,
+probably the next lucky person to have to touch latenscope :), should.
+
+- what's wrong with latenscope now?
+
+latenscope currently has to touch every bit in the mapped rtmon
+ringbuffer and constantly update the head of the ringbuffer using the
+UPDATE ioctl().
+
+latenscope currently has to drop high pri when it reports progress to
+the user, because it has only one thread.  this means that latenscope
+fails to detect holdoffs during the printout periods.
+
+- how should latenscope work?
+
+instead, 
+
+a. latenscope should use the wrap EOB mode for the rtmon buffer,
+
+b. latenscope should have a main thread which remains at normal
+timeshare priority, and a subthread which seizes high priority and
+does:
+	- the nanosleep()s
+	- the scanning of the rtmon buffer
+
+whenever there is a holdoff, the high-priority thread should enqueue
+a message into a simple ringbuffer which is local to latenscope.
+
+the message should contain
+	- time of holdoff
+	- length of holdoff
+	- stack pcs for holdoff
+
+the main thread should dequeue the messages and do the symbol table
+lookups and printouts. 
+
+the subthread is ALWAYS running: it will not miss any holdoffs.
+
+for an amazingly simple, clean, lock-free, race-free ringbuffer
+mechanism to use for this, see the blurb reprinted below.
+
+- alternative idea
+
+you could also have the sub-thread only enqueue:
+
+	- time of holdoff
+	- length of holdoff
+
+and have the main thread do all the rtmon ringbuffer work.
+
+this would make overflow detection harder, though.
+more on that below.
+
+- multi-processor support
+
+if you want to add MP support, then this change would make that
+easier.  you'd have one subthread per processor.  you'd have one
+ringbuffer per processor also.  the main thread would iterate through
+the ringbuffers at some large interval, say every 1/2 second.
+
+- why should latenscope use the wrap EOB mode for the rtmon buffer?
+
+using this mode, latenscope's subthread need only read the kernel's
+shared_state head pointer to see where it is, and then read the
+ringbuffer.  latenscope need make no update ioctl()s.  in fact,
+latenscope needs to write neither to the ringbuffer nor to the
+ringbuffer shared_state area.
+
+- how should latenscope detect rtmon buffer overflow?
+
+latenscope should not bother to zero out the events.  this will cause
+the kernel to think that the buffer has overflowed.  too bad.  this
+has no bad side effects.  latenscope should pay no attention to the
+overflow count which comes back in the shared_states.
+
+since it has selected only stack events, latenscope knows that 1000
+stacks arrive each second.  latenscope knows the worst-case stack
+size.  latenscope knows exactly how often it tries to run, and exactly
+how long it has actually been since each wakeup.  therefore,
+latenscope has all the information it needs to detect rtmon buffer
+overflow conditions.  there is no need to use the rtmon mechanism.
+
+- what's this "ringbuffer with guard location" ?
+
+From cpirazzi Mon Jan 20 18:14:48 1997
+
+Say we want a ringbuffer that holds between 0 and "capacity"==11 things.
+
+First I'll talk about normal ringbuffers and why they don't work,
+and then I'll talk about the guard location trick and how it 
+saves you from locking.
+
+
+---- NORMAL RINGBUFFERS --------------------------------------------------
+
+A standard ringbuffer looks like this:
+
+We allocate an array with "capacity" (11) locations:
+
+  --------------------------------------------------------  capacity==11
+  |    |    |    |    |    |    |    |    |    |    |    |  nlocs==11
+  --------------------------------------------------------
+    0    1    2    3    4    5    6    7    8    9    10 
+
+We call the number of locations in the array "nlocs," which
+in this case is equal to "capacity"
+
+And we have a "head" and "tail" pointer:
+
+the "tail," which is >=0 and <nlocs, is the next location at which
+the writer should write new data.
+
+the "head," which is also >=0 and <nlocs, is the next location at
+which the reader should remove currently enqueued data.
+
+the "filled count" on the ringbuffer (the number of things currently
+queued up) is equal to (tail - head) % nlocs.  
+
+the "fillable count" on the ringbuffer (the number of locations
+currently available for new data) is equal
+to (head-tail) % nlocs.
+
+(in this letter, the mod operation is assumed to return always
+positive results, so -2 % 10 == 8 for example.  the C one
+doesn't work this way, so be careful).
+
+example (X means valid data, " " means empty space):
+
+  --------------------------------------------------------
+  |    |    | X  | X  | X  | X  |    |    |    |    |    |
+  --------------------------------------------------------
+    0    1    2    3    4    5    6    7    8    9    10 
+
+              |                   | 
+             head==2           tail==6
+
+this ringbuffer has a filled count of 4 ((6-2)%11) and
+a fillable count of 7 ((2-6)%11).
+
+another example:
+
+  --------------------------------------------------------
+  | X  | X  |    |    |    |    |    |    |    | X  | X  |
+  --------------------------------------------------------
+    0    1    2    3    4    5    6    7    8    9    10 
+
+              |                                  | 
+             tail==2                            head==9
+
+this ringbuffer also has a filled count of 4 ((2-9)%11) and
+a fillable count of 7 ((9-2)%11).
+
+typically the tail is represented as one int, and the head is
+represented as another int--quantities which can be stored to memory
+atomically on mips.
+
+when the reader wants to read, they:
+
+1. load the head -> h
+2. load the tail -> t
+3. compute filled count nfilled = (t-h) % nlocs
+4. read at most nfilled things starting at buffer[h]
+   (wrapping around if necessary of course)
+5. advance h at most nfilled locations
+   (wrapping around if necessary of course)
+6. store the new head <- h
+
+when the writer wants to write, they:
+
+1. load the head -> h
+2. load the tail -> t
+3. compute fillable count nfilable = (h-t) % nlocs
+4. write at most nfillable things starting at buffer[t]
+   (wrapping around if necessary of course)
+5. advance t at most nfillable locations
+   (wrapping around if necessary of course)
+6. store the new tail <- t
+
+only one side stores the head and only one side stores the tail.  note
+the crucial lines 5 above: the reader never advances the head further
+than what it sees as the tail, and the writer never advances the tail
+further than what it sees as the head.  this is the key to how the
+reader and writer can use the ringbuffer without any form of mutual
+exclusion.  for example, while the reader is reading from the head to
+the tail, the writer may advance the tail forward some (never
+backwards, and never further than the head).  so the reader may miss
+some data this time around, but it will get the data the next time.
+reader and writer will never stomp on one another.
+
+so it would seem that we've created a lock-free ringbuffer.
+
+alas, there is a problem: what if head==tail?
+
+that could mean that the ringbuffer is completely empty:
+
+  --------------------------------------------------------
+  |    |    |    |    |    |    |    |    |    |    |    |
+  --------------------------------------------------------
+    0    1    2    3    4    5    6    7    8    9    10 
+
+              |
+         head==tail==2
+
+or completely full:
+
+  --------------------------------------------------------
+  | X  | X  | X  | X  | X  | X  | X  | X  | X  | X  | X  |
+  --------------------------------------------------------
+    0    1    2    3    4    5    6    7    8    9    10 
+
+              |
+         head==tail==2
+
+it is impossible to determine which is the case without introducing
+some other state somewhere which tells you full vs. empty.  this other
+state (perhaps a "full vs empty" bit) would presumably be stored in
+another word in memory somewhere.
+
+but now we've introduced a piece of state which both the reader and
+writer nead to load, modify, and store atomically.
+
+hence we introduce a need for locking.
+
+enter the ringbuffer with guard location:
+
+---- RINGBUFFERS WITH GUARD LOCATION ----------------------------------------
+
+Again we want a ringbuffer with capacity==11.
+
+The trick is to allocate the buffer with one more location
+than needed, so nlocs==12:
+
+  -------------------------------------------------------------  capacity==11
+  |    |    |    |    |    |    |    |    |    |    |    |    |  nlocs==12
+  -------------------------------------------------------------
+    0    1    2    3    4    5    6    7    8    9    10   11
+
+The invariant is that at least one entry of this ringbuffer
+will always be empty (ie, will not contain data).  That
+entry is called the "guard" location.
+
+You can choose to place the guard location right before
+the head, or right before the tail, both are equally valid.
+I have chosen to place it right before the head:
+
+(G=guard location)
+
+  -------------------------------------------------------------
+  |    | G  | X  | X  | X  | X  |    |    |    |    |    |    |
+  -------------------------------------------------------------
+    0    1    2    3    4    5    6    7    8    9    10   11
+
+              |                   | 
+            head==2             tail==6
+
+the "tail" and "head" have the same definition of above.
+
+the definition of "filled count" is the same: (tail - head) % nlocs
+
+the definition of "fillable count" is now: (head - tail - 1) % nlocs
+
+a buffer with head==tail is empty, and
+              (head == ((tail+1) % nlocs)) is full.
+
+or even easier, a buffer with nfilled==0 is empty, and
+                            nfillable==0 is full.
+
+or equivalently, a buffer with nfillable==capacity is empty
+                                 nfilled==capacity is full
+                          (*NOTE* we said capacity, not nlocs)
+
+the reading and writing procedure is the same as above.
+
+we now have a data structure which both reader and writer can access
+with no need for locks or special atomic operations.
+
+the C code for a user-mode implementation is below.  the source code
+refers to nlocs as "queue_size."  the source code implements a
+"getitems" (reader) and "putitems" (writer) operation which copy the
+incoming or outgoing data, but you can look at the code and see pretty
+easily how to avoid the copy if you want.
+
+this sample code is medium tested.  It's not tested as much as, say,
+the rb code inside tserialio or the Audio Library, but I use it every
+day as part of some user-mode test programs that I run.  all the usual
+common-sense disclaimers apply---don't hook it up to your car's
+anti-lock system.
+
+there are several other ways to solve this problem.  one way involves
+playing some tricks with the definition of "head" and "tail."  I have
+experimented with several of the tricks, and this is by far the
+simplest one to write and use.
+
+hope this helps,
+
+        - Chris Pirazzi
+
+---- SAMPLE CODE ---------------------------------------------------------
+
+-------- ringbuffer.h:
+
+typedef struct _ringbuffer *ringbuffer;
+
+/*
+   This is a circular ringbuffer.   Data is accessed in 'items' of a
+   fixed size (the number of bytes per item is given in the 
+   constructor).
+
+   The ringbuffer has a capacity given by getcapacity(), defined in
+   the constructor.  There is a getfilled() count and a getfillable() 
+   count, which always add up to getcapacity().
+
+   You can also access the data with a copy using getitems() and
+   putitems().  You do not need to worry about buffer wrap.
+
+   You should never call getitems() or putitems() with more items 
+   than are filled or fillable, respectively.
+*/
+ringbuffer ringbuffer_new(int capacity, int bytes_per_item);
+void ringbuffer_destroy(ringbuffer rb);
+int ringbuffer_getcapacity(ringbuffer rb);
+int ringbuffer_getfilled(ringbuffer rb);
+int ringbuffer_getfillable(ringbuffer rb);
+int ringbuffer_getitems(ringbuffer rb, int nitems, void *buf);
+int ringbuffer_putitems(ringbuffer rb, int nitems, void *buf);
+
+-------- ringbuffer.c:
+
+typedef struct _ringbuffer
+{
+  /* 
+     circular ring buffer with 1 guard location
+
+     - example:
+
+     this buffer has "queue_size" 10
+          -> it takes 10 item's worth of storage
+
+     this buffer has "capacity" 9 = 9 items + 1 guard location
+          -> you can stick up to 9 things in it
+
+     indexes             0 1 2 3 4 5 6 7 8 9
+     locations:          X X X X X X X X X X
+     filled region:          f f f f
+     unfilled region:    u u         u u u u
+     guard location:       g
+     head:                   h
+     tail:                           t
+
+     head is next location where you want to read
+     tail is next location where you want to write
+
+     guard location is at "end" of unfilled region, right before head.
+
+     nfilled   = # of filled   locations = <tail - head>     mod queue_size
+     nfillable = # of fillable locations = <head - tail - 1> mod queue_size
+
+     note that the guard location is not included in nfillable because,
+     by its nature of being a guard, it cannot be filled in with data.
+     
+     "empty" = (nfilled==0)
+     "full" = (nfillable==0) 
+          (note guard location remains unfilled in a full buffer)
+
+  */
+  int bytes_per_item;
+  void *queue; /* allocation includes 1 extra guard location */
+  int queue_size; /* count includes 1 guard location */
+  int head;
+  int tail;
+} _ringbuffer;
+
+bool ringbuffer_sanity(ringbuffer rb)
+{
+  assert(rb->bytes_per_item > 0);
+  assert(rb->queue);
+  assert(rb->queue_size > 0);
+  assert(rb->head >= 0 && rb->head < rb->queue_size);
+  assert(rb->tail >= 0 && rb->tail < rb->queue_size);
+  return TRUE;
+}
+
+ringbuffer ringbuffer_new(int capacity, int bytes_per_item)
+{
+  ringbuffer rb = malloc(sizeof(_ringbuffer));
+  
+  assert(capacity > 0);
+  assert(bytes_per_item > 0);
+
+  /* note +1 because this rb has a guard location */
+
+  rb->bytes_per_item = bytes_per_item;
+  rb->queue_size = capacity + 1; /* include guard location */
+  rb->queue = malloc(rb->queue_size*rb->bytes_per_item);
+  rb->head = rb->tail = 0;
+
+  assert(ringbuffer_sanity(rb));
+  return rb;
+}
+
+void ringbuffer_destroy(ringbuffer rb)
+{
+  assert(ringbuffer_sanity(rb));
+
+  free(rb->queue);
+  rb->queue = NULL;
+  rb->queue_size = 0;
+  
+  free(rb);
+}
+
+int ringbuffer_getcapacity(ringbuffer rb)
+{
+  return rb->queue_size - 1; /* exclude guard location */
+}
+
+int ringbuffer_getfilled(ringbuffer rb)
+{
+  int n;
+  n = rb->tail - rb->head;
+  if (n < 0) n += rb->queue_size;
+  return n;
+}
+
+int ringbuffer_getfillable(ringbuffer rb)
+{
+  int n;
+  n = rb->head - rb->tail - 1;
+  if (n < 0) n += rb->queue_size;
+  return n;
+}
+
+int ringbuffer_getitems(ringbuffer rb, int nitems, void *buf)
+{
+  nitems = min(nitems, ringbuffer_getfilled(rb));
+
+  if (rb->head + nitems > rb->queue_size)
+    {
+      /* wrap */
+      int firstcnt = rb->queue_size - rb->head;
+      memcpy((char *)buf,
+             (char *)rb->queue + rb->head*rb->bytes_per_item,
+             firstcnt*rb->bytes_per_item);
+      memcpy((char *)buf + firstcnt*rb->bytes_per_item,
+             (char *)rb->queue,
+             (nitems-firstcnt)*rb->bytes_per_item);
+    }
+  else
+    {
+      memcpy((char *)buf,
+             (char *)rb->queue + rb->head*rb->bytes_per_item,
+             nitems*rb->bytes_per_item);
+    }
+
+  rb->head += nitems;
+  if (rb->head >= rb->queue_size) rb->head -= rb->queue_size;
+  assert(ringbuffer_sanity(rb));
+
+  return nitems;
+}
+
+int ringbuffer_putitems(ringbuffer rb, int nitems, void *buf)
+{
+  nitems = min(nitems, ringbuffer_getfillable(rb));
+  
+  if (rb->tail + nitems > rb->queue_size)
+    {
+      /* wrap */
+      int firstcnt = rb->queue_size - rb->tail;
+      memcpy((char *)rb->queue + rb->tail*rb->bytes_per_item,
+             (char *)buf,
+             firstcnt*rb->bytes_per_item);
+      memcpy((char *)rb->queue,
+             (char *)buf + firstcnt*rb->bytes_per_item,
+             (nitems-firstcnt)*rb->bytes_per_item);
+    }
+  else
+    {
+      memcpy((char *)rb->queue + rb->tail*rb->bytes_per_item,
+             (char *)buf,
+             nitems*rb->bytes_per_item);
+    }
+
+  rb->tail += nitems;
+  if (rb->tail >= rb->queue_size) rb->tail -= rb->queue_size;
+  assert(ringbuffer_sanity(rb));
+
+  return nitems;
+}

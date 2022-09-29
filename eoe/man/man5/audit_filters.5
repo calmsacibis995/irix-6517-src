@@ -1,0 +1,201 @@
+.TH audit_filters 5
+.SH NAME
+audit_filters \- using filter programs with the audit facility
+.SH DESCRIPTION
+Traditionally, the System Audit Trail (SAT) facility saves all selected
+audit records directly to a file with little additional processing.
+However, for some applications it would be useful to perform some kind
+of manipulation on the audit data before saving it to disk, or perhaps
+manipulate the data and not save it to disk at all.
+This explains what needs to be done to perform these manipulations and
+the mechanisms that should be used to accomplish them.
+.SS satd
+\f2satd\f1(1M) is the daemon responsible for saving audit data from
+the kernel in disk files.
+In the default configuration it reads data directly from the kernel
+using a special system call and writes it to uniquely named files in
+the \f2/var/adm/sat\f1 directory.
+When \f2satd\f1 receives a HUP signal, it automatically closes the
+current file that it is writing to and opens a new one.
+In this default setup, the filenames are of the form
+\f2sat_\f2YYMMDDHHMM\f1 so they can be easily sorted and read in the
+order that they were produced.
+.PP
+Because audit data is often considered precious, \f2satd\f1 takes
+several measures to ensure that data is not lost.
+First, it monitors the amount of free space available on the
+filesystem to which it is writing records.
+It is possible to configure \f2satd\f1 to
+automatically switch to one or more alternate filesystems if the
+current filesystem is full, using several different configurable
+rotation policies.
+In this arrangement, if all of the filesystems
+available to \f2satd\f1 are full, it automatically brings the
+system down into single user mode.
+During this time, audit records are
+written to an "emergency" file that is pre-allocated in the root
+filesystem when the audit subsystem is first started.
+Note that if a system shutdown is undesirable when \f2satd\f1 has
+run out of space,
+it is always possible to assign \f2/dev/null\f1 as the last filesystem for
+\f2satd\f1 to use.
+\f2satd\f1 normally logs all device/filesystem
+changes to SYSLOG.
+.SS Using satd with filters
+Unfortunately, these elaborate disk management features can make it
+difficult for other software to reliably locate all of the audit data,
+such as for post-processing.
+Indeed, in some cases these disk
+management features may be totally unnecessary, for example if the
+data is consumed and then immediately discarded by other
+post-processing software.
+Therefore, \f2satd\f1 provides an option (\f3\-o\f1) to write audit
+data directly to its standard output, thus allowing it to be piped
+directly to other software.
+This can be done in addition to or in place of writing the data to
+disk.
+An example of this would be the command:
+.Ex
+\f4satd -o -f /var/adm/sat | myfilter\f1
+.Ee
+Here, \f2satd\f1 writes the audit data to files in the directory
+\f2/var/adm/sat\f1 as well as directing them to the program
+\f2myfilter\f1.
+\f2myfilter\f1 is then free to do whatever processing is needed
+on the audit data (perhaps summarizing it, or sending it to some
+remote host).
+.PP
+It is also possible that some of the audit data may need to be
+manipulated
+.I before
+it is written to disk, for example to perform special filtering or to
+augment certain data items.
+Piping the data out to a filter would lose the disk management features
+of \f2satd\f1.
+Therefore, \f2satd\f1
+provides another option (\f3\-i\f1) that allows it to read audit data
+from its standard input rather than reading it directly from the kernel.
+This way, \f2satd\f1 can receive its audit data from a filter
+and still do its normal disk management.
+Here is an example of how such a scheme might be set up:
+.Ex
+\f4satd -o | myfilter | satd -i -f /var/adm/sat\f1
+.Ee
+Here, \f2satd\f1 \f3\-o\f1 pulls the audit data from the kernel and writes it
+directly to its standard output without bothering to write it to disk.
+The \f2myfilter\f1 program reads this audit data from its standard input,
+performs whatever processing is necessary, then writes the resulting
+data (which should still be in the form of standard audit records) to
+its own standard output.
+Finally, the \f2satd\f1 \f3\-i\f1 stage reads audit data
+from its standard input (rather than the kernel) and writes it out to
+files in the \f2/var/adm/sat\f1 directory.
+.SS Writing filters for use with audit data
+It is possible to set up more than one filter for use with audit data.
+With that in mind, there are several important points to remember when
+writing audit filters:
+.TP 3
+*
+Filter programs that consume all audit records (as opposed to "true"
+filters, which would pass at least some subset of their input to their
+standard output) should still have a mode that causes audit records to
+be copied to their standard output.
+This allows other filters to be added after them in a pipe.
+Notice that this implies that a filter
+program should not write anything but audit records to its standard
+output, at least when this "copy to stdout" mode is enabled.
+.TP
+*
+On the other hand, if a site's only application for the audit data
+is some filter that consumes all of the data (for example, a program
+that summarizes all of the audit data) then copying data to standard
+output would \f2not\f1 be desirable, since it would likely end up being
+echoed to the console.
+Therefore, the ability to copy audit records to
+stdout should probably be controlled with some sort of command line
+option.
+For consistency with \f2satd\f1, it might be nice to name this
+option \f3\-o\f1.
+Alternatively, the filter could examine its stdout with \f2stat\f1(2)
+to determine if its standard output is a pipe; if so, it could assume
+that an additional filter is present and only then copy records
+to stdout.
+This could simplify user installation procedures, although a command line
+option to force copying on or off might still be useful in case of unusual
+situations.
+.TP
+*
+When \f2satd\f1 \f3\-o\f1 is first started, it writes a file header before it
+writes any audit records.
+Filter programs should \f2not\f1 do this.
+In particular, \f2satd\f1 \f3\-i\f1 does not expect to see a file header in its
+input.
+Filter programs should have an option to expect/not expect the
+file header when first started.
+Only the first filter on the pipe would need to expect and discard the
+header.
+To be consistent with satd, the default could be to expect/discard a
+header and \f2not\f1 expect one if a \f3\-i\f1 option is specified.
+.TP
+*
+If using the \f2satd\f1 \f3\-o\f1/\f2satd\f1 \f3\-i\f1 approach to
+preprocessing audit data
+before writing it to disk, bear in mind that \f2satd\f1 \f3\-i\f1 expects raw
+audit records as input.
+Only complete records should be added or deleted to the stream of audit data.
+If modifying data inside an audit
+record, care should be taken not to modify the size or offset of any
+fields within the record.
+.SS Invoking audit filters
+If the audit subsystem is installed and enabled, IRIX starts \f2satd\f1
+automatically at boot time using the \f2/etc/init.d/audit\f1 script.
+This script should not normally be modified.
+Instead, the script looks for
+several files in the \f2/etc/config\f1 directory to modify its behavior:
+.TP 15
+\f2satd.options\f1
+contains options that should be specified on the \f2satd\f1 command
+line.
+If this file is missing or empty, the default options of
+\f3\-f /var/adm/sat\f1 are used.
+To specifically supply no options to the \f2satd\f1 command,
+this file should contain only the string "\f7<NONE>\f1".
+.TP
+\f2satd.filter*\f1
+one or more files containing the command lines for filters that
+should be connected in a pipeline to \f2satd\f1.
+If one or more of these files exist and are non-empty,
+\f2satd\f1 is given the \f3\-o\f1
+option and is invoked in a pipeline formed from the
+commands found in these files.
+The pipe stages are ordered
+according to the order that the \f2ls\f1 command lists these files.
+.PP
+An example is in order.
+Suppose the file \f2/etc/config/satd.options\f1 contains this:
+.Ex
+-f /AUDITDIR -f /ALTDIR
+.Ee
+and \f2/etc/config/satd.filter-1\f1 contains this:
+.Ex
+myfilter -o
+.Ee
+and \f2/etc/config/satd.filter-2\f1 contains this:
+.Ex
+otherfilter -a -i
+.Ee
+Then \f2satd\f1 is invoked as follows by \f2/etc/init.d/audit\f1:
+.Ex
+\f4satd -o -f /AUDITDIR -f /ALTDIR | myfilter -o | otherfilter -a -i\f1
+.Ee
+Using the conventions described earlier, all filters except for the
+first one should specify a \f3\-i\f1 option to indicate that no file header
+is present at the beginning of the input stream, and all filters
+except for the last one should specify a \f3\-o\f1 option to indicate that
+input records should be echoed to standard output.
+.SH SEE ALSO
+audit(1M),
+sat_select(1M),
+satd(1M).
+.PP
+\f2IRIX Admin: Backup, Security, and Accounting\f1

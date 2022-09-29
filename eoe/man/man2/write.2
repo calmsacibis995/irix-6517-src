@@ -1,0 +1,461 @@
+'\"macro stdmacro
+.if n .pH g2.write @(#)write	41.7 of 5/26/91
+.\" Copyright 1991 UNIX System Laboratories, Inc.
+.\" Copyright 1989, 1990 AT&T
+.nr X
+.if \nX=0 .ds x} write 2 "" "\&"
+.if \nX=1 .ds x} write 2 ""
+.if \nX=2 .ds x} write 2 "" "\&"
+.if \nX=3 .ds x} write "" "" "\&"
+.TH \*(x}
+.SH NAME
+\f4write\f1, \f4writev\f1, \f4pwrite\f1, \f4pwrite64\f1 \- write on a file
+.SH SYNOPSIS
+.nf
+\f4#include <unistd.h>
+ssize_t write(int fildes, const void \(**buf, size_t nbyte);
+.br
+ssize_t pwrite(int fildes, const void \(**buf, size_t nbyte, off_t offset);
+.br
+ssize_t pwrite64(int fildes, const void \(**buf, size_t nbyte, off64_t offset);
+.sp 0.5
+#include <sys/uio.h>
+.sp 0.5
+ssize_t writev(int fildes, const struct iovec \(**iov, int iovcnt);\fP
+.fi
+.SH DESCRIPTION
+\f4write\fP
+attempts to write
+\f2nbyte\fP bytes from the buffer pointed to by
+\f2buf\fP
+to the file associated with
+.IR fildes .
+If \f2nbyte\fP is zero and the file is a regular file, \f4write\fP
+returns zero and has no other results.
+.I fildes\^
+is a
+file descriptor
+obtained from a
+\f4creat\fP,
+\f4open\fP,
+\f4dup\fP,
+\f4fcntl\fP,
+\f4pipe\fP,
+or
+\f4ioctl\fP
+system call.
+.PP
+\f4pwrite\fP and \f4pwrite64\fP are the same as \f4write\fP except that
+they do the equivalent of an \f4lseek\fP (for \f4pwrite\fP) or
+\f4lseek64\fP (for \f4pwrite64\fP)
+.I offset
+bytes with the 
+.I whence
+set to \f4SEEK_SET\fP 
+before writing.
+On return from
+\f4pwrite\fP or \f4pwrite64\fP,
+the file pointer is unchanged. If \f4fildes\fP refers to a file
+incapable of seeking (a fifo or socket) then an error is returned and
+\f4errno\fP will be set to \f4ESPIPE\fP.
+.PP
+\f4writev\f1 performs the same action as
+\f4write\f1, but gathers the output data from the \f2iovcnt\f1
+buffers specified by the members of the \f2iov\f1
+array: \f2iov\f1[0], \f2iov\f1[1], ..., \f2iov\f1[\f2iovcnt\f1\|\-\|1].
+The \f2iovcnt\fP is valid only
+if greater than 0 and less than or equal to
+{\f4IOV_MAX\fP}.  {\f4IOV_MAX\fP} can be obtained from a call to 
+\f4sysconf\fP() [see \f4sysconf\fP(3C)].
+.P
+For \f4writev\f1, the \f4iovec\f1 structure contains the following members:
+.P
+.RS
+.nf
+.ft 4
+void   \(**iov_base;
+ssize_t   iov_len;
+.ft 1
+.fi
+.RE
+.P
+Each \f4iovec\f1 entry specifies the base address and length of an
+area in memory from which data should be written.
+\f4writev\f1 always writes a complete area before
+proceeding to the next.
+.PP
+On devices capable of seeking,
+the writing of data proceeds from the position in the file
+indicated by the file pointer.
+On return from
+\f4write\fP,
+the file pointer is incremented by the number of bytes actually written.
+On a regular file, if the incremented file pointer is greater than the
+length of the file, the length of the file is set to the new file
+pointer.
+.PP
+On devices incapable of seeking,
+writing always takes place starting at the current position.
+The value of a file pointer associated with such a device is
+undefined.
+.PP
+If the
+\f4O_APPEND\fP
+flag of the file status flags is set,
+the file pointer is set to the end of the file before each \f4write\fP.
+.PP
+For regular files, if the
+\f4O_SYNC\fP
+flag of the file status flags is set,
+\f4write\fP does not return until both the file data and file status have
+been physically updated.
+This function is for special applications that require extra reliability
+at the cost of performance.
+For block special files, if
+\f4O_SYNC\fP
+is set, \f4write\fP does not return until the data has been physically
+updated.
+.PP
+If the
+\f4O_DSYNC\fP
+flag of the file status flags is set,
+\f4write\fP does not return until the file data has
+been physically updated.
+This function is for special applications that require extra reliability
+at the cost of performance.
+.PP
+A \f4write\fP to a regular file is blocked
+if mandatory file/record locking is set [see
+\f4chmod\fP(2)],
+and there is a record lock
+owned by another process
+on the segment of the file to be written:
+.PP
+.RS
+If \f4O_NDELAY\f1 or \f4O_NONBLOCK\f1 is set,
+\f4write\f1
+returns \f4-1\f1 and sets \f4errno\f1 to \f4EAGAIN\f1.
+.P
+If \f4O_NDELAY\f1 and \f4O_NONBLOCK\f1 are clear,
+\f4write\f1
+sleeps until all blocking locks
+are removed or the
+\f4write\f1 is terminated by a signal.
+.RE
+.PP
+If a
+\f4write\fP
+requests that more bytes be written than there is room for\(emfor example,
+if the write would exceed the process file size limit
+[see
+\f4getrlimit\fP(2)
+and
+\f4ulimit\fP(2)],
+the system file size limit,
+or the free space on the device\(emonly as many bytes as there is room for will be written.
+For example,
+suppose there is space for 20 bytes more in a file before
+reaching a limit.
+A \f4write\fP of 512-bytes returns 20.
+The next \f4write\fP of a non-zero number of bytes gives a failure return
+(except as noted for pipes and \s-1FIFO\s0 below).
+In addition to an error return, the \f4SIGXFSZ\fP signal is sent to the
+caller.
+The default disposition of this signal depends on the environment from
+which the application was run - some standard shells invoke programs
+with this signal ignored, others with the signal set to the default (which
+will kill the process).
+.PP
+When attempting to \f4write\fP to a file with \f4O_DIRECT\fP or \f4FDIRECT\fP
+set, \f4\-1\fP will be returned and \f4errno\fP will be set to \f4EINVAL\fP if
+\f2nbyte\fP or the current file position is not a multiple of the underlying
+device's blocksize, \f4nbyte\fP is too big or \f4buf\fP isn't properly aligned.
+See also \f4F_DIOINFO\fP in \f4fcntl\fP(2).
+.PP
+When attempting to write to a regular file in a DMAPI
+file system, if the DMAPI application will take a considerable
+time to make a portion of the file available needed for the write
+to proceed:
+.IP
+If
+\f4O_NDELAY\fP or \f4O_NONBLOCK\fP
+is set, \f4write\fP returns \-1
+and sets \f4errno\fP to \f4EAGAIN\fP.
+.IP
+If
+\f4O_NDELAY\fP and \f4O_NONBLOCK\fP
+are clear, \f4write\fP sleeps until the
+the DMAPI application has made the file data available,
+and then allows the write to proceed.
+.PP
+Write requests to a pipe or \s-1FIFO\s0 are handled the same
+as a regular file with the following exceptions:
+.IP ""
+There is no file offset associated with a pipe,
+hence each write request appends to the end
+of the pipe.
+.IP ""
+Write requests of \f4{PIPE_BUF}\f1 bytes or less are guaranteed not to be
+interleaved with data from other threads doing writes on the same pipe.
+Writes of greater than \f4{PIPE_BUF}\f1 bytes may have
+data interleaved, on arbitrary boundaries,
+with writes by other threads, whether the
+\f4O_NONBLOCK\f1 or \f4O_NDELAY\f1 flags are set.
+.IP ""
+If \f4O_NONBLOCK\f1 and \f4O_NDELAY\f1
+are clear, a write request may cause the thread to block,
+but on normal completion it returns \f2nbyte\f1.
+.IP ""
+If \f4O_NONBLOCK\f1 is set, \f4write\f1 requests are
+handled in the following way:
+the \f4write\f1 does not block the thread;
+write requests for \f4{PIPE_BUF}\f1 or fewer bytes
+either succeed completely and return \f2nbyte\f1,
+or return \f4-1\f1 and set \f4errno\f1 to \f4EAGAIN\f1.
+A \f4write\f1 request for greater than \f4{PIPE_BUF}\f1 bytes
+either transfers what it can and returns the number of bytes written,
+or transfers no data and returns \f4-1\f1 with \f4errno\f1 set to
+\f4EAGAIN\f1.
+Also, if a request is greater than \f4{PIPE_BUF}\f1 bytes
+and all data previously written to the pipe has been read,
+\f4write\f1 transfers at least \f4{PIPE_BUF}\f1 bytes.
+.IP ""
+If \f4O_NDELAY\f1 is set, \f4write\f1 requests are handled
+in the following way:
+the \f4write\f1 does not block the thread;
+write requests for \f4{PIPE_BUF}\f1 or fewer bytes
+either succeed completely and return \f2nbyte\f1,
+or return \f40\f1.
+A \f4write\f1 request for greater than
+\f4{PIPE_BUF}\f1 bytes either transfers what it can and returns
+the number of bytes written, or transfers no data and returns \f40\f1.
+Also, if a request is greater than \f4{PIPE_BUF}\f1 bytes
+and all data previously written to the pipe has been read,
+\f4write\f1 transfers at least \f4{PIPE_BUF}\f1 bytes.
+.P
+When attempting to write to a file descriptor (other than a pipe or \s-1FIFO\s0)
+that supports nonblocking writes and cannot accept the data immediately:
+.IP ""
+If \f4O_NONBLOCK\f1 and \f4O_NDELAY\f1 are clear,
+\f4write\f1 blocks until the data can be accepted.
+.IP ""
+If \f4O_NONBLOCK\f1 or \f4O_NDELAY\f1 is set,
+\f4write\f1 does not block the thread.
+If some data can be written without blocking the thread,
+\f4write\f1 writes what it can and returns
+the number of bytes written.
+Otherwise, if \f4O_NONBLOCK\f1 is set, it returns \f4\-1\f1
+and sets \f4errno\f1 to \f4EAGAIN\f1 or if \f4O_NDELAY\f1 is set,
+it returns \f40\f1.
+.P
+For \s-1STREAMS\s0 files [see \f4intro\fP(2)],
+the operation of \f4write\fP is determined by the values of the
+minimum and maximum \f2nbyte\f1 range
+(``packet size'') accepted by the stream.
+These values are contained in the topmost stream module.
+Unless the user pushes the topmost module [see \f4I_PUSH\fP in \f4streamio\fP(7)],
+these values can not be set or tested from user level.
+If \f2nbyte\f1 falls within the packet size range, \f2nbyte\f1 bytes are written.
+If \f2nbyte\f1 does not fall within the range and the minimum packet size value
+is zero, \f4write\fP breaks the buffer into maximum packet size segments prior
+to sending the data downstream (the last segment may be smaller than the maximum
+packet size).
+If \f2nbyte\f1 does not fall within the range and the minimum value is non-zero,
+\f4write\fP fails and sets \f4errno\f1 to \f4ERANGE\fP.
+Writing a zero-length buffer (\f2nbyte\fP is zero) to a \s-1STREAMS\s0 device sends
+a zero length message with zero returned.
+However, writing a zero-length buffer to a pipe or \s-1FIFO\s0 sends no message
+and zero is returned.
+The user program may issue the \f4I_SWROPT ioctl\fP(2) to enable
+zero-length messages to be sent across the pipe or \s-1FIFO\s0
+[see \f4streamio\fP(7)].
+.P
+When writing to a stream, data messages are created with a priority band
+of zero.
+When writing to a stream that is not a pipe or \s-1FIFO\s0:
+.IP ""
+If \f4O_NDELAY\f1 and \f4O_NONBLOCK\f1 are not set, and the
+stream cannot accept data (the stream write queue
+is full because of internal flow control conditions),
+\f4write\f1 blocks until data can be accepted.
+.IP ""
+If \f4O_NDELAY\f1 or \f4O_NONBLOCK\f1 is set
+and the stream cannot accept data, \f4write\fP
+returns \f4-1\f1 and sets \f4errno\f1 to \f4EAGAIN\f1.
+.IP ""
+If \f4O_NDELAY\f1 or \f4O_NONBLOCK\f1 is set and
+part of the buffer has already been written when a
+condition occurs in which the stream cannot accept additional data,
+\f4write\f1 terminates and returns the number of bytes written.
+.P
+The number of bytes written may be less than \f2nbyte\fP.
+This can occur if the \f4write\fP gets interrupted for some reason, but
+some bytes have already been written.
+.PP
+\f4write\fP and \f4writev\fP
+fail and the file pointer remains unchanged if one or more of the
+following are true:
+.TP 15
+\f4EAGAIN\fP
+Mandatory file/record locking is set,
+\f4O_NDELAY\fP or \f4O_NONBLOCK\fP
+is set, and there is a blocking record lock.
+.TP
+\f4EAGAIN\fP
+Total amount of system memory available when reading via raw I/O is temporarily
+insufficient.
+.TP
+\f4EAGAIN\fP
+An attempt is made to write to a stream that can not accept data with
+the \f4O_NDELAY\fP or \f4O_NONBLOCK\fP flag set.
+.TP
+\f4EAGAIN\fP
+If a \f4write\fP to a pipe or \s-1FIFO\s0 of \f4{PIPE_BUF}\fP bytes or
+less is requested and less than \f2nbyte\f1 of free space is available.
+.TP
+\f4EAGAIN\fP
+A DMAPI application might delay a considerable time retrieving
+a portion of the file data needed for the write to proceed,
+and \f4O_NDELAY\fP or \f4O_NONBLOCK\fP was set.
+.TP
+\f4EBADF\fP
+.I fildes\^
+is not a valid file descriptor open for writing.
+.TP
+\f4EDEADLK\fP
+The \f4write\fP was going to go to sleep
+and cause a deadlock to occur.
+.TP
+\f4EFAULT\fP
+.I buf\^
+points outside the process's allocated address space.
+.TP
+\f4EFBIG\fP
+An attempt is made to write a file that exceeds the
+process's file size limit or the maximum file size
+[see
+\f4getrlimit\fP(2)
+and
+\f4ulimit\fP(2)].
+.TP
+\f4EINTR\fP
+A signal was caught during the
+\f4write\fP
+system call and no bytes had been written.
+.TP
+\f4EINVAL\fP
+An attempt is made to write to a stream linked below a multiplexor.
+.TP
+\f4EINVAL\fP
+\f2fildes\fP has \f4O_DIRECT\fP or \f4FDIRECT\fP set and either the buffer
+alignment, current file pointer alignment or write request size is
+not valid for direct I/O.
+See also \f4F_DIOINFO\fP in \f4fcntl\fP(2).
+.TP
+\f4EIO\fP
+The process is in the background and is attempting to write to its
+controlling terminal whose \f4TOSTOP\fP flag is set;
+the process is
+neither ignoring nor blocking \f4SIGTTOU\fP signals, and the process
+group of the process is orphaned.
+.TP
+\f4EIO\fP
+\f2fildes\fP points to a device special file that is in the closing
+state.
+.TP
+\f4ENOLCK\fP
+The system record lock table was full, so the \f4write\fP
+could not go to sleep
+until the blocking record lock was removed.
+.\".TP
+.\"\f4ENOLINK\fP
+.\"\f2fildes\f1 is on a remote machine and the link
+.\"to that machine is no longer active.
+.TP
+\f4ENOSR\fP
+An attempt is made to write to a stream with insufficient \s-1STREAMS\s0 memory resources
+available in the system.
+.TP
+\f4ENOSPC\fP
+During a \f4write\fP to an ordinary file, there is no
+free space left on the device.
+.TP
+\f4ENXIO\fP
+The device associated with the file descriptor is a
+block-special or character-special file and the file-pointer
+value is out of range.
+.TP
+\f4EPIPE\fP and \f4SIGPIPE\fP signal
+An attempt is made to write to a pipe that is not open
+for reading by any process.
+.TP
+\f4EPIPE\fP
+An attempt is made to write to a \s-1FIFO\s0 that is not open for
+reading by any process.
+.TP
+\f4EPIPE\fP
+An attempt is made to write to a pipe that has only one end open.
+.TP
+\f4ERANGE\fP
+An attempt is made to write to a stream with \f2nbyte\fP outside specified minimum and
+maximum write range, and the minimum value is non-zero.
+.TP
+\f4ETIMEDOUT\fP
+The object of the write is located on a remote system which is not available [see \f4intro\fP(2)].
+.TP
+\f4ENOLCK\fP
+Enforced record locking was enabled and \f4{LOCK_MAX}\fP regions
+are already locked in the system.
+.TP
+\f4ESPIPE\f1
+\f2pwrite\fP or \f2pwrite64\fP was called on a file incapable of seeking.
+.PP
+In addition, \f4writev\f1
+may return one of the following errors:
+.TP 15
+\f4EINVAL\f1
+\f2iovcnt\f1 was less than or equal to 0,
+or greater than \f4{IOV_MAX}\fP. \f4{IOV_MAX}\fP can be obtained 
+from a call to \f4sysconf\fP() [see \f4sysconf\fP(3C)].
+.TP 15
+\f4EINVAL\f1
+An \f4iov_len\f1 value in the \f2iov\f1
+array was negative.
+.TP 15
+\f4EINVAL\f1
+The sum of the \f4iov_len\f1 values in the
+\f2iov\f1 array overflowed a 32-bit integer.
+.P
+A \f4write\fP to a \s-1STREAMS\s0 file can fail
+if an error message has been received at the stream head.
+In this case, \f4errno\fP is set to the value included
+in the error message.
+.P
+After carrier loss, \f4M_HANGUP\f1 is set, and a subsequent write
+will return \-1 with \f4errno\fP set to \f4EIO\f1.
+To write after disconnecting and
+reconnecting the line, set the \f4CLOCAL\f1 flag
+to tell the driver to ignore the state of the line
+and the driver will not send \f4M_HANGUP\f1 to the stream head.
+If \f4CLOCAL\f1 is not set, and hangup \%occurs,
+the application is responsible for re-establishing the connection.
+.P
+On successful completion \f4write\fP and \f4writev\fP mark for update the
+\f4st_ctime\fP and \f4st_mtime\fP fields of the file.
+.SH "SEE ALSO"
+\f4creat\fP(2),
+\f4dup\fP(2),
+\f4fcntl\fP(2),
+\f4getrlimit\fP(2),
+\f4intro\fP(2),
+\f4lseek\fP(2),
+\f4open\fP(2),
+\f4pipe\fP(2),
+\f4sysconf\fP(3C),
+\f4types\fP(5),
+\f4ulimit\fP(2)
+.SH "DIAGNOSTICS"
+On success, \f4write\fP returns
+the number of bytes actually written.
+Otherwise, it returns \-1 and sets \f4errno\fP
+to identify the error.

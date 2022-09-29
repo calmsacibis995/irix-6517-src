@@ -1,0 +1,155 @@
+#! /bin/sh
+#
+# Start/stop auditing
+#
+# $Revision: 1.23 $
+
+# Customers are fervently discouraged from editing this file.
+# To override default audit characteristics, create files
+# satd.options and sat_select.options in /etc/config.
+#
+# To insert one or more filters after satd, place their command
+# lines into /etc/config in files with names that begin with
+# "satd.filter". If any of these files are found, the output
+# of satd will be piped to them in the order that they are
+# found using ls. For example, if "satd.filter-1" contains "myfilt -o",
+# "satd.filter-2" contains "altfilt -q blah" and "satd.options"
+# contains "-f /SATDIR", then the following would be executed:
+#   satd -f /SATDIR -o | myfilt -o | altfilt -q blah
+#
+# To avoid having satd save audit data to files (e.g. the data
+# is entirely consumed by filters) create a satd.options file
+# containing only the string "<NONE>".
+
+
+IS_ON=/etc/chkconfig
+CONFIG=/etc/config
+
+if $IS_ON verbose ; then	# For a verbose startup and shutdown
+    ECHO=echo
+else				# For a quiet startup and shutdown
+    ECHO=:
+fi
+
+case "$1" in
+'start')
+
+    set /sat/satd.emergency-?
+    if [ $1 != "/sat/satd.emergency-?" ]; then
+	echo "Warning! Audit emergency file(s) detected (/sat/satd.emergency-*)"
+	echo "Move to an appropriate place soon."
+    fi
+
+    # kill any old daemons
+    /sbin/suattr -M dbadmin -C CAP_KILL+ip -c "/etc/killall -TERM satd"
+
+    # exit if not configured on
+    if $IS_ON audit; then
+	:
+    else
+	exit 0
+    fi
+
+    # Make sure that satd and sat_select are executable
+    if test ! -x /bin/satd -o ! -x /bin/sat_select; then
+	echo "audit: no /bin/satd or /bin/sat_select; can't start auditing"
+	exit 255
+    fi
+
+    $ECHO "Audit daemon: \c"
+
+    # ignore SIGHUP from init, so the backgrounded demon will not be killed
+    trap "" 1
+
+    # Gather up options for satd and the optional filters
+    if test -s $CONFIG/satd.options; then
+	SATD_OPTS=`cat $CONFIG/satd.options 2> /dev/null`
+	if [ "$SATD_OPTS" = "<NONE>" ]; then
+	    SATD_OPTS=""
+	fi
+    else
+	SATD_OPTS="-f /var/adm/sat"
+    fi
+
+    FILTER=""
+    if [ -f $CONFIG/satd.filter* ]; then
+	for CurrName in `ls $CONFIG/satd.filter*`; do
+	    CurrFilt=`cat $CurrName 2> /dev/null`
+	    if [ "$CurrFilt" != "" ]; then
+                FILTER="$FILTER | $CurrFilt"
+	    fi
+	done
+    fi
+
+    # Start up satd
+    if [ "$FILTER" = "" ]; then
+	/sbin/suattr -M dbadmin -C CAP_AUDIT_CONTROL,CAP_SETUID+ip -c "/bin/satd $SATD_OPTS"
+    else
+	Delay=`cat $CONFIG/satd.delay 2> /dev/null  ||  echo 2`
+        eval "/sbin/suattr -M dbadmin -C CAP_AUDIT_CONTROL,CAP_SETUID+ip -c \"/bin/satd -o $SATD_OPTS $FILTER \" &"
+	$ECHO "filters \c"
+	sleep $Delay
+    fi
+
+    SatdRC=$?
+
+    if [ $SatdRC -ne 0 ]; then
+	echo "!!! WARNING"
+	echo "!!! satd did not start successfully."
+	echo "!!! satd must be restarted or system will HANG."
+	exit 1
+    fi
+
+# satconfig reads this file to determine factory default event settings.
+# It is sensitive to the format of the event list.  Maintainers of this
+# file should edit cautiously and test satconfig before finalizing changes.
+
+    if test -s $CONFIG/sat_select.options; then
+	/sbin/suattr -M dbadmin -C CAP_AUDIT_CONTROL+ip -c '/bin/sat_select \
+	    `cat '$CONFIG'/sat_select.options`' > /dev/null 2>&1
+    else
+	/sbin/suattr -M dbadmin -C CAP_AUDIT_CONTROL+ip -c "/bin/sat_select \
+	    -off sat_check_priv -off all \
+	    \
+	    -on sat_access_denied -on sat_chdir -on sat_chroot \
+	    -on sat_open -on sat_file_crt_del \
+	    -on sat_file_crt_del2 -on sat_file_write -on sat_mount \
+	    -on sat_file_attr_write -on sat_exec -on sat_sysacct \
+	    \
+	    -on sat_fchdir -on sat_tty_setlabel -on sat_fd_attr_write \
+	    \
+	    -on sat_fork -on sat_exit -on sat_proc_read -on sat_proc_write \
+	    -on sat_proc_attr_write -on sat_proc_own_attr_write \
+	    \
+	    -on sat_svipc_create -on sat_svipc_remove -on sat_svipc_change \
+	    \
+	    -on sat_bsdipc_create -on sat_bsdipc_create_pair \
+	    \
+	    -on sat_clock_set -on sat_hostname_set -on sat_domainname_set \
+	    -on sat_hostid_set -on sat_check_priv \
+	    \
+	    -on sat_ae_audit -on sat_ae_identity -on sat_ae_dbedit \
+	    -on sat_ae_mount" > /dev/null 2>&1
+    fi
+    SatSelectRC=$?
+
+    $ECHO "satd."
+
+    if [ $SatSelectRC -ne 0 ]; then
+	echo "!!! WARNING"
+	echo "!!! sat_select did not complete successfully."
+	echo "!!! audit data may be incomplete."
+    fi
+    ;;
+
+'stop')
+    # give satd time to finish writing any records
+    /sbin/suattr -M dbadmin -C CAP_AUDIT_CONTROL+ip -c "/bin/sat_select -off all" > /dev/null 2>&1  &&  \
+	sleep 2  &&  \
+	/sbin/suattr -M dbadmin -C CAP_KILL+ip -c "/etc/killall -TERM satd"
+    ;;
+
+*)
+    echo "usage: $0 {start|stop}"
+    ;;
+esac

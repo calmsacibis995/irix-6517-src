@@ -1,0 +1,1012 @@
+# This is an ide startup file.
+#ident EVEREST/shell
+# $Revision: 1.52 $
+report=2
+hinv -v
+
+scripts {
+echo ""
+echo "IDE included scripts are:"
+echo ""
+echo "  ipall       - invokes ip1 to ip9"
+echo "  tlball      - invokes tlb1 to tlb9"
+echo "  quickfpu    - invokes fpu1 to fpu13"
+echo "  quickcache  - invokes cache1-20, 22-38, 40-44, 47 & 49"
+echo "  quickip19   - invokes all of the above and mem18, mem16"
+echo "  fpuall      - invokes fpu1 to fpu14"
+echo "  cacheall    - invokes cache1 to cache48"
+echo "  ip19        - invokes all tests for IP19"
+echo "  memall      - invokes mem2 to mem10, mem13 and mem16"
+echo "  memfast     - invokes mem3, mem5, mem8 to mem10, mem16"
+echo "  io_all      - invokes all tests for IO4"
+echo "  scsi_all    - invokes all SCSI tests for IO4"
+echo "  dang_all    - invokes all DANG/GGAM tests for IO4"
+echo "  ev_quick    - invokes standalone diag suite quickly"
+echo "  everest_all - invokes entire standalone diag suite"
+echo "  mp TEST SET - invokes TEST on SET defined for MP execution"
+echo "  mpstress    - invokes mp cache coherency test"
+echo "  mpcachesz [1/4] - verifies 1 or 4 MB scache installation"
+echo "  runadmin    - changes the contents of the global set 'runcpus'"
+echo "  scripts     - displays this list"
+echo ""
+echo "  ** 'exit' or 'quit' returns to PROM monitor**"
+echo "  ** Always reset system ('reset' at PROM prompt) before booting IDE **"
+echo ""
+}
+
+runadmin {
+echo ""
+echo "Use the following scripts to change contents of 'runcpus':"
+echo ""
+echo "  runmode         - display current contents of 'runcpus'"
+echo "  runall          - include all enabled processors in 'runcpus'"
+echo "  runon CPU#      - include only specified processor in 'runcpus'"
+echo "  runexcp CPU#    - include all except specified processor in 'runcpus'"
+echo ""
+}
+
+# define a batch of shorthands for often-needed commands 
+#
+
+printf "  - define runmode,"
+runmode {
+  echo "MP execution currently set to: " 
+  display_set -s "runcpus"
+}
+
+create_set -s "everycpus"
+printf " runall,"
+runall {
+  $temp=set_exists -s "runcpus"
+  if ($temp == 0) {
+    create_set -s "runcpus"
+  }
+  set_differ -s "runcpus,runcpus,runcpus"
+  set_union -s "everycpus,runcpus,runcpus"
+  runmode
+}
+
+printf " runon,"
+runon {
+  $temp=set_exists -s "runcpus"
+  if ($temp == 0) {
+    create_set -s "runcpus" -e
+  }
+  set_differ -s "runcpus,runcpus,runcpus"
+  add_cpu -s "runcpus" -v $1
+  runmode
+}
+
+printf " runexcp,"
+runexcp {
+  $temp=set_exists -s "runcpus"
+  if ($temp == 0) {
+    create_set -s "runcpus"
+  }
+  $temp=cpu_in -s "runcpus" -v $1
+  if ($temp == 0) return
+  set_union -s "runcpus,everycpus,runcpus"
+  del_cpu -s "runcpus" -v $1
+  runmode
+}
+
+printf " mp,"
+mp {
+  if ($$ != 3) {
+    echo "Usage: mp TEST SET"
+    return
+  }
+  $temp=set_exists -s $2
+  if ($temp == 0) {
+    echo "Please define '"$2"' using 'create_set' first"
+    return
+  }
+  exec -f $1 -s $2
+}
+
+printf " list,"
+list {
+    if ($$ == 1) {
+        printf "list "
+        symbols -l
+        printf "\n"
+        return 0
+    } else {
+        $res_ult = symbols -t $1
+        return $res_ult
+    }
+}
+
+printf " match,"
+match {
+    if ($$ == 1) {
+        printf "usage: match KEYSTRING\n"
+        return -1
+    } else {
+        $res_ult = symbols -k $1
+        return $res_ult
+    }
+}
+
+isaset {
+    $r_es = set_exists -s $1
+    return $r_es
+}
+
+isamember {
+    $r_es = cpu_in -v $1 -s $2
+    return $r_es
+}
+
+clear_set {
+    if (isaset "mty_set" == $FALSE) {
+	create_set -s "mty_set" -e
+    }
+    if (isaset $1 == $FALSE) {
+	printf ("set not found\n");
+	return $FALSE
+    }
+    $1 = $mty_set
+    return $TRUE
+}
+
+cpu_count {
+    $cnt = 0
+    for ($loop=0; $loop<64; $loop++) {
+        if (isamember $loop $1) {
+            $cnt+=1
+        }
+    }
+    return $cnt
+}
+
+printf " hx\n"
+hx {
+  printf "0x%x\n" $1
+}
+#
+# define simple usec, msec, and second delays
+# printf "  - delays with intervals of usec, msec, and second granularity:\n"
+# printf "    --> us_delay, ms_delay, and sleep.\n    usages: "
+# printf "    'us_delay USECS'   'ms_delay MSECS'   'sleep SECS'\n"
+
+us_delay {
+  ide_delay -u $1
+}
+# eg: 'us_delay 100'
+
+ms_delay {
+  ide_delay -m $1
+}
+# eg: 'ms_delay 15'
+
+sleep {
+  ide_delay -s $1
+}
+# eg: 'sleep 5'
+
+printf "  - define symcmd, charcmd, set_charcmd, newset, showset\n"
+# demonstrate parameter-passing for user-defined commands which 
+# call functions using the 'sym_t *' argv format
+symcmd {
+  test_symcmd $1
+}
+
+# and for udef commands calling functions using 'char *' argv format
+charcmd {
+  test_charcmd  $1 $2
+}
+
+# here's an example using the set-execution stuff
+set_charcmd {
+  test_charcmd -- -s $1 -i -- $2 $3
+}
+
+newset {
+  $R_ES = create_set -s $1
+  return $R_ES
+}
+
+showset {
+  $R_ES = display_set -s $1
+  return $R_ES
+}
+
+# get_vpinfo SETNAME
+# echo "define get_vpinfo"
+# cpuinfo {
+# change and restore report to mute the helpful verbosity
+#   $tmpr = $report
+#   $report = 1
+#   printf " init '%s' with the set of active virtual processors\n" $1
+#   $res_ = create_set -s $1
+#   if ($res_ != 0) {
+#     printf "\nget_vpinfo: create_set failed (%d)\n" $res
+#   } else {
+#     printf "  %s: " $1
+#     display_set -s $1
+#     printf "\n"
+#   }
+#   $report = $tmpr
+#   return $res
+# }
+
+
+printf "  - define subdue, restore,"
+subdue {
+  $2 = $report
+  $report = $1
+  $srvalid_ = 0xd0dd
+}
+
+restore {
+  if ($srvalid_ == 0xd0dd) {
+    $report = $2
+  }
+  $srvalid_ = 0xdead
+}
+
+# defines for the memory tests to make them "automatically" icached
+mem2 {
+runcached on
+clear_intrs
+mem2_
+runcached off
+}
+
+mem3 {
+runcached on
+clear_intrs
+mem3_
+runcached off
+}
+
+mem4 {
+runcached on
+clear_intrs
+mem4_
+runcached off
+}
+
+mem5 {
+runcached on
+clear_intrs
+mem5_
+runcached off
+}
+
+mem6 {
+runcached on
+clear_intrs
+mem6_
+runcached off
+}
+
+mem7 {
+runcached on
+clear_intrs
+mem7_
+runcached off
+}
+
+mem8 {
+runcached on
+clear_intrs
+mem8_
+runcached off
+}
+
+mem9 {
+runcached on
+clear_intrs
+mem9_
+runcached off
+}
+
+mem10 {
+runcached on
+clear_intrs
+mem10_
+runcached off
+}
+
+mem13 {
+runcached on
+clear_intrs
+mem13_
+runcached off
+}
+
+mem15 {
+runcached on
+clear_intrs
+mem15_
+runcached off
+}
+
+mem16 {
+runcached on
+clear_intrs
+mem16_
+runcached off
+}
+mem17 {
+runcached on
+clear_intrs
+mem17_
+runcached off
+}
+mem18 {
+runcached on
+clear_intrs
+mem18_
+runcached off
+}
+# THE STARTUP SCRIPT FOR THE CPU DIAGNOSTICS WILL BE HERE.
+# 
+printf " ipall"
+ipall {
+ip1 -- -s "runcpus" --
+ip2 -- -s "runcpus" --
+ip3 -- -s "runcpus" --
+ip4 -- -s "runcpus" --
+ip5 -- -s "runcpus" --
+ip6 -- -s "runcpus" --
+ip7 -- -s "runcpus" --
+ip8 -- -s "runcpus" --
+ip9 -- -s "runcpus" --
+printf "Finished ipall\n"
+}
+
+printf ", tlball\n"
+tlball {
+tlb1 -- -s "runcpus" --
+tlb2 -- -s "runcpus" --
+tlb3 -- -s "runcpus" --
+tlb4 -- -s "runcpus" --
+tlb5 -- -s "runcpus" --
+tlb6 -- -s "runcpus" --
+tlb7 -- -s "runcpus" --
+tlb8 -- -s "runcpus" --
+tlb9 -- -s "runcpus" --
+printf "Finished tlball\n"
+}
+
+printf "  - define quickfpu"
+quickfpu {
+fpu1 -- -s "runcpus" --
+fpu2 -- -s "runcpus" --
+fpu3 -- -s "runcpus" --
+fpu4 -- -s "runcpus" --
+fpu5 -- -s "runcpus" --
+fpu6 -- -s "runcpus" --
+fpu7 -- -s "runcpus" --
+fpu8 -- -s "runcpus" --
+fpu9 -- -s "runcpus" --
+fpu10 -- -s "runcpus" --
+fpu11 -- -s "runcpus" --
+fpu12 -- -s "runcpus" --
+fpu13 -- -s "runcpus" --
+printf "Finished quickfpu\n"
+}
+
+printf ", fpuall"
+fpuall {
+quickfpu
+fpu14 -- -s "runcpus" --
+printf "Finished fpuall\n"
+}
+
+printf ", quickcache"
+quickcache {
+cache1 -- -s "runcpus" --
+cache2 -- -s "runcpus" --
+cache3 -- -s "runcpus" --
+cache4 -- -s "runcpus" --
+cache5 -- -s "runcpus" --
+cache6 -- -s "runcpus" --
+cache7 -- -s "runcpus" --
+cache8 -- -s "runcpus" --
+cache9 -- -s "runcpus" --
+cache10 -- -s "runcpus" --
+cache11 -- -s "runcpus" --
+cache12 -- -s "runcpus" --
+cache13 -- -s "runcpus" --
+cache14 -- -s "runcpus" --
+cache15 -- -s "runcpus" --
+cache16 -- -s "runcpus" --
+cache17 -- -s "runcpus" --
+cache18 -- -s "runcpus" --
+cache19 -- -s "runcpus" --
+cache20 -- -s "runcpus" --
+cache22 -- -s "runcpus" --
+cache23 -- -s "runcpus" --
+cache24 -- -s "runcpus" --
+cache25 -- -s "runcpus" --
+cache26 -- -s "runcpus" --
+cache27 -- -s "runcpus" --
+cache28 -- -s "runcpus" --
+cache29 -- -s "runcpus" --
+cache30 -- -s "runcpus" --
+cache31 -- -s "runcpus" --
+cache32 -- -s "runcpus" --
+cache33 -- -s "runcpus" --
+cache34 -- -s "runcpus" --
+cache35 -- -s "runcpus" --
+cache36 -- -s "runcpus" --
+cache37 -- -s "runcpus" --
+cache38 -- -s "runcpus" --
+cache40 -- -s "runcpus" --
+cache41 -- -s "runcpus" --
+cache42 -- -s "runcpus" --
+cache43 -- -s "runcpus" --
+cache44 -- -s "runcpus" --
+cache47 -- -s "runcpus" --
+cache49 -- -s "runcpus" --
+cache50 -- -s "runcpus" --
+printf "Finished quickcache\n"
+}
+
+printf ", cacheall"
+cacheall {
+    quickcache
+    cache21 -- -s "runcpus" --
+    cache39 -- -s "runcpus" --
+    cache45 -- -s "runcpus" --
+    cache46 -- -s "runcpus" --
+    cache48 -- -s "runcpus" --
+    printf "Finished cacheall\n"
+}
+
+printf ", quickip19"
+quickip19 {
+ipall
+tlball
+quickfpu
+qmode on
+mem18
+mem16
+quickcache
+printf "Finished quickip19\n"
+}
+
+printf ", and ip19\n"
+ip19 {
+ipall
+tlball
+fpuall
+qmode on
+mem18
+mem16
+cacheall
+printf "Finished ip19\n"
+}
+
+checkcache {
+  if ($$ != 3) {
+    echo "Usage: checkcache vid ScacheSizeinMB"
+    return
+  }
+    if ($2 == 1) {
+    $failcache = exec -v $1 -f "mpchk_cache" -a "1"
+    }
+    if ($2 == 4) {
+    $failcache = exec -v $1 -f "mpchk_cache" -a "4"
+    }
+}
+
+mpcachesz {
+  if ($$ != 2) {
+    echo "Usage: mpcachesz ScacheSizeinMB e.g. mpcachesz 4"
+    return
+  }
+  if ($1 != 1) {
+    if ($1 != 4) {
+	echo "Only 1 or 4MB is supported"
+	return
+    }
+  }
+  $cpus = cpu_count "runcpus"
+  echo "Start checking scache installations on each CPU"
+  for ($loop=0; $loop<$cpus; $loop++) {
+	checkcache $loop $1
+	if ($failcache == 2) {
+	    quit
+	}
+  }
+}
+
+printf "  - define mptest"
+mptest {
+    if ($report >= 3) {
+	printf "Invalidate caches from cpu slices"
+	showset "allcpus";printf "\n"
+    }
+    exec -s "allcpus" -f mpinval
+
+    if ($report >= 3) {
+	printf "Check invalid state from cpu slices"
+	showset "allcpus";printf "\n"
+    }
+    exec -s "allcpus" -f mpchk_cstate -a "0 0x2000000"
+
+    if ($report >= 3) {
+	printf "Initialize uncached memory from cpu slice"
+	showset "master";printf "\n"
+    }
+    exec -s "master" -f mpmem_wr -a "0xa2000000 0x10000 0xdeadbeef"
+
+    if ($report >= 3) {
+	printf "Verify uncached memory contents from cpu slices"
+	showset "allslaves";printf "\n"
+    }
+    exec -s "allslaves" -f mpmem_rd -a "0xa2000000 0x10000 0xdeadbeef"
+
+    if ($report >= 3) {
+	printf "Check invalid state from cpu slices"
+	showset "allcpus";printf "\n"
+    }
+    exec -s "allcpus" -f mpchk_cstate -a "0 0x2000000"
+
+    if ($report >= 3) {
+	printf "Verify cached memory contents from cpu slice"
+	showset "firstslave";printf "\n"
+    }
+    exec -s "firstslave" -f mpmem_rd -a "0x82000000 0x10000 0xdeadbeef"
+
+    if ($report >= 3) {
+	printf "Check clean exclusive state from cpu slice"
+	showset "firstslave";printf "\n"
+    }
+    exec -s "firstslave" -f mpchk_cstate -a "1 0x2000000"
+
+    if ($report >= 3) {
+	printf "Verify cache memory contents from cpu slices"
+	showset "allslaves";printf "\n"
+    }
+    exec -s "allslaves" -f mpmem_rd -a "0x82000000 0x10000 0xdeadbeef"
+
+    if ($report >= 3) {
+	printf "Check shared state from cpu slices"
+	showset "allslaves";printf "\n"
+    }
+    exec -s "allslaves" -f mpchk_cstate -a "3 0x2000000"
+
+    if ($report >= 3) {
+	printf "Invalidate caches from all cpu slices"
+	showset "allcpus";printf "\n"
+    }
+    exec -s "allcpus" -f mpinval
+
+    if ($report >= 3) {
+	printf "Check invalid state from cpu slices"
+	showset "allcpus";printf "\n"
+    }
+    exec -s "allcpus" -f mpchk_cstate -a "0 0x2000000"
+
+    if ($report >= 3) {
+	printf "Write cached memory from cpu slice" 
+	showset "firstslave";printf "\n"
+    }
+    exec -s "firstslave" -f mpmem_wr -a "0x82000000 0x10000 0x1"
+
+    if ($report >= 3) {
+	printf "Check dirty exclusive state from cpu slice" 
+	showset "firstslave";printf "\n"
+    }
+    exec -s "firstslave" -f mpchk_cstate -a "2 0x2000000"
+
+    if ($report >= 3) {
+	printf "Verify uncache memory contents from cpu slice" 
+	showset "secondslave";printf "\n"
+    }
+    exec -s "secondslave" -f mpmem_rd -a "0xa2000000 0x10000 0xdeadbeef"
+
+    if ($report >= 3) {
+	printf "Check dirty exclusive state from cpu slice" 
+	showset "firstslave";printf "\n"
+    }
+    exec -s "firstslave" -f mpchk_cstate -a "2 0x2000000"
+
+    if ($report >= 3) {
+	printf "Check invalid state from cpu slice" 
+	showset "secondslave";printf "\n"
+    }
+    exec -s "secondslave" -f mpchk_cstate -a "0 0x2000000"
+
+    if ($report >= 3) {
+	printf "Write uncache memory from cpu slice" 
+	showset "secondslave";printf "\n"
+    }
+    exec -s "secondslave" -f mpmem_wr -a "0xa2000000 0x10000 0x2"
+
+    if ($report >= 3) {
+	printf "Verify cache memory contents from cpu slice" 
+	showset "secondslave";printf "\n"
+    }
+    exec -s "secondslave" -f mpmem_rd -a "0x82000000 0x10000 0x1"
+
+    if ($report >= 3) {
+	printf "Check shared state from cpu slice" 
+	showset "firstslave";printf "\n"
+    }
+    exec -s "firstslave" -f mpchk_cstate -a "3 0x2000000"
+
+    if ($report >= 3) {
+	printf "Check shared state from cpu slice" 
+	showset "secondslave";printf "\n"
+    }
+    exec -s "secondslave" -f mpchk_cstate -a "3 0x2000000"
+
+    if ($report >= 3) {
+	printf "Write cached memory from cpu slice" 
+	showset "secondslave";printf "\n"
+    }
+    exec -s "secondslave" -f mpmem_wr -a "0x82000000 0x10000 0xdeadbeef"
+
+    if ($report >= 3) {
+	printf "Check invalid state from cpu slice" 
+	showset "firstslave";printf "\n"
+    }
+    exec -s "firstslave" -f mpchk_cstate -a "0 0x2000000"
+
+    if ($report >= 3) {
+	printf "Check dirty exclusive state from cpu slice" 
+	showset "secondslave";printf "\n"
+    }
+    exec -s "secondslave" -f mpchk_cstate -a "2 0x2000000"
+
+    if ($report >= 3) {
+	printf "Write cached memory from cpu slice" 
+	showset "firstslave";printf "\n"
+    }
+    exec -s "firstslave" -f mpmem_wr -a "0x82000000 0x10000 0x1"
+
+    if ($report >= 3) {
+	printf "Check dirty exclusive state from cpu slice" 
+	showset "firstslave";printf "\n"
+    }
+    exec -s "firstslave" -f mpchk_cstate -a "2 0x2000000"
+
+    if ($report >= 3) {
+	printf "Check invalid state from cpu slice" 
+	showset "secondslave";printf "\n"
+    }
+    exec -s "secondslave" -f mpchk_cstate -a "0 0x2000000"
+
+}
+
+printf ", mpend"
+mpend {
+    add_cpu -s "master" -v "0"
+    set_differ -s "allslaves,master,allslaves"
+    add_cpu -s "firstslave" -v "1"
+    add_cpu -s "secondslave" -v "2"
+}
+
+printf ", mpstress\n"
+mpstress {
+    $temp=set_exists -s "allcpus"
+    if ($temp == 0) {
+	create_set -s "allcpus"
+    }
+    $temp=set_exists -s "allslaves"
+    if ($temp == 0) {
+    	create_set -s "allslaves"
+    }
+    $temp=set_exists -s "master"
+    if ($temp == 0) {
+    	create_set -s "master" -e
+    }
+    else {
+	set_differ -s "master,master,master"
+    }
+    add_cpu -s "master" -v "0"
+    set_differ -s "allslaves,master,allslaves"
+    $temp=set_exists -s "firstslave"
+    if ($temp == 0) {
+    	create_set -s "firstslave" -e
+    }
+    else {
+	set_differ -s "firstslave,firstslave,firstslave"
+    }
+    add_cpu -s "firstslave" -v "1"
+    $temp=cpu_in -s "allcpus" -v "2"
+    if ($temp == 1) {
+	$temp=set_exists -s "secondslave"
+	if ($temp == 0) {
+	    create_set -s "secondslave" -e
+	}
+	else {
+	    set_differ -s "secondslave,secondslave,secondslave"
+	}
+	add_cpu -s "secondslave" -v "2"
+    }
+    else {
+	echo "mpstress test aborted - 3rd cpu slices required but not detected"
+	return(1)
+    }
+    mptest
+    add_cpu -s "allslaves" -v "0"
+    del_cpu -s "master" -v "0"
+    add_cpu -s "master" -v "1"
+    set_differ -s "allslaves,master,allslaves"
+    del_cpu -s "firstslave" -v "1"
+    add_cpu -s "firstslave" -v "2"
+    del_cpu -s "secondslave" -v "2"
+    $temp=cpu_in -s "allcpus" -v "3"
+    if ($temp == 1) {
+        add_cpu -s "secondslave" -v "3"
+    }
+    else {
+	echo "mpstress test ended - 3 cpu slices have been tested"
+	set_union -s "master,allslaves,allslaves"
+	del_cpu -s "master" -v "1"
+	del_cpu -s "firstslave" -v "2"
+	mpend
+	return(0)
+    }
+    mptest
+    add_cpu -s "allslaves" -v "1"
+    del_cpu -s "master" -v "1"
+    add_cpu -s "master" -v "2"
+    set_differ -s "allslaves,master,allslaves"
+    del_cpu -s "firstslave" -v "2"
+    add_cpu -s "firstslave" -v "3"
+    del_cpu -s "secondslave" -v "3"
+    $temp=cpu_in -s "allcpus" -v "4"
+    if ($temp == 1) {
+        add_cpu -s "secondslave" -v "4"
+    }
+    else {
+	echo "mpstress test ended - 4 cpu slices have been tested"
+	set_union -s "master,allslaves,allslaves"
+	del_cpu -s "master" -v "2"
+	del_cpu -s "firstslave" -v "3"
+	mpend
+	return(0)
+    }
+    mptest
+    add_cpu -s "allslaves" -v "2"
+    del_cpu -s "master" -v "2"
+    add_cpu -s "master" -v "3"
+    set_differ -s "allslaves,master,allslaves"
+    del_cpu -s "firstslave" -v "3"
+    add_cpu -s "firstslave" -v "4"
+    del_cpu -s "secondslave" -v "4"
+    $temp=cpu_in -s "allcpus" -v "5"
+    if ($temp == 1) {
+        add_cpu -s "secondslave" -v "5"
+    }
+    else {
+	echo "mpstress test ended - 5 cpu slices have been tested"
+	set_union -s "master,allslaves,allslaves"
+	del_cpu -s "master" -v "3"
+	del_cpu -s "firstslave" -v "4"
+	mpend
+	return(0)
+    }
+    mptest
+    add_cpu -s "allslaves" -v "3"
+    del_cpu -s "master" -v "3"
+    add_cpu -s "master" -v "4"
+    set_differ -s "allslaves,master,allslaves"
+    del_cpu -s "firstslave" -v "4"
+    add_cpu -s "firstslave" -v "5"
+    del_cpu -s "secondslave" -v "5"
+    $temp=cpu_in -s "allcpus" -v "6"
+    if ($temp == 1) {
+        add_cpu -s "secondslave" -v "6"
+    }
+    else {
+	echo "mpstress test ended - 6 cpu slices have been tested"
+	set_union -s "master,allslaves,allslaves"
+	del_cpu -s "master" -v "4"
+	del_cpu -s "firstslave" -v "5"
+	mpend
+	return(0)
+    }
+    mptest
+    add_cpu -s "allslaves" -v "4"
+    del_cpu -s "master" -v "4"
+    add_cpu -s "master" -v "5"
+    set_differ -s "allslaves,master,allslaves"
+    del_cpu -s "firstslave" -v "5"
+    add_cpu -s "firstslave" -v "6"
+    del_cpu -s "secondslave" -v "6"
+    $temp=cpu_in -s "allcpus" -v "7"
+    if ($temp == 1) {
+        add_cpu -s "secondslave" -v "7"
+    }
+    else {
+	echo "mpstress test ended - 7 cpu slices have been tested"
+	set_union -s "master,allslaves,allslaves"
+	del_cpu -s "master" -v "5"
+	del_cpu -s "firstslave" -v "6"
+	mpend
+	return(0)
+    }
+    mptest
+    add_cpu -s "allslaves" -v "5"
+    del_cpu -s "master" -v "5"
+    add_cpu -s "master" -v "6"
+    set_differ -s "allslaves,master,allslaves"
+    del_cpu -s "firstslave" -v "6"
+    add_cpu -s "firstslave" -v "7"
+    del_cpu -s "secondslave" -v "7"
+    add_cpu -s "secondslave" -v "0"
+    mptest
+    add_cpu -s "allslaves" -v "6"
+    del_cpu -s "master" -v "6"
+    add_cpu -s "master" -v "7"
+    set_differ -s "allslaves,master,allslaves"
+    del_cpu -s "firstslave" -v "7"
+    add_cpu -s "firstslave" -v "0"
+    del_cpu -s "secondslave" -v "0"
+    add_cpu -s "secondslave" -v "1"
+    mptest
+    echo "mpstress test ended - 8 cpu slices have been tested"
+    mpend
+}
+
+printf "  - define memall"
+memall {
+#Read memory configuration registers
+mem1
+#Memory sockets connection test
+mem2
+#Memory address walking test
+mem3
+#Memory data write/read tes
+mem4
+#Memory address in address test
+mem5
+#Memory data walking test
+mem6
+#Memory data MarchX pattern test
+mem7
+#Memory data MarchY pattern test
+mem8
+#Memory with ECC test
+mem9
+#Memory with cache write-through test
+mem10
+#Double word march y pattern test
+mem15
+#Knaizuk Hartmann Test
+mem16
+#Double word Knaizuk Hartmann Test
+mem18
+printf "Finished memall\n"
+}
+
+printf ", memfast\n"
+memfast {
+#Memory address walking test
+mem3
+#Memory address in address test
+mem5
+#Memory data MarchY pattern test
+mem8
+#Memory with ECC test
+mem9
+#Memory with cache write-through test
+mem10
+#Knaizuk Hartmann Test
+mem16
+printf "Finished memfast\n"
+}
+
+printf "  - define scsi_all"
+scsi_all {
+# Register Read/Write test for s1 chip
+s1_regtest
+# wd95a scsi controller register test
+regs_95a
+# scsi send diag test
+#scsi_self
+# scsi interrupt from wd95a test
+scsi_intr
+# scsi dma transfer test
+#scsi_dmaxfer
+# scsi dma interrupt test
+#scsi_dmaintr
+printf "Finished scsi_all\n"
+}
+
+printf "  - define dang_all"
+dang_all {
+# dang register read/write test
+dang_regtest
+#gio bus interface test, read/write on gr2 shared ram
+dang_gr2ram
+# tests wg fifo rams, host wg addressing modes, fifo and priv viol interrupts
+dang_wg
+# tests host/graphics and g/h dma transfers, dma complete interrupt
+dang_mdma
+printf "Finished dang_all\n"
+}
+
+printf ", io_all"
+io_all {
+# Checks IO4 config against NVRAM
+check_iocfg
+# Read/Write test of IO4 registers
+io4_regtest
+# IO4 PIO bus error test
+io4_pioerr
+# Read/Write test of IO4 map ram
+mapram_test
+# all scsi tests
+scsi_all
+# Register Read/Write test for epc chip
+epc_regtest
+# NVRAM Read/Write test
+epc_nvram
+# RTC Read/Write test
+epc_rtcreg
+# RTC clock increment test
+epc_rtcinc
+# RTC interrupt generation test
+epc_rtcint
+# Duart loopback test
+duart_loopback
+# Parallel Port Write Test
+epc_plptest
+#Fchip register test
+fregs
+#VMECC register test
+vmeregs
+#VMECC self interrupt test
+vmeintr
+#VMECC loopback test
+#vmelpbk
+#VMECC buserror test
+vmeberr
+#VMECC dma test using CDSIO - skips if no CDSIO board installed
+vmedma
+#CDSIO data test - skips if no CDSIO board installed or new rev proms
+cddata
+#CDSIO interrupt test - skips if no CDSIO board installed or new rev proms
+cdintr
+#all dang tests
+dang_all
+printf "Finished io_all\n"
+}
+
+printf ", ev_quick"
+ev_quick {
+echo "Starting quick EVEREST standalone diag suite"
+echo ""
+ipall
+tlball
+quickfpu
+quickcache
+memfast
+io_all
+echo ""
+echo "End of quick EVEREST standalone diag suite"
+}
+
+printf ", and everest_all\n\n"
+everest_all {
+echo "Starting EVEREST standalone diag suite"
+echo ""
+ipall
+tlball
+fpuall
+cacheall
+memall
+io_all
+echo ""
+echo "End of EVEREST standalone diag suite"
+}
+
+printf "  -- END OF SCRIPT DEFINITIONS --\n\n"
+
+runall
+scripts
+
+$TRUE = 1
+$FALSE = 0
+

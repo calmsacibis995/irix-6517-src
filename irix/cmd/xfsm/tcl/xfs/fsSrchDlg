@@ -1,0 +1,773 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	fsSrchDlg
+# Version:	$Revision: 1.11 $
+# Synopsis:	Encapsulates the dialog that allows the user to search for
+#		file systems by: host, name, or type.
+# Functions:	fsSrch:realize
+#		fsSrch:manage
+#		fsSrch:fill
+#		fsSrch:setData
+#		fsSrch:getHost
+#		fsSrch:getIp
+#		fsSrch:getHostList
+#		fsSrch:objectExists
+#		fsSrch:fitsProfile
+#		fsSrch:addObjects
+#		fsSrch:delObjects
+#		fsSrch:getDspNmOpt
+#		fsSrch:setDspNmOpt
+#		fsSrch:_create
+#		fsSrch:_formQuery
+#		fsSrch:_dialogCb
+#		fsSrch:_typeCb
+#		fsSrch:_accept
+#		fsSrch:_cancel
+#%COMMENT_END
+
+#########################################
+#		Public			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	fsSrch:realize
+# Synopsis:	Initializes any class-wide data and creates an instance of the
+#		dialog.  If an instance of this dialog already exists for the
+#		given handle, no action is taken.
+# Arguments:	- handle	An identifier that is used as a key for storing
+#				(and later retrieving) the created widgets and
+#				any instance specific data.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc fsSrch:realize { handle parent panel } \
+{
+	global		_GW_srch _GD_srch
+	set name	fsSrch
+
+	if {! [info exists _GW_srch($handle,dialog)]} {
+		set _GD_srch(class)	FS
+		set _GD_srch(combos)	XFS_HOST
+		set _GD_srch(texts)	NAME
+		set _GD_srch(toggles)	{any efs xfs nfs}
+		set _GD_srch(buttons)	{accept apply cancel help}
+
+		set _GD_srch($handle,dspNmOpt) "MOUNT_PT"
+		set _GD_srch($handle,tb,any) false
+		set _GD_srch($handle,tb,efs) true
+		set _GD_srch($handle,tb,xfs) true
+		set _GD_srch($handle,tb,nfs) true
+		set _GD_srch($handle,hip) " "
+		set _GD_srch($handle,hfn) " "
+		set _GD_srch($handle,search,hip) " "
+		set _GD_srch($handle,search,hfn) " "
+		set _GD_srch($handle,needsort) false
+		set _GD_srch($handle,FLUSH_CACHE) false
+		set _GD_srch($handle,hostlist) ""
+
+		set _GW_srch($handle,dialog) [$name:_create $handle $parent]
+
+		####	This must happen after the dialog is realized
+		$_GW_srch($handle,dialog) realizeWidget
+		$_GW_srch($handle,dialog) getValues -height height -width width
+		.$_GW_srch($handle,dialog) setValues \
+				-minWidth $width \
+				-minHeight $height \
+				-maxHeight $height
+
+		$_GW_srch($handle,buttons) getValues -height height
+		$_GW_srch($handle,buttons) setValues \
+				-paneMinimum $height \
+				-paneMaximum $height
+
+	}
+
+	set _GD_srch(iconpanel) $panel
+}
+
+#%COMMENT_BEGIN
+# Function:	fsSrch:manage
+# Synopsis:	Manages an instance of the dialog and sets the "Flush Cache"
+#		option to its default value of false.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc fsSrch:manage { handle } \
+{
+	global	_GW_srch _GD_srch
+
+	if {[info exists _GW_srch($handle,dialog)]} {
+		$_GW_srch($handle,dialog) manageChild
+		$_GW_srch($handle,XFS_HOST) processTraversal current
+		$_GW_srch($handle,FLUSH_CACHE) setValues -set false
+		set _GD_srch($handle,FLUSH_CACHE) false
+	}
+}
+
+#########################################
+#	Public: Data In Routines	#
+#########################################
+#%COMMENT_BEGIN
+# Function:	fsSrch:fill
+# Synopsis:	Sets the list of available hosts in the host combo-box.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- host		Specifies the host to use when getting the
+#				list of available host names.
+#%COMMENT_END
+proc fsSrch:fill { handle host } \
+{
+	global		_GW_srch _GD_srch _GD_resources
+
+	if {$host == ""} {
+		set host $_GD_srch($handle,hfn)
+	} elseif {[hu:getIpAddress $host hfn hpd hip $_GD_resources(hostsFile)]} {
+		set _GD_srch($handle,hip) $hip
+		set _GD_srch($handle,hfn) $hfn
+		set h $hip
+	} else {
+		set _GD_srch($handle,hip) ""
+		set _GD_srch($handle,hfn) $hfn
+		set h $hfn
+	}
+
+	set data [hu:getHosts $h etc $_GD_resources(hostsFile)]
+	fsSrch:setData $handle $_GD_srch($handle,hfn) $data
+	if {[cequal $data ""]} {
+		return 0
+	} else {
+		return 1
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	fsSrch:setData
+# Synopsis:	Set the combo-box items to the list of hostnames.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- host		The item to select in the list.
+#		- lst		The list of host names.
+#%COMMENT_END
+proc fsSrch:setData { handle host lst } \
+{
+	global		_GW_srch _GD_srch
+
+	set _GD_srch($handle,hostlist) $lst
+	combo:setItems $_GW_srch($handle,XFS_HOST) $lst
+	combo:selectItem $_GW_srch($handle,XFS_HOST) $host
+}
+
+#########################################
+#	Public: Data Out Routines	#
+#########################################
+#%COMMENT_BEGIN
+# Function:	fsSrch:getHost
+# Synopsis:	Returns the currently selected host name.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc fsSrch:getHost { handle } \
+{
+	global	_GD_srch; return $_GD_srch($handle,hfn)
+}
+
+#%COMMENT_BEGIN
+# Function:	fsSrch:getIp
+# Synopsis:	Returns the IP address for the currently selected host name.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc fsSrch:getIp { handle } \
+{
+	global	_GD_srch; return $_GD_srch($handle,hip)
+}
+
+#%COMMENT_BEGIN
+# Function:	fsSrch:getHostList
+# Synopsis:	Returns list of hosts from the combo-box.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc fsSrch:getHostList { handle } \
+{
+	global	_GD_srch; return $_GD_srch($handle,hostlist)
+}
+
+#%COMMENT_BEGIN
+# Function:	fsSrch:objectExists
+# Synopsis:	Determines whether or not an object is already in the
+#		list of "found" objects.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- obj		The object to look for.
+#		- out_obj	A reference to a variable in which to store
+#				the found object.
+# Return Value:	0 - The object does not exist
+#		1 - The object exists as-is
+#		2 - The object exists with minor differences (e.g., type)
+#%COMMENT_END
+proc fsSrch:objectExists { handle obj out_obj } \
+{
+	global		_GD_srch _GD_resources
+	upvar $out_obj	oobj
+
+	if {[set idx [lsearch -exact $_GD_srch($handle,objects) $obj]] != -1} {
+		set oobj [lindex $_GD_srch($handle,objects) $idx]
+		return 1
+	}
+
+	obj:parse $obj o_class o_host o_nm o_type
+	if {[string tolower $o_type] != "nfs"} {
+		if {[string tolower $o_type] == "xfs"} {
+			set no_type "efs"
+		} elseif {[string tolower $o_type] == "efs"} {
+			set no_type "xfs"
+		}
+		set nobj [obj:unparse $o_class $o_host $o_nm $no_type]
+		set idx [lsearch -exact $_GD_srch($handle,objects) $nobj]
+		if {$idx != -1} {
+			set oobj $nobj
+			return 2
+		}
+		return 0
+	}
+
+	lassign [split $o_nm :] onfs_host onfs_mntpt
+	if {! [hu:getIpAddress $onfs_host onfs_hfn onfs_hpd onfs_hip \
+			$_GD_resources(hostsFile)]} {
+		return 0
+	}
+
+	set nfsobjs [lmatch $_GD_srch($handle,objects) "*:$onfs_mntpt nfs"]
+
+	foreach item $nfsobjs {
+		obj:parse $item i_class i_host i_nm i_type
+		lassign [split $i_nm :] infs_host infs_mntpt
+		if {! [cequal $onfs_mntpt $infs_mntpt]} {
+			continue
+		}
+		if {[hu:getIpAddress $infs_host infs_hfn infs_hpd infs_hip \
+				$_GD_resources(hostsFile)]} {
+			if {[cequal $onfs_hip $infs_hip]} {
+				set oobj $item
+				return 1
+			}
+		}
+	}
+
+	return 0
+}
+
+#########################################
+#	Public: Utility Routines	#
+#########################################
+#%COMMENT_BEGIN
+# Function:	fsSrch:fitsProfile
+# Synopsis:	Determines whether or not an object fits the current search
+#		profile.  This is used when new objects are created.  If
+#		the object does not fit the search profile, then don't display
+#		an icon for it.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- obj		The object to compare against the profile.
+#%COMMENT_END
+proc fsSrch:fitsProfile { handle obj } \
+{
+	global	_GW_srch _GD_srch _GD_resources
+
+	obj:parse $obj o_class o_host o_nm o_type
+
+	if {$_GD_srch($handle,hip) != ""} {
+		if {! [hu:getIpAddress $o_host o_hfn o_hpd o_hip \
+				$_GD_resources(hostsFile)]} {
+			####    TODO
+			return 0
+		}
+		if {$o_hip != $_GD_srch($handle,hip)} {
+			return 0
+		}
+	} else {
+		if {$o_host != $_GD_srch($handle,hfn)} {
+			return 0
+		}
+	}
+
+	set pattern [string trim [$_GW_srch($handle,NAME) getString]]
+	if {$_GD_srch($handle,tb,any) == "false" && \
+	    $_GD_srch($handle,tb,$o_type) == "false"} {
+		return 0
+	} elseif {$pattern != "" && $pattern != "*"} {
+		if {! [string match $pattern $o_nm]} {
+			return 0
+		}
+	}
+
+	return 1
+}
+
+#%COMMENT_BEGIN
+# Function:	fsSrch:addObjects
+# Synopsis:	Adds a list of objects to the icon panel (if they fit
+#		the current search profile).
+# Arguments:	- handle	The identifier for the desired instance.
+#		- obj_list	A list of object signatures.
+#%COMMENT_END
+proc fsSrch:addObjects { handle obj_list } \
+{
+	global		_GD_srch
+
+	set _GD_srch($handle,needsort) true
+
+	foreach obj $obj_list {
+		####	Add to the list of objects
+		lappend _GD_srch($handle,objects) $obj
+
+		if {[fsSrch:fitsProfile $handle $obj]} {
+			####	Add to the icon panel
+			ip:fillPanel fs [list $obj]
+
+			####	Add to the list of visible objects
+			lappend _GD_srch($handle,filtered) $obj
+		}
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	fsSrch:delObjects
+# Synopsis:	Deletes a list of objects from the icon panel.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- obj_list	A list of object signatures.
+#%COMMENT_END
+proc fsSrch:delObjects { handle obj_list } \
+{
+	global		_GD_srch
+
+	foreach obj $obj_list {
+	    ####	Remove from the list of objects
+	    foreach list {objects filtered} {
+		set idx [lsearch -exact $_GD_srch($handle,$list) $obj]
+		if {$idx != -1} {
+		    lvarpop _GD_srch($handle,$list) $idx
+		} else {
+		    obj:parse $item o_class o_host o_nm o_type
+		    if {[string tolower $o_type] == "xfs"} {
+			set no_type "efs"
+		    } elseif {[string tolower $o_type] == "efs"} {
+			set no_type "xfs"
+		    } else {
+			# puts "fsSrch:delObject idx = -1"
+			# puts "\t$obj"
+			# puts "\t$_GD_srch($handle,$list)"
+			continue
+		    }
+
+		    set nobj [obj:unparse $o_class $o_host $o_nm $no_type]
+		    set idx [lsearch -exact $_GD_srch($handle,$list) $nobj]
+		    if {$idx != -1} {
+			lvarpop _GD_srch($handle,$list) $idx
+		    }
+		}
+	    }
+	}
+
+	####	Remove from the icon panel
+	ip:remove fs $obj_list
+}
+
+#%COMMENT_BEGIN
+# Function:	fsSrch:getDspNmOpt
+# Synopsis:	Returns the current icon display name option.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc fsSrch:getDspNmOpt { handle } \
+{
+	global	_GD_srch; return $_GD_srch($handle,dspNmOpt)
+}
+
+#%COMMENT_BEGIN
+# Function:	fsSrch:setDspNmOpt
+# Synopsis:	Sets the current icon display name option for the icons in the
+#		icon panel.  There are two options: MOUNT_PT and DEV_NAME.
+#		If the option is set to MOUNT_PT then the icon labels will
+#		be the mount point for the file system (if it is mounted).
+#		If the option is set to DEV_NAME. then the icon labels will
+#		be the device name for the file system.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- dspNmOpt	An optional parameter that indicates the
+#				desired display option.  The default value
+#				is the empty string (""), which means to use
+#				the current display option.
+#%COMMENT_END
+proc fsSrch:setDspNmOpt { handle {dspNmOpt ""} } \
+{
+	global	_GD_srch
+
+	if {$dspNmOpt == ""} {
+		set dspNmOpt $_GD_srch($handle,dspNmOpt)
+	} else {
+		set _GD_srch($handle,dspNmOpt) $dspNmOpt
+	}
+
+	if {$dspNmOpt == "MOUNT_PT"} {
+	    ####	Check each object to see if it's mounted.
+	    ####	If so, set the icons' DisplayName to the mount point.
+	    foreach item $_GD_srch($handle,filtered) {
+		set m [lmatch $_GD_srch($handle,mnt) "[list $item] *"]
+		if {! [cequal $m ""]} {
+			ip:setObjDisplayName fs $item \
+					[lindex [lindex $m 0] 1] false
+		}
+	    }
+	} else {
+	    foreach item $_GD_srch($handle,filtered) {
+		set m [lmatch -exact $_GD_srch($handle,objects) "$item"]
+		if {! [cequal $m ""]} {
+			obj:parse [lindex $m 0] o_class o_host o_name o_type
+			if {$o_type == "nfs"} {
+				lassign [split $o_name :] h_fs n_fs
+				set dname [hu:getHostPlusDom $h_fs]:$n_fs
+			} else {
+				regsub -- "^/dev/" $o_name "" dname
+			}
+			ip:setObjDisplayName fs $item $dname false
+		}
+	    }
+	}
+
+	ip:render fs true
+}
+
+#%COMMENT_BEGIN
+# Function:	fsSrch:setMountPoint
+# Synopsis:	Sets the mount point for the given object.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- obj		
+#		- mntpt
+#		- setDspNm
+#%COMMENT_END
+proc fsSrch:setMountPoint { handle obj mntpt {setDspNm true} } \
+{
+	global	_GD_srch
+
+	set m [lmatch $_GD_srch($handle,mnt) "[list $obj] *"]
+	set mnt_obj "[list $obj] *"
+	if {[set idx [lsearch $_GD_srch($handle,mnt) $mnt_obj]] != -1} {
+		set x [lindex $_GD_srch($handle,mnt) $idx]
+		lvarpop _GD_srch($handle,mnt) $idx "[list $obj] $mntpt"
+	} else {
+		lappend _GD_srch($handle,mnt) "[list $obj] $mntpt"
+	}
+
+	if {[cequal $setDspNm "true"] && \
+	    [cequal $_GD_srch($handle,dspNmOpt) "MOUNT_PT"]} {
+		ip:setObjDisplayName $handle $obj $mntpt
+	}
+}
+
+#########################################
+#		Private			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	fsSrch:_create
+# Synopsis:	Creates an instance of the dialog.
+# Arguments:	- handle	The identifier for the new instance.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc fsSrch:_create { handle parent } \
+{
+	global		_GW_srch _GD_srch
+	set name	fsSrch
+
+	set dialog [xmFormDialog $parent.$name]
+	set pane [xmPanedWindow $dialog.$handle \
+			-sashWidth 1 \
+			-sashHeight 1 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none]
+	set grid [sgiGrid $pane.grid -numRows 8 -numColumns 2 \
+			-defaultSpacing 2]
+
+	set item XFS_HOST; set row 0
+	xmLabel $grid.$item-label managed -row $row -column 0
+	set _GW_srch($handle,$item) [dtDropDownComboBox $grid.$item managed \
+			-row $row -column 1 \
+			-columns 28]
+
+	set item NAME; set row 1
+	xmLabel $grid.$item-label managed -row $row -column 0
+	set _GW_srch($handle,$item) [xmTextField $grid.$item managed \
+			-row $row -column 1]
+	
+	set item TYPES; set row 2
+	xmLabel $grid.$item-label managed -row $row -column 0
+	foreach item $_GD_srch(toggles) {
+		set _GW_srch($handle,$item) [xmToggleButton $grid.$item \
+				 managed \
+				-row $row -column 1 \
+				-resizeHorizontal false \
+				-marginHeight 2 \
+				-set $_GD_srch($handle,tb,$item)]
+		$_GW_srch($handle,$item) valueChangedCallback \
+				"$name:_typeCb $handle $item %set"
+		incr row
+	}
+
+	set item FLUSH_CACHE; set row 7
+	set _GW_srch($handle,$item) [xmToggleButton $grid.$item managed \
+			-row $row -column 1 \
+			-resizeHorizontal false]
+	$_GW_srch($handle,$item) valueChangedCallback \
+			"set _GD_srch($handle,$item) %set"
+			
+	
+	set _GW_srch($handle,buttons) \
+		[xfs:createDialogButtons $pane $_GD_srch(buttons) 15]
+	foreach i $_GD_srch(buttons) {
+		$_GW_srch($handle,buttons).$i activateCallback \
+				"$name:_dialogCb $handle $i"
+	}
+
+	$grid columnResizable 0 false
+	$grid rowMargin 6 8
+	$grid manageChild
+	$_GW_srch($handle,buttons) manageChild
+	$pane manageChild
+
+	return $dialog
+}
+
+#%COMMENT_BEGIN
+# Function:	fsSrch:_formQuery
+# Synopsis:	Formulates a query to pass to the server to find the file
+#		system objects on a host.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc fsSrch:_formQuery { handle } \
+{
+	global	_GD_srch
+
+	lappend data "HOST_PATTERN:$_GD_srch($handle,hfn)"
+	lappend data "OBJ_TYPE:$_GD_srch(class)"
+	lappend data "OBJ_PATTERN:\*"
+
+	return $data
+}
+
+#########################################
+#	Dialog Callbacks		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	fsSrch:_dialogCb
+# Synopsis:	The callback function defined on the dialog buttons.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- op		Indicates which button the user selected.
+#%COMMENT_END
+proc fsSrch:_dialogCb { handle op } \
+{
+	global		_GW_srch _GD_srch
+
+	switch $op {
+		accept	{ fsSrch:_accept $handle
+			  fsSrch:_cancel $handle
+			}
+		apply	{ fsSrch:_accept $handle }
+		cancel	{ fsSrch:_cancel $handle }
+		help	{ sgiHelpMsg $_GW_srch($handle,dialog) }
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	fsSrch:_typeCb
+# Synopsis:	The XmNvalueChangedCallback function defined for the file
+#		system type toggle buttons.  Stores the value for later use.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- op		Indicates which button the user selected.
+#%COMMENT_END
+proc fsSrch:_typeCb { handle type set } \
+{
+	global  _GW_srch _GD_srch
+
+	set _GD_srch($handle,tb,$type) $set
+
+	if {[cequal $type "any"]} {
+		if {$set} {
+			foreach item {efs xfs nfs} {
+				$_GW_srch($handle,$item) setSensitive false
+				$_GW_srch($handle,$item) setValues -set false
+			}
+		} else {
+			foreach item {efs xfs nfs} {
+				$_GW_srch($handle,$item) setSensitive true
+				$_GW_srch($handle,$item) setValues \
+					-set $_GD_srch($handle,tb,$item)
+			}
+		}
+	}
+
+	set sensitive "false"
+	foreach item $_GD_srch(toggles) {
+		$_GW_srch($handle,$item) getValues -set isSet
+		if {$isSet} {
+			set sensitive "true"
+		}
+	}
+
+	foreach item {accept} {
+		$_GW_srch($handle,buttons).$item setSensitive $sensitive
+	}
+}
+
+#########################################
+#	Callback Utilities		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	fsSrch:_accept
+# Synopsis:	This is called when the user presses the "Accept" dialog
+#		button.  It gets the data from the dialog and then calls
+#		the server to get the objects from the given host.  The
+#		objects are then passed through filters so that only those
+#		that match the search criteria are displayed.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc fsSrch:_accept { handle } \
+{
+	global		_GW_srch _GD_srch _GD_resources
+	set new_host	true
+
+	$_GW_srch($handle,dialog) defineCursor watch; . defineCursor watch
+	set host [combo:getValue $_GW_srch($handle,XFS_HOST)]
+
+	set sv_hip $_GD_srch($handle,hip)
+	set sv_hfn $_GD_srch($handle,hfn)
+	set sv_ship $_GD_srch($handle,search,hip)
+	set sv_shfn $_GD_srch($handle,search,hfn)
+
+	if {$host == $_GD_srch($handle,search,hfn)} {
+		set new_host false
+	} elseif {[hu:getIpAddress $host hfn hpd hip $_GD_resources(hostsFile)]} {
+		if {$hip == $_GD_srch($handle,search,hip)} {
+			set new_host false
+		}
+		set _GD_srch($handle,search,hip) $hip
+		set _GD_srch($handle,search,hfn) $hfn
+	} else {
+		if {$host != $_GD_srch($handle,hfn)} {
+			set _GD_srch($handle,search,hip) " "
+			set _GD_srch($handle,search,hfn) $host
+		} else {
+			set new_host false
+		}
+	}
+
+	if {$new_host == "true" || $_GD_srch($handle,FLUSH_CACHE) == "true"} {
+		set _GD_srch($handle,hip) $_GD_srch($handle,search,hip)
+		set _GD_srch($handle,hfn) $_GD_srch($handle,search,hfn)
+
+		####	Format the query and get the objects
+		set query [fsSrch:_formQuery $handle]
+		if {[catch {set objects [xfsObjects [join $query \n]]} err]} {
+			set _GD_srch($handle,hip) $sv_hip
+			set _GD_srch($handle,hfn) $sv_hfn
+			set _GD_srch($handle,search,hip) $sv_ship
+			set _GD_srch($handle,search,hfn) $sv_shfn
+
+			em:setMessageString $handle \
+				"Unable to perform search on $host."
+			regsub -all -- "\n" [string trim $err] "\n\t" nerr
+			em:storeMsg $handle error \
+				"Unable to get list of objects.\n\t$nerr"
+
+			$_GW_srch($handle,dialog) defineCursor ""
+			. defineCursor ""
+			return
+		}
+
+		####	Use the full host name so that it is consistent
+		####	with what is used throughout the Tcl/Tm code
+		set _GD_srch($handle,mnt) ""
+		set nobjs {}
+		foreach obj $objects {
+			lvarpop obj 0 $_GD_srch($handle,hfn)
+			lappend nobjs $obj
+
+			if {[fsu:isMounted $obj mntpt]} {
+			    lappend _GD_srch($handle,mnt) "[list $obj] $mntpt"
+			}
+		}
+		set _GD_srch($handle,objects) [lsort -command obj:sort $nobjs]
+	} elseif {$_GD_srch($handle,needsort)} {
+		####	Sort the objects
+		set _GD_srch($handle,objects) \
+			[lsort -command obj:sort $_GD_srch($handle,objects)]
+		set _GD_srch($handle,needsort) false
+	}
+
+	$_GD_srch(iconpanel) clear
+	fs:searchCompleted
+	ip:setHostName fs [hu:getHostPlusDom $_GD_srch($handle,hfn)]
+
+	if {$_GD_srch($handle,FLUSH_CACHE)} {
+		$_GW_srch($handle,FLUSH_CACHE) setValues -set false
+		set _GD_srch($handle,FLUSH_CACHE) false
+	}
+
+	if {[llength $_GD_srch($handle,objects)] == 0} {
+		$_GD_srch(iconpanel) render
+		$_GW_srch($handle,dialog) defineCursor ""; . defineCursor ""
+		return
+	}
+
+	####	Collect the filter data
+	if {$_GD_srch($handle,tb,any) == "false"} {
+		set check_type true
+	}
+
+	set pattern [string trim [$_GW_srch($handle,NAME) getString]]
+	if {$pattern != "" && $pattern != "*"} {
+		####	Filter on Name
+		set filtered ""
+		foreach item $_GD_srch($handle,objects) {
+			obj:parse $item o_class o_host o_nm o_type
+			if {[string match $pattern $o_nm]} {
+				lappend filtered $item
+			}
+		}
+	} else {
+		set filtered $_GD_srch($handle,objects)
+	}
+
+	if {[info exists check_type]} {
+		####	Filter on Type
+		set nfiltered ""
+		foreach item $filtered {
+			obj:parse $item o_class o_host o_nm o_type
+			if {[info exists _GD_srch($handle,tb,$o_type)] && \
+			    $_GD_srch($handle,tb,$o_type) == "true"} {
+				lappend nfiltered $item
+			}
+		}
+		set filtered $nfiltered
+	}
+	ip:fillPanel fs $filtered
+	set _GD_srch($handle,filtered) $filtered
+
+	if {$_GD_srch($handle,dspNmOpt) == "MOUNT_PT"} {
+		fsSrch:setDspNmOpt $handle
+	}
+
+	$_GW_srch($handle,dialog) defineCursor ""; . defineCursor ""
+}
+
+#%COMMENT_BEGIN
+# Function:	fsSrch:_cancel
+# Synopsis:	This is called when the user presses the "Cancel" dialog
+#		button.  It unmanages the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc fsSrch:_cancel { handle } \
+{
+	global	_GW_srch; $_GW_srch($handle,dialog) unmanageChild
+}

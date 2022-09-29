@@ -1,0 +1,300 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	vmVolSumPnl
+# Version:	$Revision: 1.2 $
+# Synopsis:	Encapsulates the panel that displays a summary of the
+#		subvolumes of a volume.
+# Functions:	volSum:realize
+#		volSum:setData
+#		volSum:setSubvData
+#		volSum:clear
+#		volSum:setItemLabel
+#		volSum:set
+#		volSum:addSubvTbCallback
+#		volSum:_create
+#		volSum:_doRadio
+#%COMMENT_END
+
+#########################################
+#		Public			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	volSum:realize
+# Synopsis:	Initializes any class-wide data and creates an instance of
+#		the dialog. If an instance of this dialog already exists for
+#		the given handle, no action is taken.
+# Arguments:	- handle	An identifier that is used as a key for storing
+#				(and later retrieving) the created widgets and
+#				any instance specific data.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc volSum:realize { handle parent } \
+{
+	global		_GW_volSum _GD_volSum
+
+	####	One time initialization
+	if {! [info exists _GD_volSum(initialized)]} {
+		####	Make sure we don't go through this again
+		set _GD_volSum(initialized) true
+
+		set _GD_volSum(columns)	"plexes ves parts size"
+		set _GD_volSum(subvs)	"data log rt"
+	}
+
+	####	Per instance initialization / creation
+	if {! [info exists _GW_volSum($handle,panel)]} {
+		set _GD_volSum($handle,curr_subv) [lindex $_GD_volSum(subvs) 0]
+
+		set _GW_volSum($handle,panel) [volSum:_create $handle $parent]
+		volSum:set $handle $_GD_volSum($handle,curr_subv)
+	}
+
+	return $_GW_volSum($handle,panel)
+}
+
+#%COMMENT_BEGIN
+# Function:	volSum:setData
+# Synopsis:	Sets each field of the panel with the data that is extracted
+#		from the "synopsis" and "obj_info" parameters.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- synopsis	A list of lists that is used internally to
+#				represent an xlv object.
+#		- obj_info	A description of the object in the xlv file
+#				format.  It is used to display the number
+#				of partitions in each subvolume.
+#%COMMENT_END
+proc volSum:setData { handle synopsis obj_info } \
+{
+	global		_GW_volSum _GD_volSum
+
+	foreach subv $_GD_volSum(subvs) {
+		set data($subv,plexes) 0
+		set data($subv,size) 0
+		set data($subv,ves) 0
+		set data($subv,parts) 0
+	}
+
+	if {[llength $synopsis] == 1} {
+		set synopsis [lindex $synopsis 0]
+	}
+	set s_subvs [lassign $synopsis s_name s_type]
+	foreach subv $s_subvs {
+		set p_plexes [lassign $subv p_type p_size p_num]
+		set data($p_type,plexes) $p_num
+		set data($p_type,size) $p_size
+		foreach plex $p_plexes {
+			set data($p_type,ves) \
+				[expr $data($p_type,ves) + [llength $plex]]
+		}
+	}
+	xlv:partCount $obj_info data
+
+	foreach subv $_GD_volSum(subvs) {
+		set dat ""
+		lappend dat $data($subv,plexes)
+		lappend dat $data($subv,ves)
+		lappend dat $data($subv,parts)
+		lappend dat [format "%.2f" [expr $data($subv,size) / 2048.0]]
+
+		volSum:setSubvData $handle $subv $dat
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	volSum:setSubvData
+# Synopsis:	Sets each field for the specified subvolume with the 
+#		information passed in.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- subv		Specifies which subvolume the data applies to.
+#		- data		A list of values to which the fields of the
+#				specified subvolume are to be set.
+#%COMMENT_END
+proc volSum:setSubvData { handle subv data } \
+{
+	global	_GW_volSum _GD_volSum
+
+	foreach column $_GD_volSum(columns) {
+		$_GW_volSum($handle,$subv-$column) setValues \
+				-labelString [lvarpop data]
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	volSum:clear
+# Synopsis:	Resets all the displayed values to their default setting.
+#		In addition, it selects the first radio button.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc volSum:clear { handle } \
+{
+	global	_GW_volSum _GD_volSum
+
+	set subv [lindex $_GD_volSum(subvs) 0]
+	volSum:_doRadio $handle $subv $_GW_volSum($handle,$subv-tb) true
+	volSum:set $handle $subv
+
+	foreach item $_GD_volSum(subvs) {
+		volSum:setItemLabel $handle $item plexes 0
+		volSum:setItemLabel $handle $item ves 0
+		volSum:setItemLabel $handle $item parts 0
+		volSum:setItemLabel $handle $item size 0.00
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	volSum:setItemLabel
+# Synopsis:	Set the value of single display item to the given value
+# Arguments:	- handle	The identifier for the desired instance.
+#		- subv		Specifies which subvolume the data applies to.
+#		- item		A key that identifies the desired item.
+#		- value		The value to which the item is to be set.
+#%COMMENT_END
+proc volSum:setItemLabel { handle subv item value } \
+{
+	global	_GW_volSum _GD_volSum
+
+	if {[info exists _GW_volSum($handle,$subv-$item)]} {
+		$_GW_volSum($handle,$subv-$item) setValues -labelString $value
+		return 1
+	}
+	return 0
+}
+
+#%COMMENT_BEGIN
+# Function:	volSum:set
+# Synopsis:	Sets the radio button corresponding to the specified subvolume
+#		to be true.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- subv		Specifies which subvolume to select.
+#%COMMENT_END
+proc volSum:set { handle subv } \
+{
+	global	_GW_volSum _GD_volSum
+
+	if {[info exists _GW_volSum($handle,$subv-tb)]} {
+		set _GD_volSum($handle,curr_subv) $subv
+		$_GW_volSum($handle,$subv-tb) getValues -set set
+		if {$set != "true"} {
+			$_GW_volSum($handle,$subv-tb) setValues -set true
+		}
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	volSum:addSubvTbCallback
+# Synopsis:	This provides a way for other procedures to register a function
+#		to be called whenever the value changes for the subvolume
+#		radio buttons.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- subv		Specifies which subvolume to select.
+#		- proc		The name of the procedure to be called.
+#%COMMENT_END
+proc volSum:addSubvTbCallback { handle subv proc } \
+{
+	global	_GW_volSum _GD_volSum
+
+	if {[info exists _GW_volSum($handle,$subv-tb)]} {
+		$_GW_volSum($handle,$subv-tb) valueChangedCallback \
+				"$proc $handle $subv %set %w"
+	}
+}
+
+#########################################
+#		Private			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	volSum:_create
+# Synopsis:	Creates an instance of the panel.
+# Arguments:	- handle	The identifier for the new instance.
+#		- parent	The parent for the created panel.
+#%COMMENT_END
+proc volSum:_create { handle parent } \
+{
+	global		_GW_volSum _GD_volSum _GD_resources
+	set name	volSum
+
+	set panel [sgiGrid $parent.$name -numRows 4 -numColumns 6]
+	$panel rowMargin 1 0
+	$panel rowMargin 2 0
+	$panel rowMargin 3 0
+
+	set font "-adobe-helvetica-medium-r-normal--14-140-75-75-p-77-iso8859-1"
+	set bfont "-adobe-helvetica-bold-r-normal--14-140-75-75-p-82-iso8859-1"
+
+	xmLabel $panel.subvolume-label managed -row 0 -column 0
+	set column 2
+	foreach item $_GD_volSum(columns) {
+		xmLabel $panel.$item-label managed -row 0 -column $column
+		incr column
+	}
+
+	set row 1
+	foreach item $_GD_volSum(subvs) {
+
+		set _GW_volSum($handle,$item-tb) \
+				[xmToggleButton $panel.$item-tb managed \
+				-row $row -column 0 \
+				-fontList $bfont \
+				-labelString $_GD_resources($item,string) \
+				-indicatorType one_of_many \
+				-alignment alignment_beginning]
+		$_GW_volSum($handle,$item-tb) valueChangedCallback \
+				"volSum:_doRadio $handle $item %w %set"
+
+		set column 2
+		foreach i $_GD_volSum(columns) {
+			set _GW_volSum($handle,$item-$i) \
+					[xmLabel $panel.$item-$i managed \
+					-row $row -column $column \
+					-fontList $font \
+					-labelString 0]
+			incr column
+		}
+		$_GW_volSum($handle,$item-size) setValues \
+				-marginRight 10 \
+				-alignment alignment_end \
+				-labelString 0.00
+		incr row
+	}
+
+	return $panel
+}
+
+#%COMMENT_BEGIN
+# Function:	plxSum:_create
+# Synopsis:	This enforces radio behavior on the set of toggle buttons
+#		that represent the subvolumes.
+# Arguments:	- handle	The identifier for the new instance.
+#		- subv		A key that identifies the subvolume.
+#		- w		The widget id of the toggle button.
+#		- set		True if set, false otherwise.
+#%COMMENT_END
+proc volSum:_doRadio { handle subv w set } \
+{
+	global		_GW_volSum _GD_volSum
+
+	if {$set == "false"} {
+		####	radioAlwaysOne
+		if {$subv == $_GD_volSum($handle,curr_subv)} {
+			$w setValues -set true
+		}
+		return
+	} else {
+		if {$subv != $_GD_volSum($handle,curr_subv)} {
+			$_GW_volSum($handle,$_GD_volSum($handle,curr_subv)-tb) \
+					setValues -set false
+			set _GD_volSum($handle,curr_subv) $subv
+		}
+	}
+}

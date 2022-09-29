@@ -1,0 +1,674 @@
+'\"macro stdmacro
+.TH TAR 1
+.SH NAME
+tar \- tape archiver
+.SH SYNOPSIS
+.B tar
+key [ arguments ] [ name ... ]
+.SH DESCRIPTION
+.fi
+.PP
+.I tar
+saves and restores multiple files on a single file (usually a magnetic
+tape, but it can be any file).  This single logical file may span multiple
+physical tapes (this is known as "multi-volume tar").  Such tapes do
+not have a filemark at the end of intermediate volumes, and an
+archived file may be split across multiple tapes.  The second through
+last tape may be read without earlier tapes (aside from the possible
+first file split across the tape boundary) by using the
+.B e
+option.
+.PP
+The 
+.I key
+argument controls
+.IR tar 's
+actions.
+The
+.I key
+is a string of characters containing at most one function letter and possibly
+one or more function modifiers.  Other arguments to
+.I tar
+are file or directory names specifying which files to dump or restore.
+The order must match the order of the matching options in
+.IR key .
+In all cases, appearance of a directory name refers (recursively) to
+the files and subdirectories of that directory.
+These files are dumped to tape in alphabetical order.  If
+.I name 
+is
+.BR \- ,
+the list of files is read from the standard input.
+.PP
+In order to create a \f3tar\fP archive that is portable to as many 
+types of systems as possible, use the fixed block, non-byte swapped
+device, and a blocking factor of 20 (with any type of tape
+device). If the tape drive is a SCSI
+tape at ID 7 on bus 0, the following command would do this:
+.Ex
+tar cOdbf 20 /dev/rmt/tps0d7ns filelist
+.Ee
+If you know the other system has a POSIX compatible version of \f3tar\fP,
+omit the \f4O\fP and \f4d\fP options.
+.PP
+To extract tapes from other systems, use the variable block device, if
+the device supports it, with a large blocking factor, otherwise specify
+the blocking factor with which the tape was made (usually 20 on
+non-IRIX systems, if the \f4b\fP option was not specified):
+.Ex
+tar xbf 512 /dev/rmt/tps0d7nsv
+.Ee
+Or, for fixed block only devices, such as QIC tape drives:
+.Ex
+tar xbf 20 /dev/rmt/tps0d7ns
+.Ee
+Also see the notes at the \f4b\fP option below.
+.PP
+If the
+.BR O
+option is specified the maximum pathlength--including the filename itself--
+is 99 characters (\s-1\f3NAMSIZ\fP\s+1)
+not including 
+the string-terminating NULL character, and any 
+archives created with non-POSIX standard versions of
+.I tar
+will also obey this length rule.  Otherwise, (the [default] POSIX format),
+pathnames are limited to 255 total characters (not 
+including the NULL), subject to several caveats necessitated by the
+requirement of total backward compatibility with previous versions
+of
+.IR tar .
+Referring to 
+.IR /usr/include/tar.h ,
+there are two storage fields for filenames 
+.IR name ,
+(100 chars) and
+.IR prefix
+(156 chars).  If the entire pathname is 100 characters or less including the
+NULL, it will be stored in the 
+.IR name
+field.  Otherwise the pathname is split between the two fields, with
+the restriction that an implicit (i.e., unstored) '/' character 
+separates the 
+.IR prefix
+and 
+.IR name
+fields.  Upon extraction, the full pathname is constructed 
+by concatenating these fields with the added '/'.  Because of
+this requirement, files whose 
+.I actual
+names (not including the leading path) exceed 99 characters cannot
+be archived.  If the split field is used, and the tape is read on
+older, non-POSIX capable tar, the file will be extracted in the
+current directory, since no leading pathname information is located
+in the older location in the header; this at least allows the file
+to be extracted on older systems, but if multiple files with the same
+final component are extracted, the earlier will be overwritten by
+the later file(s).
+.PP
+If the file is a symbolic link the link-name must obey the
+above rules; however, the total pathlength of the
+.I target
+file may not exceed NAMSIZ characters in either POSIX or non-POSIX
+format.  See 
+.I /usr/include/tar.h
+for more detail about these length values.
+.PP
+A
+.I tar
+archive is a stream of 512-byte header structures
+which may be followed by file data rounded up to the next
+512-byte boundary.
+The end of the archive is signaled by two header structures
+beginning with null bytes.
+.PP
+The function portion of the key is specified by one of the following letters:
+.TP 6
+.B  r
+Append the named files at the end of the archive.
+On tape, named files are appended at the end of the last archive on tape.
+See the
+.B NOTES
+section below, for drives that support this operation, and other
+limitations.
+.TP 6
+.B  u
+Update; put the named files at the end of the archive if they are not
+currently in the archive, or if the file has been modified more recently
+than the file in the archive.  Note that if the pathnames do not exactly match
+those already in the archive, the files will always be appended (e.g., don't
+use absolute pathnames one time, and absolute the next).  The same
+restrictions as for the
+.B r
+function apply as to which drives support this.
+.TP 6
+.B  x
+Extract the named files from the tape.  If a named file
+matches a directory whose contents had been written onto the tape, this
+directory is (recursively) extracted.  The owner, modification time, and mode
+are restored, subject to
+.IR umask (2).
+If no file argument is given, the entire content
+of the tape is extracted.  Note that if multiple entries specifying the same
+file are on the tape, the last entry overwrites all earlier entries.
+.TP 6
+.B  X
+For each file to be extracted,
+if it is identical to the file in the corresponding
+position in the comparison tree, link the existing file
+to the new file.
+Otherwise, extract the new file as a separate new file.
+.B X
+is like 
+.B x 
+but also takes the next argument
+as the root of a directory tree for comparison.
+.TP 6
+.B  t
+List the names of the specified files each time they occur on
+the tape.  If no file argument is given, list all of the names on the tape.
+.TP 6
+.B  c
+Create a new tape; writing starts at the beginning of the tape
+instead of after the last file.  This option assumes that you are
+at the beginning of the tape.
+.TP 6
+.B  C
+Compare files on tape against existing files.
+For each specified file, print a line with a key
+character followed by the file name.
+.nf
+.ta +4m,+2m
+	L	linked to an earlier file on the tape
+	S	symbolic link
+	B	block special file
+	C	character special file
+	P	named pipe
+	D	directory
+	?	can't read the disk file, so can't compare
+	>	disk file doesn't exist
+	=	files compare
+	!	files don't compare
+.fi
+.PP
+In addition to the letter
+which selects the function desired the following characters may be used:
+.TP 6
+.B  d
+On output, 
+.I tar 
+normally places information specifying owner and modes
+of directories in the archive.  Former versions of 
+.IR tar , 
+when encountering
+this information print error messages of the form:
+.br
+	``<name>/: cannot create''.
+.br
+This option suppresses the printing of the directory information.
+This option implies the \f3D\f1 option.
+.TP 6
+.B  D
+On output, 
+.I tar 
+normally places information specifying the owner, modes,
+and device numbers
+of character and block special files and named pipes (\c
+.IR fifos )
+in the archive.
+Former versions of 
+.IR tar , 
+when encountering
+this information create an ordinary file of the same name whose contents
+is the device number, in binary.
+This option suppresses the special file information.
+.TP 6
+.B  N
+When extracting files, extract the file only if it is new; that is, if
+the \fIstat\fP(2) system call fails on the pathname that is about to
+be extracted.  When listing files with the 
+.B t
+key, only list them if they would be extracted (that is, the file
+doesn't exist).
+.TP 6
+.B  p
+This option restores files to their original modes,
+ignoring the present
+.IR umask (2).
+Setuid and sticky information
+are also restored to the super-user.
+This is the default when run as super-user.
+.TP 6
+.B  v
+Normally
+.I tar
+does its work silently.  The
+.B v
+(verbose) option make
+.I tar
+print the name of each file it treats preceded by the function
+letter.  With the
+.B t
+function, the verbose option
+gives more information about the tape entries than just their names.
+.TP 6
+.B  w
+.I tar
+prints the action to be taken followed by file name, then
+waits for user confirmation. If a word beginning with `y'
+is given, the action is done.  Any other input means do not do it.
+.TP 6
+.B f
+.I tar
+uses the next argument as the name of the archive instead of
+.IR /dev/tape .
+If the
+.B f
+argument is not given, and
+.B $TAPE
+is set in the environment, then that value is used instead of the
+default.
+If the name of the file is `\-', tar writes to standard output or
+reads from standard input (whichever is appropriate). Thus,
+.I tar
+can be used as the head or tail of a filter chain.
+.IP
+The specified archive name can also reference a remote tape device. A remote
+tape device name has the form:
+.sp .5
+.ti +0.5i
+.IR [user @ ] system:/dev/???
+.sp .5
+where
+.I system
+is the remote system,
+.I /dev/???
+is the particular drive on the remote system (raw,
+rewinding, non-rewinding, etc.),
+and the optional
+.I user
+is the login name to be used
+on the remote system; if not given, normal
+.IR rsh (1C)
+semantics apply.
+.IP
+.I Tar
+can also be used to move hierarchies on the local machine with the command
+.sp .5
+.ti +.3i
+cd fromdir; tar cBf \- . | (cd todir && tar xBf \-)
+.sp .5
+To move hierarchies between machines, use the command
+.sp .5
+.ti +.3i
+cd fromdir; tar cBf \- . | rsh \f2remote\fP "(cd todir && tar xBf \-)"
+.sp .5
+where
+.I remote
+is the host name of the remote machine.
+.TP 6
+.B b
+.I tar
+uses the next argument as the blocking factor for tape records. The
+default is to use the results of the MTIOCGETBLKSIZE ioctl for tape
+when creating a tape (and for reading on fixed blocksize devices,
+such as QIC) and to determine the blocksize (for variable
+blocksize devices) when reading.  See the output of
+.\" Ee, Ex won't work within .TP correctly...
+.ti +5
+mt blksize
+.br
+for this information; the "recommended" default for SCSI tape devices
+is set in
+.IR /var/sysgen/master.d/tpsc .
+This default blocking factor may be large enough that some non-SGI systems
+will either not be able to determine the blocking factor automatically
+when reading the tape, (thus requiring the
+.B b
+option be specified when reading the tape), or in rare cases, to not
+be able to read the tape at all.  In the latter case, the
+.B b
+option with a smaller value must be specified when writing the tape.
+
+A blocking factor of 1 is normally used with standard input
+and standard output, and 20 for files or devices not
+supporting the ioctl (such as remote tape).  If the tape
+was written with a blocking factor that does not exceed the
+limit for that device, the block size is determined
+automatically when reading a tape for devices with variable
+block size.
+
+When reading from fixed blocksize devices, tar cannot
+determine the blocking factor used when the tape was
+created.
+This may lead to tar incorrectly deciding that the tape is a
+multi-volume tape, if the blocking factor when reading is not an
+integral divisor of the block size used when the tape was written.
+If this occurs on tapes that you believe
+are not multi-volume, simply press RETURN at the "change
+tape" prompt, and tar will complete normally.
+
+Due to the blocking algorithm, a tar tape created by
+writing to the standard output should be read from standard
+input (if on the same system; if on a different system, it
+may be necessary to specify a blocking factor).
+.TP 6
+.B l
+If it cannot resolve all of the links to the
+files dumped, 
+.I tar 
+prints error messages.  If 
+.B l 
+is specified, no error messages are printed.
+.TP 6
+.B m
+Do not restore the modification times.  The modification time
+will be the time of extraction.
+.TP 6
+.B e
+Force
+.I tar
+to continue reading past tape errors.  tar continues until no
+more data is left, or read returns an error; unlike some other
+versions of tar, it does not stop when it sees the tar internal
+EOF record (512 bytes of 0's).
+.TP 6
+.B L
+Force
+.I tar
+to follow symbolic links as if they were normal files or
+directories.
+.TP 6
+.B h
+Force
+.I tar
+to not follow symbolic links, but to instead place the symbolic link
+information in the archive.  This is the default.
+.TP 6
+.B B
+Force input and output blocking to 20 blocks per record, and
+cause the input processing to ignore input record boundaries,
+concatenating all input into a contiguous stream. This option allows
+.I tar
+to work through pipes, networks, and other communications channels
+where the record blocking may not be maintained.
+.TP 6
+.B E
+On output exclude non-local files, as defined by the statvfs(2)
+.B ST_LOCAL
+flag.  This applies to files and directories on the
+command line, as well as those found descending the directory tree.
+When the
+.B L
+key is also given, symbolic links to non-local files or directories
+are also skipped.  No message is issued for skipped files unless the
+.B v
+key is given more than once.
+.TP 6
+.B R
+When extracting from tape, ignore leading slashes on file names,
+i.e., extract all files relative to the current directory.
+This also applies (as of IRIX 6.2) to any links that are restored
+(and symbolic links if specified as
+.BR RR ).
+When specified as
+.BR RRR ,
+all filenames (including the targets of symbolic links) are made
+directory relative; that is, they are extracted as
+.IR ./filename .
+This mode is intended for the use of programs running as root,
+such as
+.BR tardist ,
+that want to be sure that they do not overwrite system files when extracting
+archives, either by accident, or through a trojan horse attack.
+Since the
+.BR t , x
+and other options referring to specific files use pattern matching,
+you must omit the leading '/' when specifying directory or filenames
+with those options when using the
+.B R
+option.
+Thus, to extract /a/b/c with a relative pathname, you would do:
+.ti +5
+tar xvR a/b/c
+.br
+Earlier releases prepended a leading '.', requiring the use of:
+.ti +5
+tar xvR ./a/b/c
+.br
+The way to check for sure is to use:
+.ti +5
+tar tvR | head -2
+.br
+and then use whichever format is used in the output list.
+
+If specified as
+.BR RRR ,
+all directory information is stripped from pathnames in the archive,
+including the pathnames of symbolic links.  All files will be written
+to the current directory; no directories will be created; symbolic
+links will only refer to files in the current directory.  Note that if
+two or more different files in the archive have the same filename but
+have different pathnames, the last file extracted will overwrite any
+earlier file with the same filename.
+.TP 6
+.B U
+For each file extracted, unlink existing file (if any).
+.TP 6
+.B O
+Write old tapes in an older (pre-IRIX 4.0) format,
+as opposed to the POSIX format.
+This will not archive or extract files with pathnames > 99 characters
+(not including the string-terminating NULL character), and store user and
+group ids by value rather than by name.
+In addition, special files will be archived so that
+they may be interpreted correctly by previous releases of tar
+that understand only the old format.
+(Previous releases of tar will understand the POSIX format,
+but will interpret special files as regular files.)
+.TP 6
+.B o
+By default,
+.I tar
+will \f2chown\f1 files
+to the owner (and group) stored in the archive when invoked by the superuser.
+This flag will prevent this behavior,
+leaving the newly created files owned by root.
+This flag is ignored when
+.I tar
+is not invoked by the superuser.
+.TP 6
+.B S
+Use pre-IRIX 4.0 behavior, so that
+.I tar
+will perform a \f2chown\f1
+to the owner (and group) specified in the archive,
+regardless of whether the
+.BR \-o
+flag is specified,
+or whether
+.I tar
+is invoked by superuser.
+.TP 6
+.B V
+Variable blocking; the last tape block will not be filled to the blocking
+size.  Note that this may prevent the archive from being updated with
+.B r
+or
+.BR u .
+This option also prevents the blocksize from being set to 1 when `\-'
+is used as the archive name (i.e., the
+.B b
+option will be honored).
+.TP 6
+.B a
+Reset access times of input files after they have been copied to the archive.
+.TP 6
+.B q
+Turn on debugging and extra error diagnostics.
+Supplying this flag multiple times increases debugging level.
+.TP 6
+.B K
+Required for files larger than 2 Gigabytes.
+\f4Tar\f1 will issue a warning and skip such files if an attempt is made
+to archive them without the \f4K\f1 option.
+Mutually exclusive with the \f4O\f1 option.
+Warning: Use of this option may result in the creation of an archive
+that is not portable to other machines.
+.TP 6
+.B F
+Skip files named core and errs, and subdirectories named SCCS.
+If specified as
+.BR FF ,
+also skip files with the .o suffix, and files named a.out.
+.PP
+If a file name is preceded by
+.BR \-C ,
+then
+.I tar
+will perform a
+.IR chdir (2)
+to that file name.  This allows multiple directories not
+related by a close common parent to be archived using short
+relative path names.  This provides a method to get around the
+limitation of filename length; note that some care must
+be used when extracting a backup created in this manner.
+For example, to archive files from 
+.I /usr/include
+and from 
+.IR /etc , 
+one might use
+.sp .5
+.ti +0.5i
+tar c \-C /usr  include \-C /  etc
+.PP
+If a file name of
+.B \-
+is given on the command line when making an archive then
+.I tar
+will read its standard input for a list of files to back up,
+one per line; files will be dumped in list order.
+For example, to back up all files that have changed in the last week,
+one might use:
+.ti +5
+find / \-local ! \-type d \-mtime \-7 \-type f \-print | tar ca \-
+.SH DIAGNOSTICS
+Are intended to be self-explanatory.  For diagnostics other than those about
+options,
+.I tar
+uses the
+.IR perror (3)
+library routine to provide the cause of the error.  The message
+`Read-only file system' usually indicates an attempt to write on a
+write-protected device.
+.PP
+Tar will now attempt to recognize byte swapped tapes, and will report
+them with a message similar to:
+.Ex
+tar: directory checksum error
+tar: this appears to be a byte-swapped archive
+.Ee
+In this case, if the byte swapping device is being used to read the
+tape, the non-byteswapping device should be used instead, or vice-versa.
+If the interface doesn't support driver byte swapping (as is typical on
+non-SGI systems), a command similar to this should be used (with the
+appropriate blocking factor):
+.Ex
+dd if=/dev/rmt/tapedevice bs=20b conv=swab | tar vtf -
+.Ee
+.SH BUGS
+There is no way to ask for the
+.IR n \-th
+occurrence of a file.
+.PP
+The
+.B u
+option can be slow.
+.PP
+The data for a file with multiple links is output to
+tape with the first link encountered.   Thus, an attempt
+to extract a subsequent link by itself will not have the
+desired result.
+.PP
+For the 
+.B r
+and
+.B u
+options to work on multi-tapefile tapes (multiple independent tar
+archives on the same tape).
+the tape must be positioned to the last tapefile on the tape.
+This would typically be done with a sequence such as:
+.ti +5
+mt feom; mt bsf 2; mt fsf 1; tar c ...
+.PP
+For multi-tapefile tapes there is no guarantee that after reading 
+a tapefile (\fBc\fP or \fBt\fP option)
+non-rewinding tape is positioned at the FM.
+In this case, immediate execution of another 
+.I tar 
+may not succeed in reading the next tapefile from the tape. One may 
+need to use
+.B mt
+to position the tape to the next tapefile
+before executing the next
+.I tar
+read.
+The surest way to guarantee the position of the tape
+is to use
+.B mt rewind
+and
+.B mt fsf
+to position the tape to the desired file before proceeding with
+the next
+.I tar
+tapefile read.
+.PP
+.SH NOTES
+The
+.B r
+and
+.B u
+options currently work only on tape drives that support the MTAFILE ioctl;
+currently only 9 track and DAT (of the drives supported by SGI) support
+this (see the MTCAN_APPEND capability for SCSI tape devices, in
+.IR /var/sysgen/master.d/tpsc ).
+They are not supported on any variety of quarter inch cartridge tape drive
+or on the Exabyte 8mm tape drive, because the drive hardware
+does not allow this function to be implemented, as they do not
+support data overwrite.  These options are supported on archives that
+are normal files, with
+the restriction that the blocking factor must be the same when
+appending as when the archive was created.
+
+Since
+.I tar
+uses the MTBSR ioctl (for devices) to backspace over the last record when
+appending, the blocksize used when updating must be the same as that when
+creating the tape.
+In addition, if the fixed blocksize device is being used (with SCSI tapes),
+the blocksize must be 1, in order for the algorithm to work correctly.
+.PP
+If you open a remote tape device and receive an I/O error, it is
+possible that the remote tape interface program is obsolete and not
+compatible with the remote tape subroutine library that tar uses.
+It may also be the case that shell startup files on the remote do
+output to the terminal; see the notes on this on the
+.BR rsh (1)
+man page (remote shell, not restricted shell).
+.PP
+Extended Attributes are not archived or restored.
+See
+.IR attr (1)
+for more information about Extended Attributes and see
+.IR xfsdump (1m)
+for a method to back them up.
+.SH FILES
+/dev/tape, /dev/tapens, /dev/rmt/*, /tmp/tar* (for
+.B r
+and
+.B u
+options).
+.br
+$TAPE if set, is used instead of /dev/tape as the default when f not given.
+.SH SEE ALSO
+mtio(7), tps(7m), mt(1), attr(1), xfsdump(1m).

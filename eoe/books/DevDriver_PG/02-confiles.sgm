@@ -1,0 +1,593 @@
+<!-- Produced by version 3.14 (11/22/96) of SGI Frame/SGML translator -->
+<CHAPTER LBL="2"><TITLE><XREFTARGET ID="91375">Device Configuration</TITLE><PARAGRAPH>This chapter discusses how IRIX represents devices to software, and how it establishes the inventory of available hardware.</PARAGRAPH>
+<PARAGRAPH>This information is essential when your work involves attaching a new device or a new class of devices to IRIX. The information is helpful background material when you intend to control a device from a user-level process.</PARAGRAPH>
+<PARAGRAPH>The following primary topics are covered in this chapter.</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH><XREF IDREF="91187" TYPE="TITLE">&ldquo;Device Special Files&rdquo;</XREF> describes the traditional UNIX method of representing a device as a special kind of file, and defines such important terms as major and minor device number.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="51581" TYPE="TITLE">&ldquo;Hardware Graph&rdquo;</XREF> describes the internal database of devices and its external representation as the <FILENAME>/hw</FILENAME> filesystem.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="75563" TYPE="TITLE">&ldquo;Hardware Inventory&rdquo;</XREF> describes the interface to the hardware inventory database through the <COMMAND>hinv</COMMAND> command and <FUNCTION>getinvent()</FUNCTION> function.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="94613" TYPE="TITLE">&ldquo;Configuration Files&rdquo;</XREF> summarizes the files used for system generation and kernel configuration.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>In addition to the discussion here, you can find the system administrator's perspective on these issues in the books <DOCTITLE></DOCTITLE>
+<EXTREF IDREF="88526" BOOK="IA_DiskFiles" FILE="" HDG="88526" INFO="">IRIX Admin: Disks and Filesystems</EXTREF>
+<DOCTITLE></DOCTITLE> and <DOCTITLE></DOCTITLE>
+<EXTREF IDREF="97829" BOOK="IA_ConfigOps" FILE="" HDG="97829" INFO="">IRIX Admin: System Configuration and Operation</EXTREF>
+<DOCTITLE></DOCTITLE>. </PARAGRAPH>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="91187">Device Special Files</TITLE><PARAGRAPH>A device is represented in a UNIX system is as a <INDEXTARGET ID="02-confiles1"><!-- POSTPROCESSDATA: 02-confiles1|device special file --><GLOSSARYITEM>device special file</GLOSSARYITEM> in a certain directory (historically, the <FILENAME>/dev</FILENAME> directory). Beginning with IRIX       6.4 the implementation of device special files has been changed and expanded, but the basic purpose&mdash;to treat a device as a special case of a file&mdash;is not changed.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="87892">Devices as Files</TITLE><PARAGRAPH>A device special file consists of a filename and access permissions, but no associated disk data. The access permissions, owner ID, and group ID of the file control whether the file can be opened. A device special file can be used like a regular file in most IRIX commands; for example, a device file can be the target of a symbolic link, the destination of redirected input or output, authorized by <COMMAND>chmod</COMMAND>, and so on. A process opens a device by passing the pathname of the device special file to the <FUNCTION>open()</FUNCTION> function (see the <REFPAGE>open(2)</REFPAGE> reference page).&space;<INDEXTARGET ID="02-confiles2"><!-- POSTPROCESSDATA: 02-confiles2|device special file:as normal file --></PARAGRAPH>
+<PARAGRAPH>Historically, a device special file contained three items of information about a device:</PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="108"><PARAGRAPH>Block or Character </PARAGRAPH>
+</CELL>
+<CELL LEFT="115" WIDTH="279"><PARAGRAPH>A flag showing which of two types of access, block or 
+character, applies to this device. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="108"><PARAGRAPH>Major device number </PARAGRAPH>
+</CELL>
+<CELL LEFT="115" WIDTH="279"><PARAGRAPH>A numeric code for the device driver that controls this device.&space;<INDEXTARGET ID="02-confiles3"><!-- POSTPROCESSDATA: 02-confiles3|major device number:in inode --></PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="108"><PARAGRAPH>Minor device number </PARAGRAPH>
+</CELL>
+<CELL LEFT="115" WIDTH="279"><PARAGRAPH>A number passed to the device driver to distinguish this 
+device from others of the same type.&space;<INDEXTARGET ID="02-confiles4"><!-- POSTPROCESSDATA: 02-confiles4|minor device number:in inode --></PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>The device numbers are no longer relevant, but the distinction between block and character access still exists. To display the details of all block and character devices in a system using the <FILENAME>/hw</FILENAME> filesystem (described under <XREF IDREF="51581" TYPE="TITLE">&ldquo;Hardware Graph&rdquo;</XREF>) use a command such as the following:</PARAGRAPH>
+<EXAMPLE>
+find /hw \( -type c -o -type b \) -exec ls -l {} \; | more
+</EXAMPLE>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="59531">Block and Character Device Access</TITLE><PARAGRAPH>IRIX supports two classes of device. A <INDEXTARGET ID="02-confiles5"><!-- POSTPROCESSDATA: 02-confiles5|block device:versus character --><GLOSSARYITEM>block device</GLOSSARYITEM> such as a disk drive transfers data in fixed size blocks between the device and memory, and usually has some ability to reposition the medium so as to read or write the same data again. The driver for a block device typically has to manage buffering, and it is free to schedule I/O operations in a different sequence than they are requested.</PARAGRAPH>
+<PARAGRAPH>A <INDEXTARGET ID="02-confiles6"><!-- POSTPROCESSDATA: 02-confiles6|character device:versus block --><GLOSSARYITEM>character device</GLOSSARYITEM> such as a printer accepts or returns data as a stream of bytes, and usually acts as a sink or source of data&mdash;the medium cannot be repositioned and read again. The driver for a character device typically transfers data as soon as it is requested and completes one operation before accepting another request. Character devices are also called <ITALICS>raw</ITALICS> devices, because their input is not buffered.</PARAGRAPH>
+<PARAGRAPH>The two kinds of devices are supported by two different kinds of kernel-level device drivers, block and character drivers. The two kinds of drivers are expected to offer different kinds of service. For example, a block device driver is expected to provide a &ldquo;strategy&rdquo; entry point where it schedules asynchronous, buffered, transfers of data in units of 512 bytes. A character device driver is expected to provide read and write entry points that synchronously transfer any quantity of data from 1 byte upward.</PARAGRAPH>
+<PARAGRAPH>Some device drivers offer both kinds of access. In particular, the disk device drivers support block-type access to data partitions of the disk, and character-type read/write access to the disk volume header.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="15499">Multiple Device Names</TITLE><PARAGRAPH>When a single device is accessed in different modes, the device is described by multiple device special files. Each device special file represents one way of accessing the device. Some reasons for using multiple names are as follows:<INDEXTARGET ID="02-confiles7"><!-- POSTPROCESSDATA: 02-confiles7|device special file:multiple names for --></PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>By convention, UNIX system supply certain default device names, and this is done by creating extra symbolic links. For example, the default device <FILENAME>/dev/tapens</FILENAME> is a link to the first device file in <FILENAME>/dev/rmt/*</FILENAME>. </PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>When a device supports both block and character modes of access, there is a separate device special file for each mode. For example, the following (edited) pathnames provide block and character access to one partition of a SCSI device:</PARAGRAPH>
+<CODE>
+/hw/.../scsi_ctlr/0/target/1/lun/0/disk/partition/0/block
+/hw/.../scsi_ctlr/0/target/1/lun/0/disk/partition/0/char
+</CODE>
+</BULLET>
+<BULLET><PARAGRAPH>When a device can be treated as independent, logical partitions, each partition is given an independent device special file name, although the device is the same in each case. The following (edited) pathnames provide block access to, respectively, an entire disk volume, partition 0 (root), partition 1 (swap), and the volume header (label) of the same disk:</PARAGRAPH>
+<CODE>
+/hw/.../scsi_ctlr/0/target/1/lun/0/disk/volume/block
+/hw/.../scsi_ctlr/0/target/1/lun/0/disk/partition/0/block
+/hw/.../scsi_ctlr/0/target/1/lun/0/disk/partition/1/block
+/hw/.../scsi_ctlr/0/target/1/lun/0/disk/volume_header/block
+</CODE>
+</BULLET>
+<BULLET><PARAGRAPH>When a device needs different treatment at different times, it can have one device special file for each kind of treatment. The following pathnames all provide access to the identical tape drive. The user can open a different name for each combination of byte-swapped and non-byte-swapped I/O with fixed or variable record lengths:</PARAGRAPH>
+<CODE>
+/hw/tape/tps0d3stat
+/hw/tape/tps0d3s
+/hw/tape/tps0d3sc
+/hw/tape/tps0d3nrs
+/hw/tape/tps0d3nrsc
+/hw/tape/tps0d3ns
+/hw/tape/tps0d3nsc
+/hw/tape/tps0d3
+/hw/tape/tps0d3c
+/hw/tape/tps0d3nrns
+/hw/tape/tps0d3nrnsc
+/hw/tape/tps0d3nr
+/hw/tape/tps0d3nrc
+/hw/tape/tps0d3sv
+/hw/tape/tps0d3svc
+/hw/tape/tps0d3nrsv
+/hw/tape/tps0d3nrsvc
+/hw/tape/tps0d3nsv
+/hw/tape/tps0d3nsvc
+/hw/tape/tps0d3v
+/hw/tape/tps0d3vc
+/hw/tape/tps0d3nrnsv
+/hw/tape/tps0d3nrnsvc
+/hw/tape/tps0d3nrv
+/hw/tape/tps0d3nrvc
+</CODE>
+</BULLET>
+</BULLETLIST>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="67858">Major Device Number</TITLE><PARAGRAPH>The <INDEXTARGET ID="02-confiles8"><!-- POSTPROCESSDATA: 02-confiles8|major device number --><GLOSSARYITEM>major device number</GLOSSARYITEM> was, in traditional UNIX architecture, a numeric key that related a device special file to the device driver that managed it. When special file was opened, IRIX selected the driver to handle the device based on the major device number. In the newer <FILENAME>/hw</FILENAME> filesystem, a different means is used. The major number is no longer relevant.</PARAGRAPH>
+<PARAGRAPH>The major number in all device special files in <FILENAME>/hw</FILENAME> is always 0. The device special files in <FILENAME>/hw</FILENAME> are created dynamically, by the device drivers, as the devices are attached. The identity of the device driver is stored in the device special files at this time, but not as a number. When a process opens a device special file in <FILENAME>/hw</FILENAME> (or a name in <FILENAME>/dev</FILENAME> that is a symbolic link to <FILENAME>/hw</FILENAME>), the kernel can tell directly which driver to call.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="13802">Minor Device Number</TITLE><PARAGRAPH>In conventional UNIX, and in versions of IRIX previous to IRIX       6.4, a <INDEXTARGET ID="02-confiles9"><!-- POSTPROCESSDATA: 02-confiles9|data types:<VARIABLE>dev_t</VARIABLE> --><INDEXTARGET ID="02-confiles10"><!-- POSTPROCESSDATA: 02-confiles10|minor device number --><GLOSSARYITEM>minor device number</GLOSSARYITEM> was encoded in the device special file and was passed to the device driver. The major and minor numbers were passed together in an integer called a <VARIABLE>dev_t</VARIABLE>. The driver could extract the minor device number by passing the <VARIABLE>dev_t</VARIABLE> value to the <FUNCTION>geteminor()</FUNCTION> function.</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE>Historical Use of Minor Number</TITLE><PARAGRAPH>Prior to IRIX       6.4, the minor device number served as an argument to help the device driver distinguish one device from another. Many devices can have the same major number and be serviced by the same driver. Using the minor number, the driver could distinguish the particular device being serviced.</PARAGRAPH>
+<PARAGRAPH>Some device drivers treated the minor device number as a logical unit number, while other drivers used it to contain multiple, encoded bit fields. For example:<INDEXTARGET ID="02-confiles11"><!-- POSTPROCESSDATA: 02-confiles11|minor device number:encoding --></PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>The IRIX tape device driver used the minor device number to encode the options for rewind or no-rewind, byte-swap or nonswap, and fixed or variable blocking, along with the logical unit number.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The IRIX disk device drivers encoded the disk partition number into the minor device number along with a disk unit number.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Both disk and tape devices encoded the SCSI adapter number in the minor number.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>With STREAMS drivers, the minor device number can be chosen arbitrarily during a CLONE open&mdash;see <XREF IDREF="32390" TYPE="TITLE">&ldquo;Support for CLONE Drivers&rdquo;</XREF>.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Present Use of Minor Numbers</TITLE><PARAGRAPH>Beginning with IRIX       6.4, the minor device number has little importance because the driver has a direct way to distinguish each device and its special needs, through the hardware graph (see <XREF IDREF="51581" TYPE="TITLE">&ldquo;Hardware Graph&rdquo;</XREF>.)</PARAGRAPH>
+<PARAGRAPH>The minor number in device special files in <FILENAME>/hw</FILENAME> is an arbitrary integer with no relation to the device itself. The device special files in <FILENAME>/hw</FILENAME> are created dynamically, by the device drivers, as the devices are attached. The device driver stores any information it needs to distinguish one device from another, directly in the device special file itself. When a process opens a device special file in <FILENAME>/hw</FILENAME> (or a name in <FILENAME>/dev</FILENAME> that is a symbolic link to <FILENAME>/hw</FILENAME>), the driver can retrieve the information directly, without needing to decode the minor number.</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="40611">Creating Conventional Device Names</TITLE><PARAGRAPH>Starting with IRIX       6.4, there is a complete filesystem, <FILENAME>/hw</FILENAME>, that is devoted to device special files. However, the use of <FILENAME>/hw</FILENAME> is both new and unique to IRIX. For the sake of compatibility, the conventional device special files in the <FILENAME>/dev</FILENAME> filesystem that are used in UNIX systems generally and in previous release of IRIX are retained. This topic describes these conventional names. See also <XREF IDREF="78426" TYPE="TITLE">&ldquo;/hw Filesystem&rdquo;</XREF>.</PARAGRAPH>
+<PARAGRAPH>Many device special files are created automatically at boot time by execution of the script <INDEXTARGET ID="02-confiles12"><!-- POSTPROCESSDATA: 02-confiles12|<FILENAME>/dev/MAKEDEV</FILENAME>MAKE --><FILENAME>/dev/MAKEDEV</FILENAME>. Additional device special files can be created with administrator commands.</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="76799">IRIX Conventional Device Names</TITLE><PARAGRAPH>Conventions for the format of device special filenames are spelled out in the following reference pages: <INDEXTARGET ID="02-confiles13"><!-- POSTPROCESSDATA: 02-confiles13|names of devices --><INDEXTARGET ID="02-confiles14"><!-- POSTPROCESSDATA: 02-confiles14|device special file:<FILENAME>/dev/dsk</FILENAME> --><INDEXTARGET ID="02-confiles15"><!-- POSTPROCESSDATA: 02-confiles15|device special file:name format --><REFPAGE>intro(7)</REFPAGE>, <REFPAGE>dks(7)</REFPAGE>, <REFPAGE>dsreq(7)</REFPAGE>, and <REFPAGE>tps(7)</REFPAGE>. For example, the components of a disk device name in <VARIABLE>/dev/dsk</VARIABLE> include </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><BOLD>dks</BOLD>
+<VARIABLE></VARIABLE><VARIABLE>c</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="261"><PARAGRAPH>Constant prefix &ldquo;dks&rdquo; followed by bus adapter number <VARIABLE>c</VARIABLE>. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><BOLD>d</BOLD>
+<VARIABLE></VARIABLE><VARIABLE>u</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="261"><PARAGRAPH>Constant letter &ldquo;d&rdquo; followed by disk SCSI ID number <VARIABLE>u</VARIABLE>. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><BOLD>l</BOLD>
+<VARIABLE></VARIABLE><VARIABLE>n</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="261"><PARAGRAPH>Optionally, letter &ldquo;l&rdquo; (ell) and logical unit number <VARIABLE>n</VARIABLE> (used 
+only when disk u controls multiple drives). </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><BOLD>s</BOLD>
+<VARIABLE></VARIABLE><VARIABLE>p</VARIABLE> or <BOLD>vh</BOLD> or <BOLD>vol</BOLD>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="261"><PARAGRAPH>Constant letter &ldquo;s&rdquo; and partition number <VARIABLE>p</VARIABLE>, or else &ldquo;vh&rdquo; for 
+volume header, or &ldquo;vol&rdquo; for (entire) volume. </PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>Programs throughout the system rely on the conventions for these device names. In addition, by convention the associated major and minor numbers agree with the names. For example, the logical unit and partition numbers that appear in a disk name are also encoded into the minor number.</PARAGRAPH>
+<PARAGRAPH>Beginning with IRIX       6.4, these highly-compressed conventional names are unpacked into longer pathnames in the <FILENAME>/hw</FILENAME> filesystem. However, the older, encoded names in <FILENAME>/dev</FILENAME> are retained for compatibility and portability.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="14628">The Script MAKEDEV</TITLE><PARAGRAPH>The conventions for all the IRIX device special names are written into the script <FILENAME>/dev/MAKEDEV</FILENAME>. This is a make file, but unlike most make files, it is not used to compile executable programs. It contains the logic to prepare device special names and their associated major and minor numbers and file permissions.</PARAGRAPH>
+<PARAGRAPH>The MAKEDEV script is executed during IRIX startup from a script in <INDEXTARGET ID="02-confiles16"><!-- POSTPROCESSDATA: 02-confiles16|IRIX commands:<COMMAND>hinv</COMMAND>:and MAKEDEV --><INDEXTARGET ID="02-confiles17"><!-- POSTPROCESSDATA: 02-confiles17|configuration files:<FILENAME>/etc/rc2.d</FILENAME> --><FILENAME>/etc/rc2.d</FILENAME>. It is executed after all device drivers have been initialized, so it can use the output of the <COMMAND>hinv</COMMAND> command to construct device names to suit the actual configuration.</PARAGRAPH>
+<PARAGRAPH>The system administrator can invoke MAKEDEV to construct device special files. Administrator use of MAKEDEV is described in <DOCTITLE>IRIX Admin: System Configuration and Operation</DOCTITLE>.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="79593">Making Conventional Device Files</TITLE><PARAGRAPH>You or a system administrator can create device special files explicitly using the commands <INDEXTARGET ID="02-confiles18"><!-- POSTPROCESSDATA: 02-confiles18|IRIX commands:<COMMAND>mknod</COMMAND> --><INDEXTARGET ID="02-confiles19"><!-- POSTPROCESSDATA: 02-confiles19|IRIX commands:<COMMAND>install</COMMAND> --><COMMAND>mknod</COMMAND> or <COMMAND>install</COMMAND>. Either command can be used in a make file such as you might create as part of the installation script for a product.</PARAGRAPH>
+<PARAGRAPH>For details of these commands, see the install(1) and mknod(1M) reference pages, and <DOCTITLE>IRIX Admin: System Configuration and Operation</DOCTITLE>. The following is a hypothetical example of <COMMAND>install</COMMAND>:</PARAGRAPH>
+<EXAMPLE>
+# <USERINPUT>install -m 644 -u root -g sys -root /dev -chr 62,0</USERINPUT>&space;
+</EXAMPLE>
+<PARAGRAPH>The <COMMAND>-chr</COMMAND> option specifies a character device, and <COMMAND>62,0</COMMAND> are the major and minor device numbers, respectively.</PARAGRAPH>
+<TIP><PREFIX>Tip</PREFIX>The <COMMAND>mknod</COMMAND> command is portable, being used in most UNIX systems. The <COMMAND>install</COMMAND> command is unique to IRIX, and has a number of features and uses beyond those of <COMMAND>mknod</COMMAND>. Examples of both can be found by reading <FILENAME>/dev/MAKEDEV</FILENAME>.&space;</TIP>
+</SECTION3>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="51581">Hardware Graph</TITLE><PARAGRAPH>Conventional UNIX software is designed based on the assumption that the computer has only a small, fixed set of peripheral devices under undemanding reliability constraints. IRIX 6.5 is designed to handle a system with a large complement of devices that can change dynamically, under high demands for reliability. To meet the new requirements, IRIX introduced the <INDEXTARGET ID="02-confiles20"><!-- POSTPROCESSDATA: 02-confiles20|hwgraph --><GLOSSARYITEM>hwgraph</GLOSSARYITEM> (hardware graph) to represent system devices, and the <FILENAME>/hw</FILENAME> filesystem as the externally visible form of the hwgraph.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>UNIX Hardware Assumptions, Old and New</TITLE><PARAGRAPH>Historically, UNIX was designed to support small computer systems that were administered by the same group of people that used them. When there are only a few, or a few dozen, peripheral devices, it is acceptable to:<INDEXTARGET ID="02-confiles21"><!-- POSTPROCESSDATA: 02-confiles21|hwgraph:justification for --></PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>Represent all devices as brief names in the <FILENAME>/dev</FILENAME> filesystem</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Use a limited range of major device numbers to specify all possible device drivers</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Use an 18-bit integer (the minor device number) as the sole parameter to represent a device's identify and access mode</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Leave the details of device addressing to be specified in configuration files or by hard-coding in the source of device drivers.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>When devices are only rarely added to or removed from the system, it is acceptable to require that the administrator shut the system down, modify a configuration file, and reboot, in order to remove or add a device. When the system has a small number of tolerant users, it is acceptable to shut the system down and restart it to make small changes in the I/O configuration.</PARAGRAPH>
+<PARAGRAPH>All of these assumptions are challenged by the kinds of large-scale systems that can be built using the Silicon Graphics Origin2000 architecture.</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>It is possible to build very large Origin2000 systems with many independent nodes, each with a number of attached devices.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Because of the rich possibilities for interconnecting Origin2000 nodes, the topology of a Origin2000 system can be complex, with devices addressed by lengthy paths, and sometimes with multiple possible paths from a CPU to a device.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The hardware configuration of a Origin2000 system can change dynamically while the system runs, by adding and removing entire nodes, or single buses, or single cards on a PCI bus. </PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Origin2000 is designed to be the basis of systems that are available a very high percentage of the time, on which frequent or casual reboots are not allowed.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>In this environment it is no longer acceptable to require downtime on any change, nor to require the administrator to issue detailed commands or to edit configuration files to make simple changes. Previous release of IRIX addressed some of these points through the MAKEDEV script (see <XREF IDREF="14628" TYPE="TITLE">&ldquo;The Script MAKEDEV&rdquo;</XREF>), which creates device special files automatically for many types of hardware.</PARAGRAPH>
+<PARAGRAPH>IRIX       6.4 moves away from the conventional UNIX model by creating the hwgraph, and by requiring all kernel-level device drivers to maintain the hwgraph as devices are attached and detached.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="45843">Hardware Graph Features</TITLE><PARAGRAPH>The hwgraph is an in-memory, graph-structured database that describes all hardware units that are addressable by the system. For a very concise overview of the hwgraph, see the <INDEXTARGET ID="02-confiles22"><!-- POSTPROCESSDATA: 02-confiles22|hwgraph:definition --><REFPAGE>hwgraph(4)</REFPAGE> reference page.</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE>Hwgraph Nomenclature&space;<INDEXTARGET ID="02-confiles23"><!-- POSTPROCESSDATA: 02-confiles23|hwgraph:nomenclature --></TITLE><PARAGRAPH>&ldquo;In-memory&rdquo; means that the hwgraph is contained in kernel memory. It is reconstructed dynamically in memory each time the system boots up, and is kept current in memory as the hardware configuration changes.</PARAGRAPH>
+<PARAGRAPH>&ldquo;Graph-structured&rdquo; means that the hwgraph is topologically a directed graph, consisting of a set of &ldquo;vertexes&rdquo; (points) that represent devices, and &ldquo;edges&rdquo; (lines) that connect the vertexes. Each edge is a one-way linkage from a source vertex to a target vertex (this is the definition of a directed graph). Each edge has a label, a character string that names the edge. A small part of a typical hwgraph is depicted in <INDEXTARGET ID="02-confiles24"><!-- POSTPROCESSDATA: 02-confiles24|hwgraph:vertexhwgraph:edge --><XREF IDREF="49657" TYPE="GRAPHIC">Figure&nbsp;2-1</XREF>.</PARAGRAPH>
+<PARAGRAPH><FIGURE><GRAPHIC FILE="02-typical.hwgraph.gif" POSITION="INLINE" SCALE="FALSE"><CAPTION LBL="2-1"><PREFIX>Figure 2-1 </PREFIX><XREFTARGET ID="49657">Part of a Typical Hwgraph</CAPTION>
+</FIGURE>
+</PARAGRAPH>
+<PARAGRAPH><XREF IDREF="49657" TYPE="GRAPHIC">Figure&nbsp;2-1</XREF> shows the part of the graph that represents block-mode and character-mode access to the whole-volume partition of a disk. The more familiar path notation for the same graph would be as follows:</PARAGRAPH>
+<CODE>
+/hw/module/1/io/pci/slot/0/scsi_ctlr/0/target/1/lun/0/disk/volume/char
+/hw/module/1/io/pci/slot/0/scsi_ctlr/0/target/1/lun/0/disk/volume/block
+/hw/module/1/io/dks0d0vol/block
+/hw/module/1/io/dks0d0vol/char
+</CODE>
+<PARAGRAPH><XREF IDREF="49657" TYPE="GRAPHIC">Figure&nbsp;2-1</XREF> is color-coded to show when the parts of graph are built:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>The parts of the hwgraph built by the kernel during bootup are shown in blue.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The parts shown in cyan are built by the PCI bus adapter as it probes the bus.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The parts in magenta are built by the host adapter driver for the SCSI controller, to reflect the addressable units on the SCSI bus.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The parts shown in green are built by the disk device driver as it attaches the disk&mdash;including a shorthand link from <FILENAME>/hw/module/1/io</FILENAME> to the volume vertex.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Properties of Edges and Vertexes</TITLE><PARAGRAPH>An edge in the hwgraph originates in one vertex (the source vertex) and points to another vertex (the target vertex). The only property of an edge is its label.</PARAGRAPH>
+<PARAGRAPH>A vertex in the hwgraph stores information about an addressable unit of hardware in the system. A vertex can contain the following kinds of information:<INDEXTARGET ID="02-confiles25"><!-- POSTPROCESSDATA: 02-confiles25|hwgraph:vertex:properties --></PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>A pointer to an information structure supplied by the device driver.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>One or more <VARIABLE>inventory_t</VARIABLE> objects, representing information to be reported out by the <COMMAND>hinv</COMMAND> command (see the <REFPAGE>hinv(1)</REFPAGE> reference page).</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>One or more labelled attributes, containing information that can be reported out by the <COMMAND>attr</COMMAND> command (see the <REFPAGE>attr(1)</REFPAGE> reference page).</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>One or more labelled attributes that are not exported for availability by <COMMAND>attr</COMMAND>.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The edges leading out of this vertex.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>Not all vertexes have all this information.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="16492">Additional Edges</TITLE><PARAGRAPH>The basic hwgraph&mdash;as constructed by the kernel and by built-in drivers such as the PCI bus adapter&mdash;is highly detailed and explicit, and is generally tree-structured. However, kernel-level drivers are free to add edges between any two vertexes. A driver can add extra edges in order to provide short-circuit paths for convenient access to vertexes deep in the hwgraph.</PARAGRAPH>
+<PARAGRAPH>Many device drivers distributed with IRIX create convenience vertexes and edges; and device drivers provided by OEMs are welcome to do so as well. One problem is that often a driver needs to label a convenience edge with a unique number&mdash;a controller number, a port number, or a line number of some kind. At the time a driver is initializing and creating vertexes, the total hardware complement is not known and it is impossible to decide which number of this kind to use. This problem is alleviated by a program like <COMMAND>ioconfig</COMMAND>; see <XREF IDREF="83505" TYPE="TITLE">&ldquo;Using ioconfig for Global Controller Numbers&rdquo;</XREF>.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="66944">Implicit Edges</TITLE><PARAGRAPH>Every vertex has one implicit edge with the label &ldquo;..&rdquo; which leads back to a parent vertex. Every vertex has one implicit edge with the label &ldquo;.&rdquo; which leads to the vertex itself. This is deliberately the same convention used in a filesystem, where every directory contains &ldquo;..&rdquo; and &ldquo;.&rdquo; entries. No other edges are required.<INDEXTARGET ID="02-confiles26"><!-- POSTPROCESSDATA: 02-confiles26|hwgraph:implicit edgehwgraph:edge:implicit --></PARAGRAPH>
+<PARAGRAPH>A vertex that has only the implicit edges is a leaf vertex. A leaf vertex can stand for a device, so that a user process can name a leaf vertex in an <FUNCTION>open()</FUNCTION> call in order to open the device. A user process cannot open a non-leaf vertex, just as a process cannot open a directory as a file.</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="78426">/hw Filesystem</TITLE><PARAGRAPH>The <INDEXTARGET ID="02-confiles27"><!-- POSTPROCESSDATA: 02-confiles27|hwgraph:/hw filesystem reflects --><FILENAME>/hw</FILENAME> filesystem is a visible reflection of the hwgraph. The <FILENAME>/hw</FILENAME> filesystem is a filesystem, on a par with an EFS or XFS filesystem, but of a different type. It is built dynamically (it has no disk contents) and changes to reflect changes in the hwgraph. (You can compare the <FILENAME>/hw</FILENAME> filesystem to another artificial, dynamic filesystem, <FILENAME>/proc</FILENAME>, which is an externally visible representation of the currently executing user processes.)</PARAGRAPH>
+<PARAGRAPH>Any user can navigate the <FILENAME>/hw</FILENAME> filesystem using commands such as <COMMAND>cd</COMMAND>, <COMMAND>ls</COMMAND>, <COMMAND>find</COMMAND>, and <COMMAND>file</COMMAND>. Users can browse the <FILENAME>/hw</FILENAME> filesystem to discover the hardware configuration. Names in the <FILENAME>/hw</FILENAME> filesystem have access permissions that are applied in the same way as in other filesystems. Pathnames beginning <FILENAME>/hw</FILENAME> can be used wherever other filesystem pathnames are used, and in particular,</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>A process can use a <FILENAME>/hw</FILENAME> pathname with the <FUNCTION>open()</FUNCTION> function to open a device.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>An <FILENAME>/hw</FILENAME> pathname can be used to construct a symbolic link.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>The use of symbolic links to <FILENAME>/hw</FILENAME> paths is important. All the device special filenames that are conventionally expected to exist in <FILENAME>/dev</FILENAME> are implemented by creating symbolic links from <FILENAME>/dev</FILENAME> to <FILENAME>/hw</FILENAME>. Here is a typical link:</PARAGRAPH>
+<EXAMPLE>
+lrwxr-xr-x   1 root   sys    13 Aug 16 11:23 /dev/root -> /hw/disk/root
+</EXAMPLE>
+<PARAGRAPH>However, a symbolic link is not a perfect alias. Links are given special treatment by commands such as <COMMAND>ls</COMMAND>, <COMMAND>tar</COMMAND>, and <COMMAND>chmod</COMMAND>; and by the system function <FUNCTION>stat()</FUNCTION> on which the commands are based (see the <REFPAGE>stat(2)</REFPAGE> reference page). What is needed is a way to make a functional alias for a device special file under a different name. That is supplied by <COMMAND>mknod</COMMAND>.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="21506">Driver Interface to Hwgraph</TITLE><PARAGRAPH>A kernel-level device driver can make use of a variety of kernel functions for examining and modifying the hwgraph. These functions are covered in detail in <XREF IDREF="50960" TYPE="TITLE">&ldquo;Hardware Graph Management&rdquo;</XREF>.&nbsp;The kernel offers functions by which a driver can:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>Traverse the hwgraph, following edges by name from vertex to vertex.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Create new vertexes.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Create new edges from existing vertexes to new vertexes.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Set, change, or retrieve the address of driver-defined data from a vertex.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Add hardware inventory data to a vertex.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Set, change, retrieve or remove labelled attributes, and specify whether the attributes should be accessible to the attr command or not.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Remove edges and destroy vertexes.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>Some device drivers do not have to perform these functions, but most kernel-level drivers do need to create at least a few edges and vertexes to provide access to devices. Vertexes are typically created when the driver is called at its <VARIABLE>pfx</VARIABLE><FUNCTION>attach()</FUNCTION> entry point (driver entry points are covered in detail in <XREF IDREF="19192" TYPE="TITLE">Chapter&nbsp;7, &ldquo;Structure of a Kernel-Level Driver.&rdquo;</XREF>) Vertexes are typically destroyed when the driver is called at its <VARIABLE>pfx</VARIABLE><FUNCTION>detach()</FUNCTION> entry point.&space;</PARAGRAPH>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="75563">Hardware Inventory</TITLE><PARAGRAPH>In IRIX previous to IRIX       6.4, during bootstrap, each device driver probed the hardware attachments for which it was responsible, and added information to a hardware inventory table. The kernel maintained a hardware inventory table in kernel virtual memory. The table could be queried by users and by programs.<INDEXTARGET ID="02-confiles28"><!-- POSTPROCESSDATA: 02-confiles28|hardware inventory --></PARAGRAPH>
+<PARAGRAPH>Beginning with IRIX       6.4, what was once a simple table of devices has expanded into the hwgraph (<XREF IDREF="51581" TYPE="TITLE">&ldquo;Hardware Graph&rdquo;</XREF>). Device drivers create the hardware inventory by adding vertexes to the hwgraph. However, existing programs continue to query the hardware inventory using the old programming interface, as well as new ones.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="54641">Using the Hardware Inventory</TITLE><PARAGRAPH>The hardware inventory is used by users, administrators, and programmers.</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE>Contents of the Inventory</TITLE><PARAGRAPH>Using database terminology, the hardware inventory consists of a single table with the following columns: <INDEXTARGET ID="02-confiles29"><!-- POSTPROCESSDATA: 02-confiles29|hardware inventory:contents --></PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>Class </PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>A code for the class of device; for example, audio, disk, processor, or 
+network. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>Type </PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>A code for the type of device within its class; for example, FPU and CPU 
+types within the processor class. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>Controller</PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>When applicable, the number of the controller, board, or attachment. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>Unit</PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>When applicable, the logical unit or device within a Controller number. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>State</PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>A descriptive number, such as the CPU model number. </PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>Of these values,</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>The Class and Type are arbitrary codes that are defined in <FILENAME>/usr/include/invent.h</FILENAME>. Only the defined codes can be interpreted by the <COMMAND>hinv</COMMAND> command. </PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The Controller and Unit are small integers. The <COMMAND>hinv</COMMAND> command formats them based the Class code. For example, when Class is INV_DISK, <COMMAND>hinv</COMMAND> might report &ldquo;Disk drive: unit 4 on SCSI controller 56.&rdquo; When Class is INV_NETWORK and Type is INV_NET_ETHER, <COMMAND>hinv</COMMAND> might report &ldquo;Integral Ethernet controller: et2, Ebus slot&nbsp;11.&rdquo;</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The Controller number is used to distinguish between identical controllers. The device driver can assign a controller number when it attaches inventory data to a device vertex; or the controller numbers can be assigned dynamically at boot time, as discussed under <XREF IDREF="83505" TYPE="TITLE">&ldquo;Using ioconfig for Global Controller Numbers&rdquo;</XREF>. </PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Displaying the Inventory with hinv</TITLE><PARAGRAPH>The <INDEXTARGET ID="02-confiles30"><!-- POSTPROCESSDATA: 02-confiles30|hardware inventory:<COMMAND>hinv</COMMAND> displays --><INDEXTARGET ID="02-confiles31"><!-- POSTPROCESSDATA: 02-confiles31|IRIX commands:<COMMAND>hinv</COMMAND> --><COMMAND>hinv</COMMAND> command formats all or selected rows of the inventory table for display (see the <REFPAGE>hinv(1)</REFPAGE> reference page), translating the numbers to readable form. The user or system administrator can use command options to select a class of entries or certain specific device types by name. The class or type can be qualified with a unit number and a controller number. For example, the following command displays information about disk 4 on controller 1:</PARAGRAPH>
+<EXAMPLE>
+<USERINPUT>hinv -c disk -b 1 -u 4</USERINPUT>&space;
+</EXAMPLE>
+<PARAGRAPH>You can use <COMMAND>hinv</COMMAND> to check the result of installing new hardware. The new hardware should show up in the report after the system is booted following installation, provided that the associated device driver was called and was written correctly.</PARAGRAPH>
+<PARAGRAPH>A full inventory report (<COMMAND>hinv -mv</COMMAND>) is almost mandatory documentation for a software problem report, either submitted by your user to you, or by you to Silicon Graphics.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="78617">Testing the Inventory In Software</TITLE><PARAGRAPH>Within a shell script, you can test the output of <COMMAND>hinv</COMMAND> most conveniently in the command exit status. The command sets exit status of 0 when it finds or reports any items. It sets status of 1 when it finds no items. The code in <XREF IDREF="84617" TYPE="TEXT">Example&nbsp;2-1</XREF> could be used in a shell script to test the existence of a disk controller.</PARAGRAPH>
+<CODE><CAPTION LBL="2-1"><PREFIX>Example 2-1 </PREFIX><XREFTARGET ID="84617">Testing the Hardware Inventory in a Shell Script</CAPTION>if hinv -s -c disk -b 1;
+&nbsp;&nbsp;&nbsp;then ;
+&nbsp;&nbsp;&nbsp;else echo No second disk controller;
+fi ;
+</CODE>
+<PARAGRAPH>You can access the inventory table in a C program using the functions documented in the <INDEXTARGET ID="02-confiles32"><!-- POSTPROCESSDATA: 02-confiles32|hardware inventory:software interface to --><REFPAGE>getinvent(3)</REFPAGE> reference page. The only access method supported is a sequential scan over the table, viewing all entries. Three functions permit access: </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><FUNCTION>setinvent()</FUNCTION>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="315"><PARAGRAPH>initializes or reinitializes the scan to the first row <INDEXTARGET ID="02-confiles33"><!-- POSTPROCESSDATA: 02-confiles33|IRIX functions:<FUNCTION>setinvent()</FUNCTION> --></PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><FUNCTION>getinvent()</FUNCTION>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="315"><PARAGRAPH>returns the next table row in sequence <INDEXTARGET ID="02-confiles34"><!-- POSTPROCESSDATA: 02-confiles34|IRIX functions:<FUNCTION>getinvent()</FUNCTION> --></PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><FUNCTION>endinvent()</FUNCTION>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="315"><PARAGRAPH>releases storage allocated by <FUNCTION>setinvent()</FUNCTION>&space;<INDEXTARGET ID="02-confiles35"><!-- POSTPROCESSDATA: 02-confiles35|IRIX functions:<FUNCTION>endinvent()</FUNCTION> --></PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>These functions use static variables and should only be used by a single process within an address space. Reentrant forms of the same functions, which can safely be used in a multithreaded process, are also available (see <REFPAGE>getinvent(3)</REFPAGE>). <XREF IDREF="23677" TYPE="TEXT">Example&nbsp;2-2</XREF> demonstrates the use of these functions.</PARAGRAPH>
+<PARAGRAPH>The format of one inventory table row is declared as type <INDEXTARGET ID="02-confiles36"><!-- POSTPROCESSDATA: 02-confiles36|header files:<FILENAME>sys/invent.h</FILENAME> --><VARIABLE>inventory_t</VARIABLE> in the <FILENAME>sys/invent.h</FILENAME> header file. This header file also supplies symbolic names for all the class and type numbers that can appear in the table, as well as containing commentary explaining the meanings of some of the numbers.</PARAGRAPH>
+<CODE><CAPTION LBL="2-2"><PREFIX>Example 2-2 </PREFIX><XREFTARGET ID="23677">Function Returning Type Code for CPU Module <INDEXTARGET ID="02-confiles37"><!-- POSTPROCESSDATA: 02-confiles37|CPU:model number from inventory --></CAPTION>#include &lt;stddef.h> /* for NULL */
+#include &lt;invent.h> /* includes sys/invent.h */
+int getIPtypeCode()
+{
+&nbsp;&nbsp;&nbsp;inv_state_t * pstate = NULL;
+&nbsp;&nbsp;&nbsp;inventory_t * work;
+&nbsp;&nbsp;&nbsp;int ret = 0;
+&nbsp;&nbsp;&nbsp;setinvent_r(&amp;pstate);
+&nbsp;&nbsp;&nbsp;do {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;work = getinvent_r(pstate);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if ( (INV_PROCESSOR == work->inv_class)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&amp;&amp;   (INV_CPUBOARD == work->inv_type) )
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ret = work->inv_state;
+&nbsp;&nbsp;&nbsp;} while (!ret);
+&nbsp;&nbsp;&nbsp;endinvent_r(pstate); /* releases pstate-> */
+&nbsp;&nbsp;&nbsp;return ret;
+}
+</CODE>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="91306">Creating an Inventory Entry</TITLE><PARAGRAPH>Device drivers supplied by Silicon Graphics add information to the hardware inventory by adding vertexes to the hwgraph (see <INDEXTARGET ID="02-confiles38"><!-- POSTPROCESSDATA: 02-confiles38|hardware inventory:adding entries to --><XREF IDREF="21506" TYPE="TITLE">&ldquo;Driver Interface to Hwgraph&rdquo;</XREF>) and then by attaching <VARIABLE>inventory_t</VARIABLE> structures to vertexes using the <FUNCTION>device_inventory_add()</FUNCTION> function. This and other hwgraph functions are discussed on the <REFPAGE>hwgraph.inv(d3x)</REFPAGE> reference page, and under <XREF IDREF="50960" TYPE="TITLE">&ldquo;Hardware Graph Management&rdquo;</XREF>.&space;<INDEXTARGET ID="02-confiles39"><!-- POSTPROCESSDATA: 02-confiles39|hwgraph:hardware inventory in --></PARAGRAPH>
+<PARAGRAPH>The <VARIABLE>inventory_t</VARIABLE> structure is declared in the header file <FILENAME>sys/invent.h</FILENAME>, along with the inventory type and class numbers that are valid.</PARAGRAPH>
+<PARAGRAPH>Drivers written for releases prior to IRIX       6.4 called the <FUNCTION>add_to_inventory()</FUNCTION> kernel function in order to add a row to the inventory table. This function is supported in IRIX 6.5 in a limited way. When called, it attaches the inventory information to the root of the hwgraph (to the <FILENAME>/hw</FILENAME> directory itself). As a result, the <COMMAND>hinv</COMMAND> command does see and report the added inventory information, but the information is not physically associated with the hwgraph vertex to which it applies.<INDEXTARGET ID="02-confiles40"><!-- POSTPROCESSDATA: 02-confiles40|kernel functions:<FUNCTION>add_to_inventory()</FUNCTION> --></PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>The only valid inventory types and classes are those declared in <FILENAME>sys/invent.h</FILENAME>. Only those numbers can be decoded and displayed by the <COMMAND>hinv</COMMAND> command, which prints an error message if it finds an unknown device class, and which prints nothing at all for an unknown device type within a known class. There is no provision for adding new device-class or device-type values for third-party devices.&space;<INDEXTARGET ID="02-confiles41"><!-- POSTPROCESSDATA: 02-confiles41|header files:<FILENAME>sys/invent.h</FILENAME> --></NOTE>
+<PARAGRAPH>However, it is possible now for a driver to add any arbitrary descriptive string desired to any vertex. These labelled attributes can be retrieved by the <COMMAND>attr</COMMAND> command and in software by the <FUNCTION>attr_get()</FUNCTION> function (see <REFPAGE>attr(1)</REFPAGE> and <REFPAGE>attr_get(2)</REFPAGE>).</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="83505">Using ioconfig for Global Controller Numbers</TITLE><PARAGRAPH>An Origin2000 system can be reconfigured dynamically, so the complement of devices can change from day to day or even minute to minute&mdash;a primary motive for creating the hwgraph. However, the dynamic nature of the hardware complement makes it difficult to define a stable, predictable numbering scheme for hardware devices. This need is met by the <INDEXTARGET ID="02-confiles42"><!-- POSTPROCESSDATA: 02-confiles42|IRIX commands:<COMMAND>ioconfig</COMMAND> --><INDEXTARGET ID="02-confiles43"><!-- POSTPROCESSDATA: 02-confiles43|Controller number, assigned in hwgraph --><INDEXTARGET ID="02-confiles44"><!-- POSTPROCESSDATA: 02-confiles44|hwgraph:controller numbers assigned --><COMMAND>ioconfig</COMMAND> command (see reference page <REFPAGE>ioconfig(1M)</REFPAGE>).</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE>Need for Stable Numbering</TITLE><PARAGRAPH>As discussed under <XREF IDREF="76799" TYPE="TITLE">&ldquo;IRIX Conventional Device Names&rdquo;</XREF>, a conventional name for a disk device in the <FILENAME>/dev/dsk</FILENAME> directory is <BOLD>dks</BOLD><VARIABLE>C</VARIABLE><BOLD>d</BOLD><VARIABLE>u</VARIABLE><BOLD>l</BOLD><VARIABLE>n</VARIABLE><BOLD>s</BOLD><VARIABLE>p</VARIABLE>. The number <VARIABLE>C</VARIABLE> is the &ldquo;controller&rdquo; number, which in previous systems represented a fixed, well-known numbering of SCSI bus adapters. No such fixed numbering is inherent in the Origin2000 architecture. Controller cards can be added to and removed from modules, and entire modules can be added to and removed from the system.</PARAGRAPH>
+<PARAGRAPH>Users of network interface cards, serial ports, bus adapters, and other devices need a predictable, static naming scheme for devices. The name <FILENAME>/dev/ttyf2</FILENAME> should represent the same serial port tomorrow that it does today. A related problem is that some device drivers want to place extra, short-circuit vertexes under <FILENAME>/hw</FILENAME> to allow simpler access to their devices (see <XREF IDREF="16492" TYPE="TITLE">&ldquo;Additional Edges&rdquo;</XREF>). Typically such short-circuit names ought to be distinguished by a predictable number.</PARAGRAPH>
+<PARAGRAPH>However, it is impossible to assign stable, repeatable controller numbers dynamically at boot time, while the system is discovering the I/O complement. All the CPUs in the system boot at the same time. Bus controllers and device drivers are initialized in parallel on the nodes to which the hardware is connected. The sequence in which this happens is unpredictable; and in any case the hardware connections can change from boot to boot. A driver cannot know, when it is called to attach a device, what controller number it ought to specify in the hardware inventory.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Design of ioconfig</TITLE><PARAGRAPH>In order to solve these problems, the <COMMAND>ioconfig</COMMAND> command is invoked automatically, after device drivers have been initialized and the hwgraph has been initialized, but before user processes are started.</PARAGRAPH>
+<PARAGRAPH>Operating in parallel for speed, <COMMAND>ioconfig</COMMAND> traverses the entire hwgraph, inspecting the hardware inventory data at each vertex. At a vertex where the hardware inventory Class value indicates a controller that should be numbered, <COMMAND>ioconfig</COMMAND> assigns a number, and updates the hardware inventory Controller value to reflect the assigned number. Then the program opens the device and optionally causes an <FUNCTION>ioctl()</FUNCTION> function. This results in an entry to the <FUNCTION>open()</FUNCTION> entry point, and optionally the <FUNCTION>ioctl()</FUNCTION> entry point., of the device driver (for an overview of this interaction, see <XREF IDREF="42814" TYPE="TITLE">&ldquo;Overview of Device Open&rdquo;</XREF> and <XREF IDREF="12595" TYPE="TITLE">&ldquo;Overview of Device Control&rdquo;</XREF>).</PARAGRAPH>
+<PARAGRAPH>In these entry points, the device driver can recognize that its device now has an assigned Controller number. The driver can use this information to create extra hwgraph vertexes and edges if it wishes. (For an overview of how the distributed SCSI drivers use this facility, see <XREF IDREF="48208" TYPE="TITLE">&ldquo;SCSI Devices in the hwgraph&rdquo;</XREF>.)</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="81705">Configuration Control File </TITLE><PARAGRAPH>The <INDEXTARGET ID="02-confiles45"><!-- POSTPROCESSDATA: 02-confiles45|configuration files:/etc/ioconfig.config --><COMMAND>ioconfig</COMMAND> program uses three disk files. The first, <FILENAME>/etc/ioconfig.conf</FILENAME>, in which it records the controller numbers it has assigned and the related <FILENAME>/hw</FILENAME> pathnames. When it needs to assign a number, <COMMAND>ioconfig</COMMAND> first looks up the current hwgraph path in <FILENAME>/etc/ioconfig.conf</FILENAME>. If the path appears, <COMMAND>ioconfig</COMMAND> assigns the same controller number that it used last time. If the path does not appear, <COMMAND>ioconfig</COMMAND> assigns the lowest number that has never been assigned in this device Class, and adds the path and its number to <FILENAME>/etc/ioconfig.conf</FILENAME>.</PARAGRAPH>
+<PARAGRAPH>This procedure ensures that a given device always receives the same controller number, even if the device is removed and later replaced. Users can inspect <FILENAME>/etc/ioconfig.conf</FILENAME> at any time to discover the numbering, and so can infer the relationship of a controller number in <FILENAME>/dev/dsk</FILENAME> (for example) to a vertex in the hwgraph. Alternatively, the system administrator can cause all numbers to be reassigned simply by removing the file <FILENAME>/etc/ioconfig.conf</FILENAME>.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Permissions Control File</TITLE><PARAGRAPH>The <INDEXTARGET ID="02-confiles46"><!-- POSTPROCESSDATA: 02-confiles46|configuration files:/etc/ioperms --><COMMAND>ioconfig</COMMAND> command also can be used to set ownership and permissions on the device special files. This enables the administrator to specify ownership and permissions for device names that are created dynamically, each time the system boots.</PARAGRAPH>
+<PARAGRAPH>Assignment of permissions is driven by the file <FILENAME>/etc/ioperms</FILENAME>. Its format (as described in <REFPAGE>ioconfig(1M)</REFPAGE>) has four fields: </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH><VARIABLE>device_name</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="297"><PARAGRAPH>A path in <FILENAME>/hw</FILENAME> or <FILENAME>/dev</FILENAME>. The path can include wildcards so it applies 
+to many devices. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH><VARIABLE>permissions</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="297"><PARAGRAPH>The device file permissions, as an octal number, as described in 
+<REFPAGE>chmod(1)</REFPAGE> or <REFPAGE>chmod(2)</REFPAGE>. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH><VARIABLE>owner_name</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="297"><PARAGRAPH>A valid userid to own the device, usually root. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH><VARIABLE>group_name</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="297"><PARAGRAPH>A valid group name to own the device, usually sys. </PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>There is no requirement that <FILENAME>/etc/ioperms</FILENAME> describe only existing devices; it can describe devices that are not currently in the system. Also it can describe devices defined by third parties other than Silicon Graphics.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="64497">Device Management File</TITLE><PARAGRAPH>The <VARIABLE>ioconfig</VARIABLE> command has built-in knowledge of Silicon Graphics network and disk controllers and other devices. However, you can cause <COMMAND>ioconfig</COMMAND> to assign a controller number to an OEM device, and to call your driver when it does so. You do this by placing a file in the directory <FILENAME>/var/sysgen/ioconfig</FILENAME>.</PARAGRAPH>
+<PARAGRAPH>All files in that directory are processed by ioconfig. A noncomment line in any of these files has the following seven fields (not 8 fields, as some editions of the <REFPAGE>ioconfig(1M)</REFPAGE> reference page show): </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH><VARIABLE>class</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>The inventory Class value that is found in a vertex of this kind, as an 
+integer number. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH><VARIABLE>type</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>The inventory Type value that is found in a vertex of this kind, as an 
+integer number. Use -1 for &ldquo;any.&rdquo; </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH><VARIABLE>state</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>The inventory State value that is found in a vertex of this kind, as an 
+integer number. Use -1 for &ldquo;any.&rdquo; </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH><VARIABLE>suffix</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>A suffix to be added to the hwgraph path name when opening the device. 
+Use the two characters -1 to mean &ldquo;none.&rdquo; </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH><VARIABLE>pattern</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>A hwgraph path prefix that defines the set of controller numbers for this 
+Class, Type, and State of device. Use the characters -1 to mean &ldquo;use the 
+hwgraph base path string.&rdquo; </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH><VARIABLE>start_num</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>The lowest (first) controller number to be assigned to devices of this 
+Class, Type, and State; the first number assigned under <VARIABLE>pattern</VARIABLE>. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH><VARIABLE>ioctl_num</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>The ioctl command number to pass in an ioctl call after opening the 
+device, as decimal or hexadecimal integer. Use -1 to say &ldquo;no ioctl.&rdquo; </PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>By placing a file in <FILENAME>/var/sysgen/ioconfig</FILENAME>, you can cause ioconfig to assign a controller number to devices that you support, and to open each device and optionally execute an ioctl call against each device, so the device driver can take note of the assigned number. </PARAGRAPH>
+</SECTION3>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="94613">Configuration Files</TITLE><PARAGRAPH>IRIX uses a number of configuration files to supplement its knowledge of devices and device drivers. This is a summary of the files. The use of each file for device driver purposes is described in more detail in other chapters. (The uses of these files for other system administration tasks is covered in <INDEXTARGET ID="02-confiles47"><!-- POSTPROCESSDATA: 02-confiles47|configuration files --><DOCTITLE>IRIX Admin: System Configuration and Operation</DOCTITLE>.)</PARAGRAPH>
+<PARAGRAPH>Most configuration files used by the IRIX kernel are located in the directory <FILENAME>/var/sysgen</FILENAME>. Files used by the X11 display system are generally in <FILENAME>/usr/lib/X11</FILENAME>. With regard to device drivers, the important files are: </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="117"><PARAGRAPH><FILENAME>/var/sysgen/master.d/*</FILENAME>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="125" WIDTH="270"><PARAGRAPH>Descriptions of the attributes of kernel modules </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="117"><PARAGRAPH><FILENAME>/var/sysgen/boot/*</FILENAME>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="125" WIDTH="270"><PARAGRAPH>Kernel object modules </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="117"><PARAGRAPH><FILENAME>/var/sysgen/system/*.sm</FILENAME>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="125" WIDTH="270"><PARAGRAPH>Kernel configuration directions </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="117"><PARAGRAPH><FILENAME>/var/sysgen/mtune/*</FILENAME>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="125" WIDTH="270"><PARAGRAPH>Values and limits of tunable parameters </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="117"><PARAGRAPH><FILENAME>/var/sysgen/stune</FILENAME>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="125" WIDTH="270"><PARAGRAPH>New values for tunable parameters </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="117"><PARAGRAPH><FILENAME>/var/sysgen/ioconfig/*</FILENAME>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="125" WIDTH="270"><PARAGRAPH>Directives to <COMMAND>iconfig</COMMAND> program </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="117"><PARAGRAPH><FILENAME>/usr/lib/X11/input/config/*</FILENAME>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="125" WIDTH="270"><PARAGRAPH>Initialization commands for Xdm input modules </PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="91260">Master Configuration Database</TITLE><PARAGRAPH>Every configurable module of the kernel (this includes kernel-level device drivers and other optional kernel modules) is represented by a single file in the directory <INDEXTARGET ID="02-confiles48"><!-- POSTPROCESSDATA: 02-confiles48|configuration files:<FILENAME>/var/sysgen/master.d</FILENAME> --><FILENAME>/var/sysgen/master.d</FILENAME>.</PARAGRAPH>
+<PARAGRAPH>A file in <FILENAME>master.d</FILENAME> describes the attributes of a module of the kernel which is to be loaded at boot time (or loaded later). The general syntax of the file is documented in detail in the <REFPAGE>master(4)</REFPAGE> reference page. Only a subset of the syntax is used to describe a device driver module. In general, the <FILENAME>master.d</FILENAME> file specifies device driver attributes such as:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>the driver's <GLOSSARYITEM>prefix</GLOSSARYITEM>, a name that qualifies all its entry points<INDEXTARGET ID="02-confiles49"><!-- POSTPROCESSDATA: 02-confiles49|driver:prefix:in master.d --><INDEXTARGET ID="02-confiles50"><!-- POSTPROCESSDATA: 02-confiles50|prefix --></PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>whether it is a block, character, or STREAMS driver</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>the major number serviced by the driver<INDEXTARGET ID="02-confiles51"><!-- POSTPROCESSDATA: 02-confiles51|major device number:in master.d --></PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>whether the driver can be loaded dynamically as needed</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>whether the driver is multiprocessor-aware</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>which of the possible driver entry points the driver supplies</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>For each module described in a <INDEXTARGET ID="02-confiles52"><!-- POSTPROCESSDATA: 02-confiles52|configuration files:<FILENAME>/var/sysgen/boot</FILENAME> --><FILENAME>master.d</FILENAME> file there should be a corresponding object module in <FILENAME>/var/sysgen/boot</FILENAME>. The creation of device driver modules and the syntax of <FILENAME>master.d</FILENAME> files is covered in detail in <XREF IDREF="82892" TYPE="TITLE">Chapter&nbsp;9, &ldquo;Building and Installing a Driver.&rdquo;</XREF></PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="28517">Kernel Configuration Files</TITLE><PARAGRAPH>The files <INDEXTARGET ID="02-confiles53"><!-- POSTPROCESSDATA: 02-confiles53|IRIX commands:<COMMAND>lboot</COMMAND> --><INDEXTARGET ID="02-confiles54"><!-- POSTPROCESSDATA: 02-confiles54|configuration files:<FILENAME>/var/sysgen/system</FILENAME> --><FILENAME>/var/sysgen/system/*.sm</FILENAME> direct the <COMMAND>lboot</COMMAND> command in loading the modules of the kernel at boot time. Although there are normally several files with the names of subsystems, all the files in this directory are treated as one single file. The exact syntax of these files is documented in the <REFPAGE>system(4)</REFPAGE> reference page. </PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE>Use of Configuration Files by lboot</TITLE><PARAGRAPH>The contents of the files direct <COMMAND>lboot</COMMAND> in loading components that are described by files in <FILENAME>/var/sysgen/master.d</FILENAME>, and in probing for devices to see if they exist. (For details of the operation of <COMMAND>lboot</COMMAND>, see the <REFPAGE>lboot(1M)</REFPAGE> and <REFPAGE>autoconfig(1M)</REFPAGE> reference pages.)</PARAGRAPH>
+<PARAGRAPH>The VECTOR statement in a kernel configuration file directs <COMMAND>lboot</COMMAND> to probe for the existence of hardware at a stated address, and to include a device driver only when the hardware existed. Starting with IRIX&nbsp;6.3, the kernel automatically probes the PCI bus and other attachments in which the hardware devices can identify themselves dynamically. The VECTOR statement is used only for VME and EISA devices (in systems that support them) because these cannot identify themselves automatically.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="58068">Storing Device and Driver Attributes</TITLE><PARAGRAPH>The system administrator can place statements in any file in <FILENAME>/var/sysgen/system</FILENAME>. These statements cause labelled attributes to be placed in the hardware graph, where device drivers can retrieve them (see <XREF IDREF="21506" TYPE="TITLE">&ldquo;Driver Interface to Hwgraph&rdquo;</XREF> and the <REFPAGE>system(4)</REFPAGE> reference page).</PARAGRAPH>
+<PARAGRAPH>The DEVICE_ADMIN statement is used to attach an attribute giving information about a particular device. The attribute is attached to a specific device special file in the hwgraph. Its syntax is as follows:</PARAGRAPH>
+<EXAMPLE>
+<USERINPUT>DEVICE_ADMIN : /hw/</USERINPUT><VARIABLE>path</VARIABLE>&space;<VARIABLE>label</VARIABLE>&space;<USERINPUT>=</USERINPUT>&space;<VARIABLE>value</VARIABLE> [<USERINPUT>,</USERINPUT>&space;<VARIABLE>label</VARIABLE>&space;<USERINPUT>=</USERINPUT>&space;<VARIABLE>value</VARIABLE>]<VARIABLE>...</VARIABLE>&space;
+</EXAMPLE>
+<PARAGRAPH>The colon (:) is required; don't overlook it. The values you supply are: </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH><VARIABLE>path</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="337"><PARAGRAPH>Completion of a path to a device special file in the <FILENAME>/hw</FILENAME> filesystem. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH><VARIABLE>label</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="337"><PARAGRAPH>The label for which the device driver will ask. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH><VARIABLE>value</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="337"><PARAGRAPH>The value, a character string, the driver will retrieve. </PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>The <VARIABLE>path</VARIABLE> is terminated by white space. The <VARIABLE>label</VARIABLE> is terminated by the &ldquo;=&rdquo; or by white space. The <VARIABLE>value</VARIABLE> is terminated by a comma or by the end of the line, so the value can contain white space and special characters other than the comma. As one example of the use of DEVICE_ADMIN, you can find the following in <FILENAME>/var/sysgen/system/irix.sm</FILENAME>:</PARAGRAPH>
+<CODE>
+DEVICE_ADMIN: /hw/module/1/slot/io1/baseio/pci/0/scsi_ctlr/0&lbreak;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ql_request_queue_depth=1024
+</CODE>
+<PARAGRAPH>The path specifies a particular SCSI controller. The label is &ldquo;ql_request_queue_depth,&rdquo; and the value is 1024.</PARAGRAPH>
+<PARAGRAPH>The DRIVER_ADMIN statement is used to pass a value directly to a device driver. Its syntax is as follows:</PARAGRAPH>
+<EXAMPLE>
+<USERINPUT>DRIVER_ADMIN : </USERINPUT><VARIABLE>prefix</VARIABLE>&space;<VARIABLE>label</VARIABLE>&space;<USERINPUT>=</USERINPUT>&space;<VARIABLE>value</VARIABLE> [<USERINPUT>,</USERINPUT>&space;<VARIABLE>label</VARIABLE>&space;<USERINPUT>=</USERINPUT>&space;<VARIABLE>value</VARIABLE>]<VARIABLE>...</VARIABLE>&space;
+</EXAMPLE>
+<PARAGRAPH>The values you supply are: </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH><VARIABLE>prefix</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="337"><PARAGRAPH>The prefix string that identifies a driver (see <XREF IDREF="72688" TYPE="TITLE">&ldquo;Driver Name Prefix&rdquo;</XREF>). </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH><VARIABLE>label</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="337"><PARAGRAPH>The label for which the device driver will ask. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH><VARIABLE>value</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="337"><PARAGRAPH>The value, a character string, the driver will retrieve. </PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>The <VARIABLE>prefix </VARIABLE>is terminated by white space. The <VARIABLE>label</VARIABLE> is terminated by the &ldquo;=&rdquo; or by white space. The <VARIABLE>value</VARIABLE> is terminated by a comma or by the end of the line, so the value can contain white space and special characters other than the comma.</PARAGRAPH>
+<PARAGRAPH>These two statements can be placed in any file in <FILENAME>/var/sysgen/system</FILENAME>, but typically appear in the <FILENAME>irix.sm</FILENAME> file. The device driver must expect to receive labelled values, and must request them using the interface described under <XREF IDREF="57823" TYPE="TITLE">&ldquo;Retrieving Administrator Attributes&rdquo;</XREF>.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Setting Interrupt Targets and Levels</TITLE><PARAGRAPH>The DEVICE_ADMIN statement is used to perform general administration of device interrupts. These uses are documented with examples in <FILENAME>/var/sysgen/system/irix.sm</FILENAME>:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>DEVICE_ADMIN: <VARIABLE>CPU-path</VARIABLE> NOINTR=1 blocks all interrupts from that CPU.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>DEVICE_ADMIN: <VARIABLE>device-path</VARIABLE> INTR_TARGET=<VARIABLE>CPU-path</VARIABLE> directs all interrupts from a device to a CPU. </PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>DEVICE_ADMIN: <VARIABLE>device-path</VARIABLE> INTR_SWLEVEL=<VARIABLE>n</VARIABLE> sets the dispatching priority for the thread that executes the interrupt handler for a device. The default is 230 and normally should not be changed.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>System Tuning Parameters</TITLE><PARAGRAPH>The IRIX kernel supports a variety of tunable parameters, some of which can be interrogated by device drivers. The current values of the parameters are recorded in files in <INDEXTARGET ID="02-confiles55"><!-- POSTPROCESSDATA: 02-confiles55|configuration files:<FILENAME>/var/sysgen/mtune/*</FILENAME> --><FILENAME>/var/sysgen/mtune/*</FILENAME> (one file per major subsystem).</PARAGRAPH>
+<PARAGRAPH>You or the system administrator can view the current settings using the <INDEXTARGET ID="02-confiles56"><!-- POSTPROCESSDATA: 02-confiles56|IRIX commands:<COMMAND>systune</COMMAND> --><COMMAND>systune</COMMAND> command (see the <REFPAGE>systune(1M)</REFPAGE> reference page). The system administrator can use <COMMAND>systune</COMMAND> to request changes in parameters. Some changes take effect at once; others are recorded in a modified kernel that is loaded the next time the system boots.</PARAGRAPH>
+<PARAGRAPH>To retrieve certain tuning parameters from within a kernel-level device driver, include the header file <INDEXTARGET ID="02-confiles57"><!-- POSTPROCESSDATA: 02-confiles57|header files:<FILENAME>sys/var.h</FILENAME> --><FILENAME>sys/var.h</FILENAME>. </PARAGRAPH>
+<PARAGRAPH>The use of <COMMAND>systune</COMMAND> and its related files is covered in <DOCTITLE>IRIX Admin: System Configuration and Operation</DOCTITLE>.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>X Display Manager Configuration</TITLE><PARAGRAPH>Most files related to the configuration of the X Display Manager <INDEXTARGET ID="02-confiles58"><!-- POSTPROCESSDATA: 02-confiles58|configuration files:<FILENAME>/usr/lib/X11/input/config</FILENAME> --><COMMAND>Xdm</COMMAND> are held in <FILENAME>/var/X11</FILENAME>. These files are documented in reference pages such as <REFPAGE>xdm(1)</REFPAGE> and in the programming manuals related to the X Windows System.</PARAGRAPH>
+<PARAGRAPH>One set of files, in <FILENAME>/usr/lib/X11/input/config</FILENAME>, controls the initialization of nonstandard input devices. These devices use STREAMS modules, and their configuration is covered in <XREF IDREF="94967" TYPE="TITLE">Chapter&nbsp;22, &ldquo;STREAMS Drivers.&rdquo;</XREF>&space;</PARAGRAPH>
+</SECTION2>
+</SECTION1>
+</CHAPTER>

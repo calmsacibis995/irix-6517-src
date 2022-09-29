@@ -1,0 +1,570 @@
+'\"macro stdmacro
+.\" @(#)autofs.1m 1.40 94/02/24 SMI; from SVr4
+.\" Copyright 1989 AT&T
+.nr X
+.TH autofs 1M "23 Feb 1994"
+.SH NAME
+autofs \- install automatic mount points
+.SH SYNOPSIS
+.B /usr/etc/autofs
+[
+.B \-v
+] [
+.BI \-t " duration"
+]
+.SH DESCRIPTION
+.IX "autofs command" "" "\fLautofs\fP \(em install automatic mount points" "" PAGE START
+.IX "AutoFS" "automatically mount filesystems" "" "automatically mount filesystems \(em \fLautofs\fP"
+.LP
+\f3autofs\f1
+is a command that installs 
+.B AutoFS 
+mount points and associates
+an 
+.B AutoFS 
+map with each mount point.
+The 
+.B AutoFS 
+filesystem monitors attempts to access
+directories within it and notifies the
+.BR autofsd (1M)
+daemon.  The daemon uses the map to locate a filesystem,
+which it then mounts at the point of reference
+within the 
+.B AutoFS 
+filesystem.
+If the filesystem is not accessed within
+an appropriate interval (five minutes by default),
+the 
+.B autofsd 
+daemon unmounts the filesystem.
+.LP
+.B AutoFS
+is started by the
+.I /etc/init.d/network
+script, if the configuration flags ``nfs'' and ``autofs''
+are set ``on'' at system initialization. (See autofsd(1M).)
+The script starts the
+.B autofsd 
+daemon and invokes the
+.B autofs
+command.
+The
+\f3autofs\f1 
+command consults the master map, a local file named
+.BR /etc/auto_master , 
+for a list of 
+.B AutoFS
+mount points
+and their maps.
+The master map contains the locations of all
+.B AutoFS
+mount points.
+By default,
+.I /etc/auto_master
+contains an entry for the
+.BI -hosts
+map:
+.IP
+.ft 3
+.nf
+.ta +15n +15n +15n 
+/hosts	-hosts	-nosuid
+.ft 1
+.fi
+.LP
+Each entry in the master file specifies
+a directory on which an
+.B AutoFS
+mount will be made
+followed by the 
+.B AutoFS 
+map to be associated
+with that mount point. Mount options may be supplied
+as an optional third field in each entry.
+These options are used for any entries in the
+map that do not specify mount options explicitly.
+.LP
+.B AutoFS 
+maps can be 
+.B executable 
+binary or script files too. Any AutoFS map pointing to a file
+with execute permission set may be considered an executable map file which
+the autofs daemon will attempt to execute at mount time. The output (on stdout) of this 
+executable map file is used as part of the AutoFS map. Look at the 
+.B -E
+option in the 
+.B autofsd
+man page for more information on executable maps.
+.LP
+The
+.B autofs 
+command is usually run without arguments.
+It compares the entries in
+.I /etc/auto_master
+with the current list of
+.B AutoFS
+mounts in
+.I /etc/mtab
+and adds, removes or updates
+.B AutoFS
+mounts to bring the
+.I /etc/mtab
+up to date with
+.I /etc/auto_master.
+At boot time the
+.B autofs
+command installs all 
+.B AutoFS 
+mounts from the
+master map.
+Subsequently, it may be run to install 
+.B AutoFS 
+mounts for new
+entries in the master map, or to perform
+unmounts for entries that have been removed.
+.LP
+.SH OPTIONS
+.TP
+\f3\-t\f2 duration\f1
+Specify a
+.IR duration ,
+in seconds,
+that a filesystem is to remain mounted when not in use.
+The default is 300 (5 minutes).
+.TP
+\f3-v\f1
+Verbose mode.
+Notify of 
+.B AutoFS 
+mounts, unmounts or other
+non-essential information.
+.br
+.ne 4
+.SH USAGE
+.SS Map Entry Format
+.LP
+The format for master map entries was discussed above.
+Entries in other map files take the form:
+.IP
+key
+[
+-mount-options\f1
+]
+.I location\ .\|.\|.
+.LP
+where
+.I key
+is the full pathname of the directory to mount
+when used in a direct map, 
+or the simple name of a subdirectory in an indirect map.
+.I mount-options
+is a comma-separated list of mount options, and
+.I location
+specifies a filesystem from which the
+directory may be mounted.
+In the case of a simple NFS mount,
+.I location
+takes the form:
+.IP
+.I hostname\|:\|pathname
+.LP
+.I hostname
+is the name of the host from which to mount the filesystem
+(it may be omitted if the pathname refers to a local device
+on which the filesystem resides)
+and
+.I pathname
+is the pathname of the directory to mount.
+So, /etc/auto_master might contain an entry such as:
+.Ex
+/src  /etc/auto_src	-nosuid
+.Ee
+where /etc/auto_src contains:
+.Ex
+new		awesome:/latest/src
+old	 -ro	cave:/archive
+.Ee
+Accessing /src/{new,old} would result in a mount of the 
+corresponding remote filesystem.
+.LP
+.SS Replicated Filesystems
+Multiple
+.I location
+fields can be specified for replicated NFS filesystems,
+in which case \f3autofs\f1 
+chooses the server that responds first.
+.LP
+If each \f2location\f1 in the list shares the same
+\f2pathname\f1 then a single \f2location\f1 may be used with a
+comma-separated list of hostnames:
+.IP
+.I hostname1,\|hostname2\|...:\|pathname
+.LP
+A mapping can be continued across input lines by escaping the
+.SM NEWLINE
+with a `\|\\\|' (backslash).
+Comments begin with a '#' (pound sign) and end at the subsequent
+.SM NEWLINE\s0.
+.br
+.ne 6
+.SS Map Key Substitution"
+The '&' (ampersand) character is expanded to the value of the
+.I key 
+field for the entry in which it occurs.
+In this case:
+.LP
+.Ex
+whozi onyxserver:/home/&
+.Ee
+the & expands to 
+.IR whozi .
+.br
+.ne 7
+.SS "\f2Wildcard Key\fP"
+.LP
+The '*' (asterisk) character, when supplied as the 
+.I key
+field, is recognized as the catch-all entry.
+Such an entry will match any key not previously matched.
+For instance,
+if the following entry appeared in the indirect map for
+.IR /config :
+.IP
+*	&:/public/config/&
+.LP
+this would allow automatic mounts in 
+.I /config
+of any remote filesystem whose location could be specified as:
+.IP
+hostname\|:/public/config/hostname
+.br
+.ne 6
+.br
+.SS "\f2Variable Substitution\fP"
+.LP
+Client specific variables can be used within an \f3AutoFS\f1
+map.
+For instance, if 
+.I \|$HOST 
+appeared within a map,
+.B autofs 
+would expand it to its current value for the
+client's host name. Supported variables are:
+.LP
+.TP 20
+ARCH		The output of uname -m. The system's architecture.
+			For example "IP19"
+.TP
+CPU		The output of uname -p.	The processor type.
+			For example "mips"
+.TP
+HOST		The output of uname -n.	The host name. 
+			For example "ferd"
+.TP
+OSNAME	The output of uname -s.	The OS name. 
+			For example "IRIX"
+.TP
+OSREL	The output of uname -r.	The OS release name.
+			For example "6.2"
+.TP
+OSVERS	The output of uname -v.	The OS version. 
+			For example "10230951"
+.TE
+.LP
+If a reference needs to be protected from affixed characters,
+you can surround the variable name with '{\|}' (curly braces).
+.SS "\f2Multiple Mounts\fP"
+.LP
+A multiple mount entry takes the form:
+.LP
+.IP
+key
+[ 
+-mount-options\f1 ]
+[\|[\f2mountpoint\fP]\|
+.RI [ \-mount-options ]
+.IR location .\|.\|.\|]\|.\|.\|.
+.RE
+.LP
+The initial
+/[\f2mountpoint\|\f1]
+is optional for the first mount and mandatory for all
+subsequent mounts.
+The optional
+.I mountpoint
+is taken as a pathname relative to the
+directory named by 
+.I key.
+If
+.I mountpoint
+is omitted in the first occurrence, a mountpoint of 
+/ (root) is implied.
+.LP
+Given an entry in the indirect map for /src:
+.Ex
+beta\ \-ro\ \e
+.ta +5n +15n +15n 
+	/	svr1,svr2:/public/src/beta\ \ \ \e
+	/1.0	svr1,svr2:/public/src/beta/1.0\ \ \ \e
+	/1.0/man	svr1,svr2:/public/src/beta/1.0/man
+.Ee
+.LP
+.B autofs
+would automatically mount
+.IR /src/beta ,
+.IR /src/beta/1.0 ,
+and 
+.IR /src/beta/1.0/man\f1 , 
+as needed, from either
+.I svr1 
+or 
+.IR svr2 , 
+whichever host responds first.
+.SS "Other Filesystem Types"
+.LP
+.B AutoFS 
+assumes NFS Version 3 mounts as the default filesystem
+type. Should the server not support NFS V3, 
+.B AutoFS 
+will retry the mount(s) using the NFS V2 filesystem type.
+Users can select a particular version of the NFS protocol 
+using the
+.B vers={2,3}
+mount option (see fstab(4)).
+.LP
+Other filesystem types can be described using the
+.B fstype
+mount option.
+Other mount options specific to this filesystem type
+can be combined with the
+.I fstype
+option.
+The location field must contain information specific to
+the filesystem type.
+If the location field begins with a slash, a colon
+character must be prepended.
+.LP
+Mounts using 
+.I CacheFS 
+are most useful when applied to
+an entire map as map defaults.
+The following entry in the master map describes cached
+home directory mounts.  It assumes the default location
+of the cache directory, /cache.
+.Ex
+/home	auto_home	-fstype=cachefs,backfstype=nfs
+.Ee
+.LP
+The \fBbackfstype\fP option is required for \fICacheFS\fP map entries.
+.SS Indirect Maps
+.LP
+An indirect map allows you to specify mappings for the
+subdirectories you wish to mount under the
+.I directory
+chosen as the 
+.B AutoFS
+mount point.
+In an indirect map, each
+.I key 
+consists of a simple name (i.e., subdirectory) that refers 
+to one or more filesystems that are to be mounted as needed.
+.SS Direct Maps
+.LP
+Entries in a direct map are associated directly with
+.B AutoFS
+mount points.
+Each 
+.I key 
+is the full pathname of an 
+.B AutoFS 
+mount point.
+The direct map as a whole is not associated with any
+single directory.
+.SS Included Maps
+.LP
+The contents of another map can be  included  within  a  map with an
+entry of the form
+.I +mapname
+, or by supplying 
+.I mapname 
+(without the "+") in the location field of a map entry.  If mapname
+begins with a slash then it is assumed to be the pathname of a local
+file.  Otherwise the location of the map is determined by the policy
+of the name service switch according to the entry for the automounter
+in \fB/etc/nsswitch.conf\fP, such as
+
+.in +0.5in
+automount(dynamic): files nis(nis_enumerate_key) ldap
+.in -0.5in
+ 
+If the name service is \fBfiles\fP then the name is assumed to be that
+of a local file in \fB/etc\fP.  \fBNIS\fP requires the addition of the
+\fBnis_enumerate_key\fP attribute; see \fBnis(7P)\fP. If the key
+being searched for is not found in the included map, the search
+continues with the next entry subject to control options. See
+\fBnsswitch.conf(4)\fP.  The \fBdynamic\fP attribute is required to
+notify the Name Service Daemon (nsd) that the automount map allows
+dynamic map creation. See \fBnsd(1M)\fP.
+.SS Special Maps
+.LP
+There are two special maps available: \f3\-hosts\f1 and \f3\-null\f1.
+By default, the \f3\-hosts\f1 map is used with the \f3/hosts\f1 directory.
+It assumes that the map key is the hostname of an NFS server.
+The 
+.B autofsd 
+daemon dynamically constructs a map entry from
+the server's list of exported filesystems. (See NOTES
+on 
+.BR -nohide .)
+For instance a reference to 
+.I /hosts/bart/usr 
+would
+initiate an automatic mount of all exported filesystems
+from 
+.I bart 
+that are mountable by the client.
+References to a directory under 
+.I /hosts/bart 
+will refer
+to the corresponding directory relative to 
+.I bart's 
+root.
+.LP
+The
+\f3\-null\f1
+map, when indicated in a map entry,
+cancels a previous map for the directory indicated.
+This is most useful in the 
+.I /etc/auto_master 
+file for cancelling
+entries that would otherwise be inherited from the NIS
+.I auto_master 
+map, if included. To be effective, the \f3\-null\f1
+entries must be inserted before the included map entry.
+.LP
+.SS Configuration and the auto.master File
+.I autofs
+normally consults the 
+.I /etc/auto_master
+configuration file for a list of initial autofs maps, and sets up
+automatic mounts for them. This behavior differs from automount in that
+.I autofs 
+does not take maps on the command line, nor does it look at the auto.master NIS map by default.
+Extra mappings (either NIS or file based) should be specified within the 
+.I /etc/auto_master
+configuration file itself. To default to the automount behavior, for backward compatibility with old automount maps, the user should have one line in the 
+.I /etc/auto_master
+configuration file, pointing to the 
+.SM NIS
+.I auto.master
+map of the form:
+.IP 
++auto.master
+.LP
+.SH FILES
+.PD 0
+.TP 20
+/etc/auto_master
+master AutoFS map.
+.TP
+/etc/config/autofs.options
+options and arguments for the
+.B autofs
+command and the
+.B autofsd
+daemon.
+.PD
+.SH SEE ALSO
+autofsd (1M), chkconfig (1M), exports (4), fstab (4), mount (1M),
+nsd(1M), nsswitch.conf (4)
+.LP
+.SH NOTES
+The 
+.B \-hosts 
+map mounts all of the exported NFS
+filesystems, for which the client
+has access, from a server. Use the
+.I nohide
+export option on the server (see exports(4)) to 
+minimize the number of mounts performed by clients. AutoFS
+will not request a separate mount for a
+.I nohide
+filesystem, if the client has access via the parent filesystem.
+If frequent access to just a single filesystem
+is required, it is more efficient to access the filesystem
+with a map entry that is tailored to mount just the
+filesystem of interest.
+.LP
+.B AutoFS 
+mount points must not be hierarchically related.  
+\f3autofs\f1 does not allow an 
+.B AutoFS
+mount point to be created within another 
+.B AutoFS 
+mount.
+.LP
+Since each direct map entry results in a new 
+.B AutoFS 
+mount such maps should be kept short.
+.LP
+If a directory contains direct map mount points
+then an `ls -l' in the directory will force all
+of the direct map mounts to occur.
+.LP
+Entries in both direct and indirect maps can be modified at any time.
+The new information is used when 
+.B autofsd 
+next uses the map entry to do a mount.  
+.LP
+New entries added to a master map or direct map will not be
+useful until the 
+.B autofs 
+command is run to install them as new 
+.B AutoFS 
+mount points.
+New entries added to an indirect map may be used immediately.
+.LP
+An 
+.B AutoFS 
+directory associated with an indirect map shows only 
+currently-mounted entries.  This is a deliberate policy to
+avoid inadvertent mounting of every entry in a map via an 
+`ls -l' of the directory.
+.LP
+The multiple location feature for NFS mounts allows the
+.B autofsd 
+daemon to choose the most appropriate server at mount time.
+While such a mount is in effect, the daemon does
+not monitor the status of the server.  If the server
+crashes, 
+.B autofsd 
+will not select an alternative
+server from the list.
+.LP
+Default mount options can be assigned to an entire map when
+specified as an optional third field in the master map.
+These options apply only to map entries that have no mount
+options.
+.LP
+When using NSD to resolve map queries, Autofs actually creates map
+directories under the automount directory in 
+.B /ns/.local.
+So, the NIS map 
+.B auto_home 
+would be created as 
+.B /ns/.local/automount/auto_home
+
+.SH CAVEAT(S)
+It is important not to have the execute permission set on a standard text 
+.B AutoFS
+map, as this may cause autofs to attempt to execute the file assuming that the
+standard text map file is an executable
+.B AutoFS
+map file. Look at the
+.B -E
+option in the 
+.B autofsd
+man page for more information on executable maps.
+
+.IX "autofs command" "" "\fLautofs\fP \(em automatically mount NFS filesystems" "" PAGE END

@@ -1,0 +1,127 @@
+#!/sbin/sh
+#ident	"$Revision: 1.3 $"
+
+PROG=`basename $0`
+USAGE="Usage: $PROG [-syscalls SYSCALL_FILE] file"
+SYSCALL_FILE=""
+TMPDIR=${TMPDIR:-/var/tmp}
+CHECKFILE=$TMPDIR/check.$$
+DISFILE=$TMPDIR/dis.$$
+
+case `uname -m` in
+	SNI)	MIN_DISFILE_LEN=4;
+		DISARG=-F
+		DISFILE_PIC_ARG="8p";
+		DISFILE_HALF_ARG="11p";;
+
+	*)	MIN_DISFILE_LEN=0;
+		DISARG=-p
+		DISFILE_PIC_ARG="2p";
+		DISFILE_HALF_ARG="5p";;
+esac
+
+trap "rm -f $CHECKFILE $DISFILE; exit 1" 1 2 13 15
+
+while [ $# -gt 1 ]
+do
+	case "$1" in
+	-syscalls)	shift;
+		if [ $# -gt 1 ]
+		then
+			SYSCALL_FILE=$1; shift
+		else
+			echo $USAGE >&2;
+			exit 1;
+		fi;;
+	*)	echo $USAGE >&2;
+		exit 1;;
+	esac
+done
+
+
+if [ $# -ne 1 ]
+then
+	echo $USAGE >&2
+	exit 1
+fi
+
+if [ ! -f $1 ]
+then
+	echo "$PROG: cannot access file $1" >&2
+	exit 1
+fi
+
+if [ "$SYSCALL_FILE" = """" ]
+then
+	SYSCALL_FILE=/usr/lib/abi/data/syscall.names
+	CHECKER_ABIDIR=${CHECKER_ABIDIR:-/usr/lib/abi/data}
+fi
+
+rm -f $CHECKFILE
+
+dis $DISARG _syscall $1 > $DISFILE 2> /dev/null
+if [ `wc -l $DISFILE | awk '{ print $1 }'` -ne $MIN_DISFILE_LEN ]
+then
+	SYSCALL_START_PIC=`sed -n $DISFILE_PIC_ARG $DISFILE | awk '{ print $3 }' | sed -e "s/://p"`
+	SYSCALL_START_HALF=`sed -n $DISFILE_HALF_ARG $DISFILE | awk '{ print $3 }' | sed -e "s/://p"`
+else
+	SYSCALL_START_PIC="xyzzy"
+	SYSCALL_START_HALF="xyzzy"
+fi
+
+dis -i $1 | awk " \
+BEGIN {foundjal = 0 } \
+{ \
+	if (foundjal == 1) { \
+		if (( \$1 == \"li\") && (substr (\$2, 1, 2) == \"a0\")) { \
+			printf \"%s\n\", substr (\$2, 4) \
+		} else { \
+			printf \"%s\n\", substr (lasta0, 4) \
+		} \
+	} \
+} \
+{ \
+	if (\$1 == \"syscall\") { \
+		printf \"%s\n\", substr (prev, 4) \
+	} else { \
+		prev = \$2 \
+	} \
+} \
+{ \
+	if ((\$1 == \"jal\") && ((\$2 == \"$SYSCALL_START_PIC\") || (\$2 == \"$SYSCALL_START_HALF\"))) { \
+		foundjal = 1 \
+	} else { \
+		foundjal = 0 \
+	} \
+} \
+{ \
+	if ((\$1 == \"li\") && (substr (\$2, 1, 2) == \"a0\")) { \
+		lasta0 = \$2 \
+	} \
+}" |
+while read SYSCALL
+do
+	ENTRY=`awk " \
+			NF > 2 { \
+				if ((substr (\\\$0, 1, 7) == \"#define\") && \
+					(\\\$3 == $SYSCALL)) { \
+					print \\\$2 \
+				} \
+			}" $SYSCALL_FILE | sed -e "s/.*SYS_//p"`
+	if [ "$ENTRY" != """" ]
+	then
+		echo $ENTRY >> $CHECKFILE
+	else
+		if [ $SYSCALL -ne 0 ]
+		then
+			echo $SYSCALL >> $CHECKFILE
+		fi
+	fi
+done
+
+if [ -f $CHECKFILE ]
+then
+	sort -u $CHECKFILE
+fi
+
+rm -f $CHECKFILE $DISFILE

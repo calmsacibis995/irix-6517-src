@@ -1,0 +1,185 @@
+#!/sbin/ksh
+
+# NOTE: for the time being, this file is not used; it may be again
+# in the future.
+
+# done as a function for clarity, and so code can be reverted to
+# use real mknod for testing or other reasons.  install is used
+# because it will not remake devices if they are already correct,
+# and will preserve local modifications to ownership and modes.
+mknod()
+{
+	install -root "" -rawidb "" -f . -m 666 -chr $3,$4 $1
+}
+
+mk_ctlrnumber() {
+	# construct scsi controller number part of minor number from hinv info
+	ctlr=$(( ($1 / 10) * 8 + $1 % 10)) 
+}
+
+hinv -c tape | grep "on SCSI" | sed "s/://g" | \
+  while read a b c targ e f g adap i; do
+	prf=rmt/tps${adap}d$targ
+	mk_ctlrnumber $adap
+	minor=$(( $ctlr * 512 + $targ * 32))
+	mknod ${prf}nr c ${C_TPS} $(( $minor + 3))
+	mknod ${prf}stat c ${C_TPS_ST} $(( $minor + 3))
+	set +e ; tstat="`2>&1 mt -t ${prf}nr status`" ; set -e
+	case "$tstat" {
+	*Drive?type:*9?track*) date
+	    for dens in 0 8 16 24; do
+		case $dens {
+		0) kden=6250;;
+		8) kden=3200;;
+		16) kden=1600;;
+		24) kden=800;;
+		}
+		set s nrs ns "" nrns nr sv nrsv nsv v nrnsv nrv
+		for add in 0 1 2 2 3 3 4 5 6 6 7 7 ; do
+		    mdev=$(( $minor + $add + $dens ))
+		    mknod ${prf}$1.$kden c ${C_TPS} $mdev
+		    shift
+		done
+		if mt -t abi/9track.nr exist; then :
+		else dens=0
+		    add=6; mdev=$(( $minor + $add + $dens ))
+		    mknod abi/9track c ${C_TPS} $mdev
+		    add=7; mdev=$(( $minor + $add + $dens ))
+		    mknod abi/9track.nr c ${C_TPS} $mdev
+		fi 
+	    done ;;
+	*Drive?type:*8mm?8500*)
+	    set s nrs ns "" nrns nr sv nrsv nsv v nrnsv nrv
+	    for add in 0 1 2 2 3 3 4 5 6 6 7 7 ; do
+		mdev=$(( $minor + $add ))
+		mknod ${prf}$1 c ${C_TPS} $mdev
+		shift
+	    done
+	    for dens in 0 8 ; do
+		case $dens {
+		0) kden=8500;;
+		8) kden=8200;;
+		}
+		set s nrs ns "" nrns nr sv nrsv nsv v nrnsv nrv
+		for add in 0 1 2 2 3 3 4 5 6 6 7 7 ; do
+		    mdev=$(( $minor + $add + $dens ))
+		    mknod ${prf}$1.$kden c ${C_TPS} $mdev
+		    shift
+		done
+	    done
+		case "$tstat" {
+		*Device:*EXB8500C*|*Device:*EXB-8505*)
+			for dens in 16 24 ; do
+			case $dens {
+			16) kden=8500c;;
+			24) kden=8200c;;
+			}
+			set s nrs ns "" nrns nr sv nrsv nsv v nrnsv nrv
+			for add in 0 1 2 2 3 3 4 5 6 6 7 7 ; do
+				mdev=$(( $minor + $add + $dens ))
+				mknod ${prf}$1.$kden c ${C_TPS} $mdev
+				shift
+			done
+			done
+			;;
+		}
+		;;
+	*Drive?type:*DAT*|*Drive?type:*8mm?8200*)
+	    set s nrs ns "" nrns nr sv nrsv nsv v nrnsv nrv
+	    for add in 0 1 2 2 3 3 4 5 6 6 7 7 ; do
+		mdev=$(( $minor + $add ))
+		mknod ${prf}$1 c ${C_TPS} $mdev
+		case "$tstat" {
+		*Device:*Python*01931*) # DDS2 drive with compression
+			mdev=$(( $mdev + 8 ))
+			mknod ${prf}$1c c ${C_TPS} $mdev
+			;;
+		*Device:*SDT-9000*) # DDS3 drive with compression
+			mdev=$(( $mdev + 8 ))
+			mknod ${prf}$1c c ${C_TPS} $mdev
+			;;
+		}
+		shift
+	    done ;;
+	*Drive?type:*DLT*)
+	    set s nrs ns "" nrns nr sv nrsv nsv v nrnsv nrv
+	    for add in 0 1 2 2 3 3 4 5 6 6 7 7 ; do
+		mdev=$(( $minor + $add ))
+		mknod ${prf}$1 c ${C_TPS} $mdev
+		case "$tstat" {
+	    	*Device:*DLT7000*)		# DLT7000 supporting 4000/7000 densities
+			for dens in 0 8 16 24 ; do
+				case $dens {
+				0)  kden=7000;;
+				8)  kden=7000c;;
+				16) kden=4000;;
+				24) kden=4000c;;
+				}
+				mdevc=$(( $mdev + $dens))
+				mknod ${prf}$1.$kden c ${C_TPS} $mdevc
+			done ;;
+	    	*)				# DLT2000/4000 supports only one density
+			mdev=$(( $mdev + 8))
+			mknod ${prf}$1c c ${C_TPS} $mdev
+		}
+		shift
+	    done ;;
+	*Drive?type:*NTP*)
+	    set s nrs ns "" nrns nr sv nrsv nsv v nrnsv nrv
+	    for add in 0 1 2 2 3 3 4 5 6 6 7 7 ; do
+		mdev=$(( $minor + $add))
+		mknod ${prf}$1 c ${C_TPS} $mdev
+		mdev=$(( $mdev + 8))
+		mknod ${prf}$1c c ${C_TPS} $mdev
+		shift
+	    done ;;
+	*Drive?type:*STK*)
+	    set s nrs ns "" nrns nr sv nrsv nsv v nrnsv nrv
+	    for add in 0 1 2 2 3 3 4 5 6 6 7 7 ; do
+		mdev=$(( $minor + $add))
+		mknod ${prf}$1 c ${C_TPS} $mdev
+		mdev=$(( $mdev + 8))
+		mknod ${prf}$1c c ${C_TPS} $mdev
+		shift
+	    done ;;
+	*Drive?type:*SONY*)
+	    set s nrs ns "" nrns nr sv nrsv nsv v nrnsv nrv
+	    for add in 0 1 2 2 3 3 4 5 6 6 7 7 ; do
+		mdev=$(( $minor + $add))
+		mknod ${prf}$1 c ${C_TPS} $mdev
+		shift
+	    done ;;
+	*Drive?type:*8mm?8900*)
+	    set s nrs ns "" nrns nr sv nrsv nsv v nrnsv nrv
+	    for add in 0 1 2 2 3 3 4 5 6 6 7 7 ; do
+		mdev=$(( $minor + $add))
+		mknod ${prf}$1 c ${C_TPS} $mdev
+		mdev=$(( $mdev + 8))
+		mknod ${prf}$1c c ${C_TPS} $mdev
+		shift
+	    done ;;
+	*Drive?type:*QIC*)
+	    set "" s nr nrs ns nrns
+	    for add in 0 0 1 1 2 3 ; do
+		mdev=$(( $minor + $add))
+		mknod ${prf}$1 c ${C_TPS} $mdev
+		shift
+	    done
+		if mt -t abi/qic.nr exist; then :
+		else 
+		    add=2; mdev=$(( $minor + $add))
+		    mknod abi/qic c ${C_TPS} $mdev
+		    add=3; mdev=$(( $minor + $add))
+		    mknod abi/qic.nr c ${C_TPS} $mdev
+		fi 
+	    ;;
+	*Drive*)
+	    set "" s nr nrs ns nrns
+	    for add in 0 0 1 1 2 3 ; do
+		mdev=$(( $minor + $add))
+		mknod ${prf}$1 c ${C_TPS} $mdev
+		shift
+	    done
+	    ;;
+	}
+done

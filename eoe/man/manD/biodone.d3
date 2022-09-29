@@ -1,0 +1,114 @@
+.if n .pH ddi.rm/d3/gen/biodone @(#)biodone	43.13 of 12/14/92
+.\" Copyright 1992, 1991 UNIX System Laboratories, Inc.
+.TH biodone D3
+.SH NAME
+\f4biodone\f1 \- release buffer after block I/O and wakeup processes
+.IX "\f4biodone\fP(D3)"
+.SH SYNOPSIS
+.nf
+.na
+.ft 4
+#include <sys/types.h>
+#include <sys/buf.h>
+#include <sys/ddi.h>
+.sp 0.4
+void biodone(buf_t *\f2bp\fP);
+.ft 1
+.ad
+.fi
+.SS Arguments
+.RS 0
+.IP "\f2bp\f1" 10n
+Pointer to the buffer header structure.
+.RE
+.SH DESCRIPTION
+The \f4biodone\f1 function is called by the driver
+to indicate that block I/O associated with the buffer header \f2fp\fP
+is complete, and that it can be reused.
+.SS "Return Values"
+None
+.SH USAGE
+\f4biodone\fP is usually called from the driver's \f4strategy\fP(D2) routine
+or I/O completion handler [usually \f4intr\fP(D2)].
+.P
+If the driver (or the kernel) had specified an iodone handler
+by initializing the \f4b_iodone\fP field of the \f4buf\fP(D4) structure
+to the address of a function,
+that function is called with the single argument, \f2bp\fP.
+Then \f4biodone\fP returns.
+.P
+If an iodone handler had not been specified,
+\f4biodone\fP sets the \f4B_DONE\fP flag
+in the \f4b_flags\f1 field of the buffer header.
+Then, if the \f4B_ASYNC\fP flag is set,
+the buffer is released back to the system.
+If the \f4B_ASYNC\fP flag is not set,
+any processes waiting for the I/O to complete are awakened.
+.P
+If the buffer was allocated via \f4getrbuf\fP(D3),
+the driver must have specified an iodone handler.
+.SS Level
+Base or Interrupt.
+.SS "Synchronization Constraints"
+Does not sleep.
+.P
+Driver-defined basic locks, read/write locks, and sleep locks
+may be held across calls to this function.
+.SS "Examples"
+Generally, the first validation test performed by any block device
+\f4strategy\f1 routine is a check to verify the bounds of the I/O request.
+If a \f4read\f1 request is made for one block beyond the limits of the
+device (line 8), it will report an end-of-media condition (line 10).
+Otherwise, if the request is outside the limits of the device, the routine will
+report an error condition (line 12).
+In either case, the I/O operation
+is completed by calling \f4biodone\fP (line 14) and the driver returns.
+.br
+.ne 2i
+.P
+.ps -1
+.vs -1
+.nf
+.ft 4
+ 1  #define RAMDNBLK	1000	       /* Number of blocks in RAM disk */
+ 2  #define RAMDBSIZ	 512	       /* Number of bytes per block */
+ 3  char ramdblks[RAMDNBLK][RAMDBSIZ]; /* Array containing RAM disk */
+.sp 0.4
+ 4  ramdstrategy(bp)
+ 5	struct buf *bp;
+ 6  {
+ 7	daddr_t blkno = bp->b_blkno;
+.sp 0.4
+ 8	if ((blkno < 0) || (blkno >= RAMDNBLK)) {
+ 9		if ((blkno == RAMDNBLK) && (bp->b_flags & B_READ)) {
+10			bp->b_resid = bp->b_bcount;	/* nothing read */
+11		} else {
+12			bioerror(bp, ENXIO);
+13		}
+14		biodone(bp);
+15		return;
+16	}
+        . . .
+.ft 1
+.fi
+.ps
+.vs
+.P
+On systems where the function \f4bioerror\fP(D3) is not available,
+line 12 could read:
+.P
+.ft 4
+bp->b_error = ENXIO;
+bp->b_flags |= B_ERROR;
+.ft 1
+.SH REFERENCES
+.na
+\f4bioerror\fP(D3),
+\f4biowait\fP(D3),
+\f4brelse\fP(D3),
+\f4buf\fP(D4),
+\f4freerbuf\fP(D3),
+\f4getrbuf\fP(D3),
+\f4intr\fP(D2),
+\f4strategy\fP(D2)
+.ad

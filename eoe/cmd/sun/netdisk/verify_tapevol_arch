@@ -1,0 +1,92 @@
+#! /bin/sh
+#
+# verify_tapevol_arch arch tapen tapedev tapeserver
+#
+#	@(#)verify_tapevol_arch	1.1 88/06/08 4.0NFSSRC; from 1.8 88/03/07 D/NFS
+#       @(#) from verify_tapevol_arch 1.13 88/02/08
+#
+#       Copyright (c) 1987 by Sun Microsystems, Inc.
+#
+
+HOME=/; export HOME
+PATH=/bin:/usr/bin:/etc:/usr/etc:/usr/bsd:/usr/etc/netdisk
+CMDNAME=$0
+case $# in
+3 | 4)
+	;;
+*)
+        echo Usage: $CMDNAME arch tapen tapedev tapeserver
+        exit 1 ;;
+esac
+
+ARCH=$1
+TAPEN=$2 
+TAPEDEV=$3
+TAPESERVER=$4
+ARCH_TAPE=""
+TAPE_NUM=""
+INSTALLPATH="/tmp"
+
+case "${TAPESERVER}" in
+"")
+	REMOTE=""
+	MT_F="mt -t"
+	;;
+*)
+        REMOTE="rsh ${TAPESERVER} -n"
+	MT_F="mt -f"
+	;;
+esac
+
+while :; do
+	while :; do
+		STRING=`${REMOTE} ${MT_F} ${TAPEDEV} rew 2>&1`
+		case "${STRING}" in
+		"")
+	   		${REMOTE} ${MT_F} ${TAPEDEV} fsf 1
+			break ;;
+		*)
+	   		echo "${STRING}"
+	   		echo "Tape drive ${TAPEDEV} not ready."
+                	echo "
+Load release tape #${TAPEN} for architecture ${ARCH} and hit <RETURN>: \c"
+                	read x
+			;;
+		esac
+	done
+	#
+	# get TOC from release tape (dd format)
+	#
+	rm -rf ${INSTALLPATH}/TOC
+	case "${REMOTE}" in
+	"")
+		dd if=${TAPEDEV} bs=200k 2>/dev/null \
+		  | xdrtoc > ${INSTALLPATH}/TOC
+		;;
+	*)
+		${REMOTE} dd if=${TAPEDEV} bs=200k 2>/dev/null \
+		  | xdrtoc > ${INSTALLPATH}/TOC
+		;;
+	esac
+	ARCH_TAPE=`awk '/^ARCH/ { print $2 }' < ${INSTALLPATH}/TOC`
+	TAPE_NUM=`awk '/^VOLUME/ { print $2 }' < ${INSTALLPATH}/TOC`
+	case "${ARCH_TAPE}" in
+	"${ARCH}" )
+		case "${TAPE_NUM}" in
+		"${TAPEN}" )
+			break
+			;;
+		*)
+			echo "Tape loaded is #${TAPE_NUM}"
+			;;
+		esac ;;
+	*)
+		echo "Tape is wrong architecture (${ARCH_TAPE})"
+		;;
+	esac
+	echo "
+Load release tape #${TAPEN} for architecture ${ARCH} and hit <RETURN>: \c"
+	read x
+done
+${REMOTE} ${MT_F} ${TAPEDEV} rew 2>&1
+sync; sync

@@ -1,0 +1,110 @@
+'\"macro stdmacro
+.TH KBTOOL 1
+.SH NAME
+kbtool \- extract branch coverage information from the kernel
+.SH SYNOPSIS
+\f4kbtool [\-z]\fP
+.SH DESCRIPTION
+\f4kbtool\fP extracts the branch coverage information from the
+kernel and prints it in text form to stdout.
+The output of \f4kbtool\fP is suitable as input to commands like \f4btell\fP,
+\f4breport\fP, and \f4btell\fP that require a \f2logfile\fP as input.
+The \f4\-z\fP option zeroes the branch coverage counters in the kernel.
+.SH "Instrumenting the Kernel"
+Kernel instrumentation follows a somewhat different procedure than
+that outlined in \f4btool\fP(1).
+The branch coverage tool works by creating a map file that records the
+line numbers in each source file that contain a branch, loop, or
+function start, and adding a number to each of these entries.
+It is important that each branch, loop, or function have a unique
+number within the entire application.
+\f4btool\fP maintains this number in the file \f4$(BOOTAREA)/btool_map.count\fP.
+When \f4btool\fP runs, it reads the number from the file, increments it,
+writes it back, and uses the number for the next map file entry it
+needs to output.
+The count and map files are locked so that this all works correctly
+with \f1smake\fP.
+The current implementation uses a separate map file per directory,
+using the \f4LINTNAME\fP from the \f2Makefile\fP.
+At final link time, all the map files (\f4*.map\fP) are combined
+into the file \f4$(BOOTAREA)/btool_map\fP.
+\f4btool\fP has no ability to overwrite parts of a map file, so if
+one compiles via \f4btool\fP the same file twice, it will get 2
+different sets of numbers, and 2 sets of map file entries.
+This is ok, the old set of entries of course won't ever get referenced,
+however its important to note that an array in the kernel is dimensioned
+based on the count in the count file, so if there are lots of
+recompiled files, the array will be much larger than needed (as will the
+map file).
+Only clobbering everything (most importantly the count file)
+and re-compiling (via \f4btool\fP) will get the size back down correctly.
+.P
+The simplest case is to instrument the entire kernel, starting from a
+clean work area.
+In this case, simply:
+.sp
+.RS
+.nf
+	cd irix/kern
+	make branch
+.fi
+.RE
+.sp
+This will take a while(!), and produce a \f4unix.kbtool\fP that can be booted.
+Currently this unix is built using the \f4system.kdebug\fP system file,
+and so has pretty much everything in it (no security, etc.).
+.P
+To instrument a single directory and everything below:
+.sp
+.RS
+.nf
+	cd xxx
+	make -u branch
+	cd ..
+	make unix.kbtool
+.fi
+.RE
+.sp
+The \f4\-u\fP will force everything to be rebuild, regardless of any
+modification times.
+If you don't want all subdirectories to be instrumented, use the \f4onebranch\fP
+rather than the \f4branch\fP target.
+.PP
+There is no easy way to instrument a single file except to use a control
+file (see \f4btool\fP(1) for details).
+The control file should be called \f4btool_ctrl\fP and be in \f4irix/kern\fP.
+The absence of a control file means to instrument everything.
+File names in the control file should be relative to \f4$(BOOTAREA)\fP,
+thus to instrument just \f4os/scheduler/runq.c\fP the \f4btool_ctrl\fP
+file should contain the line:
+.sp
+.RS
+.nf
+	../os/scheduler/runq.c
+.fi
+.RE
+.sp
+Note that changing the control file doesn't cause any files to recompile,
+nor does it force removal of any files that have already been
+instrumented.
+.PP
+The objects in \f4$(BOOTAREA)\fP are shared with normal kernel compilation -
+thus if one mistakenly updates a new file and does a normal \f4make\fP
+(as opposed to a \f4make branch\fP) then those new files (or file out of
+date) will be recompiled and lose their branch coverage information.
+Since this can get confusing fairly quickly, its it advisable to do a complete
+rebuild after a large update.
+Using a control file can make this a bit easier and faster - by only having
+those files that are desired listed in the \f4btool_ctrl\fP file,
+one can always use the \f4branch\fP target - \f4btool\fP simple
+passes off all files not in the control file to \f4cc\fP.
+.SH FILES
+\f4$(BOOTAREA)/btool_map.count\fP \- unique number generator
+\f4$(BOOTAREA)/*.map\fP \- map files for each directory
+\f4$(BOOTAREA)/btool_map\fP \- map file for entire kernel
+\f4btool_ctrl\fP \- control file
+.SH SEE ALSO
+\f4bmerge\fP(1),
+\f4breport\fP(1),
+\f4btell\fP(1),
+\f4btool\fP(1).

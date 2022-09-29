@@ -1,0 +1,578 @@
+Performance Co-Pilot and IRIX
+=============================
+
+This document describes all the interfaces used by:
+
+  - irix/lib/libirixpmda
+  - eoe/cmd/pmdas/proc
+
+to extract metrics from IRIX. Note that the same source tree can be used to 
+export metrics in 6.2, 6.3, 6.4 and 6.5. The macros IRIX6_X are used to
+isolate code specific to one or more versions of IRIX.
+
+----------------------------------------------------------------------------
+The main functions used are:
+
+sysmp()
+syssgi()
+sysget()
+sysinfo()
+attrget()
+ioctl()
+kmemread()
+
+The less common functions used are:
+
+getinvent()
+scaninvent()
+swapctl()
+nftw()
+setutent()
+getutent()
+mmap()
+----------------------------------------------------------------------------
+
+Use of the functions:
+
+sysmp():
+  MP_SAGET: MPSA_BUFINFO, MPSA_EFS, MPSA_TCPIPSTATS, MPSA_LPGSTATS, MPSA_MINFO,
+            MPSA_NCSTATS, MPSA_CLSTAT3, MPSA_SVSTAT3, MPSA_CLSTAT, MPSA_SVSTAT,
+            MPSA_NODEINFO, MPSA_RCSTAT, MPSA_RSSTAT, MPSA_SOCKSTATS, MPSA_SERR,
+            MPSA_SINFO, MPSA_RMINFO, MPSA_VOPINFO, MPS_XFSSTATS
+  MP_SAGET1: MPSA_SINFO
+  MP_NPROCS
+  MP_NUMNODES
+  MP_KERNADDR: MPKA_MSGINFO, MPKA_MSG, MPKA_SEMINFO, MPKA_SEM, MPKA_SHMINFO,
+               MPKA_SHM, MPKA_AVENRUN, MPKA_VAR 
+  MP_SASZ: MPSA_NODE_INFO
+  MP_SHMSTAT
+  MP_PGSIZE
+
+syssgi():
+  SGI_DBA_GETSTATS
+  SGI_KAIO_STATS
+  SGI_EVENTCTR:  HWPERF_GET_SYSCNTRS, HWPERF_GET_SYSEVCTRL
+  SGI_NUMA_STATS_GET
+  SGI_XLV_ATTR_CURSOR
+  SGI_XLV_ATTR_GET
+  SGI_XLV_ATTR_SET
+
+  (in hinv-* files)
+  SGI_GET_EVCONF
+  SGI_IO_SHOW_AUX_INFO
+
+sysget():
+  SGT_SINFO
+  SGT_MSGQUEUE
+  SGT_KSYM: KSYM_VAR, KSYM_AVENRUN, KSYM_MSGINFO,
+            KSYM_VN_VNUMBER, KSYM_VN_EPOCH, KSYM_VN_NFREE
+  (uses SGT_COOKIE_SET_KSYM to get KSYM variants)
+
+sysinfo():
+  _MIPS_SI_PROCESSORS
+
+attrget():
+  INFO_LBL_DKIOTIME
+  INFO_LBL_DETAIL_INVENT
+
+  (in hinv-* files)
+  INFO_LBL_NIC
+  INFO_LBL_DETAIL_INVENT
+
+ioctl():
+  SNODRV_GET_HUBINFO
+  GETSTRUCTSIZE
+  ROUTERINFO_GETINFO
+  XB_GET_VERSION
+  XB_ENABLE_MPX_MODE
+  XB_START_TIMER
+  XB_STOP_TIMER
+
+  (in proc files)
+  PIOCACINFO
+  PIOCNMAP
+  PIOCMAP_SGI
+  PIOCCRED
+  PIOCPSINFO
+  PIOCSTATUS
+  PIOCUSAGE
+
+----------------------------------------------------------------------------
+
+irix/lib/libirixpmda/aio.c
+--------------------------
+
+irix.kaio.*
+	syssgi(SGI_DBA_GETSTATS, &kaio_statbuf, sizeof(kaio_statbuf), -1);
+	-- -1 => summed accross all of the per CPU structure instances
+	- IRIX 6.5
+
+	syssgi(SGI_KAIO_STATS, &kaio_statbuf, sizeof(kaio_statbuf));
+	- other IRIXs
+
+        Note: kaio_statbuf is defined in aio.c as irix/kern/sys/kaio.h
+	      is not exported in ROOT
+
+        Gets values for async I/O metrics directly out of dba_stat_t 
+	record (<sys/dbacc.h> in IRIX 6.5).
+
+irix/lib/libirixpmda/alldk.c
+----------------------------
+
+irix.disk.all.*
+	See spindle.c
+
+
+irix/lib/libirixpmda/cntrl.c
+----------------------------
+
+irix.disk.cnt.*
+	See spindle.c
+
+
+irix/lib/libirixpmda/disk.c
+---------------------------
+
+irix.disk.dev.*
+irix.xpc.disk.dev.*
+hinv.map.disk
+hinv.disk_sn
+	See spindle.c
+
+irix/lib/libirixpmda/engr.c
+---------------------------
+
+irix.engr.*
+	No longer supported, was kmem read of kernsymb[KS_ENGR]
+
+irix/lib/libirixpmda/evctr.c
+----------------------------
+
+hw.r10kevctr.*
+	sysinfo(_MIPS_SI_PROCESSORS, buf, sizeof(buf));
+	- Determine the type of CPUs
+	- Is it r10K or not
+	syssgi(SGI_EVENTCTR, HWPERF_GET_SYSCNTRS, (void *)&Count));
+	- Retrieve counts
+	syssgi(SGI_EVENTCTR, HWPERF_GET_SYSEVCTRL, &evctr_args_get));
+	- Get global counter state <sys/hwperfmacros.h>
+
+irix/lib/libirixpmda/filesys.c
+------------------------------
+
+irix.filesys.*
+	statfs();
+
+irix/lib/libirixpmda/getblkstats.c
+----------------------------------
+
+irix.resource.buffer_cache.*
+	sysmp(MP_SAGET, MPSA_BUFINFO, &getblkstats, sizeof(struct getblkstats));
+
+irix/lib/libirixpmda/hinv.c
+---------------------------
+
+hinv.* (majority)
+	getinvent();
+
+irix/lib/libirixpmda/hubstat.c
+------------------------------
+
+irix.hub.*
+	ioctl(np->hubfd, SN0DRV_GET_HUBINFO, &(np->hub));
+	-- np->hub is of type hubstat_t <sys/SN0/hubstat.h>[6.4]
+					<sys/SN/SN0/hubstat.h>[6.5]
+
+
+irix/lib/libirixpmda/hwrouter.c
+-------------------------------
+
+hinv.nrouter
+hinv.map.router.*
+hinv.nrport
+hinv.map.rport
+hinv.interconnect
+hw.router.*
+	ioctl(fd, GETSTRUCTSIZE);
+	ioctl(fd, ROUTERINFO_GETINFO, r->stats);
+	r->stats of type router_info_t <sys/SN0/router.h>[6.4]
+	                               <sys/SN/router.h>[6.5]
+
+irix/lib/libirixpmda/if.c
+-------------------------
+
+irix.network.interface.*
+	kmemread(offset, &ifp, sizeof(struct ifnet *));
+	- kernsymb[KS_IFNET]
+
+irix/lib/libirixpmda/igetstats.c
+--------------------------------
+
+irix.resource.efs.*
+	sysmp(MP_SAGET, MPSA_EFS, &igetstats, sizeof(struct igetstats));
+
+irix/lib/libirixpmda/irix.c
+---------------------------
+	sysget(SGT_SINFO, (char *)&info, sizeof(info), SGT_INFO, &ck)
+	-- get the number of cells (_pm_numcells = info.si_num)
+
+irix/lib/libirixpmda/kna.c
+--------------------------
+
+irix.network.tcp.*
+irix.network.icmp.*
+irix.network.igmp.*
+irix.network.ip.*
+irix.network.udp.*
+irix.network.mbuf.*
+irix.network.mcr.*
+	sysmp(MP_SAGET, MPSA_TCPIPSTATS, &kna, sizeof(struct kna));
+
+irix/lib/libirixpmda/lpage.c
+----------------------------
+
+irix.mem.lpage.*
+	sysmp(MP_SAGET, MPSA_LPGSTATS, &lpage, sizeof(lpage));
+
+irix/lib/libirixpmda/minfo.c
+----------------------------
+
+irix.mem.* (other than those exported by lpage.c and sysmp.c)
+	sysmp(MP_SAGET, MPSA_MINFO, &minfo, sizeof(minfo));
+
+irix/lib/libirixpmda/msg.c
+--------------------------
+
+irix.ipc.msg.*
+	sysmp(MP_KERNADDR, MPKA_MSGINFO));
+	kmemread(msginfo_addr, &msginfo, (int)sizeof(msginfo));
+	sysmp(MP_KERNADDR, MPKA_MSG);
+	kmemread(msgds_addr, msgds, msginfo.msgmni * (int)sizeof(struct msqid_ds *));
+	- IRIX 6.2, 6.3, 6.4
+	SGT_COOKIE_INIT(&ck);
+	SGT_COOKIE_SET_KSYM(&ck, KSYM_MSGINFO);
+	sysget(SGT_KSYM, (char *)&msginfo, (int)sizeof(msginfo), SGT_READ, &ck);
+	-- msginfo of type msginfo <sys/msg.h>
+	sysget(SGT_MSGQUEUE, (char *)msgds_instance, msginfo.msgmni * (int)sizeof(struct msqid_ds *), SGT_READ, &ck);
+	- IRIX 6.5
+
+irix/lib/libirixpmda/ncstats.c
+------------------------------
+
+irix.resource.name_cache.*
+	sysmp(MP_SAGET, MPSA_NCSTATS, &ncstats, sizeof(struct ncstats));
+
+irix/lib/libirixpmda/nfs3_client.c
+----------------------------------
+
+irix.nfs3.client.*
+	sysmp(MP_SAGET, MPSA_CLSTAT3, &clstat, sizeof(clstat));
+
+irix/lib/libirixpmda/nfs3_server.c
+----------------------------------
+
+irix.nfs3.server.*
+	sysmp(MP_SAGET, MPSA_SVSTAT3, &svstat, sizeof(svstat));
+
+irix/lib/libirixpmda/nfs_client.c
+---------------------------------
+
+irix.nfs.client.*
+	sysmp(MP_SAGET, MPSA_CLSTAT, &clstat, sizeof(clstat));
+
+
+irix/lib/libirixpmda/nfs_server.c
+---------------------------------
+
+irix.nfs.server.*
+	sysmp(MP_SAGET, MPSA_SVSTAT, &svstat, sizeof(svstat));
+
+irix/lib/libirixpmda/nodeinfo.c
+-------------------------------
+
+irix.node.*
+	sysmp(MP_NUMNODES);
+	-- get number of nodes
+	sysmp(MP_SASZ, MPSA_NODE_INFO);
+	-- get node-info record size
+	-- allocate n_nodes*node_infosz
+	sysmp(MP_SAGET, MPSA_NODE_INFO, (char *)node_info, num_info * node_infosz);
+	-- get node-info records
+
+irix/lib/libirixpmda/numa_node.c
+--------------------------------
+
+irix.numa.*
+	syssgi(SGI_NUMA_STATS_GET, node->hwgname, &node->numa);
+	-- gets num_stats_t record <sys/numa_stats.h>
+
+irix/lib/libirixpmda/rpc_client.c
+---------------------------------
+
+irix.rpc.client.*
+	sysmp(MP_SAGET, MPSA_RCSTAT, &rcstat, sizeof(rcstat));
+
+irix/lib/libirixpmda/rpc_server.c
+---------------------------------
+
+irix.rpc.server.*
+	sysmp(MP_SAGET, MPSA_RSSTAT, &rsstat, sizeof(rsstat));
+
+irix/lib/libirixpmda/sem.c
+--------------------------
+
+irix.ipc.sem.*
+	sysmp(MP_KERNADDR, MPKA_SEMINFO);
+	kmemread(seminfo_addr, &seminfo, (int)sizeof(seminfo));
+	sysmp(MP_KERNADDR, MPKA_SEM);
+	kmemread(semds_addr, semds, seminfo.semmni * (int)sizeof(struct semid_ds *))
+	- IRIX 6.2, 6.3, 6.4
+	SGT_COOKIE_INIT(&ck);
+	SGT_COOKIE_SET_KSYM(&ck, KSYM_SEMINFO);
+	sysget(SGT_KSYM, (char *)&seminfo, (int)sizeof(seminfo), SGT_READ, & ck);
+	sysget(SGT_SEM, (char *)semds_instance, seminfo.semmni * (int)sizeof(struct semid_ds *), SGT_READ, &ck);
+	- IRIX 6.5
+
+irix/lib/libirixpmda/shm.c
+--------------------------
+
+irix.ipc.shm.*
+	see shm_kmem.c
+
+irix/lib/libirixpmda/shm_kmem.c
+-------------------------------
+
+	sysmp(MP_KERNADDR, MPKA_SHMINFO);
+	-- get shminfo_addr
+	kmemread(shminfo_addr, &shminfo, (int)sizeof(shminfo));
+
+	sysmp(MP_KERNADDR, MPKA_SHM)
+	-- get shmds_addr (shm seg table)
+	kmemread(shmds_addr, shmds, max_shm_inst * (int)sizeof(struct shmid_ds *));
+
+	kmemread((off_t)shmds[i], &probe, (int)sizeof(struct shmid_ds));
+	- IRIX 6.2 and 6.3
+	sysmp(MP_SHMSTAT, &shmstat, sizeof(struct shmstat));
+	- IRIX 6.4 and 6.5
+
+
+irix/lib/libirixpmda/socket.c
+-----------------------------
+
+irix.network.socket.*
+	sysmp(MP_SAGET, MPSA_SOCKSTATS, &sockinfo, sizeof(sockinfo));
+
+irix/lib/libirixpmda/spindle.c
+------------------------------
+
+	dsopen(sname, O_RDONLY);
+	fillg0cmd(dsp, (uchar_t *)CMDBUF(dsp), G0_INQU, 0, 0, 0, B1(sizeof(inqbuf)), B1(0));
+	filldsreq(dsp, (uchar_t *)inqbuf, sizeof(inqbuf), DSRQ_READ|DSRQ_SENSE);
+	doscsireq(getfd(dsp), dsp);
+	dsclose(dsp);
+	- ALL versions of IRIX
+
+	kmemread(s[i].s_iotime_addr, &iotim, sizeof(iotim));
+	kmemread(kernsymb[KS_DKSCINFO].n_value, &dkscinfo, sizeof(dkscinfo));
+	kmemread(kernsymb[KS_DKIOTIME].n_value, dksciotime, dksciotimesz);
+	kmemread((__psunsigned_t)dksciotime[c], &thisiot, sizeof(thisiot));
+	kmemread(kernsymb[KS_USRAID_SOFTC].n_value, usraid_softc, sizeof(usraid_softc));
+	kmemread(kernsymb[KS_USRAID_INFO].n_value, &usraid_info, sizeof(usraid_info));
+	- IRIX 6.2 and 6.3
+
+	attr_get((char *)s[i].s_hwgname, INFO_LBL_DKIOTIME, (char *)&iotim, &dkiotimesz, 0);
+	-- gets the the disk metrics out of the iotime struct <sys/elog.h>.
+	scaninvent((int (*)()) spindle_volume_filter, (void *)NULL);
+	- IRIX 6.4 and 6.5
+
+
+
+irix/lib/libirixpmda/swap.c
+---------------------------
+
+irix.swapdev.*
+irix.swap.{free,length,maxswap,vlength,alloc,reserve,used,unused}
+	swapctl(SC_LIST, swaptable);
+	swapctl(SC_GETNSWP, (int *)NULL);
+
+irix/lib/libirixpmda/syserr.c
+-----------------------------
+
+irix.resource.fileovf
+irix.resource.procovf
+	sysmp(MP_SAGET, MPSA_SERR, &syserr, sizeof(struct syserr));
+
+irix/lib/libirixpmda/sysinfo.c
+------------------------------
+
+irix.swap.* (other than those exported in swap.c)
+irix.kernel.all.* (except load and users)
+irix.xpc.kernel.all.*
+	sysmp(MP_SAGET, MPSA_SINFO, &sysinfo, sizeof(sysinfo));
+
+irix/lib/libirixpmda/sysinfo_mp.c
+---------------------------------
+
+irix.kernel.percpu.*
+irix.xpc.kernel.percpu.*
+	sysmp(MP_NPROCS);
+
+	getinvent()
+	- IRIX 6.2 and 6.3
+	attr_get((char *)p, INFO_LBL_DETAIL_INVENT, info, &len, 0);
+	-- info typecast to (invent_generic_t *)info) to get ig_invclass
+	   and (invent_cpuinfo_t *) to get cpu_invent fields
+	nftw(_PATH_HWGFS, percpu_filter, MAX_WALK_DEPTH, FTW_PHYS);
+	- IRIX 6.4 and 6.5
+	sysmp(MP_SAGET1, MPSA_SINFO, &sysinfo, sizeof(sysinfo), physcpu);
+	- All IRIX versions
+
+	sysmp(MP_SAGET1, MPSA_SINFO, &cpus[c].sysinfo, sizeof(sysinfo), cpus[c].map)
+	-- fetch the cpus info
+
+irix/lib/libirixpmda/sysmp.c
+----------------------------
+
+irix.kernel.all.load
+	sysmp(MP_KERNADDR, MPKA_AVENRUN);
+	kmemread(addr, &load, sizeof(load));
+	- IRIX 6.2, 6.3, 6.4
+	SGT_COOKIE_INIT(&ck);
+	SGT_COOKIE_SET_KSYM(&ck, KSYM_AVENRUN);
+	sysget(SGT_KSYM, (char *)load, sizeof(load), SGT_READ | SGT_SUM, &ck);
+	- IRIX 6.5
+
+irix.kernel.all.users
+	setutent();
+	getutent();
+
+irix.mem.{freemem,availsmem,availrmem,bufmem,physmem,dchunkpages,pmapmem,
+          strmem,chunkpages,dpages,emptymem,emptymem}
+	sysmp(MP_SAGET, MPSA_RMINFO, &rminfo, sizeof(rminfo));
+
+hinv.ncpu
+	sysmp(MP_NPROCS);
+
+irix/lib/libirixpmda/var.c
+--------------------------
+
+irix.resource.{nproc,nbuf,hbuf,syssegsz,maxpmem,maxdmasz,dquot,nstream_queue,
+               nstream_head}
+	sysmp(MP_KERNADDR, MPKA_VAR);
+	kmemread(kaddr, &var, sizeof(struct var);
+	- IRIX 6.2, 6.3, 6.4
+	SGT_COOKIE_INIT(&ck);
+	SGT_COOKIE_SET_KSYM(&ck, KSYM_VAR);
+	sysget(SGT_KSYM, (char *)&var, sizeof(struct var), SGT_READ, &ck);
+	- IRIX 6.5
+
+	sysmp(MP_PGSIZE)
+	- all versions
+
+irix/lib/libirixpmda/vnodestats.c
+---------------------------------
+
+irix.resource.vnodes.*
+	sysmp(MP_SAGET, MPSA_VOPINFO, &vnodestats, sizeof(struct vnodestats));
+	- get data from vnodestats <sys/ksa.h>
+	- All IRIX versions
+	kmemread(offset, &vn_vnumber, sizeof(vn_vnumber));
+	kmemread(offset, &vn_epoch, sizeof(vn_epoch));
+	kmemread(offset, &vn_nfree, sizeof(vn_nfree));
+	- IRIX 6.2, 6.3, 6.4
+	SGT_COOKIE_INIT(&ck);
+	SGT_COOKIE_SET_KSYM(&ck, KSYM_VN_VNUMBER);
+	sysget(SGT_KSYM, (char *)&vn_vnumber, sizeof(vn_vnumber), SGT_READ, &ck);
+	SGT_COOKIE_SET_KSYM(&ck, KSYM_VN_EPOCH);
+	sysget(SGT_KSYM, (char *)&vn_epoch, sizeof(vn_epoch), SGT_READ, &ck);
+	SGT_COOKIE_SET_KSYM(&ck, KSYM_VN_NFREE);
+	sysget(SGT_KSYM, (char *)&vn_nfree, sizeof(vn_nfree), SGT_READ, &ck);
+	- IRIX 6.5
+
+irix/lib/libirixpmda/xbow.c
+---------------------------
+
+hinv.nxbow
+hinv.map.xbow
+irix.xbow.*
+	ioctl(xb_ptr->devfd, XB_GET_VERSION, &xbVersion);
+	-- test have correct xb version
+	ioctl(xb_ptr->devfd, XB_ENABLE_MPX_MODE, 0);
+	ioctl(xb_ptr->devfd, XB_START_TIMER, 0);
+	mmap(0,sizeof(xb_vcntr_block_t),PROT_READ,MAP_PRIVATE,xb_ptr->devfd,0);
+	munmap((caddr_t) xb_ptr->block, sizeof(xb_vcntr_block_t));
+	-- data retrieved through memory-map (onto type _pm_xbow in "xbow.h")
+	
+irix/lib/libirixpmda/xfs.c
+--------------------------
+
+irix.xfs.*
+	sysmp(MP_SAGET, MPSA_XFSSTATS, &xfsstats, sizeof(xfsstats));
+	- get data from xfsstats <sys/ksa.h>
+
+irix/lib/libirixpmda/xlv.c
+--------------------------
+
+irix.xlv.*
+	syssgi(SGI_XLV_ATTR_CURSOR, &_cursor);
+	-- get cursor for subsequent syssgi commands
+	-- <sys/xlv_attr.h>
+
+	syssgi(SGI_XLV_ATTR_GET, &_cursor, &req);
+	-- req.attr = XLV_ATTR_LOCKS
+	-- get req.ar_num_locks, req.ar_max_locks
+
+	syssgi(SGI_XLV_ATTR_SET, &_cursor, &req);
+	-- req.attr = XLV_ATTR_FLAGS
+	-- set XLV_FLAG_STAT ??
+
+	syssgi(SGI_XLV_ATTR_GET, &_cursor, &req);
+	-- req.attr = XLV_ATTR_SUBVOL
+	-- xlv_load_subvols ??
+
+	syssgi(SGI_XLV_ATTR_GET, &_cursor, &req);
+	-- req.attr = XLV_ATTR_VOL
+	-- xlv_load_vols ??
+
+	syssgi(SGI_XLV_ATTR_GET, &_cursor, &req);
+	-- req.attr = XLV_ATTR_STATS
+	-- get the xlv stats for the fetch
+
+
+
+eoe/cmd/pcp/pmdas/proc/pracinfo.c
+---------------------------------
+
+proc.accounting.*
+	ioctl(fd, PIOCACINFO, buf);
+
+eoe/cmd/pcp/pmdas/proc/procmem.c
+--------------------------------
+
+proc.memory.*
+	ioctl(fd, PIOCNMAP, &nmaps);
+	ioctl(fd, PIOCMAP_SGI, &maparg);
+
+eoe/cmd/pcp/pmdas/proc/pscred.c
+-------------------------------
+
+proc.pscred.*
+	ioctl(fd, PIOCCRED, buf);
+
+eoe/cmd/pcp/pmdas/proc/psinfo.c
+-------------------------------
+
+proc.psinfo.*
+	ioctl(fd, PIOCPSINFO, buf);
+
+eoe/cmd/pcp/pmdas/proc/psstatus.c
+---------------------------------
+
+proc.pstatus.*
+	ioctl(fd, PIOCPSTATUS, buf);
+
+eoe/cmd/pcp/pmdas/proc/psusage.c
+--------------------------------
+
+proc.psusage.*
+	ioctl(fd, PIOCUSAGE, buf);

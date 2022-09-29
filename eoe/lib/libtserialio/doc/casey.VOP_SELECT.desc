@@ -1,0 +1,71 @@
+From owner-os-announce@cthulhu  Mon Apr 28 14:31:52 1997
+Received: from cthulhu.engr.sgi.com (cthulhu.engr.sgi.com [192.26.80.2]) by cp.engr.sgi.com (950413.SGI.8.6.12/960327.SGI.AUTOCF) via ESMTP id OAA16277 for <cpirazzi@cp.engr.sgi.com>; Mon, 28 Apr 1997 14:31:51 -0700
+Received: from ares.esd.sgi.com (fddi-ares.engr.sgi.com [192.26.80.60]) by cthulhu.engr.sgi.com (950413.SGI.8.6.12/960327.SGI.AUTOCF) via ESMTP id OAA06807; Mon, 28 Apr 1997 14:31:50 -0700
+Received: from cthulhu.engr.sgi.com by ares.esd.sgi.com via ESMTP (951211.SGI.8.6.12.PATCH1042/950213.SGI.AUTOCF)
+	 id OAA26651; Mon, 28 Apr 1997 14:31:49 -0700
+Received: (from majordomo@localhost) by cthulhu.engr.sgi.com (950413.SGI.8.6.12/960327.SGI.AUTOCF) id OAA06106 for os-announce-list; Mon, 28 Apr 1997 14:30:26 -0700
+Received: from gauss.engr.sgi.com (gauss.engr.sgi.com [150.166.36.22]) by cthulhu.engr.sgi.com (950413.SGI.8.6.12/960327.SGI.AUTOCF) via ESMTP id OAA06098 for <os-announce@cthulhu.engr.sgi.com>; Mon, 28 Apr 1997 14:30:25 -0700
+Received: from localhost (leedom@localhost) by gauss.engr.sgi.com (950413.SGI.8.6.12/960327.SGI.AUTOCF) via SMTP id OAA08377 for <os-announce@engr>; Mon, 28 Apr 1997 14:30:23 -0700
+Message-Id: <199704282130.OAA08377@gauss.engr.sgi.com>
+From: leedom@cthulhu (Casey Leedom)
+To: os-announce@cthulhu
+Subject: VOP_POLL(), VSOP_SELECT(), and driver poll interfaces changed
+Date: Mon, 28 Apr 1997 14:30:23 -0700
+Sender: owner-os-announce@cthulhu
+Precedence: bulk
+Reply-To: os@cthulhu
+Status: OR
+
+  This message only affects those people who write, document, or port device
+driver for kudzu.  All others may ignore it.
+
+  This message concerns a change to the VOP_POLL(), VSOP_SELECT(), and
+driver poll interfaces.  The TAKE to fix bug #481256, ``pollwakeup() is
+waiting on a single global spinlock,'' implements this change.  This bug
+caused pollwakeup() to suck up to 80% of every CPU on an Origin system.
+Unfortunately the fix has rather wide ranging effects, covering 85 files in
+6 isms.  If anyone has any questions about this or needs help converting a
+driver, please contact me.  I have made every effort to check my changes and
+am working with affected ism owners to check those changes that I don't know
+how to build and test.
+
+  The interface change adds a new ``return'' parameter:
+
+    unsigned int *genp
+
+>From the poll(D2) manual page:
+
+genp
+    A pointer to an unsigned integer that is used by the driver to store
+    the current value of the pollhead's generation number at the time of
+    the poll.
+...
+    When the driver's poll entry point is called, the driver should check if
+    any of the events requested in events have occurred.  The driver should
+    store the mask, consisting of the subset of events that are pending, in
+    the short pointed to by rev entsp.  Note that this mask may be 0 if none
+    of the events are pending.  In this case, the driver should check the
+    anyyet flag and, if it is zero, store the address of the device's
+    pollhead structure in the pointer pointed at by phpp and also store the
+    ``poll time'' value of the pollhead's generation number, ph_gen, in the
+    unsigned integer pointed to by genp.
+
+    The generation value must be taken either while a state lock is held
+    that will hold off any call to pollwakeup(D3) on the pollhead, or it
+    must be taken before the check is made for any pending events.  The
+    generation number is used to solve the race condition that exists for
+    the caller of the poll routine.  When the poll routine is called, there
+    may be no events of interest pending and the pollhead is returned by the
+    driver poll routine in order that the caller can queue itself onto the
+    pollhead to wait for such events.  If the lower layer of the driver
+    signals such an event before the caller can queue up, the caller may
+    block forever or wait unnecessarily for the next such event before being
+    woken up via a pollwakeup(D3).  The snapshot of the pollhead's
+    generation number at the time of the poll allows the caller to check the
+    generation number of the pollhead as it is about to queue itself up.  If
+    the snapshot value returned by the driver and the current generation
+    number match, the caller can safely queue itself up.  If they don't
+    match, the caller knows that it must retry the poll operation.
+
+Casey
+

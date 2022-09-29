@@ -1,0 +1,92 @@
+Compiling
+	MAC support is compiled in if TRUSTED_MAC is defined.
+	Capability support is compiled in if TRUSTED_CAP is defined.
+	Trusted networking support is compiled in if TRUSTED_NET is
+	defined. Normally both TRUSTED_MAC and TRUSTED_NET are defined
+	together. If you want both SMTP and local delivery they must be
+	defined together.
+
+Run-Time
+	Since all these features (Capabilities, MAC, Trusted Networking)
+	are tested for at run-time, a sendmail binary with these features
+	compiled in should work properly if they are not supported by the
+	kernel as long as the appropriate functions/stubs are in libc.
+	One sendmail binary works on both IRIX and Trusted IRIX, for example.
+
+The Envelope
+	Envelopes have MAC labels associated with them. They represent
+	the MAC label that the message associated with the envelope
+	will be delivered at. When new envelopes are created they inherit
+	the MAC label of their parent. That way MAC information is retained
+	across redeliveries, bouncebacks, etc. The initial envelope
+	(BlankEnvelope) contains the initial MAC label of the sendmail
+	process itself, which will also be the MAC label of any messages
+	sendmail is delivering on behalf of the user invoking it (due to
+	envelope inheritance). Envelopes also get MAC labels from incoming
+	socket connections and from queue entries.
+
+The Queue
+	Queue entries have MAC labels associated with them. These MAC
+	labels are contained in the qf file itself as an 'l' line if
+	QF_HAS_MAC is defined. Otherwise, it is contained in an
+	alternate place (On IRIX, as an extended attribute of the qf
+	file). An envelope created to represent a queue entry obtains
+	its MAC label from it. If the queue entry has no MAC label, or
+	a temporary out of memory condition prevents sendmail from
+	allocating storage to hold that MAC label, that queue entry
+	will not be processed (or in the case of mailq, will not appear
+	in queue listings).
+
+	Users who wish to examine the queue (mailq or sendmail -bp)
+	must pass a MAC dominance check to see queue entries. If that
+	fails, the user will not see that queue entry. This may result
+	in the queue appearing to have fewer entries than it really has.
+
+Delivery
+	Deliveries are first checked to see if the recipient is cleared
+	to recieve a message with that MAC label. On IRIX, for example,
+	the criteria are "is that MAC label one the user could log in
+	at?".  If this check is failed, the message is bounced back to
+	the sender.  If it succeeds, delivery proceeds normally. The
+	process performing delivery changes its MAC label to that of
+	the envelope. This is important to ensure that the correct mail
+	folder is used, as well as ensuring that sendmail or any
+	delivery agents don't violate security policy by running at a
+	MAC label the recipient is not permitted to use.
+
+Capabilities
+	Sendmail runs in a least-privilege mode. It acquires only the
+	specific capabilities needed for an operation, and only as long
+	as it needs them. If sendmail is about to exec a mailer that
+	will not be running as root sendmail empties its capability set
+	before invoking it to prevent privilege propagation. This isn't
+	really a good criterion, but it will do for now. What you really
+	want is a way to distinguish "safe" mailers from unsafe ones, such
+	as mailers specified in "safe" cf files.
+
+Connection Caching
+	Connection caching is disabled if TRUSTED_MAC is defined.
+	Currently only one criteria is permitted for cache lookups: the
+	target host's name. If TRUSTED_MAC is defined, additional
+	criteria are needed, to wit the MAC label of the connection (it
+	wouldn't do to send SECRET data over an UNCLASSIFIED
+	connection, for example, or vice versa).
+
+Debug Levels
+
+	70	MAC Debugging
+	70.1	Trace get/set/duplication of envelope MAC labels
+	70.2	Trace queue entry MAC labels (get/set/dominance checks)
+	70.3	Trace get/set of process MAC label
+	70.4	Trace get/set of socket MAC label
+	70.5	Trace MAC clearance checks on recipient
+
+	71	Capability Debugging
+	71.1	Trace setting current capability set
+	71.2	Trace getting current capability set
+
+General Notes
+	There is no single place where "uid/gid/gidset/MAC label"
+	changes are computed and made. This code is duplicated many
+	times throughout sendmail. That makes analysis and changes very
+	hard.

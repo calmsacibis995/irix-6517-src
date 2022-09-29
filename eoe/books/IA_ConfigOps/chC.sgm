@@ -1,0 +1,115 @@
+<!-- Produced by version 4.3 (11/99) of SGI Frame/SGIDOCBK SGML translator -->
+<APPENDIX ID="LE80089-PARENT"><TITLE ID="LE80089-TITLE">Application Tuning</TITLE><PARA>You can often increase system performance by tuning your applications to more closely follow your system's resource limits. If you are concerned about a decrease in your system's performance, first check your application software to see if it is making the best use of the operating system. If you are using an application of your own manufacture, you can take steps to improve performance. Even if a commercially purchased application is degrading system performance, you can identify the problem and use that information to make decisions about system tuning or new hardware, or even simply when and how to use the application. The following sections explain how to examine and tune applications. For more detailed information on application tuning, see the <CITETITLE><LINK BOOK="MproCplrDbx_TG" EXTREF="19627">MIPSpro Compiling and Performance Tuning Guide</LINK>
+</CITETITLE>.</PARA>
+<SECTION><TITLE>Checking Application Performance with timex</TITLE><PARA>If your system seems slow, for example, an application runs slowly, first check the application. Poorly designed applications can perpetuate poor system performance. Conversely, an efficiently written application means reduced code size and execution time.</PARA>
+<PARA>A good utility to use to try to determine the source of the problem is the <COMMAND>timex(1)</COMMAND> utility. <COMMAND>timex</COMMAND> reports how a particular application is using its CPU processing time. The format is:</PARA>
+<PROGRAMLISTING>
+<USERINPUT>timex -s</USERINPUT>&ensp;<REPLACEABLE>program</REPLACEABLE>
+</PROGRAMLISTING>
+<PARA>which shows <REPLACEABLE>program</REPLACEABLE>'s real (actual elapsed time), user (time process took executing its own code), and sys (time of kernel services for system calls) time. For example: </PARA>
+<LITERALLAYOUT>
+<USERINPUT>timex -s ps -el</USERINPUT>
+</LITERALLAYOUT>
+<PARA>The above command executes the <COMMAND>ps -el</COMMAND> command and then displays that program's time spent as:</PARA>
+<LITERALLAYOUT>
+real 0.95
+user 0.08
+sys 0.41
+</LITERALLAYOUT>
+</SECTION>
+<SECTION  ID="LE40450-PARENT"><TITLE  ID="LE40450-TITLE">Tuning an Application </TITLE><PARA>There are many reasons why an application spends a majority of its time in either user or sys space. For purposes of example, suspect excessive system calls or poor locality of code.</PARA>
+<PARA>Typically, you can only tune applications that you are developing. Applications purchased for your system cannot be tuned in this manner, although there is usually a facility to correspond with the application vendor to report poor performance.</PARA>
+<SECTION><TITLE>Guidelines for Reducing High User Time</TITLE><PARA>If the application is primarily spending its time in user space, the first approach to take is to tune the application to reduce its user time by using the <COMMAND>pixie(1)</COMMAND> and <COMMAND>prof(1)</COMMAND> commands. See the respective man pages for more information about these commands. To reduce high <LITERAL>user</LITERAL> time, make sure that the program does the following:</PARA>
+<ITEMIZEDLIST><LISTITEM><PARA>Makes only the necessary number of system calls. Use <COMMAND>timex -s</COMMAND> to find out the number of system calls/second the program is making. The key is to try to keep <LITERAL>scall/s</LITERAL> at a minimum. System calls are those like <COMMAND>read(2)</COMMAND> and <COMMAND>exec(2)</COMMAND>; they are listed in section 2 of the man pages.</PARA>
+</LISTITEM>
+<LISTITEM><PARA>Uses buffers of at least 4K for <COMMAND>read(2)</COMMAND> and <COMMAND>write(2)</COMMAND> system calls. Or use the standard I/O library routines <COMMAND>fread(3)</COMMAND> and <COMMAND>fwrite(3)</COMMAND>, which buffer user data. </PARA>
+</LISTITEM>
+<LISTITEM><PARA>Uses shared memory rather than record locking where possible. Record locking checks for a record lock for every read and write to a file. To improve performance, use shared memory and semaphores to control access to common data (see <COMMAND>shmop(2)</COMMAND>, <COMMAND>semop(2)</COMMAND>, and <COMMAND>usinit(3P)</COMMAND>).</PARA>
+</LISTITEM>
+<LISTITEM><PARA>Defines efficient search paths (<LITERAL>$PATH</LITERAL> variable). Specify the most used directory paths first, and use only the required entries, so that infrequently used directories aren't searched every time.</PARA>
+</LISTITEM>
+<LISTITEM><PARA>Eliminates polling loops (see <COMMAND>select(2)</COMMAND>).</PARA>
+</LISTITEM>
+<LISTITEM><PARA>Eliminates busy wait (use <COMMAND>sginap(0)</COMMAND>).</PARA>
+</LISTITEM>
+<LISTITEM><PARA>Eliminates system errors. Look at <FILENAME>/var/adm/SYSLOG</FILENAME>, the system error log, to check for errors that the program generated, and try to eliminate them.</PARA>
+</LISTITEM>
+</ITEMIZEDLIST>
+</SECTION>
+<SECTION><TITLE>Guidelines for Reducing Excessive Paging</TITLE><PARA>Run <COMMAND>timex</COMMAND> again. If the application still shows a majority of either user or sys time, suspect excessive paging due to poor &ldquo;locality&rdquo; of text and data. An application that has locality of code executes instructions in a localized portion of text space by using program loops and subroutines. In this case, try to reduce high user/sys time by making sure that the program does the following:</PARA>
+<ITEMIZEDLIST><LISTITEM><PARA>Groups its subroutines together. If often-used subroutines in a loaded program are mixed with seldom-used routines, the program could require more of the system's memory resources than if the routines were loaded in the order of likely use. This is because the seldom-used routines might be brought into memory as part of a page. </PARA>
+</LISTITEM>
+<LISTITEM><PARA>Has a working set that fits within physical memory. This minimizes the amount of paging and swapping the system must perform.</PARA>
+</LISTITEM>
+<LISTITEM><PARA>Has correctly ported FORTRAN-to-C code. FORTRAN arrays are structured differently from C arrays; FORTRAN is column major while C is row major. If you do not port the program correctly, the application will have poor data locality. </PARA>
+</LISTITEM>
+</ITEMIZEDLIST>
+<PARA>After you tune your program, run <COMMAND>timex</COMMAND> again. If sys time is still high, tuning the operating system may help reduce this time.</PARA>
+</SECTION>
+<SECTION><TITLE>Guidelines for Reducing I/O Throughput</TITLE><PARA>You can do a few other things to improve the application's I/O throughput. If you are on a single-user workstation, make sure that:</PARA>
+<ITEMIZEDLIST><LISTITEM><PARA>The application gains I/O bandwidth by using more than one drive (if applicable). If an application needs to concurrently do I/O on more than one file, try to set things up so that the files are in different filesystems, preferably on different drives and ideally on different controllers.</PARA>
+</LISTITEM>
+<LISTITEM><PARA>The application obtains unfragmented layout of a file. Try to arrange an application so that there is only one file currently being written to the filesystem where it resides. That is, if you have several files you need to write to a filesystem, and you have the choice of writing them either one after another or concurrently, you actually get better space allocation (and consequently better I/O throughput) by writing these files singly, one after another.</PARA>
+</LISTITEM>
+<LISTITEM><PARA>If you are on a multiuser server, it is hard to control how other applications access the system. Use a large size I/O&mdash;16K or more. You may also be able to set up separate filesystems for different users. With high sys time output from <COMMAND>timex</COMMAND>, you need to monitor the operating system to determine why this time is high.</PARA>
+</LISTITEM>
+</ITEMIZEDLIST>
+</SECTION>
+</SECTION>
+<SECTION  ID="LE98408-PARENT"><TITLE  ID="LE98408-TITLE">Looking At Reordering an Application</TITLE><PARA>Many applications have routines that are executed over and over. You can optimize program performance by modifying these heavily used routines in the source code. The following paragraphs describe the tools that can help tune your programs.</PARA>
+<SECTION><TITLE>Analyzing Program Behavior with prof </TITLE><PARA>Profiling allows you to monitor program behavior during execution and determine the amount of time spent in each of the routines in the program. Profiling is of two types:</PARA>
+<ITEMIZEDLIST><LISTITEM><PARA>Program counter (PC) sampling</PARA>
+</LISTITEM>
+<LISTITEM><PARA>Basic block counting</PARA>
+</LISTITEM>
+</ITEMIZEDLIST>
+<PARA>PC sampling is a statistical method that interrupts the program frequently and records the value of the program counter at each interrupt. Basic block counting, on the other hand, is done by using the <COMMAND>pixie(1)</COMMAND> utility to modify the program module by inserting code at the beginning of each basic block (a sequence of instructions containing no branch instructions) that counts the number of times that each block is entered. Both types of profiling are useful. The primary difference is that basic block counting is deterministic and PC sampling is statistical. To do PC sampling, compile the program with the <LITERAL>-p</LITERAL> option. When the resulting program is executed, it will generate output files with the PC sampling information that can then be analyzed using the <COMMAND>prof(1)</COMMAND> utility. <COMMAND>prof</COMMAND> and <COMMAND>pixie</COMMAND> are not shipped with the basic IRIX distribution, but are found in the optional IRIS Development Option software distribution.</PARA>
+<PARA>To do basic block counting:</PARA>
+<ORDEREDLIST><LISTITEM><PARA>Compile the program.</PARA>
+</LISTITEM>
+<LISTITEM><PARA>Execute <COMMAND>pixie</COMMAND> on it to produce a new binary file that contains the extra instructions to do the counting.</PARA>
+<PARA>When the resulting program is executed, it produces output files that are then used with <COMMAND>prof</COMMAND> to generate reports of the number of cycles consumed by each basic block.</PARA>
+</LISTITEM>
+<LISTITEM><PARA>Use the output of <COMMAND>prof</COMMAND> to analyze the behavior of the program and optimize the algorithms that consume the majority of the program's time.</PARA>
+</LISTITEM>
+</ORDEREDLIST>
+<PARA>Refer to the <COMMAND>cc(1)</COMMAND>, <COMMAND>f77(1)</COMMAND>, <COMMAND>pixie(1)</COMMAND>, and <COMMAND>prof(1)</COMMAND> man pages for more information about the mechanics of profiling.</PARA>
+</SECTION>
+<SECTION><TITLE>Reordering a Program With pixie</TITLE><PARA>User program text is demand-loaded a page at a time (currently 4K). Thus, when a man is made to an instruction that is not currently in memory and mapped to the user's address space, the encompassing page of instructions is read into memory and then mapped into the user's address space. If often-used subroutines in a loaded program are mixed with seldom-used routines, the program can require more of the system's memory resources than if the routines are loaded in the order of likely use. This is because the seldom-used routines might be brought into memory as part of a page of instructions from another routine.</PARA>
+<PARA>Tools are available to analyze the execution history of a program and rearrange the program so that the routines are loaded in most-used order (according to the recorded execution history). These tools include <COMMAND>pixie</COMMAND>, <COMMAND>prof</COMMAND>, and <COMMAND>cc</COMMAND>. By using these tools, you can maximize the cache hit ratio (checked by running <COMMAND>sar -b</COMMAND>) or minimize paging (checked by running <COMMAND>sar -p</COMMAND>), and effectively reduce a program's execution time. The following steps illustrate how to reorganize a program named <COMMAND>fetch</COMMAND>.</PARA>
+<ORDEREDLIST><LISTITEM><PARA>Execute the <COMMAND>pixie</COMMAND> command, which adds profiling code to <COMMAND>fetch</COMMAND>:</PARA>
+<PROGRAMLISTING>
+<USERINPUT>pixie fetch</USERINPUT>
+</PROGRAMLISTING>
+<PARA>This creates an output file, <FILENAME>fetch.pixie</FILENAME>, and a file that contains basic block addresses, <FILENAME>fetch.Addrs</FILENAME>.</PARA>
+</LISTITEM>
+<LISTITEM><PARA>Run <FILENAME>fetch.pixie</FILENAME> (created in the previous step) on a normal set or sets of data. This creates the file named <FILENAME>fetch.Counts</FILENAME>, which contains the basic block counts. </PARA>
+</LISTITEM>
+<LISTITEM><PARA>Create a feedback file that the compiler passes to the loader. Do this by executing <COMMAND>prof</COMMAND>:</PARA>
+<PROGRAMLISTING>
+<USERINPUT>prof -pixie -feedback fbfile fetch fetch.Addrs fetch.Counts</USERINPUT>
+</PROGRAMLISTING>
+<PARA>This produces a feedback file named <FILENAME>fbfile</FILENAME>.</PARA>
+</LISTITEM>
+<LISTITEM><PARA>Compile the program with the original flags and options, and add the following two options:</PARA>
+<LITERALLAYOUT>
+<USERINPUT>-feedback fbfile</USERINPUT>
+</LITERALLAYOUT>
+</LISTITEM>
+</ORDEREDLIST>
+<PARA>For more information, see the <COMMAND>prof(1)</COMMAND> and <COMMAND>pixie(1)</COMMAND> man pages.</PARA>
+</SECTION>
+</SECTION>
+<SECTION><TITLE>Working Around Slow Commercial Applications</TITLE><PARA>You cannot usually tune commercially available applications to any great degree. If your monitoring has told you that a commercially purchased application is causing your system to run at unacceptably slow levels, you have a few options:</PARA>
+<ITEMIZEDLIST><LISTITEM><PARA>You can look for other areas to reduce system overhead and increase speed, such as reducing the system load in other areas to compensate for your application. Options such as batch processing of files and programs when system load levels permit often show a noticeable increase in performance. See <XREF LINKEND="LE60523-TITLE">..</PARA></LISTITEM>
+<LISTITEM><PARA>You can use the <COMMAND>nice</COMMAND>, <COMMAND>renice</COMMAND>, <COMMAND>npri</COMMAND>, and <COMMAND>runon</COMMAND> utilities to change the priority of other processes to give your application a greater share of CPU time. See <XREF LINKEND="LE96195-TITLE">. and <XREF LINKEND="LE45478-TITLE">..</PARA></LISTITEM>
+<LISTITEM><PARA>You can undertake a general program of system performance enhancement, which can include maximizing operating system I/O through disk striping and increased swap space. See the <CITETITLE><LINK BOOK="IA_DiskFiles" EXTREF="88526">IRIX Admin: Disks and Filesystems</LINK>
+</CITETITLE> guide.</PARA>
+</LISTITEM>
+<LISTITEM><PARA>You can add memory, disk space, or even upgrade to a faster CPU.</PARA>
+</LISTITEM>
+<LISTITEM><PARA>You can find another application that performs the same function but that is less intensive on your system. (This is the least preferable option, of course.)</PARA>
+</LISTITEM>
+</ITEMIZEDLIST>
+</SECTION>
+</APPENDIX>

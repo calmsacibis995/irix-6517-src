@@ -1,0 +1,96 @@
+		
+		A brief description of the VFAT File System
+		===========================================
+
+Long filename support for, uh, like,  Windows 95 compatibility, or something
+============================================================================
+
+This document constitutes a rough description of the VFAT File system;
+No specifications were available, and most of this work is based on the
+Linux VFAT driver code. The mapping of long file names to short ones (8+3),
+is not always intuitive and there are possibly several special cases that
+are incorrectly treated by mount_dos.
+
+The extended FAT file system is almost identical to the FAT file system.
+The significant change has been the addition of long file names. These long
+file names support upto 255 characters and might include spaces and lower
+case characters (as opposed to the traditional DOS 8+3 file names).
+
+In the VFAT file system, Microsoft has used extra directory entries for any
+files that have long names. (Any file name that legally does fit into the
+8+3 scheme does not have extra directory entries. These "extra" directory
+entries are called slots. The size of a slot is the same as the size of a 
+directory entry, but the format is different. Each slot holds 13 characters
+of a file's extended name. The structure of a slot is as follows:
+
+typedef struct slot {
+        u_char sl_id;                   /* sequence number for slot  */
+        u_char sl_name0_4[10];          /* first 5 characters in name*/
+        u_char sl_attr;                 /* attribute byte            */
+        u_char sl_reserved;             /* always 0                  */
+        u_char sl_chksum;               /* checksum for 8.3 alias    */
+        u_char sl_name5_10[12];         /* 6 more characters in name */
+        u_char sl_start[2];             /* starting cluster number   */
+        u_char sl_name11_12[4];         /* last 2 characters in name */
+} slot_t;
+
+Slots must be distinguishable from normal directory entries. To this end
+a number of distinctions are made. They are:
+
+        1) The attribute byte for a slot directory entry is always set
+           to 0x0f.  This corresponds to an old directory entry with
+           attributes of "hidden", "system", "read-only", and "volume
+           label".  Most old software will ignore any directory
+           entries with the "volume label" bit set.  Real volume label
+           entries don't have the other three bits set.
+        2) The starting cluster is always set to 0, an impossible
+           value for a DOS file.
+
+Since the VFAT file system is backward compatible, it is conceivable that
+a DOS user might modify directory entries (he might merely manipulate files
+with their short names, without being aware of the long names and also the
+slots associated with this file entry. In order to establish that a slot
+does indeed belong to a 8+3 directory entry, the following are adhered to:
+
+	(1) Position: Slots immediately preceed their corresponding 
+	    8+3 directory entry. Also, each slot has an id which marks
+	    its order in the long file name. A typical layout of the
+	    directory entries/slots that constitute a long file name
+	    would look something like:
+
+           <proceeding files...>
+           <slot num: #3, id = 0x43,  "h is long">
+           <slot num: #2, id = 0x02,  "xtension whic">
+           <slot num: #1, id = 0x01,  "My Big File.E">
+           <directory entry, short-name = "MYBIGFIL.EXT">
+
+           Slots are stored from last to first.  Slots are numbered from 
+	   1 to N.  The Nth slot is or'ed with 0x40 to mark it as the very
+	   last slot.
+
+        (2) Checksum:  The shortname (8+3, including spaces) is scanned and
+	    its checksum is computed. Now, in each slot that constitutes its
+	    long name the same checksum is also stored. This allows us to 
+	    perform consistency checks later on to verify if a sequence of
+	    slots does indeed map to a particular short name.
+	    The following is the checksum algorithm used on the 8+3 name:
+
+            for (sum = i = 0; i < 11; i++)
+               sum = (((sum&1)<<7)|((sum&0xfe)>>1)) + name[i]
+
+        (3) If there is in the final slot, a Unicode NULL (0x0000) is stored
+            after the final character.  After that, all unused characters in
+            the final slot are set to Unicode 0xFFFF.
+
+NOTE: All the characters that are stored in slots are stored as unicodes.
+Each unicode consists of two bytes and there are a set of ugly tables in
+"dos_util.c" that are responsible for conversion between ascii and unicode.
+
+A note on the implementation:
+=============================
+
+The crux of the vfat file system support resides in the file "dos_util.c".
+This has become a dumping ground of sorts, with a preponderance of routines
+that allow long file names to be supported. 
+
+

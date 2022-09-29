@@ -1,0 +1,186 @@
+'\"macro stdmacro
+.TH GETITIMER 2
+.UC 4
+.SH NAME
+getitimer, setitimer \- get/set value of interval timer
+.SH SYNOPSIS
+.nf
+.ft 3
+#include <sys/time.h>
+.PP
+.ft 3
+#define ITIMER_REAL   	0	/* real time intervals */
+#define ITIMER_VIRTUAL	1	/* virtual time intervals */
+#define ITIMER_PROF   	2	/* user and system virtual time */
+.sp
+.ft 3
+int getitimer(int which, struct itimerval \(**value);
+.PP
+.ft 3
+int setitimer(int which, struct itimerval \(**value,
+.br
+		struct itimerval \(**ovalue);
+.fi
+.SH DESCRIPTION
+The system provides each process with three interval timers,
+defined in
+.RB < sys/time.h >.
+The
+.I getitimer
+call returns the current value for the timer specified in
+.IR which ,
+while the
+.I setitimer
+call sets the value of a timer (optionally returning the previous
+value of the timer).
+.PP
+A timer value is defined by the 
+.I itimerval
+structure:
+.PP
+.nf
+.RS
+.DT
+struct itimerval {
+	struct	timeval it_interval;	/* timer interval */
+	struct	timeval it_value;		/* current value */
+};
+.RE
+.fi
+.PP
+If
+.I it_value
+is non-zero, it indicates the time to the next timer expiration and not the time the timer was set originally.
+If
+.I it_interval
+is non-zero, it specifies a value to be used in reloading 
+.I it_value
+when the timer expires.
+Setting 
+.I it_value
+to 0 disables a timer.  Setting 
+.I it_interval
+to 0 causes a timer to be disabled after its next expiration (assuming
+.I it_value
+is non-zero).
+.PP
+For 
+.B ITIMER_VIRTUAL 
+and
+.BR ITIMER_PROF ,
+the timer resolution is 
+.B 1/HZ
+(from
+.IR <sys/param.h> ).
+Time values that are not a multiple of
+.B 1/HZ
+will be rounded up a multiple.
+.PP
+For 
+.BR ITIMER_REAL ,
+the timer resolution is
+.B 1/HZ
+for normal processes, for a default of 10 milliseconds.
+For processes with a real-time scheduling policy
+(see
+.IR sched_setscheduler (2)),
+the resolution is determined by the variable
+.I fasthz
+(see 
+.IR systune (1M)).
+The default
+.I fasthz
+is 1000, which produces a 1 millisecond resolution.
+The requested interval time is adjusted by rounding up to the next higher
+multiple of the appropriate resolution.
+To avoid a reduction in overall system performance, normal processes
+are not permitted to use the high resolution timers, since
+fast itimer requests can add as much as 6-8% system overhead on
+slower systems, such as the 4D/70 or 4D/20, less on faster systems.
+.P
+High resolution timers are not used if the
+requested time is an integral multiple of
+.BR 1/HZ .
+.P
+Note, for the Challenge/Onyx hardware family, all processes (whether
+they execute at a non-degrading priority or not) enjoy a
+.I fasthz
+resolution,
+although only non-degrading processes can specify an absolute value less than
+.BR 1/HZ .
+.PP
+The
+.B ITIMER_REAL
+timer decrements in real time.  A
+.B SIGALRM
+signal is
+delivered when this timer expires.
+.PP
+The
+.B ITIMER_VIRTUAL
+timer decrements in process virtual time.
+It runs only when the process is executing.  A
+.B SIGVTALRM
+signal
+is delivered when it expires.
+.PP
+The
+.B ITIMER_PROF
+timer decrements both in process virtual time and
+when the system is running on behalf of the process.  It is designed
+to be used by interpreters in statistically profiling the execution
+of interpreted programs.
+Each time the
+.B ITIMER_PROF
+timer expires, the
+.B SIGPROF
+signal is
+delivered.  Because this signal may interrupt in-progress
+system calls, programs using this timer must be prepared to
+restart interrupted system calls.
+.SH NOTES
+Three macros for manipulating time values are defined in
+.RB < sys/time.h >.
+.I timerclear
+sets a time value to zero,
+.I timerisset
+tests if a time value is non-zero, and
+.I timercmp
+compares two time values (beware that >= and <= do not
+work with this macro).
+.SH "SEE ALSO"
+ftimer(1), lboot(1M), npri(1), systune(1M),
+schedctl(2), sigset(2), timers(5).
+.SH FILES
+.TP 30
+/var/sysgen/mtune/kernel	fast itimer configuration variables.
+.SH DIAGNOSTICS
+If the calls succeed, a value of 0 is returned.  If an error occurs,
+the value \-1 is returned, and \f2errno\fP will be set.
+.I setitimer
+and
+.I getitimer
+will fail if any of the following are true:
+.TP 15
+\%[EFAULT]
+The \f2value\fP
+or
+.I ovalue
+structure specified a bad address.
+.TP 15
+\%[EINVAL]
+A \f2value\fP structure specified a time was too large
+to be handled.
+.SH BUGS
+.I setitimer\^
+calls reset the alarm clock (see
+.IR alarm (2))
+of the calling process.
+.sp
+Programs cannot use 
+.I getitimer(2) 
+to accurately determine how much time
+remains until the timer expires.
+On the Challenge/Onyx hardware family, 
+.I it_value 
+is not updated at a constant rate.

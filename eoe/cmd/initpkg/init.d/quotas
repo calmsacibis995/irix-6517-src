@@ -1,0 +1,65 @@
+#! /sbin/sh
+#Tag 0x00000f00
+
+# Start or stop the quotas subsystem. This should be done immediately after
+# the local file systems (EFS) are mounted.
+# "$Revision: 1.11 $"
+
+# Ideally we should run quotacheck(1M) when the file system has been 
+# mounted and quotas enabled. But since this might take up some time
+# we provide a option /etc/config/quotacheck which will determine
+# whether to run quotacheck(1M) during mount time or not.
+#
+# "$Revision: 1.11 $"
+
+if /sbin/chkconfig verbose ; then
+	VERBOSE=-v
+else
+	VERBOSE=
+fi
+
+case "$1" in
+  'start')
+	if /sbin/chkconfig quotas ; then
+		/sbin/suattr -C CAP_QUOTA_MGT+ip -c "/usr/etc/quotaon ${VERBOSE} -a"
+		if /sbin/chkconfig quotacheck ; then
+			/sbin/suattr -C CAP_QUOTA_MGT+ip -c "/usr/etc/quotacheck ${VERBOSE} -a"
+		fi
+	fi
+	;;
+
+  'stop')
+	/sbin/suattr -C CAP_QUOTA_MGT+ip -c "/usr/etc/quotaoff ${VERBOSE} -a"
+	;;
+
+  *)
+	echo "usage: $0 {start|stop}"
+	;;
+esac
+
+
+if [ -a /usr/tmp/restore_quotas ] 
+then
+	echo "Attempting to restore quotas after restoring disk from tape."
+	if [ -a /etc/init.d/quotas ]
+	then
+		repquota -s -a > /dev/null 2> /dev/null
+		
+		if [ $? ]
+		then 
+			repquota -s / 2>&1 | \
+				grep -q 'user quota accounting.*off'
+
+			if [ $? -ne 0 ]
+			then
+				edquota -i /usr/tmp/restore_quotas
+				rm /usr/tmp/restore_quotas
+				echo "Quotas have been restored"
+			else
+				echo "Use quotaon(1M) to turn on quotas, then reboot"
+			fi
+		else
+			echo "Quotas must be turned on before restoring."
+		fi
+	fi
+fi

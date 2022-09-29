@@ -1,0 +1,168 @@
+<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML//EN">
+<HTML VERSION="2.0">
+<HEAD>
+<!-- WEBMAGIC VERSION NUMBER="2.0.1" -->
+<!-- WEBMAGIC TRANSLATION NAME="ServerRoot" SRC="/var/www/htdocs/" DST="/" -->
+<!-- WEBMAGIC TRANSLATION NAME="ProjectRoot" SRC="./" DST="" -->
+<TITLE>Moose Mediad Monitor Client API</TITLE>
+</HEAD>
+<BODY>
+<H1>Moose Mediad Monitor Client Interface.</H1>
+<P>This document explains mediad's new monitor client interface. This interface
+is used to monitor the state of removable media devices. Both the API that
+clients use and the formats and meanings of data structures passed to clients
+are described.</P>
+<P>The API allows a client to connect to mediad on any host, and to get a list
+of removable media devices and the partitions and filesystems on those devices.
+It also sends clients notification whenever the removable media state changes.
+It does not allow the client to change the removable media state in any
+way.</P>
+<P>This interface is needed to replace objectserver. Prior to the moosehead
+release, mediad sent all its state changes to objectserver, and other clients
+such as the Indigo Magic Desktop or the Cadmin system administration tools
+got that state from objectserver. There is no objectserver in the moosehead
+release, so a different mechanism was needed.</P>
+<HR>
+<H2>Using the Monitor Client Interface</H2>
+<P>A client may use this interface by linking with <KBD>libmediaclient.so</KBD>. libmediaclient is written in C, and it may be called from C or C++. (Probably
+Fortran too, if you wanted to.)</P>
+<H2>Client Data Structures</H2>
+<P>The removable media state is encoded into four data structures, <DFN>mc_system</DFN>, <DFN>mc_device</DFN>, <DFN>mc_volume</DFN>, and <DFN>mc_partition</DFN>. Logically, a system contains a set of devices, volumes and partitions.
+A device contains several partitions, and a volume resides on several partitions.
+Figure one illustrates these relationships.</P>
+<P>Figure 1</P>
+<P><IMG SRC="api_fig1.gif" ALT="Figure 1 Image" WIDTH="549" HEIGHT="403" SGI_SETWIDTH SGI_SETHEIGHT SGI_FULLPATH="/xlv0/kbob/doc/nmediad/api_fig1.gif"></P>
+<P>Volumes, devices and partitions have various attributes. Those are listed
+here. The only ones described in detail are the device name fields.</P>
+<PRE>
+struct mc_volume {
+    char *mcv_label;                /* volume label, if any */
+    char *mcv_fsname;               /* e.g., /dev/dsk/dks... */
+    char *mcv_dir;                  /* mount point */
+    char *mcv_type;                 /* volume type (format), MC_FMT_xxx */
+    char *mcv_subformat;            /* volume subformat, MC_SBFMT_xxx */
+    char *mcv_mntopts;              /* mount options */
+    unsigned int mcv_nparts;        /* number of partition ptrs */
+    mc_partition_t **mcv_parts;     /* points to array of part. ptrs */
+};
+
+struct mc_device {
+    char *mcd_name;                 /* device's short name */
+    char *mcd_fullname;             /* device's printable name */
+    char *mcd_ftrname;              /* device's name as used in FTRs */
+    inventory_t mcd_invent;         /* device's H/W inventory record */
+    mc_bool_t mcd_monitored;        /* is mediad monitoring it? */
+    mc_bool_t mcd_media_present;    /* is media present? */
+    mc_bool_t mcd_write_protected;  /* is device write-locked? */
+    unsigned int mcd_nparts;        /* number of partition ptrs */
+    mc_partition_t **mcd_parts;     /* points to array of part. ptrs */
+};
+
+struct mc_partition {
+    mc_device_t *mcp_device;        /* device of which this is part */
+    char *mcp_format;               /* partition format, MC_FMT_xxx */
+    int mcp_index;                  /* partition # or MC_IX_WHOLE */
+    unsigned int mcp_sectorsize;    /* size of sector in bytes */
+    __uint64_t mcp_sector0;         /* starting sector number */
+    __uint64_t mcp_nsectors;        /* number of sectors in part. */
+};
+
+struct mc_system {
+   &#9;unsigned int    mcs_n_volumes;&#9; /* number of volumes in system */
+   &#9;unsigned int    mcs_n_devices;&#9; /* number of devices in system */
+   &#9;unsigned int    mcs_n_parts;  &#9; /* number of partitions in system */
+   &#9;mc_volume_t    *mcs_volumes;  &#9; /* ptr to array of volumes */
+   &#9;mc_device_t    *mcs_devices;  &#9; /* ptr to array of devices */
+    mc_partition_t *mcs_partitions;&#9;/* ptr to array of partitions */
+};
+</PRE>
+<P>A device has an array of pointers to partitions. A volume also has an array
+of partition pointers. A partition points to its containung device. An mc_system
+is nothing but three arrays: an array of volumes, an array of devices, and
+an array of partitions.</P>
+<P>A device has three different names. <DFN>mcd_name</DFN> is a common, short name for the device, with no punctuation characters. <DFN>mcd_fullname</DFN> is the device's name in a more human readable format. But it is not internationalized. <DFN>mcd_ftrname</DFN> is the device's name as it appears in the file type rules, <KBD>/usr/lib/filetype/devices/devices.ftr</KBD>.</P>
+<P>Note that no <KBD>/dev</KBD> entry is associated with a device. Instead, the <KBD>/dev</KBD> entry is associated with a volume. That's because different volumes on
+the same device may be mounted using different mount points. E.g., a CD-ROM
+would mount these filesystem types using these <KBD>/dev</KBD> entries.</P>
+<PRE>
+HFS   /dev/rdsk/dks0d4vol
+  EFS   /dev/rdsk/dks0d4s7
+  CDDA  /dev/scsi/sc0d4l0
+</PRE>
+<P>Every device that has media present has one mcd_partition of format &quot;raw&quot;.
+That partition is not part of any volume; it describes the raw size of the
+medium.</P>
+<H2>Client API</H2>
+<H3>Event Procedure</H3>
+<PRE>
+typedef void (*mc_event_proc_t)(mc_port_t, mc_closure_t, const mc_event_t *);
+</PRE>
+<P>The client must define an event procedure. This procedure will be called
+when mediad is first connected to and whenever mediad has an event for the
+client.</P>
+<H3>Client Port</H3>
+<PRE>
+mc_port_t mc_create_port(u_long IPaddress, mc_event_proc_t, mc_closure_t); void mc_destroy_port(mc_port_t);
+</PRE>
+<P>To use the monitor interface, a client creates an mc_port. The mc_port makes
+a connection to mediad, retrying until it's successful. When it gets connected,
+it calls the client's event procedure. A port is created using mc_create_port()
+and destroyed using mc_destroy_port().</P>
+<PRE>
+struct mc_what_next {
+enum { MC_IDLE, MC_INPUT, MC_OUTPUT, MC_TIMEOUT } mcwn_what;
+    /* N.B. MC_IDLE never seen */
+    int mcwn_fd; /* descriptor for select */
+    unsigned mcwn_seconds; /* timeout duration */
+};
+
+const mc_what_next_t *mc_execute(mc_port_t);
+</PRE>
+<P>The client has to give the port control at various times. To do so, the
+client calls <CODE>mc_execute()</CODE>. <CODE>mc_execute()</CODE> returns a <CODE>mc_what_next</CODE> structure to inform the client when it should be called next. If the <CODE>mcwn_what</CODE> field is <CODE>MC_INPUT</CODE>, the client should call <CODE>mc_execute()</CODE> when the descriptor in the <CODE>mcwn_fd</CODE> field is readable, according to <CITE>select(2)</CITE>. If the <CODE>mcwn_what</CODE> field is <CODE>MC_OUTPUT</CODE>, the client should call <CODE>mc_execute()</CODE> when the descriptor is writable. If <CODE>mcwn_what</CODE> is <CODE>MC_TIMEOUT</CODE>, the client should sleep for <CODE>mcwn_seconds</CODE> seconds, then call <CODE>mc_execute()</CODE>.</P>
+<P>The client's event procedure is called from <CODE>mc_execute()</CODE>.</P>
+<H4>Alternate Port Creation Method</H4>
+<PRE>
+int mc_port_connect(mc_port_t);
+</PRE>
+<P>If your client doesn't need to do other processing asynchronously while
+waiting to connect to mediad, it may use <CODE>mc_port_connect()</CODE> instead of repeatedly calling <CODE>mc_execute()</CODE> and <CODE>select()</CODE>. A client that uses mc_port_connect() would look like this.</P>
+<PRE>
+{
+    mc_port_t port;
+
+    /* ... */
+
+    port = mc_create_port(...);
+    int fd = mc_port_connect(port);
+
+    /* <I>... application main loop ...</I> */
+    /* <I>... select on fd for reading as long as</I>
+           <I>mc_execute() returns MC_INPUT ...</I> */
+
+    mc_destroy_port(port);
+
+    /* ... */
+}
+</PRE>
+<H3>Getting the System State</H3>
+<PRE>
+const mc_system_t *mc_system_state(mc_port_t);
+</PRE>
+<P><CODE>mc_system_state()</CODE> returns a pointer to an <CODE>mc_system</CODE> structure describing mediad's current state. If the client is not connected
+to mediad, <CODE>mc_system_state()</CODE> returns NULL. The mc_system structure returned belongs to the port: the
+client should not destroy it, and should not expect it to be preserved after
+control flow returns to libmediaclient.</P>
+<PRE>
+mc_system_t *mc_dup_system(const mc_system_t *);
+</PRE>
+<P><KBD>mc_dup_system()</KBD> may be used to make a copy of a system's state. The new <KBD>mc_system</KBD> and related data structures belong to the caller, and should be freed by
+the caller.</P>
+<PRE>
+void mc_destroy_system(mc_system_t *);
+</PRE>
+<P><KBD>mc_destroy_system()</KBD> is used to destroy an <KBD>mc_system</KBD> created by m<KBD>c_dup_system()</KBD>.</P>
+<H2>Sample Client</H2>
+<P>There is a sample client available. Its source is available at <KBD>/proj/???/isms/irix/cmd/mediad/clientmain.c</KBD>.</P>
+</BODY>
+</HTML>

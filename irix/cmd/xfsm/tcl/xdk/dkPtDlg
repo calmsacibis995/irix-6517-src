@@ -1,0 +1,1825 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	dkPtDlg
+# Version:	$Revision: 1.13 $
+# Synopsis:	Encapsulates the dialog that allows the user to partition disks.
+# Functions:	dkPt:realize
+#		dkPt:manage
+#		dkPt:fill
+#		dkPt:chkData
+#		dkPt:getData
+#		dkPt:setData
+#		dkPt:redisplayMatrix
+#		dkPt:_schedRedisplayMatrix
+#		dkPt:_create
+#		dkPt:_createDiskInfoArea
+#		dkPt:_createPartInfoArea
+#		dkPt:_createPartGraphArea
+#		dkPt:_createPopupMenus
+#		dkPt:_popupMenu
+#		dkPt:_popupCb
+#		dkPt:_initPartData
+#		dkPt:_initMatrix
+#		dkPt:_initGraphic
+#		dkPt:_startDrop
+#		dkPt:_doTransfer
+#		dkPt:_loadTemplate
+#		dkPt:_doAutoScale
+#		dkPt:_doLoadTemplate
+#		dkPt:_displayPartGraph
+#		dkPt:_showPartGraph
+#		dkPt:_partFindNext
+#		dkPt:_partSort
+#		dkPt:_dialogCb
+#		dkPt:_accept
+#		dkPt:_doAccept
+#		dkPt:_requestBadBlockCb
+#		dkPt:_changeUnitsCb
+#		dkPt:_toggleCb
+#		dkPt:_save
+#		dkPt:_traverseCellCb
+#		dkPt:_enterCellCb
+#		dkPt:_leaveCellCb
+#		dkPt:_modifyVerifyCb
+#		dkPt:_selectRow
+#		dkPt:_selectPartGraphic
+#		dkPt:_partGraphicIsVisible
+#		dkPt:_partAction
+#		dkPt:_validateTypeFormat
+#		dkPt:_validateIntFormat
+#		dkPt:_validateMbFormat
+#		dkPt:_isValidType
+#		dkPt:_isValidPartition
+#		dkPt:_isValidPartition2
+#		dkPt:_changeUnits
+#		dkPt:_cvtBlksToUnits
+#		dkPt:_cvtUnitsToBlks
+#		dkPt:_getDiskInfo
+#		dkPt:_clear
+#		dkPt:_customPartitions
+#%COMMENT_END
+
+
+####	G_partData(blks,row,col) - the working set (in blocks)
+
+#########################################
+#		Public			#
+#########################################
+proc dkPt:realize { handle parent } \
+{
+	global		_GW_dkPt _GD_dkPt
+
+	####	One time initialization
+	if {! [info exists _GD_dkPt(initialized)]} {
+		####	Make sure we don't go through this again
+		set _GD_dkPt(initialized) true
+
+		set _GD_dkPt(cells) {
+		    {"" "" "" ""} {"" "" "" ""} {"" "" "" ""} {"" "" "" ""} 
+		    {"" "" "" ""} {"" "" "" ""} {"" "" "" ""} {"" "" "" ""} 
+		    {"" "" "" ""} {"" "" "" ""} {"" "" "" ""} {"" "" "" ""} 
+		    {"" "" "" ""} {"" "" "" ""} {"" "" "" ""} {"" "" "" ""} }
+
+		set _GD_dkPt(normal)	100000
+		set _GD_dkPt(minpct)	2.5
+		set _GD_dkPt(buttons)	{accept apply save cancel help}
+		set _GD_dkPt(units)	{blk 1k mb}
+		set _GD_dkPt(di)	{HOST DISK_NAME DISK_TYPE SIZE
+					 DISK_DRIVECAP
+					 DISK_SEC_LEN}
+		set _GD_dkPt(dia)	{HOST DISK_NAME DISK_TYPE SIZE}
+		set _GD_dkPt(toggles)	{ROOT USRROOT OPTION}
+
+		set _GD_dkPt(maxRows) 16
+		set _GD_dkPt(columns) {type start size end}
+		set _GD_dkPt(cwidths) "7, 10, 10, 10"
+
+		set _GD_dkPt(valid,type)	\
+				{efs sysv bsd bsd42 raw xfs xfslog xlv
+				 volume volhdr lvol rlvol trkrepl secrep}
+
+		set _GD_dkPt(popup,type)	\
+			{efs xfs xlv xfslog lvol rlvol raw sysv bsd}
+
+		set i 0
+		foreach col $_GD_dkPt(columns) {
+			set _GD_dkPt(colpos,$col) $i
+			incr i
+		}
+		loop i 0 $_GD_dkPt(maxRows) 1 {
+			lappend rlabels $i
+		}
+		set _GD_dkPt(rowLabels) [join $rlabels ,]
+	}
+
+	####	Per instance initialization / creation
+	if {! [info exists _GW_dkPt($handle,dialog)]} {
+		####	Per instance initialization
+		set _GD_dkPt($handle,unit)	"blk"
+		set _GD_dkPt($handle,confirm) 	false
+		trace variable _GD_dkPt($handle,confirm) w dkPt:_doAccept
+
+		set _GD_dkPt($handle,cfrmAutoScale) 	cancel
+		trace variable _GD_dkPt($handle,cfrmAutoScale) w dkPt:_doAutoScale
+
+		set _GD_dkPt($handle,ccell,row) 	0
+		set _GD_dkPt($handle,ccell,col) 	0
+		set _GD_dkPt($handle,ccell,value) 	""
+
+		set _GW_dkPt($handle,dialog) [dkPt:_create $handle $parent]
+
+		####    This must happen after the dialog is realized
+		$_GW_dkPt($handle,dialog) realizeWidget
+                $_GW_dkPt($handle,dialog) getValues -height height -width width
+                .$_GW_dkPt($handle,dialog) setValues \
+                                -minHeight [int [expr $height * .65]] \
+                                -minWidth [expr $width + 5] \
+                                -width [expr $width + 5]
+
+
+		$_GW_dkPt($handle,buttons) getValues -height height
+		$_GW_dkPt($handle,buttons) setValues \
+				-paneMinimum $height \
+				-paneMaximum $height
+
+		####    Register for Drag and Drop
+		$_GW_dkPt($handle,dialog) dropSiteRegister -dropProc \
+				"dkPt:_startDrop $handle %dragContext \
+						$_GW_dkPt($handle,dialog)" \
+				-numImportTargets 1 \
+				-importTargets "COMPOUND_TEXT"
+
+		dkPt:_clear $handle
+	}
+}
+
+proc dkPt:manage { handle } \
+{
+	global	_GW_dkPt
+
+	if {[info exists _GW_dkPt($handle,dialog)]} {
+		$_GW_dkPt($handle,dialog) manageChild
+	}
+}
+
+proc dkPt:fill { handle objdata } \
+{
+	global		_GW_dkPt _GD_dkPt
+
+	if {[lempty $objdata]} { return 0 }
+
+	dkPt:_clear $handle
+	set _GD_dkPt($handle,object) $objdata
+
+	####	Get the "high-level overview" of the disk
+	if {! [dkPt:_getDiskInfo $handle $objdata]} {
+		return 0
+	}
+	foreach i $_GD_dkPt(dia) {
+		$_GW_dkPt($handle,$i) setValues -labelString $_GD_dkPt($handle,$i)
+	}
+
+	####	Get the partition table
+	if {[catch {set data [xfsGetPartTable $objdata]} error]} {
+		regsub -all -- "\n" [string trim $error] "\n\t" nerr
+		em:storeMsg $handle error \
+		"Unable to get partition table for [obj:getName $objdata].\n\t$nerr"
+		dkPt:_clear $handle
+		return 0
+	} else {
+		dkPt:setData $handle $data
+		dkPt:_displayPartGraph $handle
+	}
+
+	$_GW_dkPt($handle,matrix) editCell 0 0
+	dkPt:_selectPartGraphic $handle 0
+	dkPt:_selectRow $handle $_GW_dkPt($handle,matrix) sel 0
+	dkPt:_customPartitions $handle
+
+	if {[xdk:chkMounts $objdata header message]} {
+		em:setMessageString $handle $header
+		em:simpleMsg $handle warning $message
+	}
+
+	return 1
+}
+
+proc dkPt:chkData { handle } \
+{
+	return true
+}
+
+proc dkPt:getData { handle data } \
+{
+	global		_GW_dkPt _GD_dkPt G_partData
+	upvar $data	dat
+
+	$_GW_dkPt($handle,DISK_NAME) getValues -labelString diskname
+	lappend dat diskname:$diskname
+	loop row 0 $_GD_dkPt(maxRows) 1 {
+	    if {[dkPt:_isValidPartition $handle $row]} {
+		loop i 0 [llength $_GD_dkPt(columns)] 1 {
+			if {[cequal $G_partData(blks,$row,$i) ""]} {
+				continue
+			}
+			set col [lindex $_GD_dkPt(columns) $i]
+			lappend dat $col.$row:$G_partData(blks,$row,$i)
+		}
+	    }
+	}
+
+	return 1
+}
+
+proc dkPt:setData { handle lst } \
+{
+	global		_GD_dkPt G_partData
+
+	dkPt:_initMatrix $handle
+	dkPt:_initPartData $handle
+
+	foreach i $lst {
+	    lassign [split $i :] key val
+	    lassign [split $key .] cname row
+
+	    if {[info exists _GD_dkPt(colpos,$cname)]} {
+		set G_partData(blks,$row,$_GD_dkPt(colpos,$cname)) $val
+	    }
+	}
+
+	dkPt:_schedRedisplayMatrix $handle true
+}
+
+proc dkPt:redisplayMatrix { handle } \
+{
+	global		_GW_dkPt _GD_dkPt G_partData
+
+	set _GD_dkPt($handle,inredisplay) true
+	loop row 0 $_GD_dkPt(maxRows) 1 {
+	    loop col 0 [llength $_GD_dkPt(columns)] {
+		set cval [$_GW_dkPt($handle,matrix) getCell $row $col]
+		if {$col == $_GD_dkPt(colpos,end)} {
+		    if {$G_partData(blks,$row,$col) > $_GD_dkPt($handle,blks)} {
+			set G_partData(blks,$row,$col) ""
+			em:setMessageString $handle "Invalid Partition Data."
+			em:storeMsg $handle warning \
+			    "Partition $row extends beyond the end of the disk."
+		    }
+		}
+		if {$col == $_GD_dkPt(colpos,type)} {
+		    set nval $G_partData(blks,$row,$col)
+		} else {
+		    set nval [dkPt:_cvtBlksToUnits $handle \
+			$_GD_dkPt($handle,unit) $G_partData(blks,$row,$col)]
+		}
+		if {! [cequal $cval $nval]} {
+		    $_GW_dkPt($handle,matrix) setCell $row $col $nval
+		}
+	    }
+	}
+
+	set _GD_dkPt($handle,ccell,value) [$_GW_dkPt($handle,matrix) \
+				getCell $_GD_dkPt($handle,ccell,row) \
+				$_GD_dkPt($handle,ccell,col)]
+
+	if {[info exists _GD_dkPt($handle,updateGraphic)]} {
+		dkPt:_displayPartGraph $handle
+		dkPt:_selectPartGraphic $handle $_GD_dkPt($handle,selrow)
+		unset _GD_dkPt($handle,updateGraphic)
+	}
+	if {[info exists _GD_dkPt($handle,timer)]} {
+		unset _GD_dkPt($handle,timer)
+	}
+	unset _GD_dkPt($handle,inredisplay)
+}
+
+proc dkPt:_schedRedisplayMatrix { handle updateGraphic } \
+{
+	global		_GD_dkPt
+
+	if {! [info exists _GD_dkPt($handle,timer)]} {
+		. addTimer 50 "dkPt:redisplayMatrix $handle"
+		set _GD_dkPt($handle,timer) true
+	}
+	if {$updateGraphic == "true"} {
+		set _GD_dkPt($handle,updateGraphic) true
+	}
+}
+
+
+#########################################
+#		Private			#
+#########################################
+proc dkPt:_create { handle parent } \
+{
+	global		_GW_dkPt _GD_dkPt
+	set name	dkPt
+
+	set dialog [xmFormDialog $parent.$name]
+	set pane [xmPanedWindow $dialog.$handle \
+			-sashHeight 1 \
+			-sashWidth 1 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form]
+
+	set form [xmForm $pane.form]
+
+	set _GW_dkPt($handle,dia) [$name:_createDiskInfoArea $handle $form]
+	set _GW_dkPt($handle,pia) [$name:_createPartInfoArea $handle $form]
+	set _GW_dkPt($handle,dpg) [$name:_createPartGraphArea $handle $pane]
+	$_GW_dkPt($handle,dpg) setValues -skipAdjust true
+
+	set _GW_dkPt($handle,buttons) \
+		 [xfs:createDialogButtons $pane $_GD_dkPt(buttons)]
+	foreach i $_GD_dkPt(buttons) {
+		$_GW_dkPt($handle,buttons).$i \
+				activateCallback "$name:_dialogCb $handle $i"
+	}
+
+	$_GW_dkPt($handle,dia) setValues \
+		-topAttachment attach_form \
+		-leftAttachment attach_form \
+		-rightAttachment attach_none \
+		-bottomAttachment attach_form \
+		-leftOffset 10
+
+	$_GW_dkPt($handle,pia) setValues \
+		-topAttachment attach_form \
+		-leftAttachment attach_widget \
+		-rightAttachment attach_form \
+		-bottomAttachment attach_form \
+		-leftWidget $_GW_dkPt($handle,dia) \
+		-leftOffset 20 \
+		-rightOffset 10
+
+	$_GW_dkPt($handle,dpg) manageChild
+	$_GW_dkPt($handle,dia) manageChild
+	$_GW_dkPt($handle,pia) manageChild
+	$_GW_dkPt($handle,buttons) manageChild
+
+	$form manageChild
+	$pane manageChild
+
+	return $dialog
+}
+
+proc dkPt:_createDiskInfoArea { handle parent } \
+{
+	global		_GD_dkPt _GW_dkPt
+
+	set form [xmForm $parent.dia]
+	set grid [sgiGrid $form.grid \
+			-numRows [expr [llength $_GD_dkPt(dia)] + 2] \
+			-numColumns 2 \
+			-defaultSpacing 2 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none]
+
+	set i 0
+	foreach item $_GD_dkPt(dia) {
+		xmLabel $grid.$item-label managed -row $i -column 0
+		set _GW_dkPt($handle,$item) [xmLabel $grid.$item managed \
+				-row $i -column 1]
+		incr i
+	}
+
+	xmLabel $grid.partitionAs-label managed -row $i -column 0 \
+			-resizeVertical false
+	set rc [xmRowColumn $grid.rc \
+			-row $i -column 1 \
+			-resizeHorizontal false \
+			-marginHeight 0 \
+			-orientation vertical \
+			-radioBehavior true \
+			-radioAlwaysOne false \
+			-spacing 2 \
+			-entryAlignment alignment_beginning \
+			-topAttachment attach_widget \
+			-leftAttachment attach_form \
+			-rightAttachment attach_none \
+			-bottomAttachment attach_none \
+			-topWidget $grid \
+			-topOffset 10]
+	foreach item $_GD_dkPt(toggles) {
+		set _GW_dkPt($handle,$item) [xmToggleButton $rc.$item-tb \
+				managed -marginHeight 0]
+		$_GW_dkPt($handle,$item) valueChangedCallback \
+				"dkPt:_toggleCb $handle $item %set"
+	}
+
+	set item bblk_pb
+	set _GW_dkPt($handle,$item) [xmPushButton $form.$item managed \
+			-topAttachment attach_widget \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none \
+			-topWidget $grid \
+			-topOffset 10]
+	$_GW_dkPt($handle,$item) activateCallback \
+			"dkPt:_requestBadBlockCb $handle"
+
+	set bblk_list [xmForm $form.bblk_list \
+			-topAttachment attach_widget \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form \
+			-topWidget $grid \
+			-topOffset 10]
+
+	set item bblk_list
+	set grid2 [sgiGrid $bblk_list.$item \
+			-numRows 2 \
+			-numColumns 2 \
+			-defaultSpacing 2 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none]
+
+	set item BAD_BLK_COUNT
+	xmLabel $grid2.$item-label managed -row 0 -column 0
+	set _GW_dkPt($handle,$item) [xmLabel $grid2.$item managed \
+			-row 0 -column 1]
+	set item DISK_BAD_BLKS
+	xmLabel $grid2.$item-label managed -row 1 -column 0
+	set _GW_dkPt($handle,$item-list) [xmScrolledList $bblk_list.sl \
+			 managed \
+			-fontList fixed \
+			-traversalOn false \
+			-visibleItemCount 8 \
+			-translations "#override \
+			    <Btn1Down>:action(xfs:actionIgnore)" \
+			-topAttachment attach_widget \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form \
+			-topWidget $grid2]
+
+	set _GW_dkPt($handle,bblk_list) $bblk_list
+
+	$grid columnResizable 0 False
+	$grid manageChild
+	$rc manageChild
+	$grid2 columnResizable 0 False
+	$grid2 manageChild
+	$bblk_list manageChild
+
+	return $form
+}
+
+proc dkPt:_createPartInfoArea { handle parent } \
+{
+	global		_GW_dkPt _GD_dkPt
+
+	set container [xmFrame $parent.pia -marginWidth 5 -marginHeight 5]
+	xmLabel $container.label managed -childType frame_title_child
+
+	set form [xmForm $container.form]
+	set rc [xmRowColumn $form.units -orientation horizontal \
+			-radioBehavior true \
+			-radioAlwaysOne true \
+			-spacing 30 \
+			-marginHeight 0 \
+			-packing pack_tight \
+			-topAttachment attach_none \
+			-leftAttachment attach_form \
+			-rightAttachment attach_none \
+			-bottomAttachment attach_form \
+			-leftOffset 30]
+	foreach j $_GD_dkPt(units) {
+		set tb [xmToggleButton $rc.$j managed -marginHeight 1]
+		$tb valueChangedCallback "dkPt:_changeUnitsCb $handle $j %set"
+	}
+	$rc.blk setValues -set true
+	$rc manageChild
+
+	set bge [matrix:getBackground even]
+	set bgo [matrix:getBackground odd]
+	set _GW_dkPt($handle,matrix) [xbaeMatrix $form.matrix managed \
+			-cellMarginWidth 3 \
+			-cellMarginHeight 3 \
+			-rows $_GD_dkPt(maxRows) \
+			-rowLabels $_GD_dkPt(rowLabels) \
+			-columns [llength $_GD_dkPt(columns)] \
+			-columnWidths $_GD_dkPt(cwidths) \
+			-visibleRows 10 \
+			-cellShadowThickness 2 \
+			-evenRowBackground $bge \
+			-oddRowBackground $bge \
+			-translations "#augment <Btn3Down>: \
+				action(dkPt:_popupMenu $handle %event)" \
+			-selectedBackground $bgo \
+			-selectedForeground black \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_widget \
+			-bottomWidget $rc \
+			-bottomOffset 10]
+
+	$_GW_dkPt($handle,matrix) setColumnColors 3 [matrix:getBackground bs]
+	$_GW_dkPt($handle,matrix) setRowColors 8 [matrix:getBackground bs]
+	$_GW_dkPt($handle,matrix) setRowColors 9 [matrix:getBackground bs]
+	$_GW_dkPt($handle,matrix) setRowColors 10 [matrix:getBackground bs]
+
+	$_GW_dkPt($handle,matrix) traverseCellCallback "dkPt:_traverseCellCb \
+			$handle %w %row %column %next_row %next_column %param"
+	$_GW_dkPt($handle,matrix) enterCellCallback "dkPt:_enterCellCb \
+			$handle %w %row %column %doit"
+	$_GW_dkPt($handle,matrix) leaveCellCallback "dkPt:_leaveCellCb \
+			$handle %w %row %column %value %doit"
+	$_GW_dkPt($handle,matrix) modifyVerifyCallback "dkPt:_modifyVerifyCb \
+			$handle %w %row %column %ptr %length %doit"
+
+	dkPt:_createPopupMenus $handle $_GW_dkPt($handle,matrix)
+
+	$form manageChild
+
+	return $container
+}
+
+proc dkPt:_createPartGraphArea { handle parent } \
+{
+	global		_GW_dkPt _GD_dkPt _GD_resources
+
+	set container [xmFrame $parent.container -allowResize true]
+
+	set _GW_dkPt($handle,graphic) [xmForm $container.graph managed \
+			-fractionBase $_GD_dkPt(normal) \
+			-background $_GD_resources(graphicBackground) \
+			-borderWidth 1 \
+			-borderColor black]
+
+	set bg [matrix:getBackground even]
+	loop i 0 $_GD_dkPt(maxRows) 1 {
+		xmLabel $_GW_dkPt($handle,graphic).$i \
+				-borderWidth 1 \
+				-borderColor black \
+				-marginHeight 4 \
+				-marginWidth 1 \
+				-background $bg \
+				-translations "#augment <Btn1Down>: \
+					action(dkPt:_partAction $handle $i)" \
+				-alignment alignment_center \
+				-leftAttachment attach_position \
+				-rightAttachment attach_position \
+				-bottomAttachment attach_none
+	}
+
+	return $container
+}
+
+proc dkPt:_createPopupMenus { handle parent } \
+{
+	global		_GW_dkPt _GD_dkPt
+
+	foreach item {type size start} {
+		set _GW_dkPt($handle,popup,$item) [xmPopupMenu $parent.$item]
+		xmLabel $_GW_dkPt($handle,popup,$item).label managed
+		xmSeparator $_GW_dkPt($handle,popup,$item).sep1 managed \
+				-separatorType double_line
+	}
+	foreach opt $_GD_dkPt(popup,type) {
+		xmPushButton $_GW_dkPt($handle,popup,type).$opt managed
+		$_GW_dkPt($handle,popup,type).$opt activateCallback \
+				"dkPt:_popupCb $handle type $opt"
+	}
+	xmSeparator $_GW_dkPt($handle,popup,type).sep2 managed \
+			-separatorType shadow_etched_in
+	xmPushButton $_GW_dkPt($handle,popup,type).clearCell managed
+	$_GW_dkPt($handle,popup,type).clearCell activateCallback \
+			"dkPt:_popupCb $handle type clearCell"
+
+	####
+	####	Size Popup Menu
+	####
+	foreach opt {endDisk} {
+		xmPushButton $_GW_dkPt($handle,popup,size).$opt managed
+		$_GW_dkPt($handle,popup,size).$opt activateCallback \
+				"dkPt:_popupCb $handle size $opt"
+	}
+	foreach item {sizeStart sizeEnd} {
+		set pd [xmPulldownMenu $_GW_dkPt($handle,popup,size).$item-pd \
+				-entryAlignment alignment_center]
+		xmCascadeButton $_GW_dkPt($handle,popup,size).$item managed \
+				-subMenuId $pd
+		loop i 0 $_GD_dkPt(maxRows) 1 {
+			xmPushButton $pd.$i managed \
+					-marginWidth 2 -marginHeight 0
+			$pd.$i activateCallback \
+					"dkPt:_popupCb $handle size $item $i"
+		}
+	}
+	xmSeparator $_GW_dkPt($handle,popup,size).sep2 managed \
+			-separatorType shadow_etched_in
+	xmPushButton $_GW_dkPt($handle,popup,size).clearCell managed
+	$_GW_dkPt($handle,popup,size).clearCell activateCallback \
+			"dkPt:_popupCb $handle size clearCell"
+
+	####
+	####	Start Popup Menu
+	####
+	foreach item {startStart startEnd} {
+		set pd [xmPulldownMenu $_GW_dkPt($handle,popup,start).$item-pd \
+				-entryAlignment alignment_center]
+		xmCascadeButton $_GW_dkPt($handle,popup,start).$item managed \
+				-subMenuId $pd
+		loop i 0 $_GD_dkPt(maxRows) 1 {
+			xmPushButton $pd.$i managed \
+					-marginWidth 2 -marginHeight 0
+			$pd.$i activateCallback \
+					"dkPt:_popupCb $handle start $item $i"
+		}
+	}
+	xmSeparator $_GW_dkPt($handle,popup,start).sep2 managed \
+			-separatorType shadow_etched_in
+	xmPushButton $_GW_dkPt($handle,popup,start).clearCell managed
+	$_GW_dkPt($handle,popup,start).clearCell activateCallback \
+			"dkPt:_popupCb $handle start clearCell"
+}
+
+proc dkPt:_popupMenu { handle event } \
+{
+	global		_GW_dkPt _GD_dkPt
+
+	set row	$_GD_dkPt($handle,ccell,row)
+	set col	$_GD_dkPt($handle,ccell,col)	
+
+	if {$col == $_GD_dkPt(colpos,type)} {
+		set item type
+	} elseif {$col == $_GD_dkPt(colpos,size)} {
+		set item size
+		set menu $_GW_dkPt($handle,popup,size)
+		set v_start [$_GW_dkPt($handle,matrix) getCell \
+				$row $_GD_dkPt(colpos,start)]
+		if {[cequal $v_start ""]} {
+		    $_GW_dkPt($handle,popup,size).endDisk setSensitive false
+		    $_GW_dkPt($handle,popup,size).sizeStart setSensitive false
+		    $_GW_dkPt($handle,popup,size).sizeEnd setSensitive false
+		} else {
+		    $_GW_dkPt($handle,popup,size).endDisk setSensitive true
+		    $_GW_dkPt($handle,popup,size).sizeStart setSensitive true
+		    $_GW_dkPt($handle,popup,size).sizeEnd setSensitive true
+		    loop i 0 $_GD_dkPt(maxRows) 1 {
+			if {[dkPt:_isValidPartition $handle $i]} {
+				$menu.sizeStart-pd.$i manageChild
+				$menu.sizeStart-pd.$i setSensitive true
+				$menu.sizeEnd-pd.$i manageChild
+				$menu.sizeEnd-pd.$i setSensitive true
+			} else {
+				$menu.sizeStart-pd.$i unmanageChild
+				$menu.sizeEnd-pd.$i unmanageChild
+			}
+		    }
+		    $menu.sizeStart-pd.$row setSensitive false
+		    $menu.sizeEnd-pd.$row setSensitive false
+		}
+	} elseif {$col == $_GD_dkPt(colpos,start)} {
+		set item start
+		set menu $_GW_dkPt($handle,popup,start)
+		loop i 0 $_GD_dkPt(maxRows) 1 {
+			if {[dkPt:_isValidPartition $handle $i]} {
+				$menu.startStart-pd.$i manageChild
+				$menu.startStart-pd.$i setSensitive true
+				$menu.startEnd-pd.$i manageChild
+				$menu.startEnd-pd.$i setSensitive true
+			} else {
+				$menu.startStart-pd.$i unmanageChild
+				$menu.startEnd-pd.$i unmanageChild
+			}
+		}
+		$menu.startStart-pd.$row setSensitive false
+		$menu.startEnd-pd.$row setSensitive false
+	} else {
+		return
+	}
+
+	if {$row >= 8 && $row <= 10} {
+		$_GW_dkPt($handle,popup,$item) setSensitive false
+	} else {
+		$_GW_dkPt($handle,popup,$item) setSensitive true
+	}
+
+	xfs:popupMenu $event $_GW_dkPt($handle,popup,$item)
+}
+
+proc dkPt:_popupCb { handle item opt {part ""} } \
+{
+	global		_GW_dkPt _GD_dkPt G_partData
+
+	set row $_GD_dkPt($handle,ccell,row)
+	set col $_GD_dkPt($handle,ccell,col)
+	set update_graphic false
+
+	if {$row >= 8 && $row <= 10} {
+	    em:simpleMsg $handle information "Partition $row cannot be modified."
+	    return
+	}
+
+	switch $item {
+	    type {
+		switch $opt {
+		    clearCell { set val "" }
+		    default { set val $opt }
+		}
+	    }
+	    size {
+		switch $opt {
+		    endDisk {
+			set v1 $G_partData(blks,$row,$_GD_dkPt(colpos,start))
+			set val [expr $_GD_dkPt($handle,blks) - $v1]
+		    }
+		    clearCell { set val "" }
+		    sizeStart {
+			set v1 $G_partData(blks,$part,$_GD_dkPt(colpos,start))
+			set v2 $G_partData(blks,$row,$_GD_dkPt(colpos,start))
+			set val [expr $v1 - $v2]
+		    }
+		    sizeEnd {
+			set v1 $G_partData(blks,$part,$_GD_dkPt(colpos,end))
+			set v2 $G_partData(blks,$row,$_GD_dkPt(colpos,start))
+			set val [expr $v1 - $v2]
+		    }
+		}
+	    }
+	    start {
+		switch $opt {
+		    clearCell { set val "" }
+		    startStart {
+			set val $G_partData(blks,$part,$_GD_dkPt(colpos,start))
+		    }
+		    startEnd {
+			set val $G_partData(blks,$part,$_GD_dkPt(colpos,end))
+		    }
+		}
+	    }
+	}
+
+	if {[clength $val] && $val < 0} {
+	 	set val $G_partData(blks,$row,$col)
+		em:simpleMsg $handle error \
+				"The requested operation would result in @n
+				a negative size for the partition."
+	} else {
+		set doit true
+		if {! [cequal $item "type"]} {
+			set cval [dkPt:_cvtBlksToUnits $handle \
+					$_GD_dkPt($handle,unit) $val]
+		} else {
+			set cval $val
+		}
+		dkPt:_leaveCellCb $handle $_GW_dkPt($handle,matrix) \
+				$row $col cval doit
+
+		if {$doit} {
+		    set G_partData(blks,$row,$col) $val
+		}
+	}
+}
+
+#################################
+#	Initialization Routines	#
+#################################
+proc dkPt:_initPartData { handle } \
+{
+	global		_GD_dkPt G_partData
+
+	loop row 0 $_GD_dkPt(maxRows) 1 {
+		loop col 0 [llength $_GD_dkPt(columns)] 1 {
+			set G_partData(blks,$row,$col) ""
+		}
+	}
+}
+
+proc dkPt:_initMatrix { handle } \
+{
+	global		_GW_dkPt _GD_dkPt
+
+	$_GW_dkPt($handle,matrix) setValues -cells $_GD_dkPt(cells)
+}
+
+proc dkPt:_initGraphic { handle } \
+{
+	global		_GW_dkPt _GD_dkPt
+
+	set bg [matrix:getBackground even]
+	for {set i [expr $_GD_dkPt(maxRows) - 1]} {$i >= 0} {incr i -1} {
+		$_GW_dkPt($handle,graphic).$i setValues -background $bg
+	}
+}
+
+#########################################
+#	Drag and Drop			#
+#########################################
+proc dkPt:_startDrop { handle dragContext w } \
+{
+	$dragContext dropTransferStart \
+		-dropTransfers {{COMPOUND_TEXT .dkPt.pane}} \
+		-numDropTransfers 1 \
+		-transferProc "dkPt:_doTransfer $handle %closure {%value}"
+}
+
+proc dkPt:_doTransfer { handle destination value } \
+{
+	if {! [ip:uniqueToObject [lindex $value 0] obj]} {
+	    set errmsg "An Illegal icon was dropped on this dialog."
+	} elseif {[llength $value] == 1} {
+	    set obj [lindex $obj 0]
+
+	    if {[obj:isXfsmObject $obj "DISK"]} {
+		dkPt:fill $handle $obj
+		set no_msg 1
+		set rval 1
+	    } elseif {[obj:isXfsmTemplate $obj "DISK"]} {
+		set no_msg 1
+		set rval [dkPt:_loadTemplate $handle $obj]
+	    } else {
+		set errmsg "An Illegal icon was dropped on this dialog."
+			
+	    }
+	}
+
+	if {! [info exists no_msg]} {
+	    set rval 0
+	    set msg "Only one disk or disk template object may be dropped on this dialog."
+	    if {[info exists errmsg]} {
+                set msg "$errmsg @n @n $msg"
+            }
+            em:simpleMsg $handle error $msg
+	}
+
+	return $rval
+}
+
+proc dkPt:_loadTemplate { handle obj } \
+{
+	global	_GW_dkPt _GD_dkPt _GD_dkm G_partData _GD_resources
+
+	obj:parse $obj class host nm type
+	if {[lsearch -exact $_GD_dkm(schemas) $nm] != -1} {
+		dkPt:_toggleCb $handle $nm true
+		return
+	}
+
+	if {! [tu:read $class $nm data]} {
+		return 0
+	}
+
+	set data [split $data \n]
+	set x [lmatch $data size.10:*]
+	lassign [split $x :] key val
+	if {! [cequal $val $G_partData(blks,10,$_GD_dkPt(colpos,size))]} {
+		set _GD_dkPt(cfrmAutoScale,data) $data
+		set _GD_dkPt(cfrmAutoScale,handle) $handle
+		if {! [info exists _GW_dkPt($handle,cfrmAutoScale)]} {
+			set _GW_dkPt($handle,cfrmAutoScale) [xmQuestionDialog \
+				$_GW_dkPt($handle,dialog).cfrmAutoScale \
+				-messageAlignment alignment_beginning \
+				-dialogStyle dialog_full_application_modal \
+				-noResize true]
+			$_GW_dkPt($handle,cfrmAutoScale) okCallback \
+				"set _GD_dkPt($handle,cfrmAutoScale) yes"
+			$_GW_dkPt($handle,cfrmAutoScale) cancelCallback \
+				"set _GD_dkPt($handle,cfrmAutoScale) no"
+			$_GW_dkPt($handle,cfrmAutoScale) helpCallback \
+				"set _GD_dkPt($handle,cfrmAutoScale) cancel"
+		}
+
+		$_GW_dkPt($handle,DISK_NAME) getValues -labelString diskname
+		$_GW_dkPt($handle,cfrmAutoScale) setValues -messageString \
+			[format $_GD_resources(dkpt,msg,autoscale) $nm $diskname]
+
+		$_GW_dkPt($handle,cfrmAutoScale) manageChild
+	} else {
+		dkPt:_doLoadTemplate $handle $data
+	}
+
+	return 1
+}
+
+proc dkPt:_doAutoScale { vname element op } \
+{
+	global	_GD_dkPt _GW_dkPt G_partData
+
+	if {$element != ""} {
+		set vname ${vname}($element)
+	}
+	upvar $vname x
+
+	set data	$_GD_dkPt(cfrmAutoScale,data)
+	set handle	$_GD_dkPt(cfrmAutoScale,handle)
+	if {$x == "cancel"} {
+		$_GW_dkPt($handle,cfrmAutoScale) unmanageChild
+		return
+	} elseif {$x == "yes"} {
+		set x [lmatch $data size.10:*]
+		lassign [split $x :] key val
+		dkPt:getData $handle disk_data
+		xdk:autoscale $val data \
+			$G_partData(blks,10,$_GD_dkPt(colpos,size)) $disk_data
+	}
+
+	dkPt:_doLoadTemplate $handle $data
+}
+
+proc dkPt:_doLoadTemplate { handle data } \
+{
+	global		_GW_dkPt _GD_dkPt G_partData
+
+	foreach item $data {
+	    if {[regexp ".*\.8:.*|.*\.9:.*|.*\.10:.*" $item]} {
+		lassign [split $item :] key val
+		lassign [split $key .] cname row
+		set item $cname.$row:$G_partData(blks,$row,$_GD_dkPt(colpos,$cname))
+	    }
+	    lappend ndata $item
+	}
+
+	foreach row {8 9 10} {
+		loop i 0 [llength $_GD_dkPt(columns)] 1 {
+			if {[cequal $G_partData(blks,$row,$i) ""]} {
+				continue
+			}
+			set cname [lindex $_GD_dkPt(columns) $i]
+			lappend ndata $cname.$row:$G_partData(blks,$row,$i)
+		}
+	}
+
+	dkPt:_selectRow $handle $_GW_dkPt($handle,matrix) def \
+			$_GD_dkPt($handle,ccell,row)
+	dkPt:setData $handle $ndata
+	$_GW_dkPt($handle,matrix) editCell 0 0
+	dkPt:_selectPartGraphic $handle 0
+	dkPt:_selectRow $handle \
+			$_GW_dkPt($handle,matrix) sel 0
+	dkPt:_customPartitions $handle
+}
+
+
+#################################
+#	Display Procedures	#
+#################################
+proc dkPt:_displayPartGraph { handle } \
+{
+	global		_GD_dkPt G_partData
+
+	set nparts 0
+	loop i 0 $_GD_dkPt(maxRows) 1 {
+		set v_type $G_partData(blks,$i,$_GD_dkPt(colpos,type))
+		set v_size $G_partData(blks,$i,$_GD_dkPt(colpos,size))
+		set v_start $G_partData(blks,$i,$_GD_dkPt(colpos,start))
+		set v_end $G_partData(blks,$i,$_GD_dkPt(colpos,end))
+
+		####	Make sure that there is a start and an end
+		####	and also that the size is positive
+		if {[dkPt:_isValidPartition2 $v_type $v_size $v_start $v_end]} {
+			set part [list $i $v_start $v_end]
+			lappend data $part
+			incr nparts
+		}
+	}
+
+	set data [lsort -command dkPt:_partSort $data]
+
+	set curend 0; set parts ""
+	if {[set idx [lsearch -regexp $data "^10 .*"]] != -1} {
+		lappend parts [list [lvarpop data $idx]]
+	}
+
+	while {[llength $data] != 0} {
+		set idx [dkPt:_partFindNext $curend $data]
+		if {$idx != -1} {
+			set slice [lvarpop data $idx]
+			lappend row $slice
+			set curend [lindex $slice 2]
+		} else {
+			lappend parts $row
+			set curend 0
+			unset row
+		}
+	}
+
+	if {[info exists row]} {
+		lappend parts $row
+	}
+
+	dkPt:_showPartGraph $handle $nparts $parts
+}
+
+proc dkPt:_showPartGraph { handle totalParts parts } \
+{
+	global		_GW_dkPt _GD_dkPt
+
+	set w	$_GW_dkPt($handle,graphic)
+
+	set is_managed [$_GW_dkPt($handle,dialog) isManaged]
+	if {$is_managed} {
+		####	Unmanage the graphic
+		$w unmanageChild
+	}
+
+	####	Unmanage all the parts of the graphic
+	for {set i [expr $_GD_dkPt(maxRows) - 1]} {$i >= 0} {incr i -1} {
+		$w.$i unmanageChild
+	}
+
+	####	Set the attachments
+	set slicenum 0
+	loop i 0 [llength $parts] 1 {
+		####	Munge the data
+		if {[catch {set row [xfsTransPartTable \
+				$_GD_dkPt(normal) \
+				$_GD_dkPt(minpct) \
+				$_GD_dkPt($handle,blks) \
+				[lindex $parts $i]]} error]} {
+			em:simpleMsg $handle error \
+			"Error calculating partition graphic.\n\n$error"
+			continue
+		}
+
+		set topattach [expr $slicenum - 1]
+		loop j 0 [llength $row] 1 {
+			set slice [lindex $row $j]
+			set label [lindex $slice 0]
+
+			if {$i == 0} {
+				$w.$slicenum setValues \
+					-labelString $label \
+					-topAttachment attach_form \
+					-leftPosition [lindex $slice 1] \
+					-rightPosition [lindex $slice 2]
+			} else {
+				$w.$slicenum setValues \
+					-labelString $label \
+					-topAttachment attach_widget \
+					-leftPosition [lindex $slice 1] \
+					-rightPosition [lindex $slice 2] \
+					-topWidget $w.$topattach
+			}
+			incr slicenum
+		}
+	}
+	
+	####	Manage the relavant parts of the graphic
+	loop i 0 $slicenum 1 {
+		$w.$i manageChild
+	}
+
+	####	Manage the graphic (if it was previously managed)
+	if {$is_managed} {
+		$w manageChild
+	}
+}
+
+proc dkPt:_partFindNext { curend data } \
+{
+	set i 0
+	foreach part $data {
+		if {$curend <= [lindex $part 1]} {
+			return $i
+		}
+		incr i
+	}
+
+	return -1
+}
+
+proc dkPt:_partSort { x y } \
+{
+	if {[lindex $x 1] < [lindex $y 1]} {
+		return -1
+	} elseif {[lindex $x 1] > [lindex $y 1]} {
+		return 1
+	} elseif {[lindex $x 0] < [lindex $y 0]} {
+		return -1
+	} elseif {[lindex $x 0] > [lindex $y 0]} {
+		return 1
+	} else {
+		return 0
+	}
+}
+
+#########################################
+#	Dialog Callbacks		#
+#########################################
+proc dkPt:_dialogCb { handle op } \
+{
+	global		_GW_dkPt _GD_dkPt
+
+	switch $op {
+		accept {
+			$_GW_dkPt($handle,matrix) commitEdit
+			if {! [em:outstandingMsgs $handle]} {
+				set _GD_dkPt($handle,unmanage) true
+				dkPt:_accept $handle
+			}
+		}
+		apply {
+			$_GW_dkPt($handle,matrix) commitEdit
+			if {! [em:outstandingMsgs $handle]} {
+				set _GD_dkPt($handle,unmanage) false
+				dkPt:_accept $handle
+			}
+		}
+		save {
+			$_GW_dkPt($handle,matrix) commitEdit
+			svTmpl:realize dk ""
+			svTmpl:fill dk DISK dkPt:_save $handle
+			svTmpl:manage dk
+		}
+		cancel { $_GW_dkPt($handle,dialog) unmanageChild }
+		help { sgiHelpMsg $_GW_dkPt($handle,dialog) }
+	}
+}
+
+#########################################
+#	Callback Utilities		#
+#########################################
+proc dkPt:_accept { handle } \
+{
+	global		_GW_dkPt _GD_dkPt _GD_resources
+
+	$_GW_dkPt($handle,DISK_NAME) getValues -labelString diskname
+	$_GW_dkPt($handle,HOST) getValues -labelString hpd
+
+	set data ""
+	if {! [dkPt:getData $handle data]} {
+		return
+	}
+	set _GD_dkPt(confirm,data) $data
+	set _GD_dkPt(confirm,handle) $handle
+
+        if {! [info exists _GW_dkPt($handle,confirm)]} {
+                set _GW_dkPt($handle,confirm) [xmQuestionDialog \
+                                $_GW_dkPt($handle,dialog).cfrmPart \
+                                -messageAlignment alignment_beginning \
+                                -dialogStyle dialog_full_application_modal \
+				-noResize true]
+		$_GW_dkPt($handle,confirm).Message setValues -fontList \
+			"-*-courier-bold-r-normal--17-*-*-*-m-100-iso8859-1"
+                $_GW_dkPt($handle,confirm) okCallback \
+                        "set _GD_dkPt($handle,confirm) true"
+                $_GW_dkPt($handle,confirm) cancelCallback \
+                        "set _GD_dkPt($handle,confirm) false"
+        }
+
+	set msgString [format $_GD_resources(dkpt,msg,partition) \
+				$diskname $hpd]
+	if {[xdk:chkMounts $_GD_dkPt($handle,object) header message]} {
+		set msgString "$message @n @n @n $msgString"
+	}
+
+	$_GW_dkPt($handle,confirm) setValues -messageString $msgString
+
+        $_GW_dkPt($handle,confirm) manageChild
+}
+
+proc dkPt:_doAccept { vname element op } \
+{
+	global		_GW_dkPt _GD_dkPt
+
+	if {$element != ""} {
+		set vname ${vname}($element)
+	}
+	upvar $vname x
+
+	if {$x} {
+	    set data	$_GD_dkPt(confirm,data)
+	    set handle	$_GD_dkPt(confirm,handle)
+
+	    $_GW_dkPt($handle,dialog) defineCursor watch
+	    $_GW_dkPt($handle,confirm) defineCursor watch
+
+	    if {[catch {set ec [xfsSetPartTable $_GD_dkPt($handle,object) \
+					[join $data \n]]} error]} {
+		regsub -all -- "\n" [string trim $error] "\n\t" nerr
+		em:storeMsg $handle error \
+		"Unable to change partition table for [obj:getName $_GD_dkPt($handle,object)].\n\t$nerr"
+	    } elseif {$_GD_dkPt($handle,unmanage)} {
+		$_GW_dkPt($handle,dialog) unmanageChild
+	    }
+
+	    $_GW_dkPt($handle,confirm) defineCursor ""
+	    $_GW_dkPt($handle,dialog) defineCursor ""
+	}
+}
+
+#########################################
+#	Other Callbacks			#
+#########################################
+proc dkPt:_requestBadBlockCb { handle } \
+{
+	global		_GW_dkPt _GD_dkPt
+
+	$_GW_dkPt($handle,dialog) defineCursor watch
+
+	set object $_GD_dkPt($handle,object)]
+	if {[catch {set data [xfsmGetBBlk $object]} error]} {
+		regsub -all -- "\n" [string trim $error] "\n\t" nerr
+		em:storeMsg $handle error \
+		"Unable to get bad block list for [obj:getName $object].\n\t$nerr"
+		$_GW_dkPt($handle,dialog) defineCursor ""
+		return
+	}
+	
+	$_GW_dkPt($handle,bblk_pb) unmapWidget
+	$_GW_dkPt($handle,bblk_list) mapWidget
+
+	set count 0; set n 0
+	set bb_data [lindex [split $data :] 1]
+	if {[clength $bb_data] != 0} {
+
+		####	Display the bad block list
+		set count [llength $bb_data]
+		if {$count != 0} {
+			set n [expr $count / 2]
+			if {[fmod $count 2] == 1} {
+				set odd true; incr n
+			} else { set odd false }
+			set end_1 [expr $n - 1]
+			set l_1 [lrange $bb_data 0 $end_1]
+			set l_2 [lrange $bb_data $n end]
+			if {$odd == "true"} {
+				lappend l_2 " "
+			}
+
+			set bb_data [lu:formatLists [list $l_1 $l_2] \
+						    {"" "  " ""} \
+						    {right right}]
+		}
+	}
+
+	$_GW_dkPt($handle,BAD_BLK_COUNT) setValues -labelString $count
+	$_GW_dkPt($handle,DISK_BAD_BLKS-list) setValues \
+			-items $bb_data \
+			-itemCount $n
+
+	$_GW_dkPt($handle,dialog) defineCursor ""
+}
+
+proc dkPt:_changeUnitsCb { handle unit set } \
+{
+	global		_GW_dkPt _GD_dkPt
+
+	if {$set} {
+		$_GW_dkPt($handle,matrix) commitEdit
+		set _GD_dkPt($handle,unit) $unit
+		dkPt:_changeUnits $handle $unit "size start end"
+
+		set _GD_dkPt($handle,ccell,value) [$_GW_dkPt($handle,matrix) \
+			getCell $_GD_dkPt($handle,ccell,row) \
+				$_GD_dkPt($handle,ccell,col)]
+	}
+}
+
+proc dkPt:_toggleCb { handle style set } \
+{
+	global		_GW_dkPt _GD_dkPt G_partData
+
+	if {$set == "true" && $style != "OTHER"} {
+		xdk:mkStdParts data $style \
+				$_GD_dkPt($handle,DISK_TYPE) \
+				$_GD_dkPt($handle,DISK_DRIVECAP) \
+				$_GD_dkPt($handle,DISK_SEC_LEN)
+
+		dkPt:_initPartData $handle
+
+		loop row 0 $_GD_dkPt(maxRows) 1 {
+		    loop col 0 [llength $_GD_dkPt(columns)] {
+			set xx [lindex $_GD_dkPt(columns) $col]
+			if {[info exists data($row,$xx)]} {
+			    set G_partData(blks,$row,$col) $data($row,$xx)
+			}
+		    }
+		}
+		dkPt:_schedRedisplayMatrix $handle true
+	}
+}
+
+#################################
+#	Callback Utilities	#
+#################################
+proc dkPt:_save { handle nm unique } \
+{
+	global	_GD_dkm _GD_resources
+
+	if {[lsearch -exact $_GD_dkm(schemas) $nm] != -1} {
+		em:simpleMsg $handle warning \
+			[format $_GD_resources(msg,tmpl,reserved) \
+			$nm [join $_GD_dkm(schemas) {, }]]
+		return 0
+	}
+
+	set data ""
+	if {! [dkPt:getData $handle data]} {
+		####	TODO:	em:setMessageString
+		return 0
+	}
+
+	set obj [list [list _TEMPLATE_ DISK $nm -]]
+	if {[tu:write DISK $nm $obj [join $data \n]]} {
+		if {$unique} {
+			ip:fillPanel dk $obj
+		}
+		return 1
+	}
+
+	return 0
+}
+
+#################################
+#	Matrix Callbacks	#
+#################################
+proc dkPt:_traverseCellCb { handle w row col next_row next_col param } \
+{
+	global		_GD_dkPt
+	upvar $next_row nrow
+	upvar $next_col ncol
+
+	if {$ncol == $_GD_dkPt(colpos,end)} {
+		if {$param == "Right" && $nrow != 15} {
+			set ncol 0
+			incr nrow
+		} else {
+			set ncol $_GD_dkPt(colpos,size)
+		}
+	}
+}
+
+proc dkPt:_enterCellCb { handle w row col doit } \
+{
+	global		_GD_dkPt
+	upvar $doit	do
+
+	if {$row >= 8 && $row <= 10} {
+		set do false
+	}
+
+	if {$row != $_GD_dkPt($handle,ccell,row)} {
+		dkPt:_selectPartGraphic $handle $row
+		dkPt:_selectRow $handle $w def $_GD_dkPt($handle,ccell,row)
+		dkPt:_selectRow $handle $w sel $row
+		set _GD_dkPt($handle,ccell,row) $row
+	}
+	set _GD_dkPt($handle,ccell,col) $col
+	set _GD_dkPt($handle,ccell,value) [$w getCell $row $col]
+}
+
+proc dkPt:_leaveCellCb { handle w row col value doit } \
+{
+	global		_GD_dkPt G_partData
+	upvar $value	val
+	upvar $doit	do
+
+	if {[info exists _GD_dkPt($handle,inredisplay)] || \
+	    [cequal $_GD_dkPt($handle,ccell,value) $val]} {
+		return
+	}
+	set v_size  $G_partData(blks,$row,$_GD_dkPt(colpos,size))
+	set v_start $G_partData(blks,$row,$_GD_dkPt(colpos,start))
+	set v_type  $G_partData(blks,$row,$_GD_dkPt(colpos,type))
+
+	set unit $_GD_dkPt($handle,unit)
+	if {$_GD_dkPt(colpos,type) == $col} {
+		if {[dkPt:_isValidType $val $row]} {
+			set G_partData(blks,$row,$col) $val
+			if {[clength $v_size] && [clength $v_start] && \
+			    (([clength $v_type] && ! [clength $val]) || \
+			     (! [clength $v_type] && [clength $val]))} {
+				dkPt:_schedRedisplayMatrix $handle true
+			}
+			$w setCell $row $col $val
+		} else {
+		    set do false
+		    if {$row < 8 || $row > 10} {
+			em:simpleMsg $handle information \
+			    "Partition $row: \\\"$val\\\" is not a valid type. \
+			    Valid types are: @n @n \\\ \\\ \\\ \\\ \
+			    [join $_GD_dkPt(popup,type) ", "]"
+		    }
+		}
+
+		return
+	} elseif {$_GD_dkPt(colpos,start) == $col || \
+		   $_GD_dkPt(colpos,size) == $col} {
+		set max_size [$w getCell 10 $_GD_dkPt(colpos,end)]
+		switch $unit {
+			blk -
+			1k {
+			    if {[clength $val] >= [clength $max_size] &&
+				[string compare $val $max_size] != -1} {
+				set errType ETOOBIG
+			    }
+			}
+			mb {
+			    if {[dkPt:_validateMbFormat $val [clength $val] ""] != "true"} {
+				set errType EINVALID
+			    }
+			    cvt:parseSizeString $val vSize vUnit
+			    lassign [split $vSize .] whole fraction
+			    if {($vUnit == "kb" && [clength $whole] > 7) || \
+			        ($vUnit != "kb" && [clength $whole] > 4)} {
+				set errType ETOOBIG
+			    }
+			}
+		}
+
+		if {[info exists errType]} {
+		    if {$errType == "ETOOBIG"} {
+		em:simpleMsg $handle information \
+		"Partition $row: \\\"$val\\\" is too large for this disk.\
+		 @n @n The value may not exceed \\\"$max_size\\\""
+		    } else {
+		em:simpleMsg $handle information \
+		"Partition $row: \\\"$val\\\" is in an invalid format."
+		    }
+		    set do false
+		    return
+		}
+	}
+
+	set nval $val
+	if {[clength $nval]} {
+	    if {$unit == "mb"} {
+		set xx1 [lindex [split $val " "] 0]
+		loop i 0 $_GD_dkPt(maxRows) 1 {
+		    if {$i == $row} {
+			continue
+		    }
+		    set xx2 [lindex [split [$w getCell $i $col] " "] 0]
+		    if {[cequal $xx1 $xx2]} {
+			set found $G_partData(blks,$i,$col)
+			break
+		    }
+		}
+	    }
+
+	    if {! [info exists found]} {
+		set nval [round [dkPt:_cvtUnitsToBlks $handle $unit $nval]]
+	    } else {
+		set nval $found
+	    }
+	}
+	if {! [cequal $G_partData(blks,$row,$col) $nval]} {
+		dkPt:_customPartitions $handle
+	}
+	set G_partData(blks,$row,$col) $nval
+
+	if {$_GD_dkPt(colpos,size) == $col} {
+		set v_size $nval
+	} else {
+		set v_start $nval
+	}
+
+	if {[cequal $v_start ""] || [cequal $v_size ""] ||
+	    [catch {set end [expr $v_start + $v_size]} error]} {
+		set end ""
+	}
+	set G_partData(blks,$row,$_GD_dkPt(colpos,end)) $end
+
+	if {([clength $end] || [dkPt:_partGraphicIsVisible $handle $row]) && \
+	    ([clength $v_type] && [dkPt:_isValidType $v_type $row])} {
+		set update_graphic true
+	} else {
+		set update_graphic false
+	}
+
+	dkPt:_schedRedisplayMatrix $handle $update_graphic
+}
+
+proc dkPt:_modifyVerifyCb { handle w row col pointer length doit } \
+{
+	global	_GD_dkPt
+	upvar	$pointer ptr
+	upvar	$length len
+	upvar	$doit do
+
+	if {$len != 0} {
+	    if {$_GD_dkPt(colpos,type) == $col} {
+		set ptr [string tolower $ptr]
+		set do [dkPt:_validateTypeFormat $ptr $len]
+	    } else {
+		if {$_GD_dkPt($handle,unit) == "mb" } {
+		    set do [dkPt:_validateMbFormat $ptr $len \
+			    [$w getCell $row $col]]
+		} else {
+		    set do [dkPt:_validateIntFormat $ptr $len]
+		}
+	    }
+	}
+}
+
+proc dkPt:_selectRow { handle w state row } \
+{
+	global	_GD_dkPt
+
+	if {$row >= 8 && $row <= 10} { return }
+
+	if {$state == "sel"} {
+		$w setRowColors $row [matrix:getBackground odd]
+		$w setCellColor $row 3 [matrix:getBackground bs,ts]
+		set _GD_dkPt($handle,selrow) $row
+	} else {
+		$w setRowColors $row [matrix:getBackground even]
+		$w setCellColor $row 3 [matrix:getBackground bs]
+	}
+}
+
+proc dkPt:_selectPartGraphic { handle row } \
+{
+	global	_GW_dkPt _GD_dkPt
+
+	set defpix [matrix:getBackground even]
+	set selpix [matrix:getBackground odd]
+
+	loop i 0 $_GD_dkPt(maxRows) 1 {
+	    $_GW_dkPt($handle,graphic).$i getValues -labelString part
+	    if {$part == $row} {
+		$_GW_dkPt($handle,graphic).$i setValues -background $selpix
+	    } else {
+		$_GW_dkPt($handle,graphic).$i setValues -background $defpix
+	    }
+	}
+}
+
+
+proc dkPt:_partGraphicIsVisible { handle row } \
+{
+	global	_GW_dkPt _GD_dkPt
+
+	loop i 0 $_GD_dkPt(maxRows) 1 {
+		$_GW_dkPt($handle,graphic).$i getValues -labelString part
+		if {$part == $row} {
+			if {[$_GW_dkPt($handle,graphic).$i isManaged]} {
+				return 1
+			} else {
+				return 0
+			}
+		}
+	}
+
+	return 0
+}
+
+#################################
+#	Actions			#
+#################################
+proc dkPt:_partAction { handle idx } \
+{
+	global	_GW_dkPt _GD_dkPt
+
+	$_GW_dkPt($handle,graphic).$idx getValues -labelString part_num
+	if {$part_num != $_GD_dkPt($handle,ccell,row)} {
+		$_GW_dkPt($handle,matrix) editCell $part_num 0
+	}
+}
+
+#################################
+#	Validation Routines	#
+#################################
+proc dkPt:_validateTypeFormat { ptr len } \
+{
+	if {[ctype alnum $ptr]} {
+		return true
+	}
+	return false
+}
+
+proc dkPt:_validateIntFormat { ptr len } \
+{
+	if {[ctype digit $ptr]} {
+		return true
+	}
+	return false
+}
+
+proc dkPt:_validateMbFormat { ptr len str } \
+{
+	if {! [cequal $ptr $str]} {
+		if {[string first "." $str] != -1} {
+			set dot 1
+		}
+		if {[string first " " $str] != -1} {
+			set space 1
+		}
+	}
+
+	set ptr [string tolower $ptr]
+	loop i 0 $len 1 {
+		set c [string index $ptr $i]
+		if {$c == "."} {
+			if {[info exists dot]} {
+				return false
+			} else {
+				set dot 1
+			}
+		}
+		if {$c == " "} {
+			if {[info exists space]} {
+				return false
+			} else {
+				set space 1
+			}
+		}
+
+		if {! [ctype digit $c] && [string match "*$c*" "gmkb. "] == 0} {
+			return false
+		}
+	}
+
+	return true
+}
+
+proc dkPt:_isValidType { val row } \
+{
+	global	_GD_dkPt
+
+	if {$row >= 8 && $row <= 10} {
+		set validTypes $_GD_dkPt(valid,type)
+	} else {
+		set validTypes $_GD_dkPt(popup,type)
+	}
+
+	if {[cequal $val ""] || [lsearch -exact $validTypes $val] != -1} {
+		return 1
+	} else {
+		return 0
+	}
+}
+
+proc dkPt:_isValidPartition { handle num } \
+{
+	global		_GW_dkPt _GD_dkPt
+
+	return [dkPt:_isValidPartition2 \
+	    [$_GW_dkPt($handle,matrix) getCell $num $_GD_dkPt(colpos,type)] \
+	    [$_GW_dkPt($handle,matrix) getCell $num $_GD_dkPt(colpos,size)] \
+	    [$_GW_dkPt($handle,matrix) getCell $num $_GD_dkPt(colpos,start)] \
+	    [$_GW_dkPt($handle,matrix) getCell $num $_GD_dkPt(colpos,end)]]
+}
+
+proc dkPt:_isValidPartition2 { type size start end } \
+{
+	if {$type == "" || $size == "" || $start == "" || $end == ""} {
+		return 0
+	} else {
+		return 1
+	}
+}
+
+#################################
+#	Utilities		#
+#################################
+proc dkPt:_changeUnits { handle unit columns } \
+{
+	global		_GW_dkPt _GD_dkPt G_partData
+
+	foreach column $columns {
+		set col $_GD_dkPt(colpos,$column)
+
+		loop row 0 $_GD_dkPt(maxRows) 1 {
+			set val $G_partData(blks,$row,$col)
+			if {[clength $val]} {
+				$_GW_dkPt($handle,matrix) setCell $row $col \
+				    [dkPt:_cvtBlksToUnits $handle $unit $val]
+			}
+		}
+	}
+}
+
+proc dkPt:_cvtBlksToUnits { handle unit value } \
+{
+	global		_GD_dkPt
+	set val		$value
+
+	if {[cequal $value ""]} {
+		return ""
+	}
+
+	switch	$unit {
+	    1k {
+		set val [expr $value / (1024 / $_GD_dkPt($handle,DISK_SEC_LEN))]
+	    }
+	    mb {
+		set val [expr $value.0 * $_GD_dkPt($handle,DISK_SEC_LEN).0]
+		####	set val [xfs:convertBytesToUnits $val]
+		set val [cvt:bytesToUnits {m} $val cvt_size cvt_unit mb]
+	    }
+	}
+
+	return $val
+}
+
+proc dkPt:_cvtUnitsToBlks { handle unit value } \
+{
+	global		_GD_dkPt
+	set val		$value
+
+	if {[cequal $value ""]} {
+		return ""
+	}
+
+	switch $unit {
+	    1k {
+		set val [expr $value.0 * (1024 / $_GD_dkPt($handle,DISK_SEC_LEN))]
+	    }
+	    mb {
+		####	set val [xfs:convertUnitsToBytes "$val"]
+		set val [cvt:unitsToBytes "$val" cvt_bytes cvt_unit mb \
+					$_GD_dkPt($handle,DISK_SEC_LEN)]
+		set val [expr $val / $_GD_dkPt($handle,DISK_SEC_LEN)]
+	    }
+	}
+
+	return $val
+}
+
+proc dkPt:_getDiskInfo { handle objdata } \
+{
+	global		_GD_dkPt _GD_resources
+
+	if {[catch {set data [xfsInfo $objdata]} error]} {
+		regsub -all -- "\n" [string trim $error] "\n\t" nerr
+		em:storeMsg $handle error \
+		"Unable to get disk information for [obj:getName $objdata].\n\t$nerr"
+		return 0
+	}
+	set data [split $data \n]
+
+	foreach item $_GD_dkPt(di) {
+		set index [lsearch -glob $data $item:*]
+		if {$index == -1} {
+			set value	" - "
+		} else {
+			set value [lindex [split [lindex $data $index] :] 1]
+		}
+		set _GD_dkPt($handle,$item) $value
+	}
+
+	set _GD_dkPt($handle,blks) $_GD_dkPt($handle,DISK_DRIVECAP)
+
+	set _GD_dkPt($handle,SIZE) [cvt:bytesToUnits {g m k} [expr \
+				$_GD_dkPt($handle,DISK_SEC_LEN).0 * \
+				$_GD_dkPt($handle,blks).0] \
+				cvt_size cvt_unit]
+
+	hu:getIpAddress [obj:getHost $objdata] \
+			hfn hpd hip $_GD_resources(hostsFile)
+        set _GD_dkPt($handle,HOST) $hpd
+
+	return 1
+}
+
+proc dkPt:_clear { handle } \
+{
+	global		_GW_dkPt _GD_dkPt
+
+	foreach item $_GD_dkPt(dia) {
+		$_GW_dkPt($handle,$item) setValues -labelString ""
+	}
+
+	$_GW_dkPt($handle,bblk_pb) mapWidget
+	$_GW_dkPt($handle,bblk_list) unmapWidget
+	$_GW_dkPt($handle,DISK_BAD_BLKS-list) deleteAllItems
+
+	if {[$_GW_dkPt($handle,graphic) isManaged]} {
+		$_GW_dkPt($handle,graphic) unmanageChild
+		set remanage true
+	}
+
+	for {set i [expr $_GD_dkPt(maxRows) - 1]} {$i >= 0} {incr i -1} {
+		$_GW_dkPt($handle,graphic).$i unmanageChild
+	}
+
+	if {[info exists remanage]} {
+		$_GW_dkPt($handle,graphic) manageChild
+	}
+
+	dkPt:_initMatrix $handle
+	dkPt:_initGraphic $handle
+}
+
+proc dkPt:_customPartitions { handle } \
+{
+	global	_GW_dkPt _GD_dkPt
+
+	foreach item $_GD_dkPt(toggles)	{
+		$_GW_dkPt($handle,$item) setValues -set false
+	}
+#	$_GW_dkPt($handle,OTHER) setValues -set true
+}

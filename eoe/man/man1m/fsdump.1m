@@ -1,0 +1,421 @@
+'\"macro stdmacro
+.if n .pH g1a.fsdump @(#)fsdump     30.4 of 3/14/86
+.nr X
+.if \nX=0 .ds x} FSDUMP 1M "Directory and File Management Utilities" "\&"
+.if \nX=1 .ds x} FSDUMP 1M "Directory and File Management Utilities"
+.if \nX=2 .ds x} FSDUMP 1M "" "\&"
+.if \nX=3 .ds x} FSDUMP "" "" "\&"
+.TH \*(x}
+.de us
+\\$1\l'|0\(ul'
+..
+.SH NAME
+fsdump \- file system dumper for rfindd for EFS and XFS 
+.SH SYNOPSIS
+.B "cd /var/rfindd; ./fsdump"
+.RB [ \-L " logfile]"
+.RB [ \-M " minutes]"
+.RB [ \-Q ]
+.RB [ \-R ]
+.RB [ \-U " maxrss]"
+.B \-F
+dumpfile
+directory
+.SH DESCRIPTION
+.I fsdump
+is applicable to EFS and XFS filesystems.
+.PP
+.IR fsdump\^
+creates the
+.B dumpfile
+used by
+.IR rfindd (1M)
+to respond to
+.IR rfind (1)
+requests.
+The
+.B dumpfile
+contains:
+.IP "inode contents" 20
+For each allocated inode in
+the file system mounted at
+.BR directory ,
+.IR fsdump\^
+stores all the fields from the inode header,
+excluding the extent and reference count fields.
+.IP "directory contents" 20
+For each directory in the file system
+that is readable by the user "rfindd",
+.IR fsdump\^
+stores the inode numbers and filenames
+in that directory.
+.IP "Quick checksums" 20
+If the
+.B \-Q
+option is specified,
+then
+.IR fsdump\^
+stores a quick checksum
+of the data contents of each
+regular file in the file system.
+This checksum only covers the first
+few bytes of each basic block
+(512 byte sector).
+.IP "RCS information" 20
+If the
+.B \-R
+option is specified,
+then
+.IR fsdump\^
+stores the top-of-trunk
+version number and date
+for each file in the file system
+that has a name of the form
+"RCS/*,v"
+and contains a parsable
+RCS header.
+See
+.IR rcsfile (4)
+for a description of such files.
+.PP
+The following options are accepted by
+.IR fsdump .
+.TP 12
+.BI \-F " dumpfile"
+Tells fsdump where to write the
+data extracted during the run.
+.TP 12
+.BI \-L " logfile"
+If specified,
+.IR fsdump\^
+appends a few lines to the named
+.BR logfile ,
+containing the date of the run
+and some statistics about the amount
+of space and time consumed.
+.TP 12
+.BI \-M " minutes"
+If specified, limits the number of minutes
+since
+.IR fsdump\^
+started
+that
+.IR fsdump\^
+will spend extracting RCS information
+or checksums.
+If either of the
+.B \-Q
+or
+.B \-R
+options is being used, and if
+.IR fsdump\^
+is being run frequently,
+such as every hour,
+then use the
+.B \-M
+option to tell
+.IR fsdump\^
+how long it should run,
+before it writes out its
+partial results,
+and allows the next
+scheduled run to occur.
+.TP 12
+.BI \-Q
+Requests
+.IR fsdump\^
+to repeatedly compute a
+quick checksum on the contents
+of each file.
+.IR fsdump\^
+prints a warning message into the
+.B logfile
+of the form:
+.br
+	>>>>>> File contents corrupted !! :: <file>
+.br
+if the checksum changes for a file that
+was not modified via the file system.
+.TP 12
+.BI \-R
+Requests
+.IR fsdump\^
+to maintain the RCS top-of-trunk
+revision and date for each
+apparent
+"RCS/*,v"
+file.
+.TP 12
+.BI \-U " maxrss"
+If specified, limits to
+.B maxrss
+kilobytes
+the amount of physical memory that
+this fsdump process can use.
+.PP
+.B directory
+must be the directory
+on which is mounted the
+EFS or the XFS file system to be dumped.
+.SS Configuration
+To configure the
+.I rfind
+services
+.RI ( rfindd " and " fsdump )
+on your system,
+perform the following:
+.IP "1)" 5
+If you want
+.I fsdump
+to update all
+.BR dumpfile \'s
+on some schedule other than
+starting at 3 minutes past
+each hour, then while
+.BR su \'d
+to rfindd\'s uid,
+use the
+.BR crontab (1)
+command to change the frequency
+of execution of
+.IR runfsdump .
+The following steps can be used to edit rfindd\'s
+crontab file.
+.RS 8
+.IP "a]" 5
+su root
+.IP "b]" 5
+su \- rfindd
+.IP "c]" 5
+crontab \-l > crontab
+.IP "d]" 5
+edit this crontab file
+.IP "e]" 5
+crontab crontab
+.RE
+.IP "2)" 5
+To change the list of file systems
+to be dumped,
+edit the file
+.BR /var/rfindd/fslist .
+By default, the basename of the mount point of the
+file system is used as the dump file name.
+If the file system is "/", then the dump
+file name is taken as "root" instead.
+To specify
+a different dump file name, provide that name as the
+second field on its line in
+.BR fslist .
+The logfile name is always the dump file name with
+the suffix ".log" added.
+.IP "3)" 5
+To change the options with which
+.IR fsdump
+is invoked, edit the file
+.BR /var/rfindd/fsoptions .
+.IP "4)" 5
+Edit the file /etc/rfind.aliases
+on each client system that should
+have access to the new rfind server.
+If only the localhost needs access,
+then this step is not needed.
+.PP
+.ne 10
+.SS Strategy
+.IR fsdump\^
+typically performs the following steps each run:
+.IP "1)" 5
+parse arguments
+.IP "2)" 5
+map
+.B directory
+to file system device
+.IP "3)" 5
+open read-only file system device (requires setuid "root" privileges)
+.IP "4)" 5
+open existing
+.B dumpfile
+(if any)
+.IP "5)" 5
+relinquish "root" privileges
+.IP "6)" 5
+redirect stdout/stderr to
+.B logfile
+(if specified)
+.IP "7)" 5
+determine file system parameters from super block for EFS filesystems and XFS
+syssgi calls for XFS filesystems.
+.IP "8)" 5
+Lock the entire
+.BR dumpfile ,
+to prevent simultaneous update attempts.
+.IP "9)" 5
+.IR mmap (2)
+existing
+.B dumpfile
+into address space
+.IP "10)" 5
+read inodes from raw disk, one cylinder group at a time for EFS filesystems
+and in numeric order for XFS filesystems.
+.IP "11)" 5
+test mtime, ctime, size and gen of each inode for changes
+.IP "12)" 5
+maintain current uid, gid, atime, nlink and mode for all inodes
+.IP "13)" 5
+discard directory, RCS and quick checksums information for any changed inodes
+.IP "14)" 5
+close the file descriptor to the raw file system device
+.IP "15)" 5
+read any changed/new directories using opendir/readdir
+.IP "16)" 5
+rebuild secondary index on filenames
+.IP "17)" 5
+if -R specified and time permits, update RCS information for changed
+"RCS/*,v"
+files
+.IP "18)" 5
+if -Q specified and time permits, update quick checksums for all regular files
+.IP "19)" 5
+write new
+.B dumpfile
+to temporary name
+.IP "20)" 5
+touch the start time of the new
+.B dumpfile
+to the beginning time of this run
+.IP "21)" 5
+update the fsdump.{pag,dir} files
+.IP "22)" 5
+.IR rename (2)
+temporary name to specified
+.B dumpfile
+name
+.SH FILES
+.PD 0
+.TP 28
+/etc/config/rfindd
+.IR chkconfig (1M)
+file controlling
+.IR fsdump\^
+and
+.IR rfindd (1M).
+.TP 28
+/var/rfindd/fsdump.dir,
+.TP 28
+/var/rfindd/fsdump.pag
+contain database (in
+.IR ndbm (3B)
+format)
+of each
+.BR directory
+and
+.BR dumpfile
+in
+.BR /var/rfindd .
+.IR fsdump\^
+updates this database each run,
+and
+.IR rfindd
+uses the database to map the requested
+.B directory
+to the
+.B dumpfile
+containing information about it.
+.TP 28
+.RB /var/rfindd/ dumpfile
+The file system information extracted by
+.IR fsdump\^
+is stored here for use by
+.IR rfindd (1M).
+The first 12 lines of this file
+contain an ASCII header describing
+the remaining, binary, sections
+of the file.
+The
+.B dumpfile
+typically requires between
+1% and 2% of the inuse
+space of the
+file system being dumped.
+.TP 28
+.RB /var/rfindd/ dumpfile .log
+Conventional name for the
+.BR logfile ,
+as specified in the
+.B crontab
+invocation of
+.IR fsdump .
+.TP 28
+/etc/init.d/rfindd
+The runtime startup script,
+invoked by
+.IR init (1M),
+that starts the
+.IR rfindd (1M)
+daemon process.
+.TP 28
+/usr/spool/cron/crontabs/rfindd
+The
+.B crontab
+file that invokes
+.IR fsdump .
+.TP 28
+/var/rfindd/rotatelogs
+Utility invoked from
+the
+.B crontab
+for "rfindd".
+Each
+.B logfile
+named on the command line
+of
+.IR rotatelogs
+is moved to the file
+.BR OLDlogfile .
+.TP 28
+/var/rfindd/fslist
+The list of file systems to be examined
+by
+.IR fsdump (1M).
+The
+.IR runfsdump
+script uses this list.
+.TP 28
+/var/rfindd/fsoptions
+The list of options to be passed when
+invoking the
+.IR fsdump (1M)
+command.
+The
+.IR runfsdump
+script uses this list.
+.TP 28
+/var/rfindd/runfsdump
+The script, executed from
+.IR cron
+once each hour, or as otherwise
+specified, which invokes
+.IR fsdump
+on each file system listed
+in
+.IR fslist ,
+using the options specified in
+.IR fsoptions .
+.TP 28
+/var/rfindd/passwd.add
+Utility used by
+.IR inst
+exitop
+to add the user "rfindd" to the file
+.BR /etc/passwd .
+.SH "SEE ALSO"
+chkconfig(1M),
+crontab(1),
+rfind(1),
+rfindd(1M).
+.br
+mmap(2),
+rename(2),
+ndbm(3B),
+fs(4),
+rcsfile(4).

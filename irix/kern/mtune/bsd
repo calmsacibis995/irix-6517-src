@@ -1,0 +1,334 @@
+**************************************************************************
+* Copyright 1997-1998, Silicon Graphics, Inc. 
+* All Rights Reserved.
+*
+* This is UNPUBLISHED PROPRIETARY SOURCE CODE of Silicon Graphics, Inc.;
+* the contents of this file may not be disclosed to third parties, copied or 
+* duplicated in any form, in whole or in part, without the prior written 
+* permission of Silicon Graphics, Inc.
+*
+* RESTRICTED RIGHTS LEGEND:
+* Use, duplication or disclosure by the Government is subject to restrictions 
+* as set forth in subdivision (c)(1)(ii) of the Rights in Technical Data
+* and Computer Software clause at DFARS 252.227-7013, and/or in similar or 
+* successor clauses in the FAR, DOD or NASA FAR Supplement. Unpublished - 
+* rights reserved under the Copyright Laws of the United States.
+**************************************************************************
+*
+* This is a read-only file. User-specified tunables are stored
+* in the file /var/sysgen/stune.
+*
+* bsd
+*
+
+* tunables for TCP/UDP hash tables
+*
+* Hash tables are used to keep references to TCP and UDP socket addresses.
+* Default sizing is based on the amount of physical memory in the system.
+*
+* The default is four hash buckets per megabyte for UDP and eight for TCP.
+* TCP uses twice as many buckets as configured because a separate table is
+* used for connections in TIME-WAIT.
+
+inpcb:	static
+
+* name			default      	minimum	  maximum
+tcp_hashtablesz		0		0	  262144
+udp_hashtablesz		0		0	  65536
+
+*
+* Tuneables for network scheduling:
+*
+* Normally netproc threads are assigned one per node, and are marked as
+* "must run" on a specific CPU on each node.  In order to avoid problems with
+* dedicating specific CPUs for real-time processes, setting
+* netthread_float to 1 will allow the netproc threads to run anywhere,
+* minmizing their impact on reserved CPUs.
+*
+* On SP systems there is only one node.  On non-Origin MP systems, a "node" is
+* defined as a pair of CPUs.
+network:  static
+* name			default		minimum	  maximum
+netthread_float		0		0	  1
+
+*
+* tuneables for IP networking code
+*
+* icmp_dropredirects == 1: kernel does not honor ICMP_REDIRECT messages.
+* icmp_dropredirects == 0: kernel honors ICMP_REDIRECT messages.
+*
+* ipfilterd_inactive_behavior == 1: reject all packets when filtering
+*	turned off. This has the effect of preventing any routing when
+*	the daemon has been active, but has died.  This is the
+*	preferred behavior for a firewall-type gateway. Note: even
+*	when the value is 1, all IP packets destined for and sent from
+*	the local host will still be accepted.  It's only
+*	foreign-source packets that get clobbered.
+* ipfilterd_inactive_behavior == 0: accept all packets when filtering
+*	turned off. Acts as though filtering is not configured;
+*	routing and other IP traffic unaffected.
+*
+* ipforwarding == 2: Forward IP packets received that should be resent
+*	to another host, but do not forward packets that contain an
+*	IP source routing option.
+* ipforwarding == 1: Forward IP packets received that should be resent
+*	to another host, including packets with an IP source routing
+*	option.
+* ipforwarding == 0: Don't forward packets.
+* Note: This parameter only affects hosts with more than 1 hardware
+*	network interface.  Hosts that have only a single interface
+*	will not forward IP packets.
+* Note: IP multicast packets can be forwarded if the boot/ip_mroute.o
+*	file exists when the kernel is configured and the mrouted(1M)
+*	daemon is used.
+* Note: "MINIROOT" and "NOT_MINIROOT" are lboot tags; see lboot(1M)
+*	for details.  The effect is that the default for miniroot
+*	(i.e., special installation-time) kernels for ipforwarding is off,
+*	while the default for non-miniroot (i.e., normal) kernels is on.
+*
+
+net_ip:	run
+
+* name				default	minimum	maximum
+icmp_dropredirects		0	0	1
+ipfilterd_inactive_behavior	1	0	1
+
+ipforwarding,MINIROOT		0	0	2
+ipforwarding,NOT_MINIROOT	1	0	2
+
+*
+* 1 = When forwarding IP packets, and a packet is forwarded using the same
+*     interface on which it arrived and if the source host is on the
+*     directly-attached network, then send an ICMP redirect to the source host.
+*     If the packet was forwarded using a route to a host or to a subnet,
+*     a host redirect is sent, otherwise a network redirect is sent.
+* 0 = The generation of redirects is inhibited.
+*
+ipsendredirects,MINIROOT	0	0	1
+ipsendredirects,NOT_MINIROOT	1	0	1
+
+*
+* 1 = For gateways (>1 interface and ipforwarding = 1), cause a broadcast
+*     packet destined for network A that arrived on network B's interface
+*     to be broadcast on network A.
+* 0 = Don't broadcast the packet to network A, though this host will receive
+*     the packet.
+*
+ipdirected_broadcast		0	0	1
+
+*
+* RFC1122 3.2.1.3 (d) specifically states that a broadcast address
+* must not be used as a source address.  Setting this to 1 will
+* disable checking for this condition, thus allowing a packet to
+* contain a source address of 0xffffffff.
+*
+allow_brdaddr_srcaddr		0	0	1
+
+*
+* TCP calculates a maximum segment size to use for each connection, and
+* sends no datagrams larger than that size. This size will be no larger
+* than that supported on the outgoing interface.  Furthermore, if the
+* destination is not on the local network, the size will be no larger
+* than 576 bytes, unless the tcp_mtudisc option below is set.
+*
+* subnetsarelocal:
+*   1 = other subnets of a directly-connected subnetted network are
+*       considered to be local.
+*   0 = other subnets are not local.
+*
+*  The tcp_mtudisc option below is a better way to accomplish the same end.
+*
+subnetsarelocal			1	0	1
+
+*
+* RFC1948: security fix for TCP source address spoofing by
+* randomizing the low order bits of ISS (Initial Sequence number)
+* using MD5 
+*  1 = use combination of MD5 and (nanotime, source/dst IP address/port
+*      values and some dynamically changing virtual addresses) to
+*      randomize ISS
+*  0 = use just the nanotime and some dynamically changing virtual address
+*      values to randomize ISS.   This is the default and by itself is
+*      quite safe from source address spoofing.
+* 
+tcpiss_md5			0	0	1
+
+*
+* Mbuf parameters:
+*
+* Maximum # of pages of memory.  This limits the total memory that
+* network buffers, "mbufs," can consume.
+* A 0 value tells the kernel to set the number based on the
+* amount of physical memory configured in the machine.
+* The current formula is 1/4 of the total physical memory.
+*
+net_mbuf:	static
+mbmaxpages,32			0	16	512
+mbmaxpages,64			0	16	2097152
+
+*
+* mbuf low-water mark:
+* In IRIX 6.5, the mbuf allocator now returns memory to the system when the
+* shaker (shaked) is running.  This is good for systems that are not using the
+* network very much, but might cause problems if paging is being done over NFS.
+* 
+* This parameter indicates that this many mbufs of each size should be retained
+* by the mbuf allocator even when the system is low on memory.
+*
+* For each increment of mbretain, this will keep 6272 bytes on 32-bit systems
+* and 18688 bytes per CPU on 64-bit systems.  The default is 10 mbufs of each
+* size per CPU.
+*
+mbretain			20	1	1024
+
+*
+* RSVP Variables
+* ps_enabled:
+* 1 = reservations are enforced by the packet scheduler.
+*
+* 0 = reservations are not enforced by the packet scheduler.  Admission
+*     control is still used but all traffic is treated as best effort.
+*
+* ps_rsvp_bandwidth - percentage of the total link bandwidth we allow
+* to be reserved.  Would be nice to make this configurable on a per
+* interface basis.
+*
+* ps_num_batch_pkts - maximum number of packets to send down at once.
+* There is a tradeoff here.  If we send down a lot at once, then
+* the driver can keep the line (ethernet) more busy, but controlled load
+* packets may suffer greater delay.  If we are not concerned about
+* getting high utilization on the line, and we want to minimize delay,
+* then we can set this number lower.
+* 0 - Use system default (25 if 100Mb/sec interface, 4 if 10Mb/sec)
+* x - user specified number.
+*
+
+net_rsvp:	static
+
+ps_enabled			1	0	1
+ps_rsvp_bandwidth		50	1	100
+ps_num_batch_pkts		0	1	100
+
+*
+* TCP networking parameters
+*
+net_tcp:	run
+
+* TCP Time to Live
+* This value should be sufficient for the Internet.
+* Increase it for extremely large internets with large "diameters."
+tcp_ttl				60	1	255
+
+*
+* Timeout value for SO_KEEPALIVE (in units of seconds).  Default
+* is 2 hours.  Do not decrease this below 10 minutes.
+*
+tcp_keepidle			7200	600	86400
+
+*
+* Time interval for SO_KEEPALIVE probes, after tcp_keepidle timeout has
+* passed (in units of seconds).  Default is 75 seconds.
+*
+tcp_keepintvl			75	1	86400
+
+*
+* TCP maximum persist time
+* This is the absolute longest time we'll persist without a response.
+* If we get a response, we'll keep going even in the face of a zero window,
+* since that's the correct behavior.
+* If we don't get a response, we will terminate the connection.
+* It may terminate sooner if we exceed the RTO by 511 times.
+* The default is 2 hours, the same as tcp_keepidle.
+*
+tcp_maxpersistidle 		7200	60	86400
+
+* TCP MTU Discovery control. This controls the use of RFC 1191
+* methods for determining TCP maximum segment sizes.  If this flag is on,
+* TCP will set the dont-fragment flag in the IP headers of TCP segments.
+* The "fragmentation needed" messages from routers will be used to determine
+* new MSS size for TCP connections.  When this flag is set, the MSS of TCP
+* connections will no longer default to tcp_mssdflt when connections are
+* not local.
+*
+tcp_mtudisc			1	0	1
+
+*
+* TCP 2MSL timer interval.  This should never be lowered unless absolutely
+* necessary.  The TCP specification mandates a value of four minutes;
+* we use 60 seconds for compatibility with previous IRIX releases.
+*
+tcp_2msl			60	1	240
+
+*
+* TCP duplicate ACK threshold for fast retransmit:
+*    This may need to be changed for certain Wide Area Networks, but should
+*    normally be left at the default value of 3.
+*
+tcprexmtthresh			3	1	16
+
+*
+* TCP SACK enable.  This allows TCP to send and receive SACK options
+* for more efficient recovery from packet losses. 
+tcp_sack			1	0	1
+
+*
+* TCP retransmission strategy.  This controls which retransmission
+* strategy TCP will use to recover from packet losses.  Several algorithms
+* are available:
+*	0	no fast retransmission is enabled.
+*	1	retransmit on duplicate ACKs. 
+*	2	retransmit on duplicate and partial ACKs. 
+*	3	retransmit based on SACK info.
+*	4	use RPLD semantics.  (experimental)
+tcp_retransmit			2	0	2
+
+*
+* TCP ramp up strategy following fast retransmission 
+* Available options:
+*	0	cut congestion window in half 
+*	1	???
+tcp_rampup			2	0	2
+
+*
+* TCP window sizes/socket space reservation; limited to 1Gbyte by RFC 1323
+*
+tcp_sendspace 			61440	2048	1073741824
+tcp_recvspace 			61440	2048	1073741824
+
+* Switch on LAN go-fast mode for TCP.  tcp_gofast is the threshold, in
+* milliseconds, below which the round-trip time must be for go-fast mode
+* to be triggered.  Recommended value for go fast mode is 4. Default is off.
+tcp_gofast			0	0	10
+
+* tcp_agak_hysteresis_hi is the threshold (units are acks per 200 ms
+* window) at which RFC-1122 style aggressive acking is disabled to
+* improve performance.
+tcp_agak_hysteresis_hi		1000	20	100000
+
+*
+* UDP networking parameters
+*
+net_udp:	run
+
+* UDP Time to Live
+* This value should be sufficient for the Internet.
+* Increase it for extremely large internets with large "diameters."
+udp_ttl				60	1	255
+
+* UDP maximum datagram size
+udp_sendspace			61440	2048	1073741824
+
+* UDP socket buffers: reserve space for (sendspace * recvgram) bytes
+udp_recvgrams		2	1	16
+
+* if arpreq_alias is on:  when sending arp request and
+* if have ip alias address on the target net, use ip alias address 
+* as source address, instead of the primary address.
+* name				default	minimum	maximum
+arpreq_alias			0	0	1
+
+* Internal and temporary systune: leave as 1 unless directed to
+* change it by SGI Customer Support.
+soreceive_alt			1	0	1
+* if_vfe driver load timer; see detail in if_vfe.c 
+vfe_ldtmr                       144     80      512

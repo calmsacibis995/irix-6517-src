@@ -1,0 +1,140 @@
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/BuildTools/OS/IRIX.6.5 sendmail-8.9.3.patch.nsd/BuildTools/OS/IRIX.6.5
+*** sendmail-8.9.3/BuildTools/OS/IRIX.6.5	Tue Dec 29 09:39:53 1998
+--- sendmail-8.9.3.patch.nsd/BuildTools/OS/IRIX.6.5	Wed Aug 18 18:12:08 1999
+***************
+*** 22,27 ****
+--- 22,31 ----
+  ABI=	confABI
+  POPDIVERT
+  define(`confMAPDEF', `-DNDBM -DNIS -DMAP_REGEX')
++ 
++ sysmcd(`test -e ${ROOT}/usr/include/ns_api.h')
++ define(`confMAPDEF', confMAPDEF ifelse(0, sysval, `-DMAP_NSD'))
++ 
+  define(`confENVDEF', `-DIRIX6 -DHASSNPRINTF=1 ${ABI} ')
+  define(`confLDOPTS', `${ABI}')
+  define(`confMBINDIR', `/usr/lib')
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/BuildTools/OS/IRIX.6.x sendmail-8.9.3.patch.nsd/BuildTools/OS/IRIX.6.x
+*** sendmail-8.9.3/BuildTools/OS/IRIX.6.x	Tue Dec 29 09:39:48 1998
+--- sendmail-8.9.3.patch.nsd/BuildTools/OS/IRIX.6.x	Wed Aug 18 18:12:19 1999
+***************
+*** 22,27 ****
+--- 22,31 ----
+  ABI=	confABI
+  POPDIVERT
+  define(`confMAPDEF', `-DNDBM -DNIS -DMAP_REGEX')
++ 
++ sysmcd(`test -e ${ROOT}/usr/include/ns_api.h')
++ define(`confMAPDEF', confMAPDEF ifelse(0, sysval, `-DMAP_NSD'))
++ 
+  define(`confENVDEF', `-DIRIX6 ${ABI} ')
+  define(`confLDOPTS', `${ABI}')
+  define(`confMBINDIR', `/usr/lib')
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/src/conf.c sendmail-8.9.3.patch.nsd/src/conf.c
+*** sendmail-8.9.3/src/conf.c	Tue Jan 26 16:15:52 1999
+--- sendmail-8.9.3.patch.nsd/src/conf.c	Thu Apr 29 21:27:36 1999
+***************
+*** 485,490 ****
+--- 485,497 ----
+  	       syslog_map_parseargs, null_map_open, null_map_close,
+  	       syslog_map_lookup, null_map_store);
+  #endif
++ 
++ #if MAP_NSD
++ 	/* IRIX 6.5 nsd support */
++ 	MAPDEF("nsd", NULL, MCF_ALIASOK,
++ 	       map_parseargs, null_map_open, null_map_close,
++ 	       nsd_map_lookup, null_map_store);
++ #endif
+  }
+  
+  #undef MAPDEF
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/src/map.c sendmail-8.9.3.patch.nsd/src/map.c
+*** sendmail-8.9.3/src/map.c	Tue Feb  2 12:10:21 1999
+--- sendmail-8.9.3.patch.nsd/src/map.c	Thu Apr 29 21:27:37 1999
+***************
+*** 5207,5209 ****
+--- 5207,5289 ----
+  	return regex_map_rewrite(map, "", (size_t)0, av);
+  }
+  #endif /* MAP_REGEX */
++ 
++ 
++ #ifdef MAP_NSD
++ 
++ #include <ndbm.h>
++ #define _DATUM_DEFINED
++ #include <ns_api.h>
++ 
++ typedef struct ns_map_list {
++ 	ns_map_t *map;
++ 	char *mapname;
++ 	struct ns_map_list *next;
++ } ns_map_list_t;
++ 
++ static ns_map_t *
++ ns_map_t_find(char *mapname)
++ {
++ 	static ns_map_list_t *ns_maps=NULL;
++ 	ns_map_list_t *ns_map;
++ 	
++ 	/* walk the list of maps looking for the correctly named map */
++ 	for (ns_map = ns_maps; ns_map; ns_map = ns_map->next) {
++ 		if (!strcmp(ns_map->mapname, mapname)) {
++ 			break;
++ 		}
++ 	}
++ 
++ 	/* if we are looking at a NULL ns_map_list_t, then create a new one */
++ 	if (! ns_map) {
++ 		ns_map = (ns_map_list_t *)calloc(1,sizeof(ns_map_list_t));
++ 		ns_map->mapname = strdup(mapname);
++ 		ns_map->map = (ns_map_t *)calloc(1,sizeof(ns_map_t));
++ 		ns_map->next = ns_maps;
++ 		ns_maps = ns_map;
++ 	}
++ 
++ 	return ns_map->map;
++ }
++ 
++ char *
++ nsd_map_lookup(map, name, av, statp)
++         MAP *map;
++ 	char *name;
++ 	char **av;
++ 	int *statp;
++ {
++ 	char buf[MAXLINE];
++ 	char *p;
++ 	int buflen;
++ 	char keybuf[MAXNAME + 1];
++ 	ns_map_t *ns_map;
++ 
++ 	if (tTd(38, 20))
++ 		printf("nsd_map_lookup(%s, %s)\n",
++ 			map->map_mname, name);
++ 
++ 	buflen = strlen(name);
++ 	if (buflen > sizeof keybuf - 1)
++ 		buflen = sizeof keybuf - 1;
++ 	bcopy(name, keybuf, buflen);
++ 	keybuf[buflen] = '\0';
++ 	if (!bitset(MF_NOFOLDCASE, map->map_mflags))
++ 		makelower(keybuf);
++ 
++ 	ns_map = ns_map_t_find(map->map_file);
++ 
++ 	if (ns_lookup(ns_map, NULL, map->map_file, keybuf, NULL, 
++ 		      buf, MAXLINE)) {
++ 		return NULL;
++ 	} 
++ 
++ 	/* 
++ 	** Null out trailing \n
++ 	*/
++ 	if ((p = strchr(buf, '\n')) != NULL) {
++ 		*p = '\0';
++ 	}
++ 	return map_rewrite(map,buf,strlen(buf),av);
++ }
++ #endif /* MAP_NSD */

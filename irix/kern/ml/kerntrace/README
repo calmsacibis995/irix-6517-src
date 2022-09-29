@@ -1,0 +1,161 @@
+TECHNIQUE
+
+Compile kernel C source files to assembly language
+and edit to insert calls to trace each function
+entry and exit.
+
+MORE OVERVIEW
+
+The command "trord" creates a file mapping each kernel function
+(/unix text symbol) to a unique integer (ordinal value). Kernel
+makefiles are edited to (1) include the assembly language file
+"trace.s" which defines two functions _trentry() and _trexit()
+which store kernel function entry and exit events with function
+ordinal value and timestamp into private 64K/processor trace
+buffers and (2) modify the .c.o rule causing each C source file to
+be compiled to assembly language, edited by the command
+"trinsert", and assembled into the .o file.  A bit vector in the
+kernel is used to uniquely enable individual functions. After
+making and booting the new kernel, the command "tracex" is used to
+execute an arbitrary command while a specified list of functions
+are enabled for tracing.  During command execution, trace events
+are retrieved from the kernel and written to one or more output
+files.
+
+INSTALLATION INSTRUCTIONS
+
+	Changes are needed on both the source side where a kernel 
+with tracing capability is built, as well as on the target side 
+where commands are run to trace kernel functions. While some 
+commands built on the source side are used to build a modified 
+kernel, others are copied over to the target machine to be used 
+in execution of trace tools.
+
+	Source Side Changes
+	===================
+
+- trace directory has been created for KUDZU: irix/kern/ml/kerntrace
+
+- cd $WORKAREA/irix/kern/ml/kerntrace/tools
+
+- make
+
+- create a function ordinal file ordfile in irix/kern/trace
+
+	# cd $WORKAREA/irix/kern/ml/kerntrace
+
+	# tools/trord $WORKAREA/irix/kern/ml/kerntrace/ordfile.$(PRODUCT) [kernel]
+
+  This command does a "nm -B kernel (/unix if kernel omitted)" and assigns 
+  a unique, increasing integer number to each kernel function name
+  ('t' or 'T' symbol).  Be sure your <kernel> has all the functions you're 
+  interested in tracing.
+
+- if you define KERNTRACE in your environment, then kcommonrules will
+  compile the ".c" to a ".s" and insert the calls to
+  _trentry/_trexit.  If KERNTRACE is not defined, then "normal"
+  compilation occurrs
+
+
+- touch kernel source files you want to trace, make and boot new kernel
+	(Ignore any "as: Warning: -mips3 should not .." for now).
+
+	Target Side Changes
+	===================
+
+- create an ascii file containing a list of kernel function names
+	you want to trace, see example "funcfile"
+
+- copy $WORKAREA/irix/kern/ml/kerntrace/tools/tracex from the source machine
+  to the target machine.
+	- there are two tracex commands, tracex32 and tracex64 for
+	  32-bit and 64-bit kernels respectively
+
+- trace by:
+
+	# tracex ordfile funcfile outfile kernel [prfcnt{0|1}]  cmd [args ]
+
+  where "ordfile" is the previously created ordinal file,
+  "funcfile" is an ascii list of kernel function names,
+  one per line, and "outfile" is the base name for the
+  output files, kernel is the name of the kernel you are running on.  
+  The optional "prfcnt0" or "prfcnt1" will log the specified R10000
+  performance counter instead of the timestamp on systems with R10000
+  cpus (see below for more information).
+
+  If you are booting the kernel over the network, you must copy the kernel
+  to your target machine for "tracex" to be able to figure out the symbols
+  in the kernel.
+  If funcfile contains the keyword "ALL",
+  then all functions with compiled-in trace points will
+  be enabled.
+
+	Example:
+
+	# cat > allfuncs
+	ALL
+	^D
+	#
+
+	# tracex ordfile allfuncs /tmp/out kernel rusers babylon
+
+  This will create one or more output files beginning
+  with the path <outfile> and ending with ".cpu<n>"
+  depending upon the number of processors on your system.
+
+- copy $WORKAREA/irix/kern/ml/kerntrace/tools/trascii over from the
+  source machine.
+
+- convert output files to ascii using trascii:
+
+	# trascii ordfile /tmp/out.cpu0
+
+will convert to ascii printing on stdout.
+
+There's also a tdiff command which annotates the ascii
+with delta microsecond timestamps on each line.
+Also a cheap and dirty hist command which takes the ascii
+and displays histogram timing of any event pairs.
+
+- copy $WORKAREA/irix/kern/ml/kerntrace/tools/tdiff over from the
+  source machine.
+
+- tdiff reads the output of trascii and adds delta times.
+
+
+APPENDUM - R10000 performance counters
+---------------------------------------
+
+To log R10000 performance counters instead of the realtime clock, you
+need to add the following steps:
+
+(1) Use "ecadmin" command to enable the global counters before running
+your test.  Make sure that exactly one or two counters are enabled
+since enabling multiple counters will result in the kernel changing
+the statistic being monitored on each clock tick and your results will
+be inaccurate. Note that the tracing code simply saves the current
+value of prfcnt0/prfcnt1 as specified and if they aren't enabled the
+values will not change.
+
+(2) When starting the test via the "tracex" command use the optional
+parameter "prfcnt0" or "prfcnt1" immediately prior to the "cmd"
+
+(3) When using the "trascii" command to analyze the file, specify the
+optional third parameter "prfcnt" so that the data is interpreted as a
+counter and not a timestamp which needs to use the "cycle count"
+multipler.
+
+(4) The kernel by default will reset the prfcnt registers on each
+clock tick.  To prevent this you should define NO_RESET_PRFCNT in your
+klocaldefs and then recompile ml/r10kperf.c.
+
+
+WARNING *** WARNING *** WARNING ***
+
+On SN0 systems we have decreased the number of cpus allowed to be traced to 64.
+This is due to the space required by the _trrectab (64KB for each possible
+processor).
+
+Enabling tracing on a system with more than 64 processors will result in data
+corruption since trace will index off the end of the table.
+

@@ -1,0 +1,282 @@
+.TH xtalk_pio D3
+.IX "\f4xtalk_pio_addr\f1(D3)"
+.IX "\f4xtalk_piotrans_addr\f1(D3)"
+.IX "\f4xtalk_piomap_alloc\f1(D3)"
+.IX "\f4xtalk_piomap_addr\f1(D3)"
+.IX "\f4xtalk_piomap_done\f1(D3)"
+.IX "\f4xtalk_piomap_free\f1(D3)"
+.IX "\f4xtalk_piospace_alloc\f1(D3)"
+.IX "\f4xtalk_piospace_free\f1(D3)"
+.SH NAME
+.nf
+\f4xtalk_pio_addr\f1 \- construct PIO address
+\f4xtalk_piotrans_addr\f1 \- construct PIO address
+\f4xtalk_piomap_alloc\f1 \- allocate an XIO PIO channel
+\f4xtalk_piomap_addr\f1 \- set PIO channel target
+\f4xtalk_piomap_done\f1 \- mark PIO channel unused
+\f4xtalk_piomap_free\f1 \- release XIO PIO channel resources
+.fi
+.SH SYNOPSIS
+.nf
+.ds fT \f1
+.if t .ds fT \f4
+\*(fT#include <sys/XIO/xtalk.h>
+.sp .8v
+caddr_t
+xtalk_pio_addr(vertex_hdl_t \f2vhdl\*(fT,
+	device_desc_t \f2desc\*(fT,
+	iopaddr_t \f2addr\*(fT,
+	size_t \f2size\*(fT,
+	xtalk_piomap_t *\f2mapp\*(fT,
+	unsigned \f2flags\*(fT)
+.sp .8v
+caddr_t
+xtalk_piotrans_addr(vertex_hdl_t \f2vhdl\*(fT,
+	device_desc_t \f2desc\*(fT,
+	iopaddr_t \f2addr\*(fT,
+	size_t \f2size\*(fT,
+	unsigned \f2flags\*(fT)
+.sp .8v
+xtalk_piomap_t
+xtalk_piomap_alloc(vertex_hdl_t \f2vhdl\*(fT,
+	device_desc_t \f2desc\*(fT,
+	iopaddr_t \f2addr\*(fT,
+	size_t \f2size\*(fT,
+	size_t \f2max\*(fT,
+	unsigned \f2flags\*(fT)
+.sp .8v
+caddr_t
+xtalk_piomap_addr(xtalk_piomap_t \f2map\*(fT,
+	iopaddr_t addr,
+	size_t size);
+.sp .8v
+void
+xtalk_piomap_done(xtalk_piomap_t \f2xtalk_piomap\*(fT)
+.sp .8v
+void
+xtalk_piomap_free(xtalk_piomap_t \f2xtalk_piomap\*(fT)\f1
+.fi
+
+.SS Arguments
+
+.IP "\f2vhdl\f1" 8n
+is the appropriate XIO connection point.
+.IP "\f2desc\f1" 8n
+is a device descriptor, usually zero.
+.IP "\f2addr\f1" 8n
+is the XIO address on the target device.
+.IP "\f2size\f1" 8n
+is the size of the mapped region.
+.IP "\f2align\f1" 8n
+is a desired alignment.
+.IP "\f2max\f1" 8n
+is the maximum size mapped at any one time.
+.IP "\f2flags\f1" 8n
+is reserved and should be zero.
+.IP "\f2map\f1" 8n
+is the result of a previous xtalk_piomap_alloc call.
+.IP "\f2mapp\f1" 8n
+is a place to record a map that may be allocated.
+
+.SH DESCRIPTION
+
+When a device driver wishes to use
+Programmed I/O (PIO) to communicate with
+a device, the system needs to have a chance
+to set up any appropriate mapping registers.
+.P
+There are two different models for how
+to do this. The simple model provides
+permanent mappings through fixed mapping
+resources.
+.IP \(bu 4n
+.IR xtalk_piotrans_addr ()
+is generally called at device attach time
+to construct a permanent address that can
+be used for PIO access to a device's
+control registers; it attempts to use
+shared resources to construct a physical
+address that, when used, will route transactions
+to the proper target on the XIO bus.
+This is not always possible, and when
+it is not, the function will return NULL.
+.IP \(bu 4n
+.IR xtalk_pio_addr ()
+is a wrapper function that calls
+.IR xtalk_piotrans_addr ()
+to establish a mapping,
+and if that fails, it then
+allocates a piomap using
+.IR xtalk_piomap_alloc ()
+and fills it in using
+.IR xtalk_piomap_addr (),
+returning the resulting piomap
+via the map pointer \f2mapp\f1.
+.P
+It is not always possible to establish
+such mappings using common shared system
+resources, so the concept of a PIO channel
+that preallocates scarce mapping resources
+is provided.
+.P
+Such channels are allocated using
+.IR xtalk_piomap_alloc (),
+which is given the limits of the
+region that will be mapped, and the
+maximum size to be mapped from
+within that region.
+.IP \(bu 4n
+.IR xtalk_piomap_addr ()
+is then used to actually establish
+the proper mappings for a PIO target;
+given the address and the size of the
+region for PIO, it will hand back
+the base address to be used for accessing
+that region.
+.IP \(bu 4n
+If the same PIO channel is to be used
+at different times to map different
+target areas,
+.IR xtalk_piomap_done ()
+should be called to idle any mapping
+hardware (and possibly flush out
+any pipes or buffers along the path
+that might do unexpected things when
+mapping registers are modified).
+Then
+.IR xtalk_piomap_addr ()
+can again be called,
+specifying the new target area.
+.P
+When a driver is completely finished with
+a PIO channel -- either because the channel
+is used only for initialization of the
+device, or because the device or the driver
+is being shut down -- the PIO channel resources
+should be released back to the system using
+.IR xtalk_piomap_free ().
+
+.SH EXAMPLES
+
+Here is a contrived example of how
+one might initialize a very strange
+XIO card. It is not clear that this
+would be the best way to do it, but
+it does give an example of the relationship
+between the various functions.
+
+.if t .ft 4
+.nf
+xiofoo_attach(vertex_hdl_t vhdl)
+{
+	unsigned	*cfgspace;
+	struct xiofoo_devregs *devregs;
+	xtalk_piomap_t pmap;
+	xtalk_piomap_t cmap;
+	struct xiofoo_chan_config *tune;
+
+	...
+
+	/* Get a pointer we can use for PIO to our
+	 * device's control registers. This call
+	 * is blindly assuming that a "piotrans"
+	 * to the base of a widget will always work,
+	 * which we would like to be true but may
+	 * not be able to always guarantee.
+	 */
+	devregs = xtalk_piotrans_addr(
+		vhdl, 0,
+		0, sizeof (struct xiofoo_devregs),
+		0);
+
+	if (cfgspace == NULL) {
+		cmn_err(CE_ALERT,
+			"xiofoo_attach: xtalk_piotrans_addr failed");
+		return -1;
+	}
+
+	...
+
+	/* pretend our "channel" space is too big
+	 * to successfully map with piotrans, so
+	 * we have to use piomap, and that it is
+	 * too big for us to get it in one call
+	 * to piomap_addr.
+	 *
+	 * This would be the case, for instance,
+	 * if the board took its 48 bits of address
+	 * space, divided it into 16 equal pieces,
+	 * and assigned each one to a logical portion
+	 * of its task: on some large systems, we
+	 * just can't keep fixed shared mapping
+	 * resources set up for all 48 bits of all
+	 * the widgets in the system.
+	 */
+
+	cmap = xtalk_piomap_alloc(vhdl, 0,
+		CHAN_OFFSET, CHAN_SEP * CHANS,
+		sizeof (struct xiofoo_chan_config), 0);
+
+	for (chan = 0; chan < chans; ++chan) {
+		tune = (struct xiofoo_chan_config *)
+		xtalk_piomap_addr(cmap, CHAN_SEP * chan,
+			sizeof (struct xiofoo_chan_config));
+
+		/* now fiddle with this particular channel */
+		tune->chan = chan + 2;
+		tune->volume = 5;
+		tune->balance = 0;
+
+		xtalk_piomap_done(cmap);
+	}
+	xtalk_piomap_free(cmap);
+	...
+}
+.fi
+.ft 1
+
+.SH NOTES
+
+It is not necessary to separately establish
+mappings for each individual PIO target register;
+it is more efficient to use a single mapping to cover
+an entire device register set.
+
+.\" .SH FILES
+
+.SH "SEE ALSO"
+
+xtalk(D3),
+xtalk_dma(D3),
+xtalk_error(D3),
+xtalk_get(D3),
+xtalk_intr(D3).
+
+.SH DIAGNOSTICS
+
+.IR xtalk_piotrans_addr ()
+will return a null pointer if
+shared (fixed) resources can not be
+used to construct a valid physical
+address that maps to the desired
+range of XIO addresses.
+.P
+.IR xtalk_piomap_alloc ()
+will return a null pointer if resources
+can not be allocated to establish PIO
+mappings to the described region, or
+if the parameters are inconsistant.
+.P
+.IR xtalk_piomap_addr ()
+will return a null pointer if the specified
+target address can not be mapped using
+the specified PIO channel; this would usually
+be due to specifying a target block that is
+outside the previously specified target area
+or is larger than the previously specified
+maximum mapping size.
+It may also return a null pointer if the
+PIO channel is currently in use and has
+not been marked idle by a
+.IR xtalk_piomap_done ()
+call.

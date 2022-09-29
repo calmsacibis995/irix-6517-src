@@ -1,0 +1,188 @@
+.if n .pH ddi.rm/d2/gen/close @(#)close	43.14 of 12/5/92
+.\" Copyright 1992, 1991 UNIX System Laboratories, Inc.
+.TH close D2
+.IX "\f4close\fP(D2)"
+.SH NAME
+\f4close\fP \- relinquish access to a device
+.SH SYNOPSIS
+.SS "Block and Character Synopsis"
+.nf
+.na
+.ft 4
+#include <sys/types.h>
+#include <sys/file.h>
+#include <sys/errno.h>
+#include <sys/open.h>
+#include <sys/cred.h>
+#include <sys/ddi.h>
+.sp 0.4
+int \f2prefix\fPclose(dev_t \f2dev\fP, int \f2flag\fP, int \f2otyp\fP, cred_t *\f2crp\fP);
+.ft 1
+.ad
+.fi
+.SS "Block and Character Arguments"
+.RS 0
+.IP "\f2dev\fP" 10n
+Device number.
+.IP "\f2flag\fP" 10n
+File status flags.
+.IP "\f2otyp\fP" 10n
+Parameter supplied so that the driver can determine how many
+times a device was opened and for what reasons.
+.IP "\f2crp\fP" 10n
+Pointer to the user credential structure.
+.RE
+.SS "\s-1STREAMS\s+1 Synopsis"
+.nf
+.na
+.ft 4
+#include <sys/types.h>
+#include <sys/stream.h>
+#include <sys/file.h>
+#include <sys/errno.h>
+#include <sys/cred.h>
+#include <sys/ddi.h>
+.sp 0.4
+int \f2prefix\fPclose(queue_t *\f2q, \fPint \f2flag, \fPcred_t *\f2crp\fP);
+.ft 1
+.ad
+.fi
+.SS "\s-1STREAMS\s+1 Arguments"
+.RS 0
+.IP "\f2q\fP" 10n
+Pointer to queue used to reference the read side of
+the driver.
+.IP "\f2flag\fP" 10n
+File status flag.
+.IP "\f2crp\fP" 10n
+Pointer to the user credential structure.
+.RE
+.SH DESCRIPTION
+.SS "Block and Character Description"
+The \f4close\fP routine ends the
+connection between the user process and the device, and prepares the
+device (hardware and software) so that it is ready to be opened again.
+.P
+Valid values for \f2flag\fP and their definitions can be found in \f4open\fP(D2).
+.P
+The values for \f2otyp\fP are mutually exclusive:
+.RS
+.TP 12n
+\f4OTYP_BLK\fP
+Close was through the block interface for the device.
+.TP
+\f4OTYP_CHR\fP
+Close was through the raw/character interface for the device.
+.TP
+\f4OTYP_LYR\fP
+Close a layered device.
+This flag is used when one driver
+calls another driver's \f4close\fP routine.
+.RE
+.P
+For \f4OTYP_BLK\fP and \f4OTYP_CHR\fP,
+a device may be opened simultaneously by multiple processes and the
+driver \f4open\fP routine is called for each open, but the kernel will
+only call the \f4close\fP routine when the last process using the
+device issues a \f4close\fP(2) system call or exits.
+.P
+There is one exception to this rule.
+If a device is opened
+through both its character and its block interfaces, then there will
+be one close per interface.
+For example, if the same device is opened
+twice through its block interface and three times through its character
+interface, then there will be two calls to the driver's close routine;
+one when the block interface is finished being used, and one when the character
+interface is finished being used.
+.P
+For \f4OTYP_LYR\fP,
+there will be one such close for every corresponding open.
+Here, the driver should count each open and close based on the \f2otyp\fP
+parameter to determine when the device should really be closed.
+.SS "\s-1STREAMS\s+1 Description"
+The \f4close\fP routines of
+STREAMS drivers and modules are called
+when a stream is dismantled or a module popped.
+The steps for dismantling a stream are performed in the following
+order.
+First, any non-persistent multiplexor links present are unlinked and the 
+lower streams are closed.
+Next, the following steps are performed for each module or driver
+on the stream, starting at the head and working toward the tail:
+.RS
+.TP 4n
+1.
+The write queue is given a chance to drain.
+.TP
+2.
+Interrupts from STREAMS devices are blocked.
+.TP
+3.
+The \f4close\fP routine is called.
+.TP
+4.
+The module or driver is removed from the stream.
+.TP
+5.
+Any remaining messages on the queues are freed.
+.RE
+.SS "Return Values"
+The \f4close\fP routine should return 0 for success, or the
+appropriate error number.
+Refer to \f4errnos\fP(D5) for a list of DDI/DKI
+error numbers.
+Return errors rarely occur, but if a failure is
+detected, the driver should still close the device and then
+decide whether the severity of the problem
+warrants displaying a message on the console.
+.SH USAGE
+This entry point is required in all drivers and STREAMS modules.
+.P
+A \f4close\fP routine could perform any of the following general
+functions, depending on the type of device and the service provided:
+.RS 0
+.IP
+disable device interrupts
+.IP
+hang up phone lines
+.IP
+rewind a tape
+.IP
+deallocate buffers from a private buffering scheme
+.IP
+unlock an unsharable device
+(that was locked in the \f4open\fP routine)
+.IP
+flush buffers
+.IP
+notify a device of the close
+.IP
+cancel any pending timeout or bufcall routines that access data that are deinitialized
+or deallocated during close
+.IP
+deallocate any resources allocated on open
+.RE
+.SS "Synchronization Constraints"
+The \f4close\fP routine has user context and can sleep.
+However, STREAMS drivers
+and modules must sleep such that signals do not cause the
+sleep to longjump [see \f4sleep\fP(D3)].
+Also, if a \f4close\fP routine does sleep,
+it is important that the driver writer synchronize
+the driver's \f4open\fP and \f4close\fP routines,
+since a driver can be reopened while being closed.
+.P
+If the \f4FNDELAY\fP or \f4FNONBLOCK\fP flags are specified in
+the \f2flag\fP argument, the
+driver should try to avoid sleeping, if possible, during close processing.
+.SH REFERENCES
+.na
+\f4drv_priv\fP(D3),
+\f4errnos\fP(D5),
+\f4open\fP(D2),
+\f4queue\fP(D4),
+\f4unbufcall\fP(D3),
+\f4untimeout\fP(D3),
+\f4sleep\fP(D3)
+.ad

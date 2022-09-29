@@ -1,0 +1,389 @@
+grio_monitor.c
+--------------
+A monitor table monitor_info is maintained comprised of 
+MONITORED_STREAMS_COUNT entries. Each entry has space to hold information
+about start, endtimes and transferred sizes of GRIO_MONITOR_COUNT number
+of transfers. This is used to see whether the rate guarantees are
+actually being delivered or not.
+
+grio_monitor_start/stop		-	syssgi calls to acquire/release
+	 a monitor structure for monitoring a specific stream
+
+grio_monitor_io_start/end	-	The direct io rd/wr routines
+	call in here to register start/end times of io requests
+
+grio_monitor_read		-	syssgi hooks to read the monitor
+	info
+
+grio_comm.c
+-----------
+grio_q_sema = sync sema ggd sleeps on, waiting for requests
+grio_q	    = ggd command queue
+
+grio_wait_for_msg_response	-	Wait for a response to the
+	ggd request
+
+grio_remove_msg_from_queue	-	Check if the given message 
+	is on the grio message queue and remove it
+
+grio_add_msg_to_q_and_wait	-	Put the ggd request into the
+	queue, poke ggd to look at it, and wait for a response to 
+	the request, removing the request from the queue if a signal
+	occurs
+
+grio_issue_grio_req		-	Allocate a queue element, 
+	copy in the user's request into it, put it in the queue,
+	wait for a response to the request, copy out the response 
+	to user and free the queue element
+
+grio_add_async_msg_to_q		-	Add a queue element to to
+	ggd queue and poke ggd to go service it
+
+grio_issue_async_grio_req	-	Allocate a queue element,
+	fill in with the ggd command, add it to the queue and return
+	w/o waiting for a response. Used only for purge vdisk cache
+
+grio_resp_grio_req		-	Routine by which ggd responds
+	back to the command it was executing in the queue by copying
+	the result back to user's command structure, takes the
+	completed command off the queue and wakes up the requesting
+	process
+
+grio_read_grio_req		-	Routine by which ggd reads
+	the next command to service. If the queue is empty, use the
+	passed in gr_time_to_wait to wait for a specific period of
+	time, then look again in the queue. Depending on whether
+	this is a sync/async request, take the command off the queue
+	before going to service it
+
+grio_queue_wakeup		- Timeout routine to wake up ggd 
+	when its time for it to go back to user space
+
+grio_start_subreq		-	Call the underlying block 
+	driver corresponding to the input buffer
+
+grio_start_bpqueue		-	Create a daemon bpsqueue
+	that picks up buffers from grio_subreq_bpqueue and dispatches 
+	them to the block drivers
+
+
+grio.c
+-------
+grio_make_bp_page_req		-	For pageio buffers, this sets
+	up the b_pages pointers for the component buffers, so that each 
+	buffer can request optiosz data from the driver
+
+grio_make_bp_list		-	Given a requst for a big chunk,
+	this breaks up the request into optiosize chunks, allocates a
+	component buffer for each of these subrequests, chains them up
+	using the b_grio_list chain, and sets up the dma location and 
+	count for each of the sub buffers
+
+griostrategy			-	Invoked from xlvstrategy for
+	any io. If the disk is non RT, pass on the request to the disk 
+	driver. Else find the stream associated with this request, marking
+	the io as nongrio if the stream is being removed. Break up the
+	request into the disk optiosize subrequests, chaining the 
+	subrequests into the disk/stream info. Update time stats for
+	the stream/disk, and send the highest priority pending io down 
+	to the disk
+
+grio_iodone			-	Get the disk and stream/disk
+	info for the completed io. If this is the completion of one
+	real io, start on the next real io and wake up the process
+	which issued the completed real io. In any case, free the
+	component buffer, and send down the next highest priority 
+	request to the disk
+
+grio_start_next_io		-	From the disk info, get the
+	next highest priority buffer that should be sent down to the
+	driver. If this is being invoked from a process context, call 
+	into the driver to schedule the io, else if invoked in a disk 
+	isr context, queue the request to a daemon which sends it down
+	to the driver
+
+grio_sub.c
+----------
+The stream id non_guaranteed_id is a place holder for nongrio to the
+disk
+
+The stream info for every <fd, pid> pair is stored in the hash table
+grio_stream_table (protected by GRIO_STABLE_LOCK) indexed by pid.
+
+Each buffer has the stream id encoded into its b_grio_private field,
+and the disk is easily located using b_edev.
+
+grio_queue_bp_request			-	Grio is servicing
+	a request for another real io for this stream. Queue this real 
+	io request into the queuedbps list
+
+grio_get_disk_info/grio_disk_info	Given a disk device, return
+	its grio specific disk info
+
+grio_add_disk_wrapper/grio_add_disk_info
+	For the disk device, put the user passed in optiosz, max iops 
+	etc into the grio_disk_info_t for this disk; also, add a stream 
+	disk info struct for nongrio at the rate of 64K in 100 ticks in
+	1 io. syssgi GRIO_ADD_DISK_INFO and GRIO_UPDATE_DISK_INFO service
+
+grio_add_stream_disk/grio_add_stream_disk_wrapper
+	Add the stream disk info corresponding to the input stream id 
+	for the input disk device, and link in the structure into the 
+	disk and stream chains. syssgi GRIO_ADD_STREAM_DISK_INFO service
+
+grio_remove_stream_disk_info		- 	Given the stream, walk
+	down the nextdiskinstream chain and shoot down the structures
+
+grio_get_stream_id_wrapper/grio_find_stream_with_proc_dev_inum	
+	Given the fsdev, inode num and the pid, return the stream info 
+	if it exists back to the user. syssgi GRIO_GET_STREAM_ID service
+
+grio_find_stream_with_id		-	Given a stream id, 
+	search the stream table for a matching id and return it
+
+grio_add_stream_wrapper/grio_add_stream_info
+	If a stream info already exists for this id, return error, else
+	pull in user passed info and stash info into stream table
+
+grio_associate_file_with_stream_wrapper/grio_associate_file_with_stream
+	Used to associate an active stream id with a possibly different
+	process on a possibly different file. Check PROC_PRIVATE_GUAR,
+	PER_FILE_GUAR, that the stream refers to same fs as new file
+	and finally move the stream info in the stream table to the
+	hash bucket of the new process. syssgi GRIO_ASSOCIATE_FILE
+	service
+
+grio_get_stream_to_remove		-	From the stream table
+	return an active stream that is not nonguaranteed
+
+grio_remove_stream_info_wrapper/grio_remove_stream_info/
+grio_remove_all_streams
+	Lock the active stream for the input id, wait for any io that
+	is being initiated on this stream to start, mark the stream as
+	being removed to prevent further io, delete the stream from the
+	stream table and any associated stream disk info. syssgi 
+	GRIO_REMOVE_STREAM_INFO/GRIO_REMOVE_ALL_STREAMS_INFO service
+
+grio_get_all_streams			-	From the stream table,
+	return the fsdev, i# and pid of each active stream. syssgi
+	GRIO_GET_ALL_STREAMS service
+
+grio_get_vod_disk_info			-	syssgi GRIO_GET_VOD_DISK_INFO
+	service
+
+grio_get_stream_disk_info		-	Given a buffer, return 
+	the associated stream disk info
+
+grio_purge_vdisk_cache			-	Called from xlv to send
+	a message upto ggd to purge the cached info for this xlv
+
+grio_add_nonguaranteed_stream_info	-	Add the non_guaranteed_id
+	stream into the stream table
+
+grio_free_bp				-	Free the b_grio_private
+	data, clean the buffer of b_grio_list and b_iodone and return it
+	to the free pool. Invoked from grio_iodone
+
+grio_remove_reservation			-	Called from xfs on last
+	close of a file to inform ggd to resources allocated to this
+	stream id
+
+grio_get_info_from_bp			-	Get the stream disk info
+	for the buffer, associating it with non grio if required
+
+grio_wait_for_stream_to_drain		-	Wait until the completion 
+	of the outstanding i/o on this stream, marked by each stream 
+	disk info having no associated buffer
+
+grio_mark_bp_as_unreserved		-	Mark the input buffer
+	as not belonging to a grio stream (DUPLICATE GR_BUF?)
+
+grio_get_queued_bp_request		-	Get the next request 
+	to issue on this disk for this stream by looking at the buffer
+	queue associated with input disk stream info, and make it
+	the current request for this stream for this disk
+
+grio_complete_real_bp			-	If input buffer is not
+	a grio buffer, free its b_grio_private and invoke iodone on it
+
+grio_determine_wait_until_priority	-	Determine time when the
+	input stream disk info will have priority for io on this disk. 
+	This stream has priority if it still has to deliver some iops
+	in this period, or if its interval period is already over etc.
+	Else, it can wait till its period will end
+
+grio_get_priority_bp			-	Returns a priority for
+	the input disk/stream. This is based on how many io requests
+	for the last time quantum are yet to be satisfied, and if the
+	system has failed to respect its last quantum. The stream/disks'
+	notion of the current slot is also altered here
+
+grio_determine_stream_priority		-	Return the highest
+	priority real io that needs to be sent down to this disk,
+	depending on all its disk/stream structures. There's timeout
+	optimizations to start a stream later when another stream with 
+	unused reservation has priority, to use up the other stream's
+	priority
+
+
+			IO buffer being serviced
+	       		       ------
+			       |    |
+			       |    |--------------------------
+		    ---------->|    |   b_grio_list components |
+		    |	       |    |-----------A--------------
+		    |	       |    |		|
+		    |	       ------		|  bp_list
+		    |---------------------------|  
+realbp		    |
+		---------	real IO buffers and their components
+		|	|	------		------		------
+		|	|	|    | av_back	|    |		|    |
+queuedbps_front |	|----->	|    |<--------	|    |<--------	|    |
+		|	|	|    |		|    |		|    |
+		|	|	|    |		|    |		|    |
+		|	|	------		------		---A-
+queuedbps_back	|	|------------------------------------------|
+		---------
+	grio_stream_disk_info
+
+
+Kernel hooks:
+
+GRIO supports io only to RT xlv subvols thru direct io (Q: how do we
+flag direct io? Set thru the file flags by fcntl?). For this, read/
+write() calls xfs_read/write() with an ioflag indicating direct io.
+xfs_diordwr is invoked, which checks if the file is RT, and if so,
+marks the buffer as B_GR_BUF if a stream is in effect for the requesting
+process on this specific file before sending it down to xfs_diostrat
+via biophysio. This invokes the underlying driver strategy (xlvstrategy)
+which knows to send the file down to griostrategy because it sees the 
+B_GR_BUF flag set.
+
+PRIO works by setting a FPRIORITY flag in the file structure thru 
+a fcntl FSETBW(which also allocates bw on the path), and then doing 
+read/writes to the file. xfs_read/write sees the IO_PRIORITY as part 
+of the ioflags, and marks a B_PRIO_BUF before sending it down to the 
+xfs_diostrat routine, and thence the disk/xlv strategy routines.
+
+If PRIO/GRIO merge, xfs_diordwr must check for stream existence for
+all types of files, and each stream stores info whether this is a
+HARD/SOFT/PRIO guarantee. In case there is a guarantee, the buffer
+is tagged B_GR_BUF before it goes down to xfs_diostrat. We need a 
+nasty hack here which will let the io go to xlvstrategy, but will 
+redirect dkscstrategy traffic to griostrategy. Or we need to tell 
+the disk driver to look at the B_GR_BUF and bounce it back to 
+griostrategy. Also, how are we going to handle PRIO requests to
+device files?
+
+Tree removal notes: Need a way to get stats about a device, given 
+the device number, unless that information can be sent down from the
+kernel. Like is it a XBOW, in which case we know the speed etc. This
+info is needed once we have the dma path to the device, and can be
+cached with device numbers.
+
+The SCSI controllers will have to be queried thru getinvent calls
+to see what kind of devices they are attached to, so that we can set
+the HARD GUAR flag. For a specific controller, the device # can be 
+found by a stat call from the path name in /etc/ioconfig.conf. For 
+all non SCSI components (like EVEREST code ignores VME), default is 
+hard guarantee (is that a good assumption?). For all SCSI controllers, 
+look at the node info for the guarantee type.
+
+
+
+Different levels of priority IO
+-------------------------------
+Conceptually, all io in a system should go thru ggd, since any
+io which does not has the risk of overflooding some component
+in the path of a guaranteed stream. Since this is a bit hard to
+achieve, the recommendation is to put all RT disks (or disks on
+which some form of guarantee is desired) on their own bus to 
+minimize interference from non guaranteed io about which ggd has
+no knowledge.
+
+If ggd is running (which implies grio.a is in the kernel), then the
+grio and prio library calls can be invoked, so that streams are 
+marked IO_PRIORITY/FPRIORITY for the reservation durations. Normal
+accesses are only allowed if there is bandwidth remaining after
+servicing the reserved rates of the special streams. For RT xlv 
+volumes, grio maintains a queue of disk requests and sends down
+one request at a time to disk queue R (no queueing at the dksc or
+firmware level) for guranteed performance; also, ggd turns
+on DIOCNORETRY. Non RT disks do not have DIOCNORETRY set on them,
+and grio allows more than 1 request to be issued to the dksc layer
+(subject to certain conditions) except that guaranteed streams are 
+placed on a higher priority queue in dksc (Q0) that is serviced 
+before the regular queue (R).  Since ggd does component bandwidth 
+checking, in the absence of nonscheduled streams and FPRIO requests 
+(about which ggd has no knowledge), the cooperating processes will
+mostly receive the bandwidth they requested. ggd also sets
+aside some bandwidth for use by non reserved steams.  In the case 
+of both RT and non RT disks, grio breaks down the requests into 
+optiosz chunks before sending it down to the disk (so that it can 
+characterize the iotime).
+
+FPRIO requests are recommended for systems that do not use grio
+(for whatever reasons, including performance, single point of 
+failure in ggd etc). This method just specifies heirarchies of
+importance of IOs to different files, but do not request any
+specific bandwidth priviledges. When used alongwith ggd, they will 
+make absolutely no difference for io to RT disks, since grio 
+sends a request at a time down to dksc, and the algorithm that
+grio uses does not include the priority value. For non RT disks
+though, FPRIO requests will go to the proper queue in dksc, and
+hence can disrupt the rates established for the FPRIORITY streams
+which are serviced via Q0 (specially since today, nongrio requests
+to regular disks are not controlled by griostrategy)
+
+Decision about next io to issue to disk: Pick the highest priority
+stream that has yet to receive io this time quantum. If there is 
+none, decide if it is safe to issue an overbandwidth request from
+a guaranteed stream, or from a non guaranteed stream. If unsafe,
+just queue a timeout so that the timeout will hit at the next time
+quantum and send down a request to the disk (otherwise there may 
+not be anyone to send down the next request).
+
+Implementation notes
+--------------------
+The dksc layer uses the foll method:
+If BUF_IS_IOSPL, b_grio_private is non NULL. Then,
+If B_GR_ISD, if B_PRV_BUF is not set, then use lowest hi pri q.
+	   , if B_PRV_BUF is set, then get queue id from grio_iopri.
+If no B_GR_ISD, then B_PRV_BUF has to be set, get queue id from b_iopri.
+On the other hand, if BUF_IS_IOSPL is not true, then the request can 
+go to the rular queue.
+
+The buffer field b_grio_private is overloaded as b_iopri. It is exclusively
+used as b_iopri if grio.a is not in the kernel. In case grio is loaded
+b_iopri is used for non rt disks not being controlled by grio. When a 
+disk starts getting controlled by grio, grio_iopri is used to hold the
+io priority.
+
+
+FPRIORITY flag
+----------------
+This flag is set by GRIO_ASSOCIATE_FILE_WITH_STREAM call. It is
+cleared from a file by doing a GRIO_ASSOCIATE_FILE_WITH_STREAM
+on the stream to a different file, by a GRIO_DISSOCIATE_STREAM,
+stream removal ie GRIO_REMOVE_STREAM_INFO and at vfile close
+time. The setting and clearing is done with VFLOCK protection,
+but since the read/write code checks w/o the lock, it is possible
+that they miss it. This flag is seen at vfile close time to see
+if there is possible cleanup work needed - since the flag is set
+only thru an ASSOCIATE call, there is no race in checking w/o 
+locks at close time. 
+
+
+Stream Table
+-------------
+The table is indexed by a hash function based on the file. Streams
+can be in associated, active and dissociated states. The first
+state means that ggd has told the kernel about the stream since 
+the start time of the reservation has come. The second state means
+that the owning process has made the associate call and all further
+io to the file is to be guaranteed. The dissociate state is when
+the filesys guarantee has been dissociated from any file, and is 
+free for attaching to a file in the file system; or when the
+attached file has been closed. In this state, the stream is 
+chained off index 0 in the table.

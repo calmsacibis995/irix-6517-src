@@ -1,0 +1,433 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	xdk.tlib
+# Version:	$Revision: 1.7 $
+# Synopsis:	Utility functions for the XFSM disk manager application.
+# Packages:	XDK-Base
+# Packages:	XDK-Util
+#%COMMENT_END
+
+
+#%COMMENT_BEGIN
+# Package:	XDK-Base
+# Functions:	xdk:mbytetoblk
+#		xdk:mkStdParts
+#		xdk:_mkStdParts
+#
+# Function:	xdk:mbytetoblk
+# Synopsis:	Return block number corresponding to value in megabytes
+# Arguments:	- mbyte		The number of megabytes
+#		- d_secbytes	The number of bytes per sector.
+#
+# Function:	xdk:mkStdParts
+# Synopsis:	Determines the cylinder of a given block for a disk.
+# Arguments:	- part_data	A reference to an array variable in which
+#				to store the resultant partition information.
+#		- style		Identifies which of the predefined partitioning
+#				algorythms to use.  This in one of:  ROOT,
+#				USRROOT, OPTION.
+#		- d_type	The type of the disk (SCSI or RAID).
+#		- d_drivecap	Drive capacity in blocks
+#		- d_secbytes	The number of bytes per sector.
+#
+# Function:	xdk:_mkStdParts
+# Synopsis:	Determines the cylinder of a given block for a disk.
+# Arguments:	- part_data	A reference to an array variable in which
+#				to store the resultant partition information.
+#		- styles	A list of which of the predefined partitions
+#				to create.  This is a subset of:  VOLUME,
+#				VOLHDR, FSROOT, FSSWAP, FSUSR
+#		- d_type	The type of the disk (SCSI or RAID).
+#		- d_drivecap	Drive capacity in blocks
+#		- d_secbytes	The number of bytes per sector.
+#%COMMENT_END
+
+#@package: XDK-Base	xdk:mbytetoblk xdk:mkStdParts xdk:getDefTmpls
+
+global	_GD_xdk
+
+. getAppResources {
+	{ defaultPartType \
+	  DefaultPartType \
+	  xfs \
+	  _GD_xdk(DEFAULT,type) }
+    }
+
+set	_GD_xdk(FSROOT,type)	$_GD_xdk(DEFAULT,type)
+set	_GD_xdk(FSSWAP,type)	raw
+set	_GD_xdk(FSUSR,type)	$_GD_xdk(DEFAULT,type)
+set	_GD_xdk(FSALL,type)	$_GD_xdk(DEFAULT,type)
+set	_GD_xdk(VOLHDR,type)	volhdr
+set	_GD_xdk(VOLUME,type)	volume
+
+####	These numbers were taken from fx (fx.h)
+set	_GD_xdk(FSROOT,num)	0
+set	_GD_xdk(FSSWAP,num)	1
+set	_GD_xdk(FSUSR,num)	6
+set	_GD_xdk(FSALL,num)	7
+set	_GD_xdk(VOLHDR,num)	8
+set	_GD_xdk(VOLUME,num)	10
+set	_GD_xdk(XFSLOG,num)	15
+
+####	These numbers were taken from fx (pt.c: Revision 1.56)
+set	_GD_xdk(VOLHDR,min)	[expr 1024 * 1024]
+set	_GD_xdk(FSROOT,pct)	4
+set	_GD_xdk(FSROOT,min)	18
+set	_GD_xdk(FSROOT,max)	50
+set	_GD_xdk(FSSWAP,pct)	10
+set	_GD_xdk(FSSWAP,min)	39
+set	_GD_xdk(FSSWAP,max)	128
+set	_GD_xdk(XFSLOG,logsize)	4
+
+set	_GD_xdk(schemas)	{HALVES THIRDS FOURTHS FIFTHS
+				 SIXTHS SEVENTHS EIGHTHS}
+
+#########################################
+#		Public			#
+#########################################
+proc xdk:mbytetoblk { mbyte d_secbytes } \
+{
+	return [expr $mbyte * ((1024 *1024) / $d_secbytes)]
+}
+
+proc xdk:mkStdParts { part_data style d_type d_drivecap d_secbytes} \
+{
+	upvar $part_data data
+
+	switch $style {
+		ROOT	{ set styles { VOLUME VOLHDR FSROOT FSSWAP } }
+		USRROOT	{ set styles { VOLUME VOLHDR FSROOT FSSWAP FSUSR } }
+		OPTION	{ set styles { VOLUME VOLHDR FSALL } }
+		HALVES	 -
+		THIRDS	 -
+		FOURTHS	 -
+		FIFTHS	 -
+		SIXTHS	 -
+		SEVENTHS -
+		EIGHTHS	 { set styles "VOLUME VOLHDR $style" }
+	}
+
+	xdk:_mkStdParts data $styles $d_type $d_drivecap $d_secbytes
+}
+
+proc xdk:getDefTmpls {} \
+{
+	global	_GD_xdk
+	foreach item $_GD_xdk(schemas) {
+		lappend tmpls "_TEMPLATE_ DISK $item -"
+	}
+	return $tmpls
+}
+
+#########################################
+#		Private			#
+#########################################
+proc xdk:_mkStdParts {part_data styles d_type d_drivecap d_secbytes} \
+{
+	global	_GD_xdk
+
+	upvar $part_data data
+
+	set logblks 0
+	set nblks 0
+
+	if {$d_type == "SCSI" || $d_type == "RAID"} {
+		set l 0
+	}
+
+	if {[lsearch -exact $styles VOLUME] != -1} {
+	    set n $_GD_xdk(VOLUME,num)
+	    set data($n,type) $_GD_xdk(VOLUME,type)
+	    set data($n,start) 0
+	    set data($n,size) $d_drivecap
+	    set data($n,end) [expr $data($n,start) + $data($n,size)]
+	    set nblks $data($n,size)
+	}
+
+	if {[lsearch -exact $styles VOLHDR] != -1} {
+	    set n $_GD_xdk(VOLHDR,num)
+	    set data($n,type) $_GD_xdk(VOLHDR,type)
+	    set data($n,start) 0
+	    set data($n,size) [xdk:mbytetoblk 2 $d_secbytes]
+	    set data($n,end) [expr $data($n,start) + $data($n,size)]
+	    set nblks [expr $nblks - $data($n,size)]
+	}
+
+	if {[lsearch -exact $styles XFSLOG] != -1} {
+	    set logblks [xdk:mbytetoblk $_GD_xdk(XFSLOG,logsize) $d_secbytes]
+	}
+
+	if {[lsearch -exact $styles FSALL] != -1} {
+	    set n $_GD_xdk(FSALL,num)
+	    set data($n,type) $_GD_xdk(FSALL,type)
+	    set data($n,start) $data($_GD_xdk(VOLHDR,num),end)
+	    set data($n,size) $nblks
+	    if {[lsearch -exact $styles XFSLOG] != -1} {
+		set data($n,size) [expr $data($n,size) - $logblks]
+	    }
+	    set data($n,end) [expr $data($n,start) + $data($n,size)]
+	}
+
+	if {[lsearch -exact $styles FSROOT] != -1} {
+	    set n $_GD_xdk(FSROOT,num)
+	    set data($n,type) $_GD_xdk(FSROOT,type)
+	    set data($n,start) $data($_GD_xdk(VOLHDR,num),end)
+	    if {[lsearch -exact $styles FSUSR] != -1} {
+		set l [expr ($d_drivecap / 100) * $_GD_xdk(FSROOT,pct)]
+		set s [xdk:mbytetoblk $_GD_xdk(FSROOT,min) $d_secbytes]
+		incr s
+		if {$l < $s} { set l $s }
+
+		set s [xdk:mbytetoblk $_GD_xdk(FSROOT,max) $d_secbytes]
+		if {$l > $s} { set l $s }
+
+		if {$l > $nblks} { set l $nblks }
+		set data($n,size) $l
+		set nblks [expr $nblks - $l]
+	    } else {
+		set l [expr ($d_drivecap / 100) * $_GD_xdk(FSSWAP,pct)]
+		set s [xdk:mbytetoblk $_GD_xdk(FSSWAP,min) $d_secbytes]
+		incr s
+		if {$l < $s} { set l $s }
+
+		set s [xdk:mbytetoblk $_GD_xdk(FSSWAP,max) $d_secbytes]
+		if {$l > $s} { set l $s }
+
+		set data($n,size) [expr $nblks - $l]
+		set nblks [expr $nblks - $data($n,size)]
+	    }
+	    set data($n,end) [expr $data($n,start) + $data($n,size)]
+	}
+	
+	if {[lsearch -exact $styles FSSWAP] != -1} {
+	    set n $_GD_xdk(FSSWAP,num)
+	    set data($n,type) $_GD_xdk(FSSWAP,type)
+	    set data($n,start) $data($_GD_xdk(FSROOT,num),end)
+
+	    set l [expr ($d_drivecap / 100) * $_GD_xdk(FSSWAP,pct)] 
+	    set s [xdk:mbytetoblk $_GD_xdk(FSSWAP,min) $d_secbytes]
+	    incr s;
+
+	    if {$l < $s} { set l $s }
+
+	    set s [xdk:mbytetoblk $_GD_xdk(FSSWAP,max) $d_secbytes]
+	    if {$l > $s} { set l $s }
+
+	    if {$l > $nblks} { set l $nblks }
+
+	    set data($n,size) $l
+	    set nblks [expr $nblks - $l]
+	    set data($n,end) [expr $data($n,start) + $data($n,size)]
+	}
+
+	if {[lsearch -exact $styles FSUSR] != -1} {
+	    set n $_GD_xdk(FSUSR,num)
+	    set data($n,type) $_GD_xdk(FSUSR,type)
+	    set data($n,start) $data($_GD_xdk(FSSWAP,num),end)
+	    set data($n,size) $nblks
+
+	    if {[lsearch -exact $styles XFSLOG] != -1} {
+		set data($n,size) [expr $data($n,size) - $logblks]
+	    }
+	    set data($n,end) [expr $data($n,start) + $data($n,size)]
+	}
+
+	if {[lsearch -exact $styles XFSLOG] != -1} {
+	    set n $_GD_xdk(XFSLOG,num)
+	    set data($n,type) $_GD_xdk(XFSLOG,type)
+	    if {[lsearch -exact $styles FSUSR] != -1} {
+		set data($n,start) $data($_GD_xdk(FSUSR,num),end)
+	    } else {
+		set data($n,start) $data($_GD_xdk(FSALL,num),end)
+	    }
+	    set data($n,size) $logblks
+	    set nblks [expr $nblks - logblks]
+	}
+
+	if {[lsearch -exact $styles HALVES] != -1}	{ set chunks 2 }
+	if {[lsearch -exact $styles THIRDS] != -1}	{ set chunks 3 }
+	if {[lsearch -exact $styles FOURTHS] != -1}	{ set chunks 4 }
+	if {[lsearch -exact $styles FIFTHS] != -1}	{ set chunks 5 }
+	if {[lsearch -exact $styles SIXTHS] != -1}	{ set chunks 6 }
+	if {[lsearch -exact $styles SEVENTHS] != -1}	{ set chunks 7 }
+	if {[lsearch -exact $styles EIGHTHS] != -1}	{ set chunks 8 }
+
+	if {[info exists chunks]} {
+	    set start $data($_GD_xdk(VOLHDR,num),end)
+	    set size [expr $d_drivecap - $data($_GD_xdk(VOLHDR,num),size)]
+	    set size [expr $size / $chunks]
+
+	    loop n 0 $chunks 1 {
+		set data($n,type) $_GD_xdk(DEFAULT,type)
+		set data($n,start) $start
+		set data($n,size) $size
+		set data($n,end) [expr $data($n,start) + $data($n,size)]
+		set start $data($n,end)
+	    }
+	}
+}
+#@packend
+
+#%COMMENT_BEGIN
+# Package:	XDK-Util
+# Functions:	xdk:autoscale
+#		xdk:chkMounts
+#
+# Function:	xdk:autoscale
+# Synopsis:	Automatically scale a template to fit the current disk.
+# Arguments:	- tmpl_size	The size (in blocks) of the template.
+#		- tmpl_data	The data describing the template.
+#		- disk_size	The size (in blocks) of the current disk.
+#		- disk_data	The data describing the current disk.
+#
+# Function:	xdk:chkMounts
+# Synopsis:	Check a disk for mounted file systems.
+# Arguments:	- object	The object signature of the disk to check.
+#		- hdr		A reference to a variable in which to store a
+#				synopsis of the results of the operation.
+#		- msg		A reference to a variable in which to store the
+#				detailed results of the operation.
+#%COMMENT_END
+
+#@package: XDK-Util	xdk:autoscale xdk:chkMounts
+
+proc xdk:autoscale { tmpl_size tmpl_data disk_size {disk_data ""} } \
+{
+	upvar $tmpl_data t_data
+
+	set pct [expr $disk_size.0 / $tmpl_size.0]
+
+	foreach item $t_data {
+		lassign [split $item :] key val
+		set t_arr($key) $val
+		lassign [split $key .] cname row
+		if {! [regexp ".*\.8:.*|.*\.9:.*|.*\.10:.*" $item]} {
+			switch $cname {
+				start -
+				size -
+				end {
+				    if {0 == 1} {
+					set item $key:[int [expr $val * $pct]]
+				    } else {
+					set nval [int [expr $val * $pct]]
+					set nt_arr($key) $nval
+					set item $key:$nval
+				    }
+				}
+				default {
+					set nt_arr($key) $val
+				}
+			}
+		}
+	}
+
+	foreach item $disk_data {
+		lassign [split $item :] key val
+		set d_arr($key) $val
+	}
+
+	foreach p {8 9 10} {
+		foreach item {start size end type} {
+			if {[info exists d_arr($item.$p)]} {
+				set nt_arr($item.$p) $d_arr($item.$p)
+			}
+		}
+	}
+
+	loop p 0 16 1 {
+		if {! [info exists nt_arr(start.$p)] || \
+		    $p == 8 || $p == 9 || $p == 10} {
+			continue
+		}
+
+		loop q 0 16 1 {
+			if {[info exists t_arr(start.$p)] && \
+			    [info exists t_arr(end.$q)] && \
+			    [info exists nt_arr(start.$p)] && \
+			    [info exists nt_arr(end.$q)]} {
+				if {[cequal $t_arr(start.$p) $t_arr(end.$q)]} {
+					set nt_arr(start.$p) $nt_arr(end.$q)
+				}
+			}
+			if {[info exists t_arr(end.$p)] && \
+			    [info exists t_arr(start.$q)] && \
+			    [info exists nt_arr(end.$p)] && \
+			    [info exists nt_arr(start.$q)]} {
+				if {[cequal $t_arr(end.$p) $t_arr(start.$q)]} {
+					set nt_arr(end.$p) $nt_arr(start.$q)
+				}
+			}
+		}
+		if {[info exists d_arr(end.8)]} {
+			if {[expr $nt_arr(start.$p) < $d_arr(end.8)]} {
+				set nt_arr(start.$p) $d_arr(end.8)
+				set nt_arr(size.$p) [expr $nt_arr(end.$p) - \
+							  $nt_arr(start.$p)]
+			}
+		}
+		if {[info exists d_arr(start.9)]} {
+			if {[expr $nt_arr(end.$p) > $d_arr(start.9)]} {
+				set nt_arr(end.$p) $d_arr(start.9)
+				set nt_arr(size.$p) [expr $nt_arr(end.$p) - \
+							  $nt_arr(start.$p)]
+			}
+		}
+		if {[info exists d_arr(end.10)]} {
+			if {[expr $nt_arr(end.$p) > $d_arr(end.10)]} {
+				set nt_arr(end.$p) $d_arr(end.10)
+				set nt_arr(size.$p) [expr $nt_arr(end.$p) - \
+							  $nt_arr(start.$p)]
+			}
+		}
+	}
+	foreach key [array names nt_arr] {
+		lappend ndata $key:$nt_arr($key)
+	}
+
+	set t_data $ndata
+}
+
+proc xdk:chkMounts { object hdr msg } \
+{
+	upvar $hdr	header
+	upvar $msg	message
+	set rval	0
+	
+	set header "Warning: Partitioning May Result In Loss Of Data"
+	set message ""
+
+	set dname [file tail [obj:getName $object]]
+	if {[catch {set data [xfsmChkMounts $object]} error]} {
+		regsub -all -- "\n" [string trim $error] \
+				" @n \\\ \\\ " nerror
+		set message "\
+The check for mounted partitions on \\\"$dname\\\" failed. @n @n \
+Please be sure that none of the partitions on this disk are @n \
+currently in use.  The repartition of this disk may result @n \
+in the loss of data.  Continue at your own risk!!! @n @n \
+\\\ \\\ $nerror"
+		set rval 1
+	} elseif {[clength $data] != 0} {
+		regsub -all -- " " [string trim $data] "\\\ " ndata
+		regsub -all -- "\n" $ndata " @n \\\ \\\ " data
+		set message "\
+The disk \\\"$dname\\\" contains partitions that are currently in use @n \
+Partitioning this disk may result in the loss of data. @n @n \
+\\\ \\\ $data"
+		set rval 1
+	}
+
+	return $rval
+}
+#@packend

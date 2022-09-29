@@ -1,0 +1,352 @@
+.TH quotas 4
+.SH NAME
+quotas \- filesystem quota subsystem
+.SH DESCRIPTION
+In most computing environments, disk space is not
+infinite.
+The lbootable \f3quotas\fP subsystem provides a mechanism
+to control usage of disk space.
+Quotas can be set for each individual user on any or
+all of the local filesystems.
+The quotas subsystem warns users when they
+exceed their allotted limit, but allows some
+extra space for current work (hard limit/soft limit).
+In addition, XFS filesystems with limit enforcement turned off
+can be used as an effective disk usage accounting system.
+.SS "Users' Views of Disk Quotas"
+To most users, disk quotas are either of no concern
+or a fact of life that cannot be avoided.
+There are two possible quotas that can be
+imposed; usually if one is imposed, both are.
+A limit can be set on the amount of space a user
+can occupy, and there may be a limit on the number
+of files (inodes) he can own.
+.P
+The \f2quota\fP(1) command
+provides information on the quotas that have
+been set by the system administrators and current usage.
+.P
+There are four numbers for each limit:
+current
+usage, soft limit (quota), hard limit, and time limit.
+The soft limit is the number of 1K blocks (or files)
+that the user is expected to remain below.
+The hard limit cannot be exceeded.
+If a user's usage reaches the hard limit, further
+requests for space (or attempts to create a file)
+fail with an EDQUOT/ENOSPC error.
+.P
+When a user exceeds the soft limit, the timer is enabled.
+Any time the quota drops below the soft limits, the timer
+is disabled.
+If the timer pops, the
+particular limit that has been exceeded is treated
+as if the hard limit has been reached, and no
+more resources are allocated to the user.
+The \f3only\fP way to reset this condition, short of turning off limit enforcement
+or increasing the limit, is to reduce usage below quota.
+Only the superuser can set the
+time limits and this is done on a per filesystem basis.
+.SS "Surviving When the Quota Limit Is Reached"
+In most cases, the only way for a user to recover from over-quota
+conditions is to abort whatever activity is in progress
+on the filesystem that has reached its limit, remove
+sufficient files to bring the limit back below quota,
+and retry the failed program.
+.P
+However, if a user is in the editor and a write fails
+because of an over quota situation, that is not
+a suitable course of action.
+It is most likely
+that initially attempting to write the file
+has truncated its previous contents, so if
+the editor is aborted without correctly writing the
+file, not only are the recent changes lost, but
+possibly much, or even all, of the contents
+that previously existed.
+.P
+There are several possible safe exits for a user
+caught in this situation.
+He can use the editor \f3!\fP shell escape command to
+examine his file space and remove surplus files.
+Alternatively, using \f2csh\fP(1), he can suspend the
+editor, remove some files, then resume it.
+A third possibility is to write the file to
+some other filesystem (perhaps to a file on \f2/tmp\f1)
+where the user's quota has not been exceeded.
+Then after rectifying the quota situation,
+the file can be moved back to the filesystem
+it belongs on.
+.SS "Administering the Quota System"
+\f3Quotas\f1 is an lbootable
+subsystem that can be installed by the administrator.
+A decision as to what filesystems need to have
+quotas enabled needs to be made.
+Usually, only filesystems that house users' home directories
+or other user files need to be subjected to
+the quota system.
+If possible, \f2/tmp\fP should be free of quotas.
+.P
+XFS and EFS quota systems share many characteristics. However, overall
+XFS offers a richer set of functionalities. We will explain
+the old EFS quota system first and differences in XFS afterwards.
+.SS "Administering the EFS Quota System"
+On EFS filesystems, a file by the name of \f2quotas\fP should be created in the
+root of the filesystems that are to have quotas.
+This file should
+be of size zero and should be writable only by root.
+After deciding on the filesystems that will have quotas,
+the administrator then establishes quotas for individual users.
+The
+\f2edquota\fP(1M)
+command is used to actually set the limits desired upon
+each user.
+Where a number of users are to be given the
+same quotas (a common occurrence) the \f3\-p\fP option
+to \f2edquota\f1 allows this to be easily accomplished.
+Unless explicitly given a quota, users have no limits set on the
+amount of disk they can use or the number of files they can create.
+.P
+Once the quotas are set and ready to operate, the system
+must be informed to enforce quotas on the desired filesystems.
+This is accomplished with the
+\f2quotaon\fP(1M)
+command.
+For quotas to be accurate, it
+should be enabled on a local filesystem immediately after the
+filesystem has been mounted.
+.I quotaon
+either enables quotas for a particular filesystem or,
+with the \f3\-a\fP option, enables quotas for each
+filesystem indicated in \f2/etc/fstab\fP as using quotas.
+See
+\f2fstab\fP(4)
+for details.
+When the quotas subsystem is installed,
+.Ex
+/usr/etc/quotaon -a
+.Ee
+can be automatically executed during system boot up time by
+\f2/etc/rc2\fP.
+The script
+\f2/etc/init.d/quotas\fP
+handles enabling of quotas
+and it uses the \f2chkconfig\fP(1M) command
+to check the \f3quotas\fP configuration flag to decide whether or
+not to enable quotas.
+Users can circumvent the quotas mechanism
+by giving the files away to other users with the use of \f2chown\fP(1) or
+\f2chown\fP(2).
+The system administrator can prevent this by setting
+the variable
+.I restricted_chown
+to a non-zero value (see \f2intro\fP(2) and \f2lboot\fP(1M)).
+.P
+When quotas need to be disabled, the
+\f2quotaoff\fP(1M)
+command is used.
+However, if the filesystem is
+about to be dismounted, the
+\f2umount\fP(1M)
+command disables quotas immediately before the
+filesystem is unmounted.
+This is actually an effect of the
+\f2umount\fP(2)
+system call, and it guarantees that the quota system
+is not disabled if the \f2umount\f1 would fail
+because the filesystem is not idle.
+.P
+Periodically (certainly after each reboot and when quotas
+are first enabled for a filesystem), the records retained
+in the quota file should be checked for consistency with
+the actual number of blocks and files allocated to
+the user.
+The
+\f2quotacheck\fP(1M)
+command is used to accomplish this.
+It is not necessary to dismount the filesystem or disable
+the quota system to run this command, though on
+active filesystems inaccurate results may occur.
+This does no real harm in most cases; another run of
+.I quotacheck
+when the filesystem is idle corrects any inaccuracy.
+\f2quotacheck\f1 can be run automatically during boot up via the script
+\f2/etc/init.d/quotas\fP.
+Since \f2quotacheck\fP can take
+some time, there is a \f2chkconfig\fP flag called \f3quotacheck\fP
+that controls whether or not to run \f2quotacheck\fP at system
+boot up time.
+.P
+The superuser can use the
+\f2quota\fP
+command to examine the usage and quotas of any user, and
+the
+\f2repquota\fP(1M)
+command can be used to check the usages and limits for
+all users on a filesystem.
+.SS "Administering the XFS Quota System"
+The XFS quota system is different from that of EFS in many ways.
+.TP
+.B o
+There is no necessity for a 
+.I quotas
+file in the root of the XFS filesystem.
+.TP
+.B o
+XFS distinguishes between quota accounting and limit enforcement.
+Quota accounting must be turned on at the time of mounting the XFS filesystem.
+However, it is possible to turn on/off limit enforcement any time quota 
+accounting is turned on. The
+.B quota
+option in 
+.IR fstab (4) 
+(or 
+.B \-o quota
+in 
+.IR mount (1M)
+)
+turns on both quota accounting and enforcement. The
+.B qnoenforce
+option must be used to turn on accounting with limit enforcement disabled.
+.IR quotaon (1M)
+contains some examples of frequently used procedures.
+.TP
+.B o
+Turning on quotas on the root filesystem is slightly different from the above.
+.IR quotaon (1M)
+must be used on the root XFS filesystem first;
+quotas will be turned on the next time the system is rebooted.
+It is useful to use
+.IR repquota (1M) 
+with the
+.B \-s
+option to monitor the effect of 
+.IR quotaon/off
+at various stages.
+.TP
+.B o
+.IR quotacheck (1M)
+has no effect on XFS filesystems. The first time quota accounting is turned on,
+XFS does an automatic quotacheck internally; afterwards, the quota system will 
+always be completely consistent until quotas are manually turned off.
+Similarly,
+.IR /etc/chkconfig (1M)
+options
+.B quotas
+and
+.B quotacheck
+are not needed for XFS filesystems. 
+.TP
+.B o
+.IR repquota (1M)
+with the
+.B \-s
+option can be used to monitor the status of the quota system of an XFS filesystem.
+This can be used to see if quotas are turned on, given an XFS filesystem.
+It can also be used to monitor the space occupied by the quota system itself.
+.TP
+.B o
+.IR repquota
+also provides a
+.B \-e
+option to output the limits of all users listed in 
+.I /etc/passwd
+to a file that can later be read in by
+.IR edquota (1M).
+This is useful in recreating the limits of a large number of users. 
+A possible scenario would be 
+.B (a) 
+creating the output file using
+.IR repquota,
+.B (b) 
+turning off quotas and deleting all the quota information
+(including limits, etc), 
+.B (c)
+mounting the XFS filesystem back with quotas turned on, and 
+.B (d) 
+reading that file
+containing limits of users using 
+.IR edquota. 
+This procedure will help compact the quota information. 
+Keeping all the limits saved in a file for later use will also
+help in case of a disaster because quota information
+cannot be backed up using
+.IR xfsdump (1M)
+or any other backup utility.
+.TP
+.B o
+.IR edquota (1M)
+cannot be used to set quota limits before turning on quotas on the
+filesystem concerned.
+.TP
+.B o
+XFS filesystems keep quota accounting on the superuser, and 
+.IR quota 
+.B \-v
+will display the superuser's usage information. 
+However, limits are never enforced on the superuser.
+.TP
+.B o
+XFS filesystems keep quota accounting whether the user has quota
+limits or not.
+.SS "Quota Implementation Notes"
+On EFS filesystems, disk quota usage information is stored in a file on the
+filesystem that the quotas are to be applied to.
+Conventionally, this file is called \f2quotas\f1, and resides at the root of
+the filesystem.
+While this name is not known to the system in any way,
+several of the user level utilities "know" it, and
+choosing any other name is not wise.
+.P
+The data in the quotas file is stored in a format different from
+Berkeley's implementation.
+Any direct accesses to the file by programs is
+not recommended.
+Instead, use the commands or the \f2quotactl\fP(2)
+system call to
+access or modify the quota information.
+.P
+The system is informed of the existence of the quota
+file by the
+\f2quotactl\fP
+system call.
+It then reads the quota entries for
+any open files owned by users.
+Each subsequent open of a file in the filesystem is
+accompanied by a pairing with its quota information.
+In memory, the quota information is kept hashed by user ID
+and filesystem and retained in an LRU chain so recently
+released data can be easily reclaimed.
+.P
+Each time a block is accessed or released and each time an inode
+is allocated or freed, the quota system gets told
+about it and, in the case of allocations, gets the
+opportunity to deny the allocation.
+.P
+Note that the XFS quota system implementation is radically different from
+that of EFS described above. XFS considers quota information
+as filesystem metadata and uses journalling to provide
+a higher level guarantee of consistency.
+Among other things, it is worth mentioning that XFS can keep accounting
+information for a very large number of active users efficiently.
+.SH BUGS
+.P
+Currently, it is not possible to enable quotas on XFS realtime filesystems.
+.SH FILES
+.ta \w'/etc/config/quotacheckXXX'u
+.nf
+/etc/init.d/quotas	script to enable and disable quotas
+/etc/rc2.d/S14quotas	linked to \f2/etc/init.d/quotas\f1
+/etc/config/quotas	\f2chkconfig\f1 flag
+/etc/config/quotacheck	\f2chkconfig\f1 flag
+.fi
+.SH "SEE ALSO"
+mount(1M),
+chkconfig(1M),
+edquota(1M),
+quota(1),
+quotacheck(1M),
+rc2(1M),
+repquota(1M),
+quotactl(2),
+fstab(4).

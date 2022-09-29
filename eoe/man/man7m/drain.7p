@@ -1,0 +1,164 @@
+'\"macro stdmacro
+.TH DRAIN 7P local "Silicon Graphics"
+.UC 5
+.SH NAME
+drain \- capture unimplemented link-layer protocols
+.SH SYNOPSIS
+.nf
+.ft 3
+#include <sys/types.h>
+#include <net/raw.h>
+
+s = socket\|(PF_RAW, SOCK_RAW, RAWPROTO_DRAIN);
+.ft P
+.fi
+.SH DESCRIPTION
+The Drain protocol provides non-promiscuous capture of packets having
+unimplemented link-layer protocol types, i.e., packets that the operating
+system normally receives and drops ``down the drain''.
+It treats packets as datagrams containing a link-layer header followed
+by data.
+Drain uses the Raw address format, interpreting ports as link-layer type codes
+(in host byte order) to match against unimplemented types in received packets.
+Multiple sockets may bind to the same port on a network interface.
+.PP
+Drain can map several link-layer type codes to a port.
+There is one type-to-port mapping for each network interface;
+it is initialized to map zero to zero.
+Call
+.IR ioctl (2)
+with the
+.B \s-1SIOCDRAINMAP\s+1
+command and the address of the following structure, declared in
+.RI < net/raw.h >,
+to set a mapping:
+.Ex 5
+struct drainmap {
+	u_short	dm_minport;	/* lowest port in range */
+	u_short	dm_maxport;	/* and highest port */
+	u_short	dm_toport;	/* port mapped by range */
+};
+.Ee
+.PP
+Drain input from Ethernet network interfaces is demultiplexed based on the
+.B \s-1ether_type\s0
+member of the
+.B \s-1ether_header\s0
+structure, declared in
+.RI < netinet/if_ether.h >
+and documented in
+.IR ethernet (7).
+.PP
+If the link-layer header size is not congruent with
+.BR \s-1RAW_ALIGNGRAIN\s0 ,
+Drain input prepends
+.BI \s-1RAW_HDRPAD(\s0 "hdrsize" \s-1)\s0
+bytes of padding to received packets.
+Output on a Drain socket, using
+.IR write (2)
+or
+.IR send (2),
+takes a buffer address pointing at the link-layer packet to be transmitted,
+not at any prepended padding.
+.SH EXAMPLES
+To capture from an Ethernet network interface, first declare an input
+buffer structure with the required header padding:
+.Ex 11
+#include <sys/types.h>
+#include <net/raw.h>
+#include <netinet/if_ether.h>
+
+#define ETHERHDRPAD	RAW_HDRPAD(sizeof(struct ether_header))
+
+struct etherpacket {
+	char			pad[ETHERHDRPAD];
+	struct ether_header	ether;
+	char			data[ETHERMTU];
+};
+.Ee
+.PP
+To capture all Reverse ARP (RARP) packets, create a Drain socket and bind it
+to the RARP port on the primary network interface (error handling is omitted
+for clarity):
+.Ex 9
+#define	ETHERTYPE_RARP	0x8035
+
+int s;
+struct sockaddr_raw sr;
+
+s = socket(PF_RAW, SOCK_RAW, RAWPROTO_DRAIN);
+sr.sr_family = AF_RAW;
+sr.sr_port = ETHERTYPE_RARP;
+bzero(sr.sr_ifname, sizeof sr.sr_ifname);
+bind(s, &sr, sizeof sr);
+.Ee
+.PP
+Alternatively, to capture all Ethernet packets with IEEE 802.3 encapsulations,
+create and bind a socket to a port different from any valid
+.BR \s-1ether_type\s0 :
+.Ex 9
+#define	IEEE802_3PORT	1
+
+int s;
+struct sockaddr_raw sr;
+
+s = socket(PF_RAW, SOCK_RAW, RAWPROTO_DRAIN);
+sr.sr_family = AF_RAW;
+sr.sr_port = IEEE802_3PORT;
+bzero(sr.sr_ifname, sizeof sr.sr_ifname);
+bind(s, &sr, sizeof sr);
+.Ee
+.PP
+Map all Ethernet types corresponding to packet lengths, as specified by
+802.3, to the bound port:
+.Ex 6
+struct drainmap map;
+
+map.dm_minport = 1;
+map.dm_maxport = 1500;
+map.dm_toport = IEEE802_3PORT;
+ioctl(s, SIOCDRAINMAP, &map);
+.Ee
+.PP
+Before reading, it may be desirable to increase the Drain socket's default
+receive buffer size.
+The following code also shows how to transmit a link-layer packet:
+.Ex 8
+struct etherpacket ep;
+int cc = 10000;
+
+setsockopt(s, SOL_SOCKET, SO_RCVBUF, (char *) &cc, sizeof cc);
+for (;;) {
+	cc = read(s, (char *) &ep, sizeof ep);
+	/* . . . */
+	write(s, (char *) &ep.ether, cc - sizeof ep.pad);
+}
+.Ee
+.SH DIAGNOSTICS
+A socket operation may fail with one of the following errors returned:
+.TP 15
+[EISCONN]
+when trying to establish a connection on a socket which
+already has one, or when trying to send a datagram with the destination
+address specified and the socket is already connected;
+.TP 15
+[ENOBUFS]
+when the system runs out of memory for an internal data structure or
+a send or receive buffer.
+.TP 15
+[EADDRINUSE]
+when an attempt
+is made to create a socket with a port which has already been
+allocated;
+.TP 15
+[EADDRNOTAVAIL]
+when an attempt is made to create a 
+socket with a network address for which no network interface
+exists.
+.TP 16
+[EOPNOTSUPP]
+when an
+.I ioctl
+operation not supported by the Drain protocol is attempted.
+.SH SEE ALSO
+getsockopt(2), socket(2), intro(3), ethernet(7), raw(7F), snoop(7P)

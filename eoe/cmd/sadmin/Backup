@@ -1,0 +1,296 @@
+#!/sbin/sh
+####
+
+usage()
+{
+	echo "Usage $0 [-h hostname] [-t tapedevice] [-i] directory_name/file_name"
+	exit 1
+}
+####
+notabspath()
+{
+	echo "you need to specify the absolute pathname for $FILE"
+	exit 1
+}
+####
+nonrootincr()
+{
+	echo "you can only do incremental backup from root ( / )"
+	exit 1
+}
+
+# matches what the GUI tool uses
+make_label() {
+
+( exec 2>/dev/null; \
+	echo label: "$1"; \
+	date;echo user: \\c;id -nu; echo group: \\c; id -ng; uname -a;\
+	ident /sbin/cpio|sed -n -e 's/.*Header: *//' -e 2p;\
+	echo options: "$2"
+) > $LABEL_FILE
+
+}
+
+
+BDIR=""
+TP="/dev/tape"
+HN="LOCAL"
+FILE=""
+INCR="FALSE"
+INCR_FILE=/etc/lastbackup # file we use to mark incremental backups
+	# was the date therein, now it's the modtime of that file.
+LABEL_FILE=/tmp/.info_$$ # name should match system recovery and GUI tool
+OPTS="$@" # original option string
+
+
+####
+
+if [ $# -eq 0 ]
+then
+	usage
+fi
+
+####
+
+while [ $1 = "-h" -o $1 = "-t" -o $1 = "-i" ]
+do
+	if [ $1 = "-i" ]
+	then
+		INCR="TRUE"
+		shift
+		if [ $# -lt 1 ]
+		then
+			usage
+		fi
+	fi
+	if [ $1 = "-h" ]
+	then
+		shift
+		if [ $# -lt 1 ]
+		then
+			usage
+		fi
+		HN=$1
+		shift
+		if [ $# -lt 1 ]
+		then
+			usage
+		fi
+	fi
+	if [ $1 = "-t" ]
+	then
+		shift
+		if [ $# -lt 1 ]
+		then
+			usage
+		fi
+		TP=$1
+		shift
+		if [ $# -lt 1 ]
+		then
+			usage
+		fi
+	fi
+done
+
+####
+
+BDIR="$@"
+while [ $# -gt 0 ]
+do
+	FILE=$1
+	shift
+	case "$FILE" in
+		/*)
+			continue ;;
+		 *)	notabspath ;
+			break ;;
+	esac
+done
+
+####
+
+if [ "$BDIR" != "/" -a "$INCR" = "TRUE" ]
+then
+	nonrootincr
+fi
+
+if [ $HN = "LOCAL" ]
+then
+	ret=`mt -t $TP status 2>&1`
+else
+	ret=`(/usr/etc/ping -s 1 -c 1 $HN 2>&1)`
+	case "$ret" {
+		*100%?packet?loss*)	echo "Error: Unable to communicate with host:" "$HN" ;
+					exit 1;;
+		}
+	# do not use remote mt for historical reasons.
+	ret=`(rsh $HN -n -l guest mt -t $TP status 2>&1)`
+fi
+
+case "$ret" {
+	*Login?incorrect*)	echo "Error: guest login incorrect on:" "$HN" ;
+				exit 1 ;;
+	*No?such?file*)		echo "Error: Tape device $TP not configured." ;
+				exit 1 ;;
+	*Not?READY*)		echo "Error: There is no tape in the drive." ;
+				exit 1 ;;
+	*write?protected*)	echo "Error: The tape is write protected." ;
+				exit 1 ;;
+	*Unknown?host*)		echo "Error: Host $HN is unknown." ;
+				exit 1 ;;
+	*can*get?status*)	echo "Error: Cannot stat $TP." ;
+				exit 1 ;;
+	*I/O?error*)		echo "Error: Unable to I/O on $TP." ;
+				exit 1 ;;
+	}
+
+####
+
+# set here even for incrementals, so rm in trap doesn't get an error
+tabfiles=tmp/mtab # tabfiles need to be relative for restore script
+	# and so cpio sorts them to front of tape from cmdline args
+
+sleep 2
+echo ""
+echo "Backup started.  Please wait..."
+trap 'cd /; rm -rf $tabfiles $LABEL_FILE; trap 0; exit 0' 0
+trap 'cd /; echo Backup interrupted; rm -rf $tabfiles $LABEL_FILE; trap 0; exit 1' 1 2
+
+if [ $HN = "LOCAL" ]
+then
+	TPDEV="$TP"
+else
+	TPDEV="guest@$HN:$TP"
+fi
+
+
+INCR_DATE="`stat -m $INCR_FILE 2>/dev/null | \
+    sed -e 's/.*[ 	]modify time - //' -e 's/[ 	]*<.*//' `"
+if [ -z "$INCR_DATE" ]; then
+    if [ "$INCR" = "TRUE" ]; then
+	echo No incremental file $INCR_FILE, doing full backup
+	INCR=FALSE
+    fi
+fi
+
+if [ "$BDIR" = "/" ]
+then
+	cd /
+    if [ "$INCR" = "TRUE" ]
+    then
+	cat /dev/null > /tmp/mtab
+	while read dev dir typ rest
+	do
+		if [ "$typ" = "efs" -o "$typ" = xfs ]
+		then
+			echo "$dev $dir $typ" >> /tmp/mtab
+		fi
+	done < /etc/mtab
+	make_label "Incremental Backup of files modified since $INCR_DATE from $BDIR" \
+		"/sbin/cpio -KWovO $TPDEV"
+	(echo $LABEL_FILE; for i in $tabfiles; do echo $i; done; \
+		find . -local -depth -newer "$INCR_FILE" ! -type s -print) | \
+		/sbin/cpio -KWovO $TPDEV
+
+	exitstat=$?
+    else
+	make_label "Full system backup from /" "/sbin/cpio -KWovO $TPDEV"
+
+	# ignore the volhdr lv and xlv files, and the files that are no longer
+	# in /stand, and that we handle specially below
+	dvhtool -v list | grep '[0123456789]' | sed \
+	    -e /lvtab/d -e /xlvlab/d -e /sash/d -e /ide/d -e /symmon/d \
+	    -e /sgilabel/d -e 's/^[	 ]*//' -e 's/[	 ].*//' > /tmp/volhdrlist
+	tabfiles="$tabfiles tmp/volhdrlist"
+	cat /dev/null > /tmp/mtab
+	while read dev dir typ rest
+	do
+		if [ "$typ" = "efs" -o "$typ" = xfs ]
+		then
+			echo "$dev $dir $typ" >> /tmp/mtab
+		fi
+	done < /etc/mtab
+	if [ -s /etc/lvtab ]
+		then cp /etc/lvtab /tmp
+		tabfiles="$tabfiles tmp/lvtab"
+	fi
+
+	# check if xlv volumes exist, if so store info
+	if [ -d /dev/dsk/xlv ]
+	then
+		set `ls /dev/dsk/xlv | wc`
+		if [ $1 -ne 0 ]
+		then
+			# xlv vols exist - store config and the list
+			/bin/ls /dev/dsk/xlv > /tmp/xlv_vollist
+			echo "script all\nquit\n" | xlv_mgr > /tmp/xlv_config_script
+			tabfiles="$tabfiles tmp/xlv_vollist tmp/xlv_config_script"
+			
+		fi
+	fi
+
+	# check if quotas are on, if so store quota info
+	if [ -a /etc/init.d/quotas ]
+	then
+		repquota -s -a > /dev/null 2> /dev/null
+
+		if [ $? ]
+		then 
+			repquota -s -a 2>&1 | \
+				grep -q 'user quota accounting.*off'
+
+			if [ $? -ne 0 ]
+			then
+				repquota -e /tmp/quotatab -a
+				tabfiles="$tabfiles tmp/quotatab"
+			fi
+		fi
+	fi
+
+	mkdir /var/tmp/_sgi_stand_$$
+	if [ ! -d /var/tmp/_sgi_stand_$$ ]
+	then echo Warning: unable to save copy of volume header files
+	else
+		dvhtool -v g sash /var/tmp/_sgi_stand_$$/sash
+		if [ ! -f /var/tmp/_sgi_stand_$$/sash ]
+		then echo Warning: not able to save copy of volume header sash
+		fi
+		# not all systems have ide or symmon, and not crucial
+		dvhtool -v g ide /var/tmp/_sgi_stand_$$/ide >/dev/null 2>&1
+		dvhtool -v g symmon /var/tmp/_sgi_stand_$$/symmon >/dev/null 2>&1
+		echo /var/tmp/_sgi_stand_$$ > /tmp/vh_savedir
+		tabfiles="$tabfiles tmp/vh_savedir"
+	fi
+	# The tabfiles all get backed up twice, but we want them to be at
+	# the beginning, so it's no big deal.
+	(echo $LABEL_FILE; for i in $tabfiles; do echo $i; done;
+		find . -local -depth ! -type s -print) | \
+		/sbin/cpio -KWovO $TPDEV
+	exitstat=$?
+
+	if [ $exitstat -eq 0 ]
+	then date +%D > $INCR_FILE
+	else echo $0 failed "(exit status $?)", $INCR_FILE not updated
+	fi
+    fi
+else
+	if [ -d "$BDIR" ]
+	then
+		cd $BDIR
+		findarg=.
+	else # allow backup of specific file(s), but not with spaces in name
+		# label file will show working dir backup started from, which
+		# isn't very useful since the file has a full pathname, but it's
+		# a minor inconsistency that has no clear "correct" answer.
+		findarg="$BDIR"
+	fi
+	BDIR="`/bin/pwd`"
+	make_label "Selected Files Backup from $BDIR" "/sbin/cpio -KWovO $TPDEV"
+	(echo $LABEL_FILE; find $findarg -local -depth ! -type s -print) | \
+		/sbin/cpio -KWovO $TPDEV
+	exitstat=$?
+fi
+echo ""
+echo "Backup complete."
+exit $exitstat

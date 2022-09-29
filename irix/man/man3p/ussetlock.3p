@@ -1,0 +1,209 @@
+'\"macro stdmacro
+.TH USSETLOCK 3P
+.SH NAME
+ussetlock, uscsetlock, uswsetlock, ustestlock, usunsetlock \- spinlock routines
+.Op c p a
+.SH C SYNOPSIS
+.B #include <ulocks.h>
+.PP
+.B "int ussetlock (ulock_t lock);"
+.PP
+.B "int uscsetlock (ulock_t lock, unsigned spins);"
+.PP
+.B "int uswsetlock (ulock_t lock, unsigned spins);"
+.PP
+.B "int ustestlock (ulock_t lock);"
+.PP
+.B "int usunsetlock (ulock_t lock);"
+.Op
+.Op f
+.SH FORTRAN SYNOPSIS
+.B integer*4 function ussetlock (lock)
+.br
+.B TYPE lock
+.PP
+.B integer*4 function uscsetlock (lock, spins)
+.br
+.B TYPE lock
+.br
+.B integer*4 spins
+.PP
+.B integer*4 function uswsetlock (lock, spins)
+.br
+.B TYPE lock
+.br
+.B integer*4 spins
+.PP
+.B integer*4 function ustestlock (lock)
+.br
+.B TYPE lock
+.PP
+.B integer*4 function usunsetlock (lock)
+.br
+.B TYPE lock
+.sp
+.in +1i
+where
+.B TYPE
+is
+.B "integer*4"
+in 32 bit mode, and is
+.B "integer*8"
+in 64 bit mode.
+.in -1i
+.Op
+.SH DESCRIPTION
+This set of routines provide a standard test and set facility.
+If the lock is free then it is atomically locked, and control is returned
+to the caller.
+If the lock is already locked, the caller either spins waiting for the
+lock or gets queued.
+The locks are based in user address space thus avoiding any system call
+overhead in the case where the lock is available.
+.P
+The actual algorithm used to implement these functions depends on whether
+the system is a multiprocessor or a single processor.
+In the multiprocessor case, if the lock is already locked, the caller will
+spin (i.e. busy wait).
+The amount of time it spins depends on the function - for \f4ussetlock\fP,
+a system chosen value is used, for \f4uscsetlock\fP and \f4uswsetlock\fP the
+value of \f2spins\fP is used.
+If, after \f2spins\fP attempts to acquire the lock have all failed, the
+function will either return (\f4uscsetlock\fP) or yield the processor
+(\f4ussetlock\fP, or \f4uswsetlock\fP).
+The yield is affected by calling \f4sginap\fP(2).
+After returning from yield, \f4ussetlock\fP and \f4uswsetlock\fP will
+again attempt to acquire the lock \f2spins\fP times.
+This will continue until the lock is finally acquired.
+Note that if a process spends much of its time waiting for a lock without
+giving up the processor, then the total throughput of the system may
+be reduced.
+On the other hand, by giving up the processor too quickly, there is a
+longer latency between when the lock is freed and the caller obtains the
+lock.
+.P
+The implementation of locks on single processor systems never spin;
+if the lock is unavailable the caller is
+atomically queued.
+This queueing operation suspends the calling process
+and forces a scheduling cycle.
+Processes are removed from the queue in FIFO order when the lock is
+released.
+.P
+The appropriate lock algorithm is selected automatically at program
+startup time.
+Different levels of debugging information can be requested via
+.BR usconfig (3P).
+.P
+.B ussetlock\^
+doesn't return until the lock specified by
+.I lock\^
+is acquired.
+.B uscsetlock 
+attempts to acquire a lock \f2spins\fP times, returning a 1
+if the lock was acquired, and a 0 if it was not available.
+.B uswsetlock
+is similar to 
+.B ussetlock,
+except that the caller specifies the number of times
+the lock is attempted to be acquired before
+the process gives up control of the processor.
+On a single processor this call is identical with
+.BR ussetlock .
+.B ustestlock
+returns the instantaneous value of the lock, a 0 if it is not locked, 
+and a 1 if it is locked.
+.B usunsetlock
+releases the lock.
+.PP
+When invoked with a valid lock,
+.B ussetlock 
+and
+.B uswsetlock
+do not return until the lock is acquired.
+An invalid lock will yield unpredictable results.
+.P
+It is allowed to call
+.B usunsetlock
+on a lock that is either not locked or locked by another process.
+In either case, the lock will be unlocked.
+Double tripping, i.e. calling a set lock function twice with the same lock
+is also permissible.
+The caller will block until another process unsets the lock.
+.P
+In order to use a lock, the caller must have joined the shared
+arena out of which the lock is allocated (via
+.BR usinit (3P)),
+and have a file descriptor to a
+.BR usema (7M)
+device to suspend/unsuspend on.
+As a convenience, these routines
+will automatically do this for members of a share group, or for
+related (via
+.BR fork (2))
+processes.
+This automatic facility can generate the same errors as
+.BR usinit (3P).
+These errors will be passed back to the caller.
+If tracing is enabled (see
+.BR usinit (3P))
+then any errors will cause a message to be printed to
+.IR stderr .
+To avoid these errors and therefore not need to check for errors
+on every lock call,
+have each process call
+.BR usinit (3P)
+before using any locks.
+.PP
+These locks are designed to be fast in the case where the lock is available.
+On a Challenge R4400 multiprocessor a 
+.BR ussetlock ,
+.B unsetlock
+pair takes about 500nS.
+.PP
+When using debugging lock types the following debugging prints
+can occur.
+.P
+.I "Double tripped on lock @ 0x... by pid ..."
+will be printed when an attempt is made to acquire a lock that is already held
+by the caller.
+.P
+.I "Unlocking lock that other process lockd lock @ 0x... by pid ..."
+will be printed when an attempt is made to release a lock that is not held
+by the process attempting to release it.
+.P
+.I "Unset lock, but lock not locked. lock @ 0x... pid ..."
+will be printed when using debug software locks, and an attempt was made
+to unlock a lock that was not locked.
+.P
+The following errors can occur due to misuse of a lock:
+.TP 15
+.SM
+\%[EBADF]
+The underlying file descriptor for the lock
+was closed or re-used by the application.
+.SH SEE ALSO
+sginap(2),
+barrier(3P),
+uscas(3P),
+usconfig(3P),
+usctllock(3P),
+usdumplock(3P),
+usfreelock(3P), usinitlock(3P),
+usinit(3P),
+uspsema(3P).
+usnewlock(3P),
+usnewsema(3P),
+usema(7M).
+.SH "DIAGNOSTICS"
+.B ussetlock,
+.B uswsetlock,
+.B uscsetlock, 
+and
+.B ustestlock 
+will return a 1 if the lock is acquired and a 0 if the lock is not acquired.
+.B usunsetlock
+always returns 0 if successful.
+On error, \-1 is returned and
+.I errno
+is set to indicate the error.

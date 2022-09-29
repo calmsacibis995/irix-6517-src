@@ -1,0 +1,149 @@
+.if n .pH 386.intr @(#)intr	43.10 of 11/25/92
+.\" Copyright 1992, 1991 UNIX System Laboratories, Inc.
+.TH intr D2
+.IX "\f4intr\fP(D2)"
+.SH "NAME"
+\f4intr\fP \- process a device interrupt
+.SH "SYNOPSIS"
+.nf
+.na
+.ft 4
+void \f2prefix\fPintr(int \f2ivec\fP);
+.ft 1
+.ad
+.fi
+.SS Arguments
+.RS 0
+.IP \f2ivec\fP 10n
+Number used by the operating system to associate a driver's interrupt
+handler with an interrupting device.
+For a VME device, this number can be the logical device number,
+the interrupt vector number, or the address which is set by 
+\f4vme_ivec_set\fP(). For a SCSI device, this number is a pointer to
+a \f4scsi_request_t\fP type structure.
+.RE
+.SH "DESCRIPTION"
+The \f4intr\fP routine is the interrupt handler
+for both block and character hardware drivers,
+as well as for non-driver hardware modules.
+.SS "Return Values"
+None
+.SH USAGE
+This entry point is only required for those modules
+that interface to hardware that interrupts the host computer.
+It is not used with software drivers.
+.P
+The interrupt handler is responsible for
+determining the reason for an interrupt, servicing the interrupt, and
+waking up any base-level driver processes sleeping on any events associated
+with the interrupt.
+.P
+For example, when a disk drive has transferred
+information to the host to satisfy a read request, the disk drive's
+controller generates an interrupt.
+The CPU acknowledges the interrupt
+and calls the interrupt handler associated with that controller and disk drive.
+The interrupt routine services the interrupt and then wakes up the
+driver base-level process waiting for data.
+The base-level portion of the driver then conveys the data to the user.
+.P
+In general, most interrupt routines do the following tasks:
+.RS 0
+.IP
+keep a record of interrupt occurrences
+.IP
+return immediately if no devices controlled by a driver
+caused the interrupt (only for systems supporting shared interrupts)
+.IP
+interpret the interrupt routine argument \f2ivec\fP
+.IP
+reject requests for devices that are not served by the device's controller
+.IP
+process interrupts that happen without cause (called spurious interrupts)
+.IP
+handle all possible device errors
+.IP
+wake processes that are sleeping on any events associated with the interrupt
+.RE
+.P
+There are also many tasks the \f4intr\fP routine must perform that are
+driver-type and device specific.
+For example, the following types of
+drivers require different functions from their \f4intr\fP routines:
+.RS 0
+.IP
+A block driver
+dequeues requests and
+wakes up processes sleeping on an I/O request.
+.IP
+A terminal driver
+receives and sends characters.
+.IP
+A printer driver
+ensures that characters are sent.
+.RE
+.ne 1i
+.P
+In addition, the functions of an \f4intr\fP routine are device
+dependent.
+You should know the exact chip set that produces the
+interrupt for your device.
+You need to know the exact bit patterns of
+the device's control and status register and how data is transmitted
+into and out of your computer.
+These specifics differ for every device
+you access.
+.P
+The \f4intr\fP routine for an intelligent controller
+that does not use individual interrupt vectors for each subdevice
+must access the completion queue to determine
+which subdevice generated the interrupt.
+It must also update the status information,
+set/clear flags, set/clear error indicators,
+and so forth to complete the handling of a job.
+The code should also be able to handle a
+spurious completion interrupt
+identified by an empty completion queue.
+When the routine finishes,
+it should advance the unload pointer to
+the next entry in the completion queue.
+.P
+If the driver called \f4biowait\fP(D3) or \f4sleep\fP(D3)
+to await the completion of an operation,
+the \f4intr\fP routine must call
+\f4biodone\fP(D3) or \f4wakeup\fP(D3)
+to signal the process to resume.
+.P
+The interrupt routine runs at the processor level associated
+with the interrupt level for the given device.
+Lower priority
+interrupts are deferred while the interrupt routine is active.
+Certain processor levels can block different interrupts.
+See
+\f4spl\fP(D3) for more information.
+.P
+\f4uiomove\fP(D3), \f4ureadc\fP(D3), and \f4uwritec\fP(D3)
+cannot be used in an interrupt routine when the
+\f4uio_segflg\fP member of the \f4uio\fP(D4) structure 
+is set to \f4UIO_USERSPACE\fP
+(indicating a transfer between user and kernel space).
+.SS "Synchronization Constraints"
+The \f4intr\fP routine must never:
+.RS 0
+.IP
+use functions that sleep
+.IP
+drop the interrupt priority level below the level at which the interrupt
+routine was entered
+.IP
+call any function or routine that requires user context (that is, if
+it accesses or alters information associated with the running process)
+.RE
+.SH REFERENCES
+.na
+\f4biodone\f1(D3),
+\f4biowait\f1(D3),
+\f4spl\fP(D3),
+\f4wakeup\f1(D3),
+\f4vme_ivec_set\f1(D3X)
+.ad

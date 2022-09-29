@@ -1,0 +1,3 @@
+disk_install()
+{
+}

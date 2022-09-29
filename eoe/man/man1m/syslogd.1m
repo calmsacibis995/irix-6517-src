@@ -1,0 +1,254 @@
+.nr X
+.if \nX=0 .ds x} syslogd 1M "Silicon Graphics" "\&"
+.TH \*(x}
+.SH NAME
+syslogd \- log systems messages
+.SH SYNOPSIS
+.nf
+\f3/usr/etc/syslogd\f1 [ \f3\-f\f1\f2configfile\f1 ] [ \c
+\f3\-m\f1\f2markinterval\f1 ] [ \f3\-p\f1\f2logpipe\f1 ] [ \f3\-d\f1 ]
+.fi
+.SH DESCRIPTION
+.I syslogd
+reads and logs messages into a set of files
+described by the configuration file
+.IR /etc/syslog.conf .
+Each message is one line.
+A message can contain a priority code,
+marked by a number in angle braces
+at the beginning of the line.
+Priorities are defined in
+.RI < sys/syslog.h >.
+.I syslogd
+reads from the stream device
+.IR /dev/log ,
+from an Internet domain socket specified in
+.IR /etc/services ,
+and from the special device
+.I /dev/klog
+(to read kernel messages).
+.PP
+.I syslogd
+reads its configuration when it starts up
+and whenever it receives a hangup signal.
+Lines in the configuration file have a
+selector
+to determine the message priorities to which the line applies
+and an
+.IR action .
+The
+.I action
+fields are separated from the selector by one or more tabs.
+A maximum of 50 lines can be specified.
+It is recommended that
+no more than 49 be used, or the \f3LOG_LFMT\fP facility may not
+work correctly; this facility is used by \f2login\fP(1), among other
+programs.
+.PP
+Selectors are semicolon separated lists of priority specifiers.
+Each priority has a
+.I facility
+describing the part of the system that generated the message,
+a dot,
+and a
+.I level
+indicating the severity of the message.
+Symbolic names can be used.
+An asterisk (\f3*\f1) selects all facilities,
+while \f3debug\f1 selects all levels.
+All messages of the specified level or higher (greater severity)
+are selected.
+More than one facility can be selected, using commas to separate them.
+For example:
+.Ex
+*.emerg;mail,daemon.crit
+.Ee
+selects all facilities at the
+.I emerg
+level and the
+.I mail
+and
+.I daemon
+facilities at the
+.I crit
+level.
+.PP
+Known facilities and levels
+recognized by
+.I syslogd
+are those listed in
+.IR syslog (3C)
+without the leading \f3LOG_\f1.
+The additional facility
+\f3mark\f1 logs messages at priority LOG_INFO every
+20 minutes
+(this interval can be changed with the
+.B \-m
+flag).
+The \f3mark\f1 facility is not enabled by a facility field
+containing an asterisk.
+The level \f3none\f1 can be used to disable a particular facility.
+For example:
+.Ex
+*.debug;mail.none
+.Ee
+sends all messages
+.I except
+mail messages to the selected file.
+.PP
+The second part of each line describes where the message is to be logged
+if this line is selected.
+There are five forms:
+.IP \(bu 3n
+A filename (beginning with a leading slash).
+The file is opened in append mode.
+.IP \(bu 3n
+A hostname preceded by an at sign (\f3@\f1).
+Selected messages are forwarded to the
+.I syslogd
+on the named host.
+.IP \(bu 3n
+A comma-separated list of users.
+Selected messages are written to those users
+if they are logged in.
+.IP \(bu 3n
+An asterisk.
+Selected messages are written to all logged-in users.
+.IP \(bu 3n
+A \f3|\f1, followed immediately by a program name, which is taken
+to be all chars after the \f3|\f1 up to the next tab; at least one
+action must follow the tab.
+The filter is expected to read stdin and write the filtered response to
+stdout.
+The filter receives the source and message through stdin.
+A filter can also access the priority, facility, and hostname via
+environmental variables: PRIORITY, FACILITY, and FROM.
+The values are
+stored as strings defined in
+.RI < sys/syslog.h >.
+If the filter exits with a non-zero value, the original message is logged,
+as well as a message that the filter failed.
+The filter has a limited time (currently eight seconds) to process the message.
+If the filter exits with status 0 without writing any data, no message is
+logged.
+The data to be read by the filter is not terminated with a newline, nor
+should the data written have a newline appended.
+See below for a sample filter.
+.PP
+Blank lines and lines beginning with \f3#\f1 are ignored.
+.PP
+For example, the configuration file:
+.Ex
+.ta +\w'kern.debug'u+2 +\w'|/var/adm/auth.filter	'u+2
+kern.debug	|/usr/sbin/klogpp	/var/adm/SYSLOG
+kern.debug	|/usr/sbin/klogpp	/dev/console
+user,mail,daemon,auth,syslog,lpr.debug	/var/adm/SYSLOG
+kern.err	@ginger
+*.emerg	*
+*.alert	eric,beth
+*.alert;auth.warning	ralph
+.Ee
+filters all kernel messages through \f2klogpp\f1(1M) and writes them to
+the system console and into \f2/var/adm/SYSLOG\f1
+and logs debug (or higher) level messages
+into the file \f2/var/adm/SYSLOG\f1.
+Kernel messages of error severity or higher are forwarded
+to \f3ginger\f1.
+All users are informed of any emergency messages.
+The users \f3eric\f1 and \f3beth\f1
+are informed of any alert messages.
+The user \f3ralph\f1
+is informed of any alert message
+or any warning message (or higher)
+from the authorization system.
+.PP
+.I syslogd
+is started at system initialization from \f2/etc/init.d/sysetup\f1.
+Optional site-specific flags belong in \f2/etc/config/syslogd.options\f1.
+The flags are:
+.TP 17
+.BI \-f configfile
+Specify an alternate configuration file.
+.TP
+.BI \-m markinterval
+Select the number of minutes between mark messages.
+.TP
+.B \-d
+Turn on debugging.
+.I syslogd
+runs in the foreground and writes debugging information to stdout.
+.TP
+.BI \-p logpipe
+Use the given name for the device instead of \f2/dev/log\f1.
+.PP
+.I syslogd
+rereads its configuration file when it receives a hangup signal, SIGHUP.
+To bring
+.I syslogd
+down,
+send it a terminate signal (for example, \f3killall \-TERM syslogd\f1).
+.SH "SECURITY CONSIDERATIONS"
+.I syslogd
+creates log files in mode 644 which allows general read access.
+If the log file
+already exists, its permissions are unchanged.
+The system administrator may
+wish to create separate log files with more restricted permissions
+for sensitive information such as LOG_AUTH
+messages.
+Scripts or
+.IR cron (1M)
+jobs that roll (that is
+save and restart with a new file)
+these sensitive log files should ensure that the new log file has
+the desired permissions.
+.SH "FILTER EXAMPLE"
+This example shows how to use the filter mechanism.
+To have
+.IR ftpd (1M)
+messages logged in a different file,
+add the following line to \f2/etc/syslog.conf\f1:
+.Ex
+daemon,auth.debug       |/var/adm/ftpd.filt  /var/adm/ftpd.log
+.Ee
+The \f2/var/adm/ftpd.filt\f1 file is a shell script:
+.Ex
+#!/bin/sh
+# This filter only accepts ftpd messages
+read line
+set $line
+case "$1" {
+    ftpd\e[*)
+        echo "$line\ec"
+        exit 0
+        ;;
+}
+exit 0
+.Ee
+.SH "MESSAGE EXAMPLE"
+The following is an example line from the \f2/var/adm/SYSLOG\f1 file:
+.Ex
+Aug 10 10:32:53 6F:sgihost syslogd: restart
+.Ee
+Each line has several parts.
+The date and time of the message are
+listed first, followed by a priority and facility code.
+Priorities are
+listed as 0\-7 and facilities are listed as A\-T.
+Reference
+.RI < sys/syslog.h >.
+The source is the name of the program that generated the message.
+Following the source is the message itself.
+.SH FILES
+.ta 30
+.nf
+/etc/syslog.conf	default configuration file
+/dev/log		device read by \f2syslogd\f1
+/dev/klog		the kernel log device
+/usr/sbin/klogpp	filter for kernel messages
+/etc/config/syslogd.options	command-line flags used at system startup
+.fi
+.SH SEE ALSO
+logger(1),
+sysmon(1M),
+syslog(3C).

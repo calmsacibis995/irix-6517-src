@@ -1,0 +1,289 @@
+'\"macro stdmacro
+.TH SNOOP 7P local "Silicon Graphics"
+.UC 5
+.SH NAME
+snoop \- network monitoring protocol
+.SH SYNOPSIS
+.nf
+.ft 3
+#include <sys/types.h>
+#include <net/raw.h>
+
+s = socket\|(PF_RAW, SOCK_RAW, RAWPROTO_SNOOP);
+.ft P
+.fi
+.SH DESCRIPTION
+The Snoop protocol provides promiscuous packet capture with filtering.
+It treats packets as datagrams containing a link-layer header followed
+by data.
+Snoop uses the Raw address format, assigning a unique port to a socket
+bound to port zero, otherwise binding the specified port if it is valid.
+Valid ports range from
+.B \s-1SNOOP_MINPORT\s0
+to
+.BR \s-1SNOOP_MAXPORT\s0 .
+.PP
+Snoop associates a set of
+.B \s-1SNOOP_MAXFILTERS\s0
+packet filters with each network interface.
+Each filter contains an array of mask bits, a parallel array of bits to
+match against the masked packet's bits, the filter's index in the interface's
+filter table, and a port identifying the socket that added this filter.
+The user can set only
+.BR \s-1sf_mask\s0 ,
+.BR \s-1sf_match\s0 ,
+and
+.BR \s-1sf_port\s0 ;
+all other members are set by the kernel.
+.Ex 10
+struct snoopfilter {
+	u_long	sf_mask[SNOOP_FILTERLEN];
+	u_long	sf_match[SNOOP_FILTERLEN];
+	u_short	sf_allocated:1,
+		sf_active:1,
+		sf_promisc:1,
+		sf_allmulti:1,
+		sf_index:SNOOP_MAXFILTSHIFT;
+	u_short	sf_port;
+};
+.Ee
+.PP
+The mask is applied to at most
+.B \s-1SNOOP_FILTERLEN\s0
+long integers of the packet.
+If the link-layer header size is not congruent with
+.BR \s-1RAW_ALIGNGRAIN\s0 ,
+the mask and match arrays begin with
+.BI \s-1RAW_HDRPAD(\s0 "hdrsize" \s-1)\s0
+bytes of padding, in order to preserve native addressability of packet data.
+The
+.BI \s-1RAW_HDR(\s0 "addr, hdrtype" \s-1)\s0
+macro adjusts and coerces a
+.BR \s-1RAW_ALIGNGRAIN\s0 -congruent
+address into a pointer to the packet header type.
+Use
+.B \s-1RAW_HDR\s0
+to convert
+.B \s-1sf_mask\s0
+and
+.B \s-1sf_match\s0
+into appropriately padded, typed pointers.
+.PP
+Call
+.IR ioctl (2)
+on a bound Snoop socket with the
+.B \s-1SIOCADDSNOOP\s0
+command and the address of a snoopfilter, to add a filter.
+The
+.B \s-1SIOCDELSNOOP\s0
+.I ioctl
+command takes the address of an integer telling the index of a filter
+to delete.
+The
+.B \s-1SIOCSNOOPLEN\s0
+command takes the address of an integer telling how many bytes of packet
+data to capture (the link-layer header is always captured).
+By default, all received bytes of packet data are captured.
+The
+.B \s-1SIOCSNOOPING\s0
+command takes the address of an integer boolean telling whether to start
+or stop capture.
+.PP
+The
+.B \s-1SIOCERRSNOOP\s0
+.I ioctl
+command establishes an error filter.
+It takes the address of an integer containing error flag bits (see below),
+and designates the socket being operated on as the
+.IR "error snooper" .
+There may be at most one error snooper per network interface.
+Only packets received with errors indicated by bits in the integer argument
+will be captured.
+.PP
+Snoop applies filters to a non-erroneous packet in index order, matching all
+filters against the packet.
+It then prepends the following header to the alignment-padded, link-layer
+header:
+.Ex 6
+struct snoopheader {
+	u_long		snoop_seq;
+	u_short		snoop_flags;
+	u_short		snoop_packetlen;
+	struct timeval	snoop_timestamp;
+};
+.Ee
+.PP
+A snoopheader contains a reception sequence number, packet state flags,
+length in bytes of the link-layer packet excluding frame check and preamble,
+and a reception timestamp.
+The bits in
+.B \s-1snoop_flags\s0
+describe the packet's state as follows:
+.Ex 9
+SN_PROMISC	\f1\s+1packet was not destined for this interface\s0\fP
+SN_ERROR	\f1\s+1receive error specified by the following bits:\s0\fP
+SNERR_FRAME	\f1\s+1packet received, but with framing error\s0\fP
+SNERR_CHECKSUM	\f1\s+1packet received, but with CRC error\s0\fP
+SNERR_TOOBIG	\f1\s+1packet received, truncated to fit buffer\s0\fP
+SNERR_TOOSMALL	\f1\s+1packet not received, size less than minimum\s0\fP
+SNERR_NOBUFS	\f1\s+1no packet received, out of buffers\s0\fP
+SNERR_OVERFLOW	\f1\s+1no packet received, input silo overflow\s0\fP
+SNERR_MEMORY	\f1\s+1no packet received, buffer memory error\s0\fP
+.Ee
+.PP
+The
+.B \s-1snoop_timestamp\s0
+member contains the packet's reception time, with precision limited by the
+operating system's clock tick parameter (see
+.IR times (2)).
+.PP
+Output on a Snoop socket, using
+.IR write (2)
+or
+.IR send (2),
+takes a buffer address pointing at the link-layer packet to be transmitted.
+Output buffers may need to begin with
+.B \s-1RAW_HDRPAD\s0
+bytes of padding to ensure addressability of structured data, but such
+padding is not passed to
+.IR write .
+.SH EXAMPLES
+To capture all packets from an Ethernet network interface, first declare
+an input buffer structure:
+.Ex 12
+#include <sys/types.h>
+#include <net/raw.h>
+#include <netinet/if_ether.h>
+
+#define ETHERHDRPAD	RAW_HDRPAD(sizeof(struct ether_header))
+
+struct etherpacket {
+	struct snoopheader	snoop;
+	char			pad[ETHERHDRPAD];
+	struct ether_header	ether;
+	char			data[ETHERMTU];
+};
+.Ee
+.PP
+Then create a Snoop socket (error handling is omitted for clarity).
+Bind it to the desired interface, e.g.,
+.B \s-1ec0\s0
+(to bind to the primary interface, zero
+.BR \s-1sr_ifname\s0 ):
+.Ex 8
+int s;
+struct sockaddr_raw sr;
+
+s = socket(PF_RAW, SOCK_RAW, RAWPROTO_SNOOP);
+sr.sr_family = AF_RAW;
+sr.sr_port = 0;
+strncpy(sr.sr_ifname, "ec0", sizeof sr.sr_ifname);
+bind(s, &sr, sizeof sr);
+.Ee
+.PP
+Initialize a filter with no mask bits set, in order to match all packets.
+Add it to the interface's filter set:
+.Ex 2
+struct snoopfilter sf;
+
+bzero((char *) &sf, sizeof sf);
+ioctl(s, SIOCADDSNOOP, &sf);
+.Ee
+.PP
+Increase the socket's receive buffer size to a generous upper bound,
+to cope with promiscuous reception of heavy traffic.
+Turn snooping on and read captured packets:
+.Ex 10
+struct etherpacket ep;
+int cc = 60000, on = 1;
+
+setsockopt(s, SOL_SOCKET, SO_RCVBUF, (char *) &cc, sizeof cc);
+ioctl(s, SIOCSNOOPING, &on);
+for (;;) {
+	cc = read(s, (char *) &ep, sizeof ep);
+	/* . . . */
+}
+.Ee
+.PP
+To capture ARP packets from a specific Ethernet host, first declare an
+appropriate input buffer structure:
+.Ex 12
+#include <sys/types.h>
+#include <net/raw.h>
+#include <net/if_arp.h>
+#include <netinet/if_ether.h>
+
+#define ETHERHDRPAD	RAW_HDRPAD(sizeof(struct ether_header))
+
+struct arp_packet {
+	struct snoopheader	snoop;
+	char			pad[ETHERHDRPAD];
+	struct ether_header	ether;
+	struct ether_arp	arp;
+};
+.Ee
+.PP
+Create and bind a Snoop socket as shown in the previous example.
+Then initialize a filter to capture all ARP requests originating from a
+.BR \s-1remote_ether_addr\s0 :
+.Ex 10
+struct snoopfilter sf;
+struct ether_header *eh;
+
+bzero((char *) &sf, sizeof sf);
+eh = RAW_HDR(sf.sf_mask, struct ether_header);
+memset(eh->ether_dhost, 0xff, sizeof eh->ether_dhost);
+eh->ether_type = 0xffff;
+eh = RAW_HDR(sf.sf_match, struct ether_header);
+bcopy(remote_ether_addr, eh->ether_dhost, sizeof eh->ether_dhost);
+eh->ether_type = htons(ETHERTYPE_ARP);
+.Ee
+.PP
+Finally, add the filter and start capturing packets:
+.Ex 11
+struct arp_packet ap;
+int cc, on = 1;
+
+ioctl(s, SIOCADDSNOOP, &sf);
+ioctl(s, SIOCSNOOPING, &on);
+for (;;) {
+	cc = read(s, (char *) &ap, sizeof ap);
+	/* . . . */
+}
+.Ee
+.SH DIAGNOSTICS
+A socket operation may fail with one of the following errors returned:
+.TP 16
+[EISCONN]
+when trying to establish a connection on a socket which
+already has one, or when trying to send a datagram with the destination
+address specified and the socket is already connected;
+.TP 16
+[ENOBUFS]
+when the system runs out of memory for an internal data structure or
+a send or receive buffer;
+.TP 16
+[EADDRINUSE]
+when an attempt is made to create a socket with a port which has already been
+allocated;
+.TP 16
+[EADDRNOTAVAIL]
+when an attempt is made to bind an address naming a non-existent network
+interface to a Raw family socket.
+.TP 16
+[EOPNOTSUPP]
+when an
+.I ioctl
+operation not supported by the Snoop protocol is attempted.
+.TP 16
+[EINVAL]
+when a Snoop
+.I ioctl
+argument is out of bounds or otherwise invalid.
+.TP 16
+[EBUSY]
+when an error snooper is running and another process attempts to
+set an error filter with
+.BR \s-1SIOCERRSNOOP\s0 .
+.SH SEE ALSO
+getsockopt(2), socket(2), intro(3), ethernet(7), raw(7F), drain(7P)

@@ -1,0 +1,1003 @@
+#!/usr/sgitcl/bin/moat
+#Tag 0x00FFD002
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	fsMgr
+# Version:	$Revision: 1.11 $
+# Synopsis:	The main script for the XFSM filesystem manager.
+# Functions:	fs:initialize
+#		fs:createApplication
+#		fs:createMenu
+#		fs:createContents
+#		fs:createIconPanelPopup
+#		fs:searchCompleted
+#		fs:openIconCb
+#		fs:viewCb
+#		fs:selectedCb
+#		fs:_remove
+#		fs:_doRemove
+#		fs:_unmount
+#		fs:_doUnmount
+#		fs:_unexport
+#		fs:_doUnexport
+#		fs:_mount
+#		fs:_doMount
+#		fs:_export
+#		fs:_doExport
+#		fs:_exit
+#%COMMENT_END
+
+global	_GD_fsm _GW_fsm _GW_fsmMenu _GD_fsmCfrm
+global	G_data _GD_resources
+
+#########################################
+#	Widget Creation Procedures	#
+#########################################
+#%COMMENT_BEGIN
+# Function:	fs:initialize
+# Synopsis:	Initializes variables in preparation for starting the app.
+#		This includes defining the menu structures for the pulldown
+#		and popup menus and setting traces on variables.
+# Arguments:	None
+#%COMMENT_END
+proc fs:initialize {} \
+{
+	global	_GD_fsm _GD_fsmCfrm G_data env
+
+	set _GD_fsm(class)	FS
+	set _GD_fsm(style)	Icon
+	set _GD_fsm(tmplDir)	/var/xfs/templates
+	set _GD_fsm(commands)	{new mount export remove \
+				 unmount unexport info quit}
+
+	set _GD_fsm(new,sel)		{ true  true true }
+	set _GD_fsm(mount,sel)		{ true  true true }
+	set _GD_fsm(export,sel)		{ true  true true }
+	set _GD_fsm(remove,sel)		{ false true true }
+	set _GD_fsm(unmount,sel)	{ false true true }
+	set _GD_fsm(unexport,sel)	{ true  true true }
+	set _GD_fsm(info,sel)		{ false true true }
+	set _GD_fsm(quit,sel)		{ true  true true }
+	
+	lappend _GD_fsm(menus) {selected xmCascadeButton {
+			{new      xmPushButton}
+			{mount    xmPushButton}
+			{export   xmPushButton}
+			{sep1     xmSeparator}
+			{remove   xmPushButton}
+			{unmount  xmPushButton}
+			{unexport xmPushButton}
+			{sep2     xmSeparator}
+			{info     xmPushButton}
+			{sep3     xmSeparator}
+			{quit     xmPushButton}
+			}
+		}
+
+	lappend _GD_fsm(menus) {view xmCascadeButton {
+			{search   xmPushButton}
+			{sep1     xmSeparator}
+			{asIcon   xmToggleButton}
+			{asList   xmToggleButton}
+			{asColumn xmToggleButton}
+			{sep2     xmSeparator}
+			{mountPt  xmToggleButton}
+			{devName  xmToggleButton}
+			}
+		}
+
+
+	set _GD_fsmCfrm(delete,opts) \
+		{XFS_FORCE_UMOUNT_FLAG XFS_RM_FSTAB_ENTRY XFS_RM_EXPORTS_ENTRY}
+	set _GD_fsmCfrm(unmount,opts) {XFS_FORCE_UMOUNT_FLAG}
+	set _GD_fsmCfrm(unexport,opts) {XFS_RM_EXPORTS_ENTRY}
+
+	set _GD_fsmCfrm(delete,answer)		false
+	set _GD_fsmCfrm(unmount,answer)		false
+	set _GD_fsmCfrm(export,answer)		false
+	set _GD_fsmCfrm(unexport,answer)	false
+	set _GD_fsmCfrm(mount,answer)		false
+	set _GD_fsmCfrm(quit,answer)		false
+	trace variable _GD_fsmCfrm(delete,answer) w fs:_doRemove
+	trace variable _GD_fsmCfrm(unmount,answer) w fs:_doUnmount
+	trace variable _GD_fsmCfrm(mount,answer) w fs:_doMount
+	trace variable _GD_fsmCfrm(export,answer) w fs:_doExport
+	trace variable _GD_fsmCfrm(unexport,answer) w fs:_doUnexport
+	trace variable _GD_fsmCfrm(quit,answer) w fs:_exit
+
+        if {[info exists env(XFSTCL_FSSRC_DIR)]} {
+                set G_data(sourcedir) $env(XFSTCL_FSSRC_DIR)
+        } else {
+                set G_data(sourcedir) /usr/xfsm/xfs
+        }
+}
+
+#%COMMENT_BEGIN
+# Function:	fs:createApplication
+# Synopsis:	The entry point for creating the widgets for the application.
+# Arguments:	None
+#%COMMENT_END
+proc fs:createApplication {} \
+{
+	global	_GW_fsm _GW_fsmMenu _GW_fsmPoMenu _GD_fsm
+
+	fs:initialize
+
+	xmMainWindow .main managed
+	xmPanedWindow .main.pane
+
+	set menu [fs:createMenu .main]
+	set form [fs:createContents .main.pane]
+	$menu.selected cascadingCallback \
+			"mu:ipSelectCb $_GW_fsm(panel) _GD_fsm _GW_fsmMenu"
+
+	foreach item {Icon List Column} {
+                ip:registerMVC fs $item $_GW_fsmMenu(as$item)
+	}
+#	ip:registerMVC fs Shelf $_GW_fsmMenu(shelf)
+
+	set item search
+	$_GW_fsmMenu($item) activateCallback "fs:viewCb $_GW_fsm(panel) $item"
+
+	foreach item {devName mountPt} {
+		$_GW_fsmMenu($item) valueChangedCallback \
+				"fs:viewCb $_GW_fsm(panel) $item %set"
+	}
+	$_GW_fsmMenu(mountPt) setValues -set true
+
+	####	Set initial state for the "selected" menu items
+	mu:ipSelectCb $_GW_fsm(panel) _GD_fsm {_GW_fsmMenu _GW_fsmPoMenu}
+
+	$menu manageChild
+	$form manageChild
+	.main.pane manageChild
+}
+
+#%COMMENT_BEGIN
+# Function:	fs:createMenu
+# Synopsis:	Creates the menu bar at the top of the main window and
+#		defines callbacks for the items in the "Selected" menu.
+# Arguments:	- parent	The widget id for the parent of the menu bar.
+#%COMMENT_END
+proc fs:createMenu { parent } \
+{
+	global	_GW_fsmMenu _GD_fsm
+
+	set mbar [xmMenuBar $parent.menuBar]
+	foreach item $_GD_fsm(menus) {
+		xfs:createMenu $parent $mbar $item _GW_fsmMenu
+	}
+	sgiHelpMenu $mbar
+
+	foreach item $_GD_fsm(commands) {
+		$_GW_fsmMenu($item) activateCallback "fs:selectedCb $item"
+	}
+
+	return $mbar
+}
+
+#%COMMENT_BEGIN
+# Function:	fs:createContents
+# Synopsis:	Creates the icon panel and associated widgets.
+# Arguments:	- parent	The parent for the icon panel.
+#%COMMENT_END
+proc fs:createContents { parent } \
+{
+	global	_GW_fsm _GD_fsm
+
+	set form [xmForm $parent.form managed]
+
+	set po_panel menu_selected
+	set po_tmpl ""
+	set _GW_fsm(panel) [ip:create fs $form $_GD_fsm(style) \
+				po_panel po_tmpl false]
+	$_GW_fsm(panel) activateCallback Open "fs:openIconCb $_GW_fsm(panel)"
+	$_GW_fsm(panel) activateCallback Drop "return 1"
+#
+#	"Select" does not get called when "Shift-Select" occurs.  Set the
+#	sensitivity of menu items when the menu is popped up (mapCallback
+#	for the popup menu and cascadingCallback for the pulldown menu).
+#
+#	$_GW_fsm(panel) postCallback Select "mu:ipSelectCb \
+#			$_GW_fsm(panel) _GD_fsm {_GW_fsmMenu _GW_fsmPoMenu}"
+
+	fs:createIconPanelPopup $po_panel
+
+	return $form
+}
+
+#%COMMENT_BEGIN
+# Function:	fs:createIconPanelPopup
+# Synopsis:	Creates a popup menu on the icon panel.
+# Arguments:	- po		The widget id for the popup menu.
+#%COMMENT_END
+proc fs:createIconPanelPopup { po } \
+{
+	global	_GW_fsm _GD_fsm _GW_fsmPoMenu _GD_fsm
+
+	xmPopupMenu $po
+	xfs:createMenuItems $po $po \
+			[lindex [lindex $_GD_fsm(menus) 0] 2] _GW_fsmPoMenu
+	foreach item $_GD_fsm(commands) {
+		$_GW_fsmPoMenu($item) activateCallback "fs:selectedCb $item"
+	}
+
+	$po mapCallback "mu:ipSelectCb $_GW_fsm(panel) _GD_fsm _GW_fsmPoMenu"
+}
+
+#########################################
+#		Utilities		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	fs:searchCompleted
+# Synopsis:	Resets the "Selected" menu items to their initial state.  When
+#		a search is completed, the icons are replaced.  After a search
+#		is done, all icons are unselected.  This ensures that the menu
+#		items reflect that.
+# Arguments:	None
+#%COMMENT_END
+proc fs:searchCompleted { } \
+{
+	global	_GW_fsm _GW_fsmMenu _GW_fsmPoMenu _GD_fsm
+
+        ####    Reset initial state for the "selected" menu items
+	mu:ipSelectCb $_GW_fsm(panel) _GD_fsm {_GW_fsmMenu _GW_fsmPoMenu}
+}
+
+#########################################
+#		Callbacks		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	fs:openIconCb
+# Synopsis:	The function that is defined for the "Open" action on the
+#		icon panel.
+# Arguments:	- panel		The widget id for the icon panel.
+#%COMMENT_END
+proc fs:openIconCb { panel } \
+{
+	set chosen [$panel selection -encode]
+	if {! [ip:encodeToObject $chosen selected]} {
+		####	TODO
+	}
+
+	foreach i $selected {
+#		puts "fs:openIconCb: $i"
+	}
+
+	#	Returning 1 here prevents the default "open"
+	#	action from being invoked
+	return 1
+}
+
+#%COMMENT_BEGIN
+# Function:	fs:viewCb
+# Synopsis:	This is called when the user selects an item from the "View"
+#		pulldown menu.  This function ignores any items other than
+#		"search", "devName", and "mountPt", since the other items
+#		have special callbacks to ensure consistency with the view
+#		toggle buttons to the left of the icon panel.
+# Arguments:	- w		The widget id for the icon panel.
+#		- op		Indicates which item was selected from the menu.
+#%COMMENT_END
+proc fs:viewCb { w op {set true} } \
+{
+	global	_GW_fsm _GW_fsmMenu
+
+	switch $op {
+	    search {
+		fsSrch:realize fs "" $_GW_fsm(panel)
+		fsSrch:manage fs
+	    }
+	    devName {
+		if {[cequal $set "true"] && \
+		    ! [cequal "DEV_NAME" [fsSrch:getDspNmOpt fs]]} {
+			$_GW_fsmMenu(mountPt) setValues -set false
+			fsSrch:setDspNmOpt fs DEV_NAME
+		}
+	    }
+	    mountPt {
+		if {[cequal $set "true"] && \
+		    ! [cequal "MOUNT_PT" [fsSrch:getDspNmOpt fs]]} {
+			$_GW_fsmMenu(devName) setValues -set false
+			fsSrch:setDspNmOpt fs MOUNT_PT
+		}
+	    }
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	fs:selected
+# Synopsis:	This is called when the user selects an item from the "Selected"
+#		pulldown menu or the icon panel popup menu.  It creates a list
+#		of object signatures representing each item that was selected
+#		in the icon panel when the action was invoked.  It then
+#		performs the appropriate action.
+# Arguments:	- op		Indicates which item was selected from the menu.
+#%COMMENT_END
+proc fs:selectedCb { op } \
+{
+	global	_GW_fsm G_data _GD_resources
+
+	set chosen [$_GW_fsm(panel) selection -encode]
+	if {! [ip:encodeToObject $chosen selected]} {
+		####	TODO
+	}
+
+	. defineCursor watch
+
+	switch $op {
+	    new {
+		if {! [info exists G_data(source,mkfsDlg)]} {
+			source $G_data(sourcedir)/mkfsDlg
+			set G_data(source,mkfsDlg) true
+			mkfsDlg:realize newfs ""
+		}
+		mkfsDlg:fill newfs
+		mkfsDlg:manage newfs
+	    }
+	    mount {
+		if {[llength $selected] <= 1} {
+			if {! [info exists G_data(source,mntDlg)]} {
+				source $G_data(sourcedir)/fsMntDlg
+				set G_data(source,mntDlg) true
+				mntDlg:realize mntDlg ""
+			}
+			if {[mntDlg:fill mntDlg $selected]} {
+				mntDlg:manage mntDlg
+			}
+		} else {
+			fs:_mount $selected
+		}
+	    }
+	    export {
+		if {[llength $selected] <= 1} {
+			if {! [info exists G_data(source,exportDlg)]} {
+				source $G_data(sourcedir)/exportDlg
+				set G_data(source,exportDlg) true
+				expDlg:realize exp ""
+			}
+			expDlg:fill exp $selected
+			expDlg:manage exp
+		} else {
+			fs:_export $selected
+		}
+	    }
+	    unexport {
+		if {[llength $selected] < 1} {
+			if {! [info exists G_data(source,unexportDlg)]} {
+				source $G_data(sourcedir)/unexportDlg
+				set G_data(source,unexportDlg) true
+				unexpDlg:realize unexp ""
+			}
+			if {[unexpDlg:fill unexp $selected]} {
+				unexpDlg:manage unexp
+			}
+		} else {
+			fs:_unexport $selected
+		}
+	    }
+	    unmount  { fs:_unmount $selected }
+	    remove   { fs:_remove $selected }
+	    info {
+		if {! [info exists G_data(source,fsInfoDlg)]} {
+			source $G_data(sourcedir)/fsInfoDlg
+			set G_data(source,fsInfoDlg) true
+			fsInfo:realize fsInfo ""
+		}
+		if {[fsInfo:fill fsInfo replace $selected]} {
+			fsInfo:manage fsInfo
+		}
+	    }
+	    quit {
+		if {! [info exists _GW_fsm(quit,dialog)]} {
+			set _GW_fsm(quit,dialog) [xmQuestionDialog .quitDlg \
+				-messageString $_GD_resources(msg,quit) \
+				-noResize true]
+			$_GW_fsm(quit,dialog).Help unmanageChild
+			$_GW_fsm(quit,dialog) okCallback \
+				"set _GD_fsmCfrm(quit,answer) true"
+		}
+		$_GW_fsm(quit,dialog) manageChild
+	    }
+	}
+
+	. defineCursor ""
+}
+
+#########################################
+#	Callback Utilities		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	fs:_remove
+# Synopsis:	This is called from fs:selectedCb() when the operation is
+#		"Remove".  It creates a confirmation dialog (if one does not
+#		already exist), fills the dialog, and stores the list of
+#		objects for use after the user has confirmed the action.
+# Arguments:	- objects	The list of objects for the operation.
+#%COMMENT_END
+proc fs:_remove { objects } \
+{
+	global	_GW_fsm _GD_fsmCfrm
+
+	if {[llength $objects] == 0} { return }
+
+	if {[cfrm:getDialog fsDelete] == ""} {
+		cfrm:realize fsDelete ""
+		set cfrmDlg [cfrm:getDialog fsDelete]
+		$cfrmDlg okCallback "set _GD_fsmCfrm(delete,answer) true"
+		$cfrmDlg cancelCallback "set _GD_fsmCfrm(delete,answer) false"
+		$cfrmDlg helpCallback "sgiHelpMsg $cfrmDlg"
+
+		set wa [cfrm:getWorkArea fsDelete]
+		set rc [xmRowColumn $wa.rc managed]
+		foreach item $_GD_fsmCfrm(delete,opts) {
+			set _GW_fsm(delete,$item) \
+					[xmToggleButton $rc.$item managed]
+		}
+		cfrm:attachSubSection fsDelete $rc
+	}
+	$_GW_fsm(delete,XFS_FORCE_UMOUNT_FLAG) setValues -set false
+	$_GW_fsm(delete,XFS_RM_FSTAB_ENTRY) setValues -set true
+	$_GW_fsm(delete,XFS_RM_EXPORTS_ENTRY) setValues -set true
+
+	set _GD_fsmCfrm(delete,objects) $objects
+	set host [hu:getHostPlusDom [fsSrch:getHost fs]]
+	if {[llength $objects] == 1} {
+		set q [format $_GD_fsmCfrm(delete,msg,single) $host]
+	} else {
+		set q [format $_GD_fsmCfrm(delete,msg,multiple) $host]
+	}
+	cfrm:fill fsDelete $q $objects
+	cfrm:manage fsDelete
+}
+
+#%COMMENT_BEGIN
+# Function:	fs:_doRemove
+# Synopsis:	This is called when the user confirms the remove action.  It
+#		is called by setting a trace on a variable which is updated
+#		when the user presses a dialog button in the confirmation
+#		dialog.  If the user accepts the action, the filesystems
+#		are removed.  The icons representing successfully removed
+#		filesystems are removed from the icon panel if the user
+#		chose to remove /etc/fstab entry.
+# Arguments:	- vname		The name of the traced variable.
+#		- element	The variables element name if it is an array
+#				element, otherwise an empty string.
+#		-op		"r" for read, "w" for write, "u" for unset.
+#%COMMENT_END
+proc fs:_doRemove { vname element op } \
+{
+	global          _GW_fsm _GD_fsmCfrm
+
+	if {$element != ""} {
+		set vname ${vname}($element)
+	}
+	upvar $vname x
+
+	if {$x} {
+	    set cfrmDlg [cfrm:getDialog fsDelete]
+	    . defineCursor watch; $cfrmDlg defineCursor watch
+		
+	    foreach item $_GD_fsmCfrm(delete,opts) {
+		$_GW_fsm(delete,$item) getValues -set value
+		lappend data $item:$value
+		if {$item == "XFS_RM_FSTAB_ENTRY"} {
+			set do_remove $value
+		}
+	    }
+	    set data [join $data "\n"]
+
+	    foreach item $_GD_fsmCfrm(delete,objects) {
+		if {[catch {set ec [fsCmd delete $item $data]} error]} {
+		    obj:parse $item o_class o_host o_nm o_type
+		    regsub -all -- "\n" [string trim $error] "\n\t" nerror
+
+		    em:setMessageString fs \
+			"An error occured while removing the filesystem(s)."
+
+		    global	errorCode
+		    lassign $errorCode ec_class ec_msg
+
+		    if {$ec_class == "SERVER" && $ec_msg == "WARNING"} {
+			em:storeMsg fs warning \
+			    "A non-fatal error occured while removing $o_nm:\n\t$nerror"
+			 lappend remove_queue $item
+		    } else {
+			em:storeMsg fs error \
+			    "Unable to remove $o_nm:\n\t$nerror"
+		    }
+		} else {
+		    lappend remove_queue $item
+		}
+	    }
+
+	    if {[info exists remove_queue] && $do_remove == "true"} {
+		####    Remove the object from the icon panel
+		fsSrch:delObjects fs $remove_queue
+	    }
+
+	    $cfrmDlg defineCursor ""; . defineCursor ""
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	fs:_remove
+# Synopsis:	This is called from fs:selectedCb() when the operation is
+#		"Unmount".  It creates a confirmation dialog (if one does not
+#		already exist), fills the dialog, and stores the list of
+#		objects for use after the user has confirmed the action.
+# Arguments:	- objects	The list of objects for the operation.
+#%COMMENT_END
+proc fs:_unmount { objects } \
+{
+	global	_GW_fsm _GD_fsmCfrm
+
+	if {[llength $objects] == 0} { return }
+
+	if {[cfrm:getDialog fsUnmount] == ""} {
+		cfrm:realize fsUnmount ""
+		set cfrmDlg [cfrm:getDialog fsUnmount]
+		$cfrmDlg okCallback "set _GD_fsmCfrm(unmount,answer) true"
+		$cfrmDlg cancelCallback "set _GD_fsmCfrm(unmount,answer) false"
+		$cfrmDlg helpCallback "sgiHelpMsg $cfrmDlg"
+
+		set wa [cfrm:getWorkArea fsUnmount]
+		set rc [xmRowColumn $wa.rc managed]
+		foreach item $_GD_fsmCfrm(unmount,opts) {
+			set _GW_fsm(unmount,$item) \
+					[xmToggleButton $rc.$item managed]
+		}
+		cfrm:attachSubSection fsUnmount $rc
+	}
+	$_GW_fsm(unmount,XFS_FORCE_UMOUNT_FLAG) setValues -set false
+
+	set host [hu:getHostPlusDom [fsSrch:getHost fs]]
+	if {[llength $objects] == 1} {
+		set q [format $_GD_fsmCfrm(unmount,msg,single) $host]
+	} else {
+		set q [format $_GD_fsmCfrm(unmount,msg,multiple) $host]
+	}
+	set _GD_fsmCfrm(unmount,objects) $objects
+
+	cfrm:fill fsUnmount $q $objects
+	cfrm:manage fsUnmount
+}
+
+#%COMMENT_BEGIN
+# Function:	fs:_doUnmount
+# Synopsis:	This is called when the user confirms the unmount action.  It
+#		is called by setting a trace on a variable which is updated
+#		when the user presses a dialog button in the confirmation
+#		dialog.  If the user accepts the action, the filesystems
+#		are unmounted.  The display names of the icons representing
+#		unmounted filesystems are changed to the device names.
+# Arguments:	- vname		The name of the traced variable.
+#		- element	The variables element name if it is an array
+#				element, otherwise an empty string.
+#		-op		"r" for read, "w" for write, "u" for unset.
+#%COMMENT_END
+proc fs:_doUnmount { vname element op } \
+{
+	global          _GW_fsm _GD_fsmCfrm
+
+	if {$element != ""} {
+		set vname ${vname}($element)
+	}
+	upvar $vname x
+
+	if {$x} {
+	    set cfrmDlg [cfrm:getDialog fsUnmount]
+	    . defineCursor watch; $cfrmDlg defineCursor watch
+
+	    foreach item $_GD_fsmCfrm(unmount,opts) {
+		$_GW_fsm(unmount,$item) getValues -set value
+		lappend data $item:$value
+	    }
+	    set data [join $data "\n"]
+
+	    foreach item $_GD_fsmCfrm(unmount,objects) {
+		obj:parse $item o_class o_host o_nm o_type
+		if {[catch {set ec [fsCmd unmount $item $data]} error]} {
+		    regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		    em:setMessageString fs \
+			"An error occured while unmounting the filesystem(s)."
+		    em:storeMsg fs error "Unable to unmount $o_nm:\n\t$nerror"
+		} else {
+			regsub -- "^/dev/" $o_nm "" nm
+			ip:setObjDisplayName fs $item $nm false
+		}
+	    }
+	    ip:render fs true
+
+	    $cfrmDlg defineCursor ""; . defineCursor ""
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	fs:_mount
+# Synopsis:	This is called from fs:selectedCb() when the operation is
+#		"Mount" and more than one object is selected in the icon panel.
+#		It creates a confirmation dialog (if one does not already
+#		exist), fills the dialog, and stores the list of objects
+#		for use after the user has confirmed the action.
+# Arguments:	- objects	The list of objects for the operation.
+#%COMMENT_END
+proc fs:_mount { objects } \
+{
+	global	_GD_fsmCfrm
+
+	if {[llength $objects] == 0} { return }
+
+	if {[cfrm:getDialog fsMount] == ""} {
+		cfrm:realize fsMount ""
+		set cfrmDlg [cfrm:getDialog fsMount]
+		$cfrmDlg okCallback "set _GD_fsmCfrm(mount,answer) true"
+		$cfrmDlg cancelCallback "set _GD_fsmCfrm(mount,answer) false"
+		$cfrmDlg helpCallback "sgiHelpMsg $cfrmDlg"
+	}
+
+	set host [hu:getHostPlusDom [fsSrch:getHost fs]]
+	if {[llength $objects] == 1} {
+		set q [format $_GD_fsmCfrm(mount,msg,single) $host]
+	} else {
+		set q [format $_GD_fsmCfrm(mount,msg,multiple) $host]
+	}
+	set _GD_fsmCfrm(mount,objects) $objects
+
+	cfrm:fill fsMount $q $objects
+	cfrm:manage fsMount
+}
+
+#%COMMENT_BEGIN
+# Function:	fs:_doMount
+# Synopsis:	This is called when the user confirms the mount action.  It
+#		is called by setting a trace on a variable which is updated
+#		when the user presses a dialog button in the confirmation
+#		dialog.  If the user accepts the action, the filesystems
+#		are mounted.
+# Arguments:	- vname		The name of the traced variable.
+#		- element	The variables element name if it is an array
+#				element, otherwise an empty string.
+#		-op		"r" for read, "w" for write, "u" for unset.
+#%COMMENT_END
+proc fs:_doMount { vname element op } \
+{
+	global          _GD_fsmCfrm
+
+	if {$element != ""} {
+		set vname ${vname}($element)
+	}
+	upvar $vname x
+
+	if {$x} {
+	    set cfrmDlg [cfrm:getDialog fsMount]
+	    . defineCursor watch; $cfrmDlg defineCursor watch
+
+	    foreach item $_GD_fsmCfrm(mount,objects) {
+		if {[catch {set ec [fsCmd mount $item ""]} error]} {
+		    obj:parse $item o_class o_host o_nm o_type
+		    regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		    em:setMessageString fs \
+			"An error occured while mounting the filesystem(s)."
+		    em:storeMsg fs error "Unable to mount $o_nm:\n\t$nerror"
+		}
+	    }
+
+	    fsSrch:setDspNmOpt fs
+	    $cfrmDlg defineCursor ""; . defineCursor ""
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	fs:_unexport
+# Synopsis:	This is called from fs:selectedCb() when the operation is
+#		"Unexport".  It creates a confirmation dialog (if one does not
+#		already exist), fills the dialog, and stores the list of
+#		objects for use after the user has confirmed the action.
+# Arguments:	- objects	The list of objects for the operation.
+#%COMMENT_END
+proc fs:_unexport { objects } \
+{
+	global	_GW_fsm _GD_fsmCfrm
+
+	if {[llength $objects] == 0} {
+		return
+	} elseif {[llength $objects] == 1} {
+		set q $_GD_fsmCfrm(unexport,msg,single)
+	} else {
+		set q $_GD_fsmCfrm(unexport,msg,multiple)
+	}
+	set _GD_fsmCfrm(unexport,objects) $objects
+
+	set cfrmDlg [cfrm:getDialog fsUnexport]
+	if {$cfrmDlg == ""} {
+		cfrm:realize fsUnexport ""
+		set cfrmDlg [cfrm:getDialog fsUnexport]
+		$cfrmDlg okCallback "set _GD_fsmCfrm(unexport,answer) true"
+		$cfrmDlg cancelCallback "set _GD_fsmCfrm(unexport,answer) false"
+		$cfrmDlg helpCallback "sgiHelpMsg $cfrmDlg"
+
+		set wa [cfrm:getWorkArea fsUnexport]
+		set rc [xmRowColumn $wa.rc managed]
+		foreach item $_GD_fsmCfrm(unexport,opts) {
+			set _GW_fsm(unexport,$item) \
+				[xmToggleButton $rc.$item managed]
+		}
+		cfrm:attachSubSection fsUnexport $rc
+	}
+	$_GW_fsm(unexport,XFS_RM_EXPORTS_ENTRY) setValues -set true
+
+	cfrm:fill fsUnexport $q $objects
+	cfrm:manage fsUnexport
+}
+
+#%COMMENT_BEGIN
+# Function:	fs:_doUnexport
+# Synopsis:	This is called when the user confirms the unexport action.  It
+#		is called by setting a trace on a variable which is updated
+#		when the user presses a dialog button in the confirmation
+#		dialog.  If the user accepts the action, the filesystems
+#		are unexported.
+# Arguments:	- vname		The name of the traced variable.
+#		- element	The variables element name if it is an array
+#				element, otherwise an empty string.
+#		-op		"r" for read, "w" for write, "u" for unset.
+#%COMMENT_END
+proc fs:_doUnexport { vname element op } \
+{
+	global          _GW_fsm _GD_fsmCfrm
+
+	if {$element != ""} {
+		set vname ${vname}($element)
+	}
+	upvar $vname x
+
+	if {$x} {
+	    set cfrmDlg [cfrm:getDialog fsUnexport]
+	    . defineCursor watch; $cfrmDlg defineCursor watch
+
+	    foreach item $_GD_fsmCfrm(unexport,opts) {
+		$_GW_fsm(unexport,$item) getValues -set value
+		lappend data $item:$value
+	    }
+	    set data [join $data "\n"]
+
+	    foreach item $_GD_fsmCfrm(unexport,objects) {
+		if {[catch {set ec [fsCmd unexport $item $data]} error]} {
+		    obj:parse $item o_class o_host o_nm o_type
+		    regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		    em:setMessageString fs \
+			"An error occured while unexporting the filesystem(s)."
+
+		    global	errorCode
+		    lassign $errorCode ec_class ec_msg
+
+		    if {$ec_class == "SERVER" && $ec_msg == "WARNING"} {
+			em:storeMsg fs warning \
+			    "A non-fatal error occured while unexporting $o_nm:\n\t$nerror"
+			 lappend remove_queue $item
+		    } else {
+			em:storeMsg fs error \
+			    "Unable to unexport $o_nm:\n\t$nerror"
+		    }
+
+
+		}
+	    }
+
+	    $cfrmDlg defineCursor ""; . defineCursor ""
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	fs:_export
+# Synopsis:	This is called from fs:selectedCb() when the operation is
+#		"Export" and more than one object is selected in the icon panel.
+#		It creates a confirmation dialog (if one does not already
+#		exist), fills the dialog, and stores the list of objects
+#		for use after the user has confirmed the action.
+# Arguments:	- objects	The list of objects for the operation.
+#%COMMENT_END
+proc fs:_export { objects } \
+{
+	global	_GD_fsmCfrm
+
+	if {[llength $objects] == 0} {
+		return
+	} elseif {[llength $objects] == 1} {
+		set q $_GD_fsmCfrm(export,msg,single)
+	} else {
+		set q $_GD_fsmCfrm(export,msg,multiple)
+	}
+	set _GD_fsmCfrm(export,objects) $objects
+
+	set cfrmDlg [cfrm:getDialog fsExport]
+	if {$cfrmDlg == ""} {
+		cfrm:realize fsExport ""
+		set cfrmDlg [cfrm:getDialog fsExport]
+		$cfrmDlg okCallback "set _GD_fsmCfrm(export,answer) true"
+		$cfrmDlg cancelCallback "set _GD_fsmCfrm(export,answer) false"
+		$cfrmDlg helpCallback "sgiHelpMsg $cfrmDlg"
+	}
+	cfrm:fill fsExport $q $objects
+	cfrm:manage fsExport
+}
+
+#%COMMENT_BEGIN
+# Function:	fs:_doExport
+# Synopsis:	This is called when the user confirms the export action.  It
+#		is called by setting a trace on a variable which is updated
+#		when the user presses a dialog button in the confirmation
+#		dialog.  If the user accepts the action, the filesystems
+#		are exported.
+# Arguments:	- vname		The name of the traced variable.
+#		- element	The variables element name if it is an array
+#				element, otherwise an empty string.
+#		-op		"r" for read, "w" for write, "u" for unset.
+#%COMMENT_END
+proc fs:_doExport { vname element op } \
+{
+	global          _GD_fsmCfrm
+
+	if {$element != ""} {
+		set vname ${vname}($element)
+	}
+	upvar $vname x
+
+	if {$x} {
+	    set cfrmDlg [cfrm:getDialog fsExport]
+	    . defineCursor watch; $cfrmDlg defineCursor watch
+
+	    foreach item $_GD_fsmCfrm(export,objects) {
+		if {[catch {set ec [fsCmd export $item ""]} error]} {
+		    obj:parse $item o_class o_host o_nm o_type
+		    regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		    em:setMessageString fs \
+			"An error occured while exporting the filesystem(s)."
+		    em:storeMsg fs error "Unable to export $o_nm:\n\t$nerror"
+		}
+	    }
+
+	    $cfrmDlg defineCursor ""; . defineCursor ""
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	fs:_exit
+# Synopsis:	This is called when the user confirms the exit action.  It
+#		is called by setting a trace on a variable which is updated
+#		when the user presses a dialog button in the confirmation
+#		dialog.  If the user accepts the action, the application exits.
+# Arguments:	- vname		The name of the traced variable.
+#		- element	The variables element name if it is an array
+#				element, otherwise an empty string.
+#		-op		"r" for read, "w" for write, "u" for unset.
+#%COMMENT_END
+proc fs:_exit { vname element op } \
+{
+	if {$element != ""} {
+		set vname ${vname}($element)
+	}
+	upvar $vname x
+
+	if {$x} { exit 0 }
+}
+
+#########################################
+#		Initialization		#
+#########################################
+xtAppInitialize -class Xfsm
+. getAppResources { 
+		{ hostName \
+		  HostName \
+		  "" \
+		  _GD_resources(hostName) }
+		{ hostsFile \
+		  HostsFile \
+		  /etc/hosts \
+		  _GD_resources(hostsFile) }
+		{ cfrmQuit \
+		  CfrmQuit \
+		  "Do you really want to quit?" \
+		  _GD_resources(msg,quit) }
+		{ cfrmDeleteS \
+		  CfrmDeleteS \
+		  "Delete this filesystem from %s?" \
+		  _GD_fsmCfrm(delete,msg,single) }
+		{ cfrmDeleteM \
+		  CfrmDeleteM \
+		  "Delete these filesystems from %s?" \
+		  _GD_fsmCfrm(delete,msg,multiple) }
+		{ cfrmUnmountS \
+		  CfrmUnmountS \
+		  "Unmount this filesystem from %s?" \
+		  _GD_fsmCfrm(unmount,msg,single) }
+		{ cfrmUnmountM \
+		  CfrmUnmountM \
+		  "Unmount these filesystems from %s?" \
+		  _GD_fsmCfrm(unmount,msg,multiple) }
+		{ cfrmMountS \
+		  CfrmMountS \
+		  "Mount this filesystem on %s?" \
+		  _GD_fsmCfrm(mount,msg,single) }
+		{ cfrmMountM \
+		  CfrmMountM \
+		  "Mount these filesystems on %s?" \
+		  _GD_fsmCfrm(mount,msg,multiple) }
+		{ cfrmMkfs \
+		  CfrmMkfs \
+		  "Create %s filesystem on %s?" \
+		  _GD_fsmCfrm(mkfs,msg) }
+		{ cfrmUnexportS \
+		  CfrmUnexportS \
+		  "Unexport this filesystem?" \
+		  _GD_fsmCfrm(unexport,msg,single) }
+		{ cfrmUnexportM \
+		  CfrmUnexportM \
+		  "Unexport these filesystems?" \
+		  _GD_fsmCfrm(unexport,msg,multiple) }
+		{ cfrmExportS \
+		  CfrmExportS \
+		  "Export this filesystem?" \
+		  _GD_fsmCfrm(export,msg,single) }
+		{ cfrmExportM \
+		  CfrmExportM \
+		  "Export these filesystems?" \
+		  _GD_fsmCfrm(export,msg,multiple) }
+	}
+
+####	Set the path for autoloading
+if {[info exists env(XFSTCL_TLIB)]} {
+        set xsh_tlib $env(XFSTCL_TLIB)
+} else {
+        set xsh_tlib /usr/xfsm/lib/tlib
+}
+lvarpush auto_path $xsh_tlib
+
+####	Load the dso
+if {! [xfs:openDSO reason]} {
+	exit 1
+}
+
+####	Parse any command line arguments - ignore any we don't understand
+if {$argc != 0} {
+	set hostname ""; set hostfile ""
+	xfs:parseArgs hostname hostfile
+	if {[clength $hostname]} { set _GD_resources(hostName) $hostname }
+	if {[clength $hostfile]} { set _GD_resources(hostsFile) $hostfile }
+}
+if {! [clength $_GD_resources(hostName)]} {
+	set _GD_resources(hostName) [exec /sbin/uname -n]
+}
+
+####	Make widgets
+fs:createApplication
+. realizeWidget
+
+####	Set the view for the icon panel(s)
+ip:viewCb fs true Icon
+
+####	Must do this after ". realizeWidget"
+source $G_data(sourcedir)/fsSrchDlg
+fsSrch:realize fs "" $_GW_fsm(panel)
+fsSrch:fill fs $_GD_resources(hostName)
+fsSrch:_accept fs
+
+####	Get all the existing templates
+# set templates [tu:getTemplates $_GD_fsm(class)]
+
+####	Add the icons to the template shelf
+# ip:fillPanel fs $templates
+
+. mainLoop

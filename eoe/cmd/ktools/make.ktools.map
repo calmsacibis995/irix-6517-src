@@ -1,0 +1,395 @@
+#!/bin/perl5
+# $Modified: Thu Aug  7 14:25:02 1997 by cwilson $
+# $Revision: 1.2 $
+#
+# churn annex portsfile into ktools nis map.
+#
+
+print "$0: invoked as $0 @ARGV\n";
+
+require 'newgetopt.pl';
+
+&NGetOpt('u', 'kwho=s', 'kreset=s', 'kcons=s', 'version=s');
+
+# note that you can't specify these arguments and command-line switches.
+#
+$PORTSFILE = $ARGV[0] || '/var/domain/ktools.configuration';
+$MAPFILE = $ARGV[1] || '/var/domain/ktools.map';
+$CONFIGDIR = $ARGV[2] || '/var/domain/annex-config/';
+
+
+&ReadPortsfile;
+
+open ($MAPFILE, ">$MAPFILE") 
+    || die "Couldn't open $MAPFILE, $!\n";
+
+# print classes available
+#
+print $MAPFILE "classes\t" . join('`', keys %{$Class}) . "\n\n";
+
+# print class config
+#
+foreach (sort keys %{$Class}) {
+    print $MAPFILE $_ . "_config\t";
+    print $MAPFILE join('`', 
+	       $Class->{$_}->{desc} || 'description here',
+	       $Class->{$_}->{owner} || 'owner here',
+	       $Class->{$_}->{email} || 'email here',
+	       666,
+	       join(',', @{$Class->{$_}->{connectors}}),
+	       );
+    print $MAPFILE "\n";
+}    
+print $MAPFILE "\n\n";
+
+# print the annexes available
+#
+# OLD # strip out the sgi.com bit because the value is too large for a dbm map!
+#
+# NEW: if length is > 1k then split up into multiple keys.
+#
+
+$joined_connectors =  join('`', keys %{$Connector});
+
+if ( length($joined_connectors) > 1000) {
+    $connector_count++;
+
+    while (($key, $value) = each %{$Connector} ) {
+	$connectors{$connector_count} .= "$key`";
+	if (length ($connectors{$connector_count}) > 1000) {
+	    $connector_count++;
+	}
+    }
+
+    foreach (sort keys %connectors) {
+	chop $connectors{$_};
+	print $MAPFILE "(connectors_$_)\t" . $connectors{$_} . "\n";
+	$all_connectors .= "(connectors_$_) ";
+    }
+    print $MAPFILE "_connectors\t$all_connectors\n";
+
+}
+    
+$joined_connectors =~ s/.sgi.com//g;
+
+print $MAPFILE "annexes\t" . $joined_connectors . "\n\n";
+
+
+# print each annex's config
+#
+foreach (sort keys %{$Connector}) {
+    print $MAPFILE $_ . "_config\t";
+    print $MAPFILE join('`',
+	       $Connector->{$_}->{ports},
+	       $Connector->{$_}->{boot},
+	       $Connector->{$_}->{loc},
+	       $Connector->{$_}->{owner},
+	       $Connector->{$_}->{email},
+	       $Connector->{$_}->{type},
+	       );
+    print $MAPFILE "\n";
+}
+print $MAPFILE "\n\n";
+
+# print the machine configuration, and extract the connector, so that
+# we can list the machines hooked up to each connector.
+# also extract the rtelnet-able ports.
+#
+foreach (sort keys %{$Object}) {
+    print $MAPFILE "$_\t";
+
+    local($consoles, $debugs);
+    ($consoles = $Object->{$_}->{consoles}) =~
+	s/(r?)(\d+)/sprintf("$1%.2d", $2)/ge;
+    ($debugs = $Object->{$_}->{debugs}) =~
+	s/(r?)(\d+)/sprintf("$1%.2d", $2)/ge;
+
+    print $MAPFILE join('`', 
+	       $Object->{$_}->{desc},
+	       $Object->{$_}->{cputype},
+	       $Object->{$_}->{mktgtype},
+	       $Object->{$_}->{chassis},
+	       $Object->{$_}->{gfx},
+	       $Object->{$_}->{memory},
+	       $Object->{$_}->{hw},
+	       $Object->{$_}->{loc},
+	       $Object->{$_}->{asset},
+	       $Object->{$_}->{serial},
+	       $Object->{$_}->{notes},
+	       $Object->{$_}->{owner},
+	       $Object->{$_}->{email},
+	       666,
+	       $Object->{$_}->{ports},
+	       $Object->{$_}->{connector},
+	       $Object->{$_}->{reset_method},
+	       $consoles,
+	       $debugs,
+	       666,
+	       );
+    print $MAPFILE "\n";
+
+    push (@{$xref{ $Object->{$_}->{connector} } }, $_);
+
+    if ($Object->{$_}->{consoles} =~ /r/) {
+	foreach $c ( split(',', $Object->{$_}->{consoles})) {
+	    $rtelnetd_con .= "$_:$c`"
+		if $c =~ s/r//;
+	}
+    }
+
+    if ($Object->{$_}->{debugs} =~ /r/) {
+	foreach $c ( split(',', $Object->{$_}->{debugs})) {
+	    $rtelnetd_dbg .= "$_:$c`"
+		if $c =~ s/r//;
+	}
+    }
+}
+
+# print list of machines connected to each annex
+#
+foreach (sort keys %xref) {
+    print $MAPFILE $_ . "_machines\t";
+    print $MAPFILE join('`', sort @{$xref{$_}});
+    print $MAPFILE "\n";
+}
+
+# print rtelnetd entries
+#
+print $MAPFILE "rtelnetd_con\t$rtelnetd_con\n" if $rtelnetd_con;
+print $MAPFILE "rtelnetd_dbg\t$rtelnetd_dbg\n" if $rtelnetd_dbg;
+
+# now add the version tags for the ktools programs:
+#
+# Evil evil evil
+#
+if (!$opt_kwho) {
+    $foo = `grep rcsversion kwho.c`;
+    ($kwho_version) = $foo =~ /(\d\.\d+)/;
+} else {
+    $kwho_version = $opt_kwho;
+}
+print $MAPFILE "kwho_version\t$kwho_version\n";
+
+if (!$opt_kcons) {
+    $foo = `grep Revision kcons`;
+    ($kcons_version) = $foo =~ /(\d\.\d+)/;
+} else {
+    $kcons_version = $opt_kcons;
+}
+print $MAPFILE "kcons_version\t$kcons_version\n";
+
+if (!$opt_kreset) {
+    $foo = `grep Revision kreset`;
+    ($kreset_version) = $foo =~ /(\d\.\d+)/;
+} else {
+    $kreset_version = $opt_kreset;
+}
+print $MAPFILE "kreset_version\t$kreset_version\n";
+
+# Add a timestamp, so that rtelnetd can know when to update.
+#
+print $MAPFILE "timestamp\t" . time . "\n";
+
+
+# Now, update annex configurations
+#
+foreach $connector (sort keys %xref ) {
+
+    # skip if not an annex
+    next if $Connector->{$connector}->{type} !~ /annex/i;
+    
+    undef %ports_used;
+
+    rename ( "$CONFIGDIR/$connector.config", 
+	     "$CONFIGDIR/$connector.config.old" );
+    open (FILE, '>' . "$CONFIGDIR/$connector.config") 
+	|| warn "unable to open $CONFIGDIR/$connector.config for writing, $!";
+
+    print FILE "# Changes to the some annexes CU device configuration\n";
+    print FILE "# Effective: " . `date` . "\n\n";
+    print FILE "annex $connector\n\n";
+
+    # iterate through each machine
+    #
+    foreach $ob ( sort @{$xref{$connector}} ) {
+	$ref = $Object->{$ob};
+	
+	# iterate through each console and debug port
+	$portcount = 0;
+	foreach ( split(/,/, $ref->{consoles})) {
+	    s/r//;
+	    print FILE "set port=$_ location\t\"" . $ref->{name} . '.con.' .
+		$portcount++ . "\"\n";
+	    print FILE "set port=$_ mode \"slave\"\n";
+	    $ports_used{$_}++;
+	}
+
+	$portcount = 0;
+	foreach ( split(/,/, $ref->{debugs})) {
+	    s/r//;
+	    print FILE "set port=$_ location\t\"" . $ref->{name} . '.dbg.' .
+		$portcount++ . "\"\n";
+	    print FILE "set port=$_ mode \"slave\"\n";
+	    $ports_used{$_}++;
+	}
+    }
+    
+    # now mark all the other ports unused if we know how many ports 
+    # this annex has
+    #
+    if ($Connector->{$connector}->{ports}) {
+	for ($i = 1; $i < $Connector->{$connector}->{ports}; $i++) {
+	    next if $ports_used{$i} || $ports_used{ sprintf('%.2d', $i) };
+	    print FILE "set port=$i location\t\"unknown\"\n";
+	    print FILE "set port=$i mode \"slave\"\n";
+	}
+    }
+
+    close FILE;
+}
+
+
+# push new config to annexes if desired
+if ($opt_u) {
+    foreach $connector (sort keys %xref ) {
+
+	# skip if not an annex
+	if ($Connector->{$connector}->{type} !~ /annex/i) {
+	    print "not updating $connector, not an annex [$Connector->{$connector}->{type}]" . 
+		" or an unknown connector.\n";
+	    next;
+	}
+	# only push if changes
+	if (`diff $CONFIGDIR/$connector.config $CONFIGDIR/$connector.config.old | wc -l` > 4) {
+	    print "updating $connector\n";
+	    print `/usr/annex/na < $CONFIGDIR/$connector.config`;
+	} else {
+	    print "not updating $connector, insufficient differences.\n";
+	}
+    }
+}
+
+#======================================================================
+# Read the portsfile...
+#
+sub ReadPortsfile {
+
+@Mach_Vars = ( 
+	      name,
+	      desc, 
+	      cputype,
+	      mktgtype,
+	      chassis,
+	      gfx,
+	      memory,
+	      hw,
+	      loc,
+	      asset,
+	      serial,
+	      notes,
+	      owner,
+	      email,
+	      ext,
+	      ports,
+	      connector,
+	      reset_method,
+	      consoles,
+	      debugs,
+	      access,
+	      );
+
+@Annex_Vars = (
+	       name,
+	       ports,
+	       boot,
+	       loc,
+	       owner,
+	       email, 
+	       ext,
+	       );
+
+@Class_Vars = (
+	       name,
+	       desc,
+	       owner,
+	       uname,
+	       ext,
+	       connectors,
+	       );
+
+
+    open(P, $PORTSFILE) || die "unable to open $PORTSFILE, $!";
+
+    $tag = <P>; 
+
+    if ($tag !~ /Version 2/) {
+
+	# slurp in a whole definition.
+	#
+	$/ = ")\n";
+	
+	while (<P>) {
+	    
+	    split(/\n/);
+	    
+	    # ignore commentary
+	    #
+	    while ($_[0] =~ /^\#/) {
+		shift @_;
+	    }
+	    
+	    # remove leading, trailing markers
+	    $_[0] =~ s/\(//;
+	    pop @_;
+	    
+	    $what = shift(@_);
+	    
+	    grep(s/^\s+(.*)\s+\#.*$\n*/$1/g, @_ );		# remove leading whitespace 
+	    grep(s/\s*$//, @_);					# nuke trailing whitespace and newline
+	    # and trailing comment
+	    # name of object
+	    #
+	    $ob = $_[0];				  
+	    next if ! $ob;
+	    
+	    if ($what =~ /^annex/ || /^connector/) {
+		foreach (@Annex_Vars) {
+		    $Connector->{$ob}->{$_} = shift(@_);
+		}	    
+	    } elsif ($what =~ /^class/) {
+		foreach (@Class_Vars) {
+		    $Class->{$ob}->{$_} = shift(@_);
+		}	    
+		$Class->{$ob}->{connectors} = 
+		    [ split( /,/, $Class->{$ob}->{connectors} ) ];
+	    } elsif ($what =~ /^machine/ || $what =~ /^object/) {
+		# slurp info into hashed struct.
+		#
+		foreach (@Mach_Vars) {
+		    $x = shift(@_);
+		    $Object->{$ob}->{$_} = $x if length($x);
+		}	    
+		
+		# tie the connector ports to the object
+		#
+		if (0) {
+		    foreach $c (split(',', $Object->{$ob}->{'consoles'}), 
+				split(',', $Object->{$ob}->{'consoles'}) ) {
+			$c =~ s/r//;
+			push ( @{ $Connector->{ $Object->{$ob}->{'connector'} }
+				  ->{'port'}->{$c} }, 
+			      $Object->{$ob} );
+		    }
+		}		
+	    }
+	}
+    } else {
+	# version 2
+	@x = <P>;		# <burp>
+	eval (join('', @x));
+	print;
+    }
+    
+}
+
+#----------------------------------------------------------------------

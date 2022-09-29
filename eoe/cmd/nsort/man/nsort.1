@@ -1,0 +1,975 @@
+.\"#ident $Revision: 1.2 $
+.ds Ns nsort
+.ds NS nSort
+.ds NU NSORT
+.TH \*(Ns 1
+.SH NAME
+\*(NS - high speed multiprocessor sort
+.SH SYNOPSIS
+.B \*(Ns
+[
+.I "sort definition"
+] [
+.I "input-files ..."
+] [
+.B -o
+.I output-file
+]
+.SH DESCRIPTION
+.P
+.B \*(NS
+reads input files,
+sorts them based on the instructions in the sort definition,
+and writes the results to the output file.
+Typically it uses all available processors in the system to
+help achieve maximum performance.
+.HP 0.5i
+.I "sort\ definition"
+.br
+A series of zero or more sort definition statements, each beginning
+with a '-' and contained in a single command line argument.
+Sort statements define the input record type and size,
+the sort field positions, field lengths, and field types.
+Sort statements also define the sort order, and direct
+summarization and duplicate removal.  The statements also define
+how many processors, how much memory, and which temporary files to
+use for the sort.  Sort definition statements may be placed
+anywhere on the command line.
+.HP 0.5i
+.B "input-files"
+.br
+This is a list of zero or more input files containing the records
+to be sorted.  If no input files are named or a filename is
+.B -\c
+, the standard input is used.
+.HP 0.5i
+.B -o 
+.I output-file
+.br
+The name of the output file to receive the sorted data. 
+The file is created if it does not exist.
+If the file already exists, 
+.B \*(NS
+truncates and overwrites it.
+If no output file is specified,
+the results are written to the standard output.
+.SH "SORT DEFINITION STATEMENTS"
+.P
+.\".B \*(NS
+.\"is compatible with the VMS Sort/Merge
+.\"utility's language for defining record formats, fields, keys, and memory
+.\"allocation.
+.\"In addition,
+.\".B \*(NS
+.\"can summarize records with equal keys
+.\"and may be directed to use the cpu, memory, and disk resources
+.\"of the system as desired.
+.\"\*(NS's flexible syntax allows sort definition statements
+.\"to have a unix-friendly appearance.
+.P
+.B \*(NS
+reads sort definition statements in order from the following places:
+.IP 1) 0.5i
+the system-wide parameter file: /usr/\*(Ns/\*(Ns.params
+.IP 2) 0.5i
+the \*(NU environment variable
+.IP 3) 0.5i
+the \*(NS command line
+.IP 4) 0.5i
+a file named in a
+.BI -specification: filename
+statement
+.SS "Syntax Conventions"
+.P
+Statements on the command line begin with the '-' character.
+In all other places, statements may alternatively begin with a '/' for
+compatibility with VMS Sort/Merge.
+Command-line arguments which neither start 
+with '-' nor follow '-o' are treated as an input file names.
+.P
+Statement keywords and field names are case-insensitive.  Keywords may be
+abbreviated to a prefix sufficient to distinguish it from the others
+permissible in that context.
+.P
+Wherever a keyword is followed by a '=' character the character ':' is also
+permitted. Similarly wherever a ':' is expected the character '=' is also
+accepted.
+Blank spaces, tabs and newlines are permitted in a statement.  A '#' or '!'
+character indicates that a comment follows until the next newline character.
+.P
+In the following syntax examples, the symbol
+.I N
+is a placeholder for
+a non-negative integer.  The symbol
+.I C
+is a placeholder for a named or quoted character.
+.P
+Built-in character names include:
+.RS
+.PD 0
+.IP nl 0.9i
+\&'\\n'
+.IP newline 0.9i
+\&'\\n'
+.IP tab 0.9i
+\&'\\t'
+.IP comma 0.9i
+\&','
+.IP space 0.9i
+\&' '
+.IP blank 0.9i
+\&' '
+.IP null 0.9i
+\&'\0'
+.PD
+.RE
+.P
+A quoted character is a printable ASCII character surrounded by single
+quotes, or one of the following escape sequences:
+.if 0 \{
+.RS
+.TP 0.9i
+\\\\\\\&n
+newline
+.TP 0.9i
+\\\\\\\&t
+tab
+.TP 0.9i
+\\\\\\0onnn
+the character with the octal value 0onnn
+.TP 0.9i
+\\\\\\
+the backslash \"\c
+.IP ' 0.9i
+.RB "the single quote " '
+.RE
+\}
+.ta 8n 16n 24n
+\\n	newline
+.br
+\\t	tab
+.br
+\\0nnn	the character with the octal value 0onnn
+.br
+\&'	the single quote
+.RB ( ' )
+.br
+\\	the escape character (\c
+.B "\\\\\c"
+)
+.SS "Data Description"
+.P
+The data description indicates the type of records in the input file(s) and
+the locations of the fields significant to the sort.
+.RS
+.SS Record Types
+.B \*(NS
+supports three record types, specified by a
+.B format
+statement.
+In the absence of a
+.B format
+statement the data is interpreted as containing stream records
+delimited by a newline character, i.e., lines of text.
+.HP 0.5i
+Fixed:
+.BR "-format= " [ ( "] {" size |\c
+.BR record_size } :\c
+.I N
+.RB [ ) ]
+.br
+Every input record has the same length in bytes, specified by
+the positive integer
+.IR N . 
+.HP 0.5i
+Variable:
+.BR "-format= " [ ( "] {" size |\c
+.BR record_size } ":variable " [ ",minimumlength:\c"
+.IR N "] [\c"
+.BR , { maximumlength | lrl }\c
+.BI : N\c
+.RB "] [" ) ]
+.br
+Every record in the input starts with a two-byte unsigned short
+integer that is the record's length in bytes.  The record
+length may range from 0 to 65535 bytes.  The two byte record
+size is not included in the record length nor can it be
+referred to as a field.  The total record size, including the
+length field, varies from 2 to 65537.  The position of the
+first field (after the record length) is 1 (offset 0).
+.\"(See the later Field Definition section for the definition
+.\"of position and offset.)
+.HP 0.5i
+Stream:
+.BR "-format= " [ ( ] " delimiter:\c"
+.IR "C " [\c
+.BI ",minimumlength:" N\c
+.RB "] [" , { maximumlength | lrl\c
+.RB } :\c"
+.I N\c
+.RB "] [" ) ]
+.br
+Every record in the input is terminated by a single byte record
+delimiter character. The maximum length of a stream record
+(including the delimiter) is 65535 bytes.  
+.P
+For variable or stream records, the upper and lower limits of the
+lengths may be declared with the 
+.BI "minimumlength:" N
+and
+.RB { maximumlength | lrl } :\c"
+.I N
+qualifiers.
+.B \*(NS
+uses memory more efficiently when these values are known.
+The minimum and maximum lengths of a
+variable record do not include
+the two-byte size preceding the record.
+An error is raised and the sort is cancelled
+if a record violates these size limits.
+The default
+.B minimumlength
+is the position of the last byte in
+the fixed-length field or key with the highest position.
+The default
+.B maximumlength
+is 65535.
+.SS "Field Definitions"
+The
+.B field
+statement defines the positions, lengths, and types of the fields
+to be sorted or summarized.
+Several field statements may be present in a sort specification.
+Fields not used as a key nor summarized do not need to be defined.
+.HP 1.0i
+.BR -field= " [" ( ]
+.br
+.BI "name=" field-name ,
+.br
+.RB { position | offset } :\c
+.I N
+.br
+.RB [ , { size:\c
+.IR N |\c
+.BI "delimiter:" C\c
+}]
+.br
+.RB [ ,\c
+.IR datatype ]
+.br
+.RB [ ,\c
+.BI pad: C\c
+]
+.br
+.RB [ ) ]
+.HP 0.5i
+.B name=\c
+.I field-name
+.br
+Specifies the name of this field.  This may be used in subsequent
+.B -key
+or
+.B -summarize
+statements.
+.HP 0.5i
+.BI position: N
+.br
+This field starts at the
+.I N\c
+th byte in the record.
+A field at the beginning of the record has a
+.B position
+of 1.
+The
+.B position
+may not be greater than the record length.
+.HP 0.5i
+.BI offset: N
+.br
+This field starts
+.I N
+bytes from the start of the record.
+A field at the beginning of the record has an
+.B offset
+of 0.
+An
+.B offset
+of
+.I N
+corresponds to a
+.B position
+of
+.I N\c
+-1.
+.HP 0.5i
+.BI size: N
+.br
+This field is
+.I N
+bytes long. In fixed length records, the sum of the
+.B offset
+and
+.B size
+may not be
+greater than the record length.
+The size of a field must be greater than 0.
+.HP 0.5i
+.BI delimiter: C
+.br
+This field is a variable length character string that is
+terminated by the character
+.I C
+or the end of the record.
+The terminator is not considered as part of the field.
+Empty fields occurs when:
+.br
+1) the first byte of the field is the delimiter, or
+.br
+2) the field's position is at or beyond the end of the record.
+.br
+An empty field is compared as if it were filled with
+the field's
+.B pad
+character
+(ascii blanks, by default).
+.br
+Delimited strings are not supported in fixed length records.
+.HP 0.5i
+.B pad:\c
+.I C
+.br
+The pad character is relevant only for comparing character
+strings of unequal length.  The comparison is made as if the
+shorter string were appended with the pad character to have
+the same length as the longer string.  The
+.B pad
+qualifier changes the pad
+character from ascii blank to the value
+.I C\c
+\&. The pad value is ignored for non-character data types.
+.SS Datatypes
+.br
+.HP 0.5i
+.RB [ unsigned "] " binary ,
+.RB [ unsigned "] " integer
+.br
+These integer types may have a
+.B size
+of 1, 2, 4, or 8.
+.if 0 \{
+.RS
+.br
+# salary: a 4-byte unsigned integer starting in the fourth byte
+.br
+-field=nam:salary,un,int,off:3,siz:4 
+.br
+# sales: an 8-byte signed integer at offset 4
+.br
+-field=name:sales,bin,offset:4,size:8
+.br
+.RE
+\}
+.HP 0.5i
+.B character
+.br
+Ascii strings may be of a fixed length, or may have a
+character delimiter.  When two character strings of
+different length are compared, the result is as if the
+shorter string were filled out with the pad character
+(default: ascii blank) until it has the same length as the
+longer string.  The pad may be changed from ascii blank to
+any other character by using the
+.BI pad: C
+qualifier.
+.if 0 \{
+.RS
+.br
+! a 20-byte character field starting 11 bytes into the record
+.br
+-field:nam:employee,char,pos:11,size:20
+.br
+! a null-terminated string at starting 3 bytes into the record
+.br
+-field:name:street,char,off:2,del:null
+.br
+.RE
+\}
+.HP 0.5i
+.BR float , s_floating
+.br
+This is the 32-bit IEEE 754 single precision floating point data type.
+It always has a length of 4,
+and therefore need not have an explicit size specification.
+.if 0 \{
+.RS 1i
+.br
+# xcoordinate: a 4-byte floating point at offset 10
+.br
+-field:name=Xcoordinate,offset=10,float
+.br
+.RE
+\}
+.HP 0.5i
+.BR double , t_floating
+.br
+This is the 64-bit IEEE 754 double precision floating pointer data type.
+It always has a length of 8,
+and therefore need not have an explicit size specification.
+.if 0 \{
+.RS
+# sales: an 8-byte floating point at offset 4
+.br
+-field:name=sales,offset=4,double
+.RE
+\}
+.HP 0.5i
+.BR decimal
+.br
+This is a character string containing an ASCII representation
+of a number in the form:
+.br
+.RB "[" "+" "|" "-" "][" "digits\c"
+.RB "][" "." "][" "digits" "]"
+.br
+The number may be preceded by spaces and is terminated by
+the end of the string or an unexpected (e.g. non-digit,
+decimal point) character. A string which is too short
+(e.g. "+", ".") or starts with unexpected characters
+(e.g. "+r") is treated as zero.
+.SS "Key Definitions"
+Key statements define the fields to be used in ordering the data.  Multiple
+keys can be defined with multiple key statements.
+A key may be defined using a previously defined field name as follows:
+.HP 1.0i
+.BR -key= " [" ( ]
+.br
+.I field-name
+.br
+.RB [ , { ascending | descending\c
+}]
+.br
+.RB [ ",number:\c"
+.IR N ]
+.br
+.RB [ ) ]
+.HP 0.5i
+.I field-name
+.br
+Use the previously defined
+.B field
+.I field-name
+as this sorting key.
+.HP 0.5i
+.BR ascending , descending
+.br
+The
+.B descending
+qualifier indicates that this field is to be
+sorted from the high values to low values. The default ordering
+.RB ( ascending )
+sorts this field from low to high.
+.HP 0.5i
+.B number:\c
+.I N
+.br
+The order of key comparisons
+.B \*(NS
+uses to compare records may be specified by using
+.B number
+qualifiers.  A key of
+.B number:\c
+1 is the first key used to compare records, while
+.B number:\c
+2 defines the second key, etc.
+The second key is used to resolve comparisons between records only when the
+first keys are equal.  Similarly the third key is only used when the first two
+keys are equal, etc.
+In the absence of
+.B number
+qualifiers in the key definitions, the order of the keys is determined by
+the order of their key statements (the first key statement defines the
+first key).
+.if 0 \{
+.br
+.RS
+! Order records primarily by the region field in ascending
+.br
+! order, and secondarily by the sales field in descending order.
+.br
+-field=name:sales,offset:8,binary,size:8
+.br
+-field=name:region,char,offset:16,size:20
+.br
+-key:region
+.br
+-key:sales,descend
+.br
+.br
+! Order records primarily by the sales field in descending
+.br
+! order, and secondarily by the region field in ascending order.
+.br
+-field=name:sales,offset:8,binary,size:8
+.br
+-field=name:region,char,offset:16,size:20
+.br
+-key:region,number:2
+.br
+-key:sales,desc,num:1
+.br
+.RE
+\}
+.P
+Alternately, the
+.I field-name
+may be replaced with the body of a field definition as follows:
+.HP 1.0i
+.BR -key= " [" ( ]
+.br
+.RB { position | offset } :\c
+.I N
+.br
+.RB [ , {\c
+.BI size: N\c
+|\c
+.BI delimiter: C\c
+}]
+.br
+.RB [ ,\c
+.IR datatype ]
+.br
+.RB [ ,\c
+.BI pad: C\c
+]
+.br
+[{\c
+.BR ascending | descending }]
+.br
+.RB [ ,\c
+.BI number: N\c
+]
+.br
+.RB [ ) ]
+.RS
+.br
+.\"/key=(pos:1,size:4,binary,unsign,descend)
+.RE
+.P
+In the absence of a key statement the entire record will be sorted as a
+single character string.
+.RE
+.SS "Sort Method"
+.HP 0.5i
+.BR -method= [{ record | pointer "}] [\c"
+.BR , { merge | radix "}] [\c"
+.BR ",hash" ]
+.br
+Specifies the sorting method to be performed.  A record sort may
+copy records several times in the course of a sort. A pointer sort
+copies the pointer to the record several times, but copies the
+record only once.
+.br
+.B \*(NS
+automatically performs a record sort for fixed-length records
+no larger than 32 bytes, after any derived fields have been added
+to the record.  Fixed length records of 100 bytes or less may be
+sorted by either record or pointer method.  Larger records and non
+fixed length records always use the pointer method.
+.PP
+With the default
+.B merge
+sort, records or record pointers are placed into sorted
+order by merging (see The Art of Computer Programming Vol. 3, by
+Knuth, pp. 251-266).
+The alternative
+.B radix
+sort (ibid, pp. 170-180), may be more efficient than
+the standard sort algorithm
+when the first 4 bytes of each key have well distributed values.
+.PP
+The
+.B hash
+modifier can be used to speed up some summarizing or duplicate-eliminating
+sorts, if the returned order of records is not important.
+The modifier changes the semantics of the sort
+so that records are ordered according to a hash value of the
+specified keys, rather than the specified keys - but only records
+with equal key values are treated as duplicates (summarized or
+deleted).  If the first 4 bytes of key values are not well
+distributed, using the
+.B hash
+modifier should reduce the amount of cpu
+time necessary to summarize the data or delete duplicates.
+The hash modifier can be used with any
+combination of
+.BR record / pointer
+and
+.BR merge / radix .
+.\"	XXX forgot to put this into the code
+.if 0 \{
+\*(NS defaults to a
+.B radix
+sort when the
+.B hash
+modifier is specified.
+\}
+.SS "Summarizing Data"
+.P
+A summarize statement specifies one or more previously defined field names.
+.HP 0.5i
+.BR -summarize= " [" ( ]
+.I field-name
+.RB [ , "...] [" ) ]
+.br
+The summarize statement directs
+.B \*(NS
+to delete all but one record for each
+set of unique key values, and to add the "summarization" fields in the deleted
+record to the corresponding fields of the persisting record.
+If any of the field additions between a pair of records would overflow,
+neither record is deleted, no addition is performed,
+and both records will appear in the output (with duplicate keys).
+The type of the summarizing fields must be
+binary with a length of four or eight bytes.
+.if 0 \{
+.br
+.RS 1i
+-format=size:8
+.br
+-field=name:region,char,size:20,offset:4
+.br
+-field=name:sales,binary,size:4,offset:0
+.br
+-key:region
+.br
+-summarize:sales
+.br
+.RE
+In the above example 
+.B \*(NS
+is directed to produce only one record
+for each unique value of region, the sales field will contain the
+total sales for that region.
+\}
+.P
+.HP 0.5i
+.BR -derived= " [" ( ]
+.BI name= field-name ,
+.RB [ size:\c
+.IB N ,\c
+] [\c
+.IB datatype ,\c
+] [\c
+.BI pad: C ,\c
+]
+.BI value= constant
+.RB [ ) ]
+.P
+To facilitate the counting of unique key values, the
+.B derived
+statement may be used to define a binary field
+to be added to the end of each input record.
+Derived fields are currently supported for fixed-length records
+only, and their initial value must be a constant.
+.if 0 \{
+.RS
+-format=(size:4)
+-key=(offset:0, size:4, binary, unsigned)
+-derived=(name:count, binary, unsigned, size:4, value:1)
+-sum=count
+.RE
+In the above example, each input record consists of a 4-byte
+integer that is used as the key for the sort.  A 4-byte "count"
+field with an initial value of 1 is appended to the end of each
+record on input.  The summarize statement directs 
+.B \*(NS
+to delete
+records with duplicate keys, but add their "count" fields before
+doing so.  In the output file, the count field will contain the
+number of occurrences of the associated key value in the input file.
+\}
+.SS "Memory Allocation"
+.P
+There are two 
+statements for managing 
+.B \*(NS
+process memory.
+.HP 0.5i
+.BI -memory= N\c
+.RB "[{" k | m | g\c
+}]
+.br
+Specifies the limit on the amount of virtual memory 
+.B \*(NS
+will
+consider using beyond the approximately 10MB that is used to
+contain the program and its sorting control structures.  The memory
+size is a byte count. The
+.BR k ", " m ", and " g
+suffixes indicate that the integer
+.I N
+is to multiplied by 1024, 1,048,576 (1024*1024),
+or 1,073,741,824 (1024*1024*1024) respectively.
+The default memory limit is the resident set size
+limit for the user running
+.B \*(Ns\c
+\&.  This is the value displayed by
+the "memory" line in the output of the ulimit -a (ksh) or limit
+(csh) command.
+.br
+If sufficient memory is available, 
+.B \*(NS
+will perform a one pass
+sort: all input data is read into memory, sorted, and
+written to the output file.  Otherwise it
+performs a two
+pass sort by writing sorted runs of data to the temporary files
+during the input phase, then during the output phase reading those
+runs of data from the temporary file, merging them and writing
+them to the output file.
+.br
+.SS "File Parameters"
+.P
+High speed file i/o can be critical to
+.B \*(NS
+performance.
+High disk access speeds can be achieved by using multiple disks in parallel.
+For input and output files,
+this can be achieved by using a striped logical volume,
+i.e. a logical disk device that is striped across multiple drives.
+For
+.B \*(NS
+temporary data, many temporary files should be used,
+each on its own disk drive.
+.B \*(NS
+automatically stripes its temporary data across the
+temporary files.
+For all types of
+.B \*(NS
+files (input, temporary, and output),
+xfs is the irix file system of choice.
+.P
+.B \*(NS
+minimizes the amount of time it waits for disk i/o by utilizing
+asynchronous i/o requests.  For each file there are two parameters
+.B \*(NS
+allows the user to set for asynchronous i/o:
+.RS
+* the transfer size
+.br
+* the maximum number (or count) of i/o requests
+.RE
+For the input and output files, these parameters for should be configured
+so that all disks in the logical volume are kept busy.  The recommended
+transfer size is the product of the number of disks in the logical volume
+times the step size (the number of bytes per disk in a disk stripe).  The
+default is 128K (a single-disk file system is assumed).  The recommended 
+request count is 2 (also the default).
+.P
+The input and output file
+names can be specified on the command line without using a sort definition
+statement.
+The transfer size and request count for these files can be set
+with a filesystem statement:
+.HP 0.5i
+.BR -filesystem= " [" ( "] {\c"
+.IR file-system-name | file-name\c
+} [\c
+.BI ,transfersize: N\c
+.RB { k | m }]
+[\c
+.BI ,count: N\c
+] [\c
+.BR ) ]
+.br
+Specifies the target i/o transfer size and maximum number of i/o
+requests for
+.B \*(NS
+files on the specified file system.  The
+specified name may either be the file system name, or the name of a
+file on the file system (e.g. the mount directory name).
+.if 0 \{
+.br
+.RS
+# /xlv is the mount directory for a 64-drive
+.br
+# logical volume with a step size of 128K
+.br
+# The transfer size is 64*128K or 8M.
+.br
+-filesys:/xlv,transfer:8M,count:2
+.RE
+\}
+.PP
+Ideally, there should be a
+.B -filesystem
+statement in the /usr/\*(Ns/\*(Ns.params
+file for every file system used for
+.B \*(NS
+input or output files.
+The
+.B infile
+and
+.B outfile
+statements allow input and output file to be
+declared and, optionally, the transfer size and request count set for each
+file.  These statements are also the only way input and output files can be
+named inside a
+.B specification
+file. 
+.\"On the command line input and
+.\"output files can be declared in the command line syntax.
+.HP 0.5i
+.BR -infile= " [" ( ]
+.IR file-name " [\c"
+.BI ",transfersize:" N\c
+.RB [{ k | m "}]] [\c"
+.BI ",count:" N\c
+.RB "] [" ) ]
+.br
+Specifies the name of a file containing data to be sorted.  A file
+specification of a single dash '-' indicates that the input data
+will be read from the standard input.  Several infile statements
+are permitted; their names are added to any input files listed on
+the command line to specify the data set to be sorted.
+.HP 0.5i
+.BR -outfile= " [" ( ]
+.IR file-name " [\c"
+.BI ",transfersize:" N\c
+.RB [{ k | m "}]] [\c"
+.BI ",count:" N\c
+.RB "] [" ) ]
+.br
+Specifies the name of the output file. The sorted results will be
+placed in this file.  It will be created if necessary.  A file
+specification of a single dash '-' or no outfile specification at
+all directs \*(NS to send the result to the standard output.
+.HP 0.5i
+.BR -tempfile= " [" ( ]
+.I file-name 
+.BR , "...] [\c"
+.BI ",transfersize:" N\c
+.RB [{ k | m "}]] [\c"
+.BI ",count:" N\c
+.RB "] [" ) ]
+.br
+Specifies the set of temporary files to stripe the temporary data across
+for a two pass sort, the
+transfer sizes to/from these files (default 128K), and the maximum
+number of requests to/from each file (default 2).
+If a
+.I file-name
+refers to a directory then
+.B \*(NS
+will create a temporary file in that directory.
+If a
+.I file-name
+refers to an existing file, the
+file will be truncated before it is used.
+Each temporary file should be specified on a separate file system.
+The sort will be aborted if any of the temporary files cannot be written due
+to lack of space on its file system.
+In the absence of any
+.B tempfile
+statements, 
+.B \*(NS 
+creates a single temporary file in the /tmp directory.
+.if 0 \{
+.RS
+.PP
+The following declares the directories for \*(NS to create its temporary file
+stripe.  These happen to be the mount directories (but are not
+required to be) for 4 (presumably single-disk) file systems.
+It uses a transfer size of 256K,
+and a simultaneous asynchronous i/o request count of 2.
+.br
+-temp=/tmp0,/tmp1,/tmp2,transfer:256K,count:2,/tmp3
+.RE
+\}
+.PP
+If a
+.I filesystem
+or
+.I "file-name"
+contains any of
+the characters ``\c
+.B " ,\\\\()\c"
+\&'',
+they must be prefixed with the escape character backslash ``\c
+.B \\\\\c
+\&''.
+.SH OPTIONS
+.HP
+.BI -specification= file-name
+.br
+Specifies a text file containing additional sort definition
+statements.  Specification files may reference other specification
+files, up to a nesting level of 20.  A referenced specification
+file is always processed in its entirety before returning to the
+referencing specification file, environment variable,
+or command line for further
+statement processing.  
+.HP 0.5i
+.BR - [ no ] statistics
+.br
+Directs
+.B \*(NS
+to print performance statistics to the standard error.
+.HP 0.5i
+.BI -processes= N
+.br
+Specifies the number of sorting processes
+.B \*(NS
+will use.  The
+default is to create one process for each of the unrestricted
+processors in the system.  A warning message is issued if the
+requested number of processes is larger than the number of
+processors available to
+.B \*(NS\c
+\&.
+.HP
+.BR - [ no ] duplicates
+.br
+If noduplicates is specified then the output will not contain
+multiple records that have the same key fields; all but one will be
+deleted.  The default action is to maintain records which have the
+same key values.  The noduplicates statement has the same effect as
+a summarize statement which has no field name.  In a summarizing
+sort duplicates may not be set.
+.HP
+.BR - [ no ] stable
+.br
+.BR \*(NS 's
+algorithm automatically outputs records with equal keys in
+same order that they appear in the input without any added
+overhead.  This option is recognized for compatibility only;
+it does not affect the sort.
+.HP
+.B -twopass
+.br
+A two pass sort orders very large data sets while using a modest
+amount of memory and temporary disk space slightly larger than the
+size of the input data.  
+The main memory requirement is approximately 5 MB plus the square root of
+the product of the input size and two times the temporary file transfer
+size.
+The alternative one pass sort needs enough memory to contain the input
+data, but does not require temporary disk space.
+If twopass is specified or if the input data is too large for an in-memory
+sort then
+.B \*(NS
+will perform a two-pass sort.  A two-pass sort requires
+temporary disk space slightly more that to the size of the input
+data.
+The default is for a one-pass sort if the input data is small
+enough to fit in
+.BR \*(NS 's
+memory allotment.
+.SH FILES
+.IP "/usr/\*(Ns/\*(Ns.params" 2.3i
+system-wide initial sort statements
+.IP /tmp/\*(Ns.??? 2.3i
+temporary files for two pass sorts
+.SH ENVIRONMENT\ VARIABLES
+.IP \*(NU 2.3i
+initial sort statements

@@ -1,0 +1,132 @@
+#!/sbin/sh
+#
+# Archive of the database
+#
+# 	"$Revision: 1.6 $"
+#
+INITDIR=/etc/init.d
+BINDIR=/usr/sbin
+DATADIR=/var/esp/ssdb/data
+DAEMONDIR=/usr/etc
+# On IRIX hostname is in /usr/bsd so add this to the path
+HOSTNAME=`hostname`
+lenght=`expr $HOSTNAME | wc -c`
+lenght=`expr $lenght`
+arch_date=`date '+%H%M%S%m%d%Y'`
+NEXTARCHIVE=$HOSTNAME\_$arch_date
+
+# user must have root permissions to perform archiving 
+
+ID=`id | sed 's/).*$//' | sed 's/^.*(//'`;
+if [ "$ID" != "root" ]; then
+	echo "Backup operation is not allowed for this user on $hostname"
+	exit 1
+fi
+
+if ! test -d /var/esp/ssdb/data/ssdb
+	then echo "The esp database is corrupted or missing (/var/esp/ssdb/data/ssdb). Archiving cannot be performed."
+        exit 1
+fi
+
+currentsize=`du -k /var/esp/ssdb/data/ssdb | cut -d "/" -f1`
+currentsize=`expr $currentsize`
+
+if ! test -x $DAEMONDIR/eventmond
+	then echo "You have missing binaries ($DAEMONDIR/eventmond). Archiving cannot be performed."
+        exit 1
+fi
+
+if ! test -x /usr/sbin/espadmin 
+	then echo "You have missing binaries (/usr/sbin/espadmin). Archiving cannot be performed."
+	exit 1
+fi
+
+if ! test -x /usr/sbin/espdbinit
+	then echo "You have missing binaries (/usr/sbin/espdbinit). Archiving cannot be performed."
+	exit 1
+fi
+
+if ! test -x /usr/sbin/espquery
+	then echo "You have missing binaries (/usr/sbin/espquery). Archiving cannot be performed."
+        exit 1
+fi
+
+if ! test -x /usr/etc/amtime1970
+	then echo "You have missing binaries (/usr/etc/amtime1970). Archiving cannot be performed."
+        exit 1
+fi
+
+if [ "$currentsize" -lt 10240 ]; then
+	echo "The database is too small and need not be archived at this time."
+	exit 2
+fi
+
+# Retrieve information for generating the archive list entry
+
+number_recs=`$BINDIR/espquery -t -s "select count(*) from event" ssdb  | cut -d "|" -f2`
+startdate=`$BINDIR/espquery -t -s "select event_start from event where event_id = 1" ssdb  | cut -d "|" -f2`
+enddate=`$BINDIR/espquery -t -s "select event_end from event where event_id = $number_recs" ssdb  | cut -d "|" -f2`
+tables=`$BINDIR/espquery -t -s "show tables" ssdb | cut -d "|" -f2`
+
+# Convert seconds to date format
+
+datestart=`/usr/etc/amtime1970 -x $startdate`
+dateend=`/usr/etc/amtime1970 -x $enddate`
+
+# Create the archive directory and sleep 5 secs. Problems have been seen here sometimes if we execute immediately
+mkdir $DATADIR/$NEXTARCHIVE
+sync
+sleep 5
+
+echo "Shutting down the Embedded Support Partner daemons..."
+$DAEMONDIR/eventmond -y off
+
+
+# Bring down the database
+echo "Shutting down the Embedded Support Partner database..."
+$BINDIR/espadmin shutdown >/dev/null 2>&1
+
+echo "Creating a copy of the database..."
+/usr/bin/cp -r $DATADIR/ssdb/* $DATADIR/$NEXTARCHIVE
+sync
+sleep 1
+
+echo "Restarting the Embedded Support Partner database..."
+$DAEMONDIR/espdbd --skip-networking --basedir=$DAEMONDIR --datadir=$DATADIR >>$LOGFILE >/dev/null 2>&1  & 
+counter=0
+while [ "$counter" -lt 5 ]
+do
+	/usr/sbin/espadmin ver > /dev/null 2>&1
+	if test $? -eq 0 ; then
+		break
+	fi
+	sleep 2                     # This must be enough
+	counter=`expr $counter + 1`
+done
+
+#
+# Create the next archive directory and update the archive list. This list
+#
+
+echo "Creating entries in privilege tables for the created archive..."
+$BINDIR/espdbinit -d ssdb -s "insert into archive_list values (NULL,'$NEXTARCHIVE','$datestart','$dateend')"
+$BINDIR/espdbinit -d mysql -s "insert into host values ('localhost','$NEXTARCHIVE','Y','Y','Y','Y','Y','Y')"
+$BINDIR/espdbinit -d mysql -s "insert into db values ('localhost','$NEXTARCHIVE','root','Y','Y','Y','Y','Y','Y')"
+echo "Cleaning up current database..."
+$BINDIR/espdbinit -d ssdb -s "delete from event"
+$BINDIR/espdbinit -d ssdb -s "delete from actions_taken"
+$BINDIR/espdbinit -d ssdb -s "delete from availdata"
+$BINDIR/espdbinit -d ssdb -s "delete from system_data"
+$BINDIR/espdbinit -d ssdb -s "delete from test_data"
+$BINDIR/configmon -k -S -u 2>&1 >/dev/null
+# Now go ahead and compress the database archive
+echo "Compressing archived database..."
+for table in $tables
+do
+	$BINDIR/pack_isam -s $DATADIR/$NEXTARCHIVE/$table >/dev/null 2>&1
+done 
+
+# Restart daemons to perform normal operations of ESP
+echo "Restarting the Embedded Support Partner daemons..."
+$DAEMONDIR/eventmond -y on
+echo "Archiving complete successfully."

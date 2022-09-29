@@ -1,0 +1,837 @@
+#!/bin/perl5
+# $Modified: Mon May 12 14:42:32 1997 by cwilson $
+
+# Comment these lines for use with Perl4/curseperl
+ BEGIN { $Curses::OldCurses = 1; }
+use Curses;
+
+# dumpit
+
+use Data::Dumper;
+
+
+#
+# Load the key package
+#
+require "menu.pl";		# Main menu package
+require "menuutil.pl";	# For "pause" and "print_nl" routines
+
+require 'rcs.pl';
+
+$PORTSFILE = $ARGV[0] ? $ARGV[0] : '/var/domain/ktools.configuration';
+
+@input = ();	# Place to put data entered on screen
+@defaults = ();		# Default data
+@protect = ();		# Protected markers
+@required = ();		# Required field markers
+$bell = "\007";		# Ascii bell character
+$row = $col = 0;	# Storage for row/col used by menuutil.pl
+
+@machine_required = ( 2,0,0,2,2,2,2,0,2,2 ); # don't care about the rest
+@connector_required = (2, 0, 0, 2, 2, 2,);
+@class_required = (2,2,2,2,2);
+#---------------------------
+
+&ReadPortsfile;
+
+#---------------------------
+
+$window = &initscr();
+&menu_curses_application($window);
+
+
+$arrow_pref = "default";	# Default prefs active at start
+$menu_default_top = 0;	# Storage for mainline top item number.
+$menu_default = 0;		# Storage for mainline arrow location.
+$row = $col = 0;		# Storage for row/col for menuutil.pl
+$title_cnt = 0;		# To trigger different subtitles/bottom titles
+
+while (1) {
+    local($thing) = 0;
+
+    &menu_init(1,"Kedit -- Edit ktools configuration",1,"",
+	       "-Chan Wilson, cwilson\@sgi.com",
+	       "main_menu_help");
+
+    &menu_item("Machine Configuration","nothing");
+
+    &menu_item("\tAdd Machine","add_machine");
+    &menu_item("\tEdit Machine","edit_machine");
+    &menu_item("\tDelete Machine","delete_machine");
+    
+    &menu_item("Terminal Server (Annex) Configuration","nothing");
+    &menu_item("\tAdd Server ","add_connector");
+    &menu_item("\tEdit Server ","edit_connector");
+    &menu_item("\tDelete Server","delete_connector");
+
+    &menu_item("Class Configuration","nothing");
+    &menu_item("\tAdd Class","add_class");
+    &menu_item("\tEdit Class","edit_class");
+    &menu_item("\tDelete Class","delete_class");
+
+    &menu_item("Write Configuration","write");
+    &menu_item("Print Server Configuration","server_conf");
+    &menu_item("Exit kedit","exit");
+
+    $sel = &menu_display("",$menu_default,$menu_default_top);
+
+    if ($sel eq "exit") { last; }
+    if ($sel eq "%EMPTY%") {
+	die "Not enough screen lines to display demo menu\n";
+    }
+
+    if ($sel eq 'nothing') {}
+
+    &server_conf if $sel eq 'server_conf';
+    if ($sel eq 'write') {
+	&writePortsfile;
+    }
+
+    if ($sel =~ /add_/) {
+	if (&query("Do you want to clone an existing $'?", "yn")
+	    eq 'y') {
+	    ($thing, $ref) = &pick_thing( $' );
+	} else { undef $ref; }
+    } 
+
+    if ($sel =~ /edit_/ || $sel =~ /delete_/) {
+	($thing, $ref) = &pick_thing( $' );
+    }
+
+    next if $thing == -2;
+
+    if ($sel =~ /add_/ || $sel =~ /edit_/ || $sel =~ /delete_/ ) {
+#	&& $ref) {
+	&do_thing($sel, $thing, $ref);
+
+    }
+}
+
+if ($rcs_reason) {
+    $result = &query("Configuration modified, save?", "yn");
+    &writePortsfile if $result eq 'y';
+}
+
+endwin();
+#----------------------------------------------------------------------
+# print out the terminal server config.
+#
+sub server_conf {
+    
+    foreach (sort keys %{$Object}) {
+	push (@{$xref{ $Object->{$_}->{connector} } }, $_);
+    }
+
+    &clear_screen;
+    
+    foreach $connector (sort keys %xref) {
+	print_nl("$connector",1);
+	foreach ( sort @{$xref{$connector}}) {
+	    print_nl("    $_    $Object->{$_}{consoles},$Object->{$_}{debugs}",1);
+	}
+    }
+
+    foreach (sort keys %{$Object}) {
+	@{$xref{ $Object->{$_}->{connector} } } = ();
+    }
+
+    &pause();
+}
+#----------------------------------------------------------------------
+
+sub do_thing {
+    
+    ($what, $object, $ref) = @_;
+
+    ($action, $area) = $what =~ /(\w+)_(\w+)/;
+
+    if ($action eq 'delete') {
+	$result = &query("Really delete $object?", "yn");
+	if ($result eq 'y') {
+	    if ($area eq 'machine') {
+		delete $Object->{$object};
+	    } elsif ($area eq 'connector') {
+		delete $Connector->{$object};
+	    } elsif ($area eq 'class') {
+		delete $Class->{$object};
+	    }
+	    $rcs_reason .= "$action $area $object\n";
+	}
+	return;
+    }
+
+    @defaults = ();
+    @protect = ();
+
+    $required = \@{$area . "_required"};
+
+    if ($area eq 'machine') {
+	$parent_ref = $Object;
+    } elsif ($area eq 'connector') {
+	$parent_ref = $Connector;
+    } elsif ($area eq 'class') {
+	$parent_ref = $Class;
+    }
+
+
+    # setup defaults
+    if ($ref ) {
+	$oldname = $ref->{name} if $what !~ /add/;
+
+	if ($area eq 'machine') {
+	    @defaults = (
+			 $what =~ /add/ ? "CLONED MACHINE $ref->{name}" : $ref->{name},
+			 $ref->{serial},
+			 $ref->{asset},
+			 $ref->{owner},
+			 $ref->{email},
+			 $ref->{desc},
+			 $ref->{loc},
+			 $ref->{notes},
+			 
+			 $ref->{ports},
+			 $ref->{consoles},
+			 $ref->{debugs},
+			 $ref->{connector},
+			 $ref->{reset_method},
+			 
+			 $ref->{cputype},
+			 $ref->{mktgtype},
+			 $ref->{chassis},
+			 $ref->{gfx},
+			 $ref->{memory},
+			 $ref->{hw},
+			 );
+	} elsif ($area eq 'connector') {
+	    @defaults = (
+			 $what =~ /add/ ? "CLONED SERVER $ref->{name}" : $ref->{name},
+			 $ref->{type},
+			 $ref->{ports},
+			 $ref->{owner},
+			 $ref->{email},
+			 $ref->{loc},
+			 );
+	} elsif ($area eq 'class') {
+	    @defaults = (
+			 $what =~ /add/ ? "CLONED CLASS $ref->{name}" : $ref->{name},
+			 $ref->{desc},
+			 $ref->{owner},
+			 $ref->{email},
+#			 join(',', @{$ref->{connectors}}),
+			 );
+	}
+	undef $ref if $what =~ /add/;
+    }
+    
+    &menu_prep($area);
+
+    do {
+	# IMPORTANT: Note the use of pointers to arrays here
+	&menu_display_template(*input,*defaults,*protect,"template_exit",
+			       $required);
+	return if (&menu_getexit() eq "\e");
+
+	# XXX  Check to make sure the name field is unique before they exit the form
+
+	# Display what we got the last time
+	#
+	&verify_input($area);
+	
+	$result = &query("Happy?", "ynx");
+	@defaults = @input if $result eq 'n';
+	
+    } until ($result eq 'y' || $result eq 'x');
+
+    if ($result eq 'y') {
+	# 
+	# they renamed it
+	#
+	if ( $ref && 
+	    ! $parent_ref->{$input[0]}) {
+	    delete $parent_ref->{$oldname};
+	    undef $ref; 
+	}
+	
+	#
+	# new or renamed thang
+	#
+	if (!$ref) {
+	    $parent_ref->{$input[0]}->{name} = $input[0];
+	    $ref = $parent_ref->{$input[0]};
+	}
+
+	if ($area =~ /machine/) {
+	    ( $ref->{name},
+	     $ref->{serial},
+	     $ref->{asset},
+	     $ref->{owner},
+	     $ref->{email},
+	     $ref->{desc},
+	     $ref->{loc},
+	     $ref->{notes},
+	     
+	     $ref->{ports},
+	     $ref->{consoles},
+	     $ref->{debugs},
+	     $ref->{connector},
+	     $ref->{reset_method},
+	     
+	     $ref->{cputype},
+	     $ref->{mktgtype},
+	     $ref->{chassis},
+	     $ref->{gfx},
+	     $ref->{memory},
+	     $ref->{hw},
+	     ) = @input;
+	} elsif ($area =~ /connector/) {
+	    ( $ref->{name},
+	     $ref->{type},
+	     $ref->{ports},
+	     $ref->{owner},
+	     $ref->{email},
+	     $ref->{loc},
+	     ) = @input;
+	} elsif ($area =~ /class/) {
+	    ( $ref->{name},
+	     $ref->{desc},
+	     $ref->{owner},
+	     $ref->{email},
+	     ) = @input;
+#	    push(@input, join(',', @{$ref->{connectors}}));
+	}
+
+	# did they rename the thing?
+	#
+	#
+
+
+	# select the annexes for a class here
+	#
+	if ($area =~ /class/) {
+	    
+	    &menu_init(1,"Select some servers",0);
+	    
+	    $stuph = join(' ', @{$ref->{connectors}});
+	    foreach (sort keys %{$Connector} ) {
+		&menu_item($_,$_, $stuph =~ /$_/); 
+	    }
+	    $sel = &menu_display_mult("");
+	    
+	    if ($sel ne '%UP%' && $sel ne '%NONE%') {
+		@{$ref->{connectors}} = split(/[,]/, $sel);
+	    }		
+	}
+	
+	$rcs_reason .= "$action $area $ref->{name}\n";
+    }
+}
+
+#----------------------------------------------------------------------
+sub verify_input {
+    $area = $_[0];
+
+    &clear_screen();
+	
+    &top_title("Verify input");
+    
+    if ($area =~ /machine/) {
+	&print_nl("Machine Name: $input[0]           Serial\#: $input[1]     Asset\#: $input[2]",1);
+	&print_nl(" Owner:       $input[3]                          Email: $input[4]",1);
+	&print_nl("Description:  $input[5]",1);
+	&print_nl(" Location:    $input[6]",2);
+	&print_nl("  Notes:  $input[7]",2);
+	&print_nl("  Total number of serial connections: $input[8]",1);
+	&print_nl("  Main (consoles) connected on which ports?  $input[9]",1);
+	&print_nl("  Alternate (debug consoles) on which ports? $input[10]",2);
+	&print_nl("  Terminal Server (Annex): $input[11]",1);
+	&print_nl("  Reset method:  $input[12]",2);
+	&print_nl(" CPU Type (IPxx): $input[13]   Marketing Type: $input[14]",1);
+	&print_nl(" Chassis: $input[15]     Graphics: $input[16]    Memory: $input[17]",1);
+	&print_nl(" Special Hardware: $input[18]",3);
+    } elsif ($area =~ /connector/) {
+	&print_nl("Terminal Server Name: $input[0]",2);
+	&print_nl("Type of Terminal Server: $input[1]",1);
+	&print_nl("Number of ports on server: $input[2]",2);
+	&print_nl("Owner:   $input[3]                          Email: $input[4]", 1);
+	&print_nl("Location:    $input[5]",3);
+    } elsif ($area =~ /class/) { 
+	&print_nl("Class name:   $input[0]",1);
+	&print_nl("Description:  $input[1]",2);
+	&print_nl("Owner:        $input[2]                     Email: $input[3]",2);
+	&print_nl("Terminal Servers:",1);
+	
+	$string = "     ";
+	if ($ref) {
+	    foreach (@{$ref->{connectors}}) {
+		if (length($string) + length("$_, ") > 75) {
+		    &print_nl($string,1);
+		    $string = "     ";
+		} 
+		$string .= "$_, ";
+	    }
+	    $string =~ s/, $//;
+	    &print_nl($string,2);
+	}
+    }
+}
+
+#----------------------------------------------------------------------
+sub show_servers {
+
+    $clist = '-' x 77 . "\n | "; $count = 0;
+    
+    foreach (keys %{$Connector}) {
+	if ($count +length("$_, ") > 75) {
+	    $clist .= "\n | ";
+	    $count = 0;
+	}
+	$clist .= "$_, ";
+	$count += length("$_, ");
+    }
+    $clist .= "\n " . '-' x 77;
+    
+    &menu_overlay_template(2,2,$clist);
+
+    $showing_stuff++;
+}
+
+sub show_reset {
+    $clist = <<EOF;
+--------------------------------------------------------------
+  |  Reset Method -- 'sc'    for Everest/Challenge Systems     |
+  |		  'elsc'  for SN0 / Lego / Origin Systems      |
+  |	 'x10_annex:...'  for X10 resetting                    |
+  --------------------------------------------------------------
+EOF
+
+    &menu_overlay_template(2,2,$clist);
+
+    $showing_stuff++;
+}
+    
+#======================================================================
+#
+
+sub menu_prep {
+
+    $area = $_[0];
+#
+# Activate left and right markers, both in standout rendition.
+#
+    &menu_template_prefs("*"," ",0,"*"," ",0);
+    
+    if ($area eq 'machine') {
+	&menu_load_template_array(split("\n", <<'END_OF_TEMPLATE'));
+
+ Machine Name: [________________]  Serial#: [__________]  Asset#: [__________]
+  Owner:       [______________________________]   Email: [___________________]
+ Description:  [________________________________________]
+  Location:    [________________________________________]
+  Notes:  [__________________________________________________________________]
+
+  Total number of serial connections: [\\]   
+                                                                    (Comma 
+  Main (consoles) connected on which ports?  [____________________]  seperated
+  Alternate (debug consoles) on which ports? [____________________]  list)
+
+  Terminal Server (Annex): [________________________________________]
+
+  Reset method:  [________________________________________________________]
+
+ CPU Type (IPxx): [____]    Marketing Type: [_________________________]
+ Chassis: [__________]   Graphics: [__________]  Memory: [__________]
+ Special Hardware: [_________________________________________________________]
+  
+END_OF_TEMPLATE
+
+
+
+
+} elsif ($area eq 'connector') {
+    &menu_load_template_array(split("\n", <<'END_OF_TEMPLATE'));
+
+ Terminal Server Name (Fully Qualified Hostname)
+       [__________________________________________________]
+
+ Type of Terminal Server (Annex, Cisco, SGI, etc):  [__________________]
+ Number of ports on server: [\\\]
+
+  Owner:       [______________________________]   Email: [___________________]
+  Location:    [________________________________________]
+
+  
+END_OF_TEMPLATE
+
+
+
+} elsif ($area eq 'class') {
+    $string = <<'END_OF_TEMPLATE';
+
+  Class name:   [____________________]
+  Description:  [________________________________________]
+
+  Owner:       [______________________________]   Email: [___________________]
+
+			   Terminal Servers
+	      (select these after filling out the form)
+
+END_OF_TEMPLATE
+
+    $count = 0;
+    $string .= "     ";
+    if ($ref) {
+	foreach (@{$ref->{connectors}}) {
+	    if ($count + length("$_, ") > 75) {
+		$string .= "\n     ";
+		$count = 0;
+	    } 
+	    $string .= "$_, ";
+	    $count += length("$_, ");
+	}
+    }
+    $string =~ s/, $//;
+    &menu_load_template_array(split("\n", $string));
+}
+    
+    &menu_overlay_template(0,28,"Kedit V2",1,1);
+    &menu_overlay_template($LINES-1,0,
+			   "ESC-ESC exits.  ==> Fields marked with a \"*\" are required. <==",0);
+
+#
+# Define "Control X" as "abort data input"
+#
+    &menu_template_setexit("\e");
+
+}
+
+#======================================================================
+
+sub main_menu_help {
+    local($text, $tag) = @_;
+
+}
+#======================================================================
+#
+# TEMPLATE_EXIT - Exit routine for "menu_display_template"
+
+sub template_exit {
+  local($direction,$last_index,$next_index,$still_required) = @_;
+
+# Return now if they are skipping between fields
+  if ($direction) { 
+      if ($area =~ /machine/) {
+	  if ($next_index == 11) {
+	      &show_servers; 
+	  } elsif ($next_index == 12) {
+	      &menu_overlay_clear;
+	      &perlmenu::display_template_internal(1);
+		  $showing_stuff--;
+	      &show_reset;
+	  } else {
+	      if ($showing_stuff) {
+		  &menu_overlay_clear;
+		  &perlmenu'display_template_internal(1);
+		  $showing_stuff--;
+	      }
+	  }
+      }
+      return($next_index); 
+  }
+
+#
+# Check for forced exit (aborted data entry).
+# Note that this routine uses a "-2" return code, which means "ignore
+# required fields checking".
+#
+  if (&menu_getexit() eq "\e") { return(-2); }
+
+# User says they are done (they pressed "Return").
+  &menu_overlay_clear(); # Clear any old overlays
+
+# Put out message if there are still required fields.
+  if ($still_required) {
+    &menu_overlay_template($LINES-1,10,
+	"$bellFields marked with a \"*\" are STILL required.",1);
+    return(-1);		# Still need required field(s) - auto-position
+  }
+
+# Let them be done.
+  return(-1);
+}
+
+
+#======================================================================
+#
+# pick a thing. 
+# machine, server, class
+# object, connector, class
+#
+sub pick_thing {
+    $what = $_[0];
+    local($sel);
+
+    if ($what eq 'machine') {
+	$internal_hash = $Object;
+    } elsif ($what eq 'connector') {
+	$internal_hash = $Connector;
+    } elsif ($what eq 'class') {
+	$internal_hash = $Class;
+    }
+
+    @keys = ();
+    undef %short;
+
+
+    local($menu_default_top) = 0; # Storage for local top menu item number.
+    local($menu_default) = 0;     # Storage for local arrow location.
+
+loop:
+    while (1) {
+	# Init a numbered menu with title
+	&menu_init(1,"Pick a $what");
+
+	# Add item to return to main menu.
+	# offer an alphabet shortcut if there's a lot of entries.
+	#
+	@keys = keys %{$internal_hash} if $#keys == -1;
+
+	
+	if ( ! %short && $#keys > 50) {
+	    foreach (@keys) {
+		($char) = /^([a-z])/i;
+		$short{ $char }{'count'} ++;
+		push (@{ $short{ $char } {'list'} }, $_);
+	    }
+	    
+	    &menu_item("Return to main menu","%exit%");
+
+	    foreach (sort keys %short) {
+		&menu_item("$_ ($short{$_}{'count'} entries)", "short-$_");
+	    }
+
+	} else {
+	    if ( %short) {
+		&menu_item("Back to a-z list", "%back%");
+	    } else {
+		&menu_item("Return to main menu","%exit%");
+	    }
+
+	    # add the items to the menu
+	    #
+	    foreach (sort @keys) {
+		&menu_item($_, $_);
+	    }
+	}
+	
+	# Get user selection.
+	# Note that local parms 2 and 3 are provided to provide storage of the
+	# default arrow location and top menu item on the screen for subsequent call.
+	$sel = &menu_display("",$menu_default,$menu_default_top);
+
+	if ( $sel =~ /^short-(.)/ ) {
+	    @keys = @{ $short{ $1 } {'list'} };
+	    $save_menu_default = $menu_default;
+	    $save_menu_default_top = $menu_default_top;
+	} elsif ( $sel =~ /%back%/) {
+	    undef @keys;
+	    undef %short; 
+	    $menu_default = $save_menu_default;
+	    $menu_default_top = $save_menu_default_top;
+	    next loop;
+	} elsif (($sel eq "%UP%") || ($sel eq "%exit%")) { return -2; }
+	else {
+	    return ($sel, $internal_hash->{$sel});
+	}
+    }
+}
+
+#======================================================================
+# Read the portsfile...
+#
+sub ReadPortsfile {
+
+@Mach_Vars = ( 
+	      name,
+	      desc, 
+	      cputype,
+	      mktgtype,
+	      chassis,
+	      gfx,
+	      memory,
+	      hw,
+	      loc,
+	      asset,
+	      serial,
+	      notes,
+	      owner,
+	      email,
+	      ext,
+	      ports,
+	      connector,
+	      reset_method,
+	      consoles,
+	      debugs,
+	      access,
+	      );
+
+@Annex_Vars = (
+	       name,
+	       ports,
+	       boot,
+	       loc,
+	       owner,
+	       email, 
+	       ext,
+	       );
+
+@Class_Vars = (
+	       name,
+	       desc,
+	       owner,
+	       uname,
+	       ext,
+	       connectors,
+	       );
+
+
+    open(P, $PORTSFILE) || die "unable to open $PORTSFILE, $!";
+
+    $tag = <P>; 
+
+    if ($tag !~ /Version 2/) {
+
+	# slurp in a whole definition.
+	#
+	$/ = ")\n";
+	
+	while (<P>) {
+	    
+	    split(/\n/);
+	    
+	    # ignore commentary
+	    #
+	    while ($_[0] =~ /^\#/) {
+		shift @_;
+	    }
+	    
+	    # remove leading, trailing markers
+	    $_[0] =~ s/\(//;
+	    pop @_;
+	    
+	    $what = shift(@_);
+	    
+	    grep(s/^\s+(.*)\s+\#.*$\n*/$1/g, @_ );		# remove leading whitespace 
+	    grep(s/\s*$//, @_);					# nuke trailing whitespace and newline
+	    # and trailing comment
+	    # name of object
+	    #
+	    $ob = $_[0];				  
+	    next if ! $ob;
+	    
+	    if ($what =~ /^annex/ || /^connector/) {
+		foreach (@Annex_Vars) {
+		    $Connector->{$ob}->{$_} = shift(@_);
+		}	    
+	    } elsif ($what =~ /^class/) {
+		foreach (@Class_Vars) {
+		    $Class->{$ob}->{$_} = shift(@_);
+		}	    
+		$Class->{$ob}->{connectors} = 
+		    [ split( /,/, $Class->{$ob}->{connectors} ) ];
+	    } elsif ($what =~ /^machine/ || $what =~ /^object/) {
+		# slurp info into hashed struct.
+		#
+		foreach (@Mach_Vars) {
+		    $x = shift(@_);
+		    $Object->{$ob}->{$_} = $x if length($x);
+		}	    
+		
+		# tie the connector ports to the object
+		#
+		if (0) {
+		    foreach $c (split(',', $Object->{$ob}->{'consoles'}), 
+				split(',', $Object->{$ob}->{'consoles'}) ) {
+			$c =~ s/r//;
+			push ( @{ $Connector->{ $Object->{$ob}->{'connector'} }
+				  ->{'port'}->{$c} }, 
+			      $Object->{$ob} );
+		    }
+		}		
+# 	    $A{$ptr{'annex'}} .= "$mach`";
+# 	    *it = "$ptr{'annex'}";
+# 	    $i = 0;
+# 	    foreach $c ( split(',', $ptr{'consoles'})) {
+# 		$c =~ s/r//;
+# 		$it{$c} = "$mach.con.$i";
+# 		$i++
+# 		}
+# 	    $i = 0;
+# 	    foreach $c ( split(',', $ptr{'debugs'})) {
+# 		$c =~ s/r//;
+# 		$it{$c} = "$mach.dbg.$i";
+# 		$i++
+# 		}
+	    }
+	}
+    } else {
+	# version 2
+	@x = <P>;		# <burp>
+	eval (join('', @x));
+	print;
+    }
+
+# Gotta define these if they don't exist, else new entries
+# just won't go anywhere...
+#
+$Class = { } if !$Class;
+$Object = { } if !$Object;
+$Connector = { } if !$Connector;
+
+}
+
+#----------------------------------------------------------------------
+#
+
+sub writePortsfile {
+    
+    &print_nl("Writing portsfile, please wait.",1);
+
+    &print_nl("locking config file...",1);
+    %ktools_rcs = &RCS_Lock( $PORTSFILE, `pwd`, quiet);
+
+    if ( %ktools_rcs == undef ) {
+	print STDERR "problems locking $PORTSFILE, aborting.\n";
+	exit 1;
+    }
+
+    $rcs_reason = 'just looking?' if !$rcs_reason;
+    $ktools_rcs{'reason'} = $rcs_reason;
+    
+    &print_nl("opening config file...",1);
+
+    open(W, ">$PORTSFILE") 
+	|| die "unable to open $PORTSFILE for writing, $!\n";
+
+
+    $Data::Dumper::Purity = 1;
+
+    print W "# Kedit Version 2, generated on " . localtime() . "\n";
+
+    &print_nl("dumping data...",1);
+
+    $data = Data::Dumper->new( [$Object, $Connector, $Class],
+			      [ "Object", "Connector", "Class"] );
+
+    print W $data->Dumpxs;
+
+    &print_nl("closing...",1);
+
+    close W;
+
+    &print_nl("unlocking...",1);
+
+    &RCS_Unlock ( * ktools_rcs );
+    
+    $rcs_reason = '';
+}
+

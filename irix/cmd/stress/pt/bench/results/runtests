@@ -1,0 +1,180 @@
+#!/bin/perl -w
+
+# I wrote this to try to make the task of running a standard set of 
+# benchmarks reasonably painless. We parse a workload description file,
+# and execute the specified commands. We monitor the output of these 
+# commands, and average the results for each test, logging to an output
+# file.
+
+# A command is complex record, the first of whose elements is the command's
+# name, and each of whose subsequent elements specify an option to the command.
+
+sub usage();
+sub give_up($);
+sub parse_cmds();
+sub exec_cmd($\@\@);
+sub expand_opt($);
+sub print_cmd(\@);
+
+# some global parameters
+$__cpppath="/usr/lib/cpp";
+
+# try to open the test description file
+give_up(&usage) if (scalar @ARGV != 1);
+give_up(&usage) if !(@cmds = parse_cmds());
+
+# $cmd is a reference to a cmd
+foreach my $cmd (@cmds) {
+	my $cmdstr = shift @$cmd;
+	my $cmdstrcpy = $cmdstr;
+	$cmdstr =~ s,(.*/)*,,;
+	$cmddir = $1;
+
+	print "\t\t*** $cmdstr ***\n";
+
+	# set up env vars to run these thingies
+	$ENV{"LD_LIBRARY_PATH"} = $cmddir;
+	$ENV{"HRN_VRB"} = "result";
+	$cmdstr .= '.' . `hostname`;
+	chop $cmdstr;
+	$cmdstr .= '.' . `date +%H%M%S`;
+	chop $cmdstr;
+
+	give_up(sub { print STDERR "couldn't open $cmdstr!\n"} ) 
+		if !open(OUTPUTFILE, "> $cmdstr");
+	my @whatever = ();
+	exec_cmd ($cmdstrcpy, @$cmd, @whatever );
+	close(OUTPUTFILE);
+}
+
+# parse a file of the form:
+# :cmd
+# opt1 
+# optn
+# return a list of commands
+sub parse_cmds()
+{
+	my $curcmd = -1;
+	my $curopt = 1;
+	my @cmds = ();
+
+	# filter testfile with cpp
+	return 0 if !open(TESTFILE, "< $ARGV[0]");
+	system("$__cpppath -P $ARGV[0] > $ARGV[0].foo");
+	close (TESTFILE);
+	return 0 if !open(CPPOUT, "$ARGV[0].foo");
+	unlink ("$ARGV[0].foo");
+
+LINE:	while (<CPPOUT>) {
+		chop;
+		# ignore blank lines
+		next LINE if (/^\s*$/);
+	
+		if (/^:/) {
+			s/:(.*)/$1/;
+			$curcmd++;
+			$cmds[$curcmd] = [ ];
+			$cmds[$curcmd][0] = $_;
+			$curopt = 1;
+			next LINE;
+		}
+
+		$cmds[$curcmd][$curopt] = $_;
+		$curopt++;
+	}
+	close (CPPOUT);
+	return @cmds;
+}
+
+# print out a usage message
+sub usage() 
+{ print STDERR "usage: $ARGV[0] <testfile>"; }
+
+# something went wrong
+sub give_up($)
+{ 
+	my $funcref = shift;
+	&$funcref();
+	exit(1); 
+}
+
+
+# execute the passed-in command, with the passed options. we cdr down the
+# options, accumulating the command-line recursively.
+sub exec_cmd($\@\@)
+{
+	my ($cmdline, $optref, $totaloptref) = @_;
+
+	my $opt;
+	my @optcopy = @$optref;
+
+	if ($opt = shift @optcopy) {
+		foreach my $s (expand_opt($opt)) {
+			push @$totaloptref,$s;
+			exec_cmd($cmdline . " $s", @optcopy, @$totaloptref);
+			pop @$totaloptref;
+		}
+	} else {
+		# we read from the command's standard output, setting hash
+		# elements for each output
+		open(CMDPIPE, "$cmdline |");
+		while ( <CMDPIPE> ) {
+			my $thrre = "thr0x[0-9a-f]+";
+			# look for timer results, ending in microseconds 
+			if ( /^$thrre:\s*(\w*)\s*:\s*([0-9\.]*)us$/ ) {
+				my ($key, $result) = ($1, $2);
+				my $tmp = ++$noccurrences{$key};
+				$results{$key} *= ($tmp -1) / $tmp;
+				$results{$key} += $result / $tmp;
+			}
+		}
+		close(CMDPIPE);
+
+		# now results is full of, umm, results. print out our command,
+		# and our averages
+
+		foreach my $key (keys %results) {
+			print OUTPUTFILE "$key\t";
+			foreach $opt (@$totaloptref) {
+				print OUTPUTFILE "$opt\t";
+			}			
+			print OUTPUTFILE "$results{$key}\n";
+		}
+	}
+}
+
+# expand a string along the following rules:
+# -j 1-4 become ( "-j 1", "-j 2", etc.)
+# -K 1,foo,bar becomes "-K 1", "-K foo", "-K bar"
+sub expand_opt($)
+{
+	my @retval = ();
+	my $str = shift;
+	if ($str =~ /([^0-9]*)([0-9]+)-([0-9]+)(.*)/) {
+		my ($pre, $min, $max, $post) = ($1, $2, $3, $4);	
+		for (my $i=$min; $i <= $max; $i++) {
+			push @retval, ( $pre . $i . $post);
+		}
+	} elsif ($str =~ /([\w\s-]*\s+)?((\w+,)*\w+)/) {
+		# do comma wack
+		my $pre = $1;
+		my @eltlist = split /,/, $2;
+		
+		foreach my $wrd (@eltlist) {
+			(defined($pre)) && ($wrd = $pre.$wrd);
+			push @retval, $wrd;
+		}
+	}
+
+	wantarray? return @retval : return \@retval;
+}
+
+sub print_cmd(\@)
+{
+	my $cmdref = $_[0];
+	foreach my $str (@$cmdref) {
+		print("$str ");
+	}
+	print ("\n");
+}
+

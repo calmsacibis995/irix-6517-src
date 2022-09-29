@@ -1,0 +1,121 @@
+#!/bin/sh
+#
+# Copyright 1997, Silicon Graphics, Inc.
+# ALL RIGHTS RESERVED
+# 
+# UNPUBLISHED -- Rights reserved under the copyright laws of the United
+# States.   Use of a copyright notice is precautionary only and does not
+# imply publication or disclosure.
+# 
+# U.S. GOVERNMENT RESTRICTED RIGHTS LEGEND:
+# Use, duplication or disclosure by the Government is subject to restrictions
+# as set forth in FAR 52.227.19(c)(2) or subparagraph (c)(1)(ii) of the Rights
+# in Technical Data and Computer Software clause at DFARS 252.227-7013 and/or
+# in similar or successor clauses in the FAR, or the DOD or NASA FAR
+# Supplement.  Contractor/manufacturer is Silicon Graphics, Inc.,
+# 2011 N. Shoreline Blvd. Mountain View, CA 94039-7311.
+# 
+# THE CONTENT OF THIS WORK CONTAINS CONFIDENTIAL AND PROPRIETARY
+# INFORMATION OF SILICON GRAPHICS, INC. ANY DUPLICATION, MODIFICATION,
+# DISTRIBUTION, OR DISCLOSURE IN ANY FORM, IN WHOLE, OR IN PART, IS STRICTLY
+# PROHIBITED WITHOUT THE PRIOR EXPRESS WRITTEN PERMISSION OF SILICON
+# GRAPHICS, INC.
+#Tag 0x00010D13
+# $Id: pmnsadd,v 1.6 1997/05/22 05:33:10 markgw Exp $
+#
+# Add a subtree of new names into the namespace in the current directory
+
+# Some degree of paranoia here ...
+PATH=/usr/sbin:/usr/bsd:/sbin:/usr/bin:/bin:/usr/pcp/bin
+export PATH
+
+exitsts=1
+tmp=/var/tmp/$$
+prog=`basename $0`
+trap "rm -f $tmp.*; exit \$exitsts" 0 1 2 3 15
+
+_usage()
+{
+    echo "Usage: pmnsadd [-d] [-n namespace] file"
+}
+
+namespace=${PMNS_DEFAULT-/var/pcp/pmns/root}
+dupok=""
+umask 22		# anything else is pretty silly
+
+while getopts dn:\? c
+do
+    case $c
+    in
+	d)	dupok="-d"
+		;;
+	n)	namespace=$OPTARG
+		;;
+	\?)	_usage
+		exitsts=0
+		exit
+		;;
+    esac
+done
+shift `expr $OPTIND - 1`
+
+if [ $# -ne 1 ]
+then
+    _usage
+    exit
+fi
+
+if [ ! -f $namespace ]
+then
+    echo "$prog: cannot find PMNS file \"$root\""
+    exit
+fi
+
+if [ ! -w $namespace ]
+then
+    echo "$prog: cannot open PMNS file \"$root\" for writing"
+    exit
+fi
+
+if [ ! -f $1 ]
+then
+    echo "$prog: cannot find input file \"$1\""
+    exit
+fi
+
+# Find PMNS pathname for base of new subtree (subroot), construct upper
+# levels of PMNS as required and hand-off to pmnsmerge
+#
+subroot=`nawk <$1 'NF >= 2 && $2 == "\{" { print $1 ; exit }'`
+
+echo 'root {' >$tmp.tmp
+path=""
+for name in `echo "$subroot" | tr '.' ' '`
+do
+    [ ! -z "$path" ] && echo "$path {" >>$tmp.tmp
+    echo "	$name" >>$tmp.tmp
+    echo "}" >>$tmp.tmp
+    if [ -z "$path" ]
+    then
+	path="$name"
+    else
+	path="$path.$name"
+    fi
+done
+cat $1 >>$tmp.tmp
+
+/usr/pcp/bin/pmnsmerge $dupok $namespace $tmp.tmp $tmp.root
+exitsts=$?
+
+# from here on, ignore SIGINT, SIGHUP and SIGTERM to protect
+# the integrity of the new ouput files
+#
+trap "" 1 2 15
+
+if [ $exitsts = 0 ]
+then
+    cp $tmp.root $namespace
+    cp $tmp.root.bin $namespace.bin
+else
+    echo "$prog: No changes have been made to the PMNS file \"$namespace\""
+fi

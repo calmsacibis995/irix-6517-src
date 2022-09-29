@@ -1,0 +1,306 @@
+.TH xlv 7M
+.SH NAME
+xlv \- logical volume disk driver
+.SH SYNOPSIS
+.nf
+\f3/dev/xlv/*\f1
+\f3/dev/rxlv/*\f1
+.fi
+.SH DESCRIPTION
+XLV devices provide access to disk storage as
+.IR "logical volumes" .
+A logical volume is an object that behaves like a disk partition, but its
+storage can span several physical disk devices.
+.P
+Using XLV, you can concatenate disks together to create larger
+logical volumes, stripe data across disks to create logical volumes with
+greater throughput, and plex (or mirror) disks for reliability.
+In addition,
+XLV enables you to change the configuration of volumes while the volume
+is actively being used as a filesystem.
+.P
+The geometry of logical volumes (e.g., the disks that belong to it, how
+they are put together, etc.) are stored in the disk labels of the disks
+that belong to the logical volumes.
+When the system starts up, the
+utility
+.IR xlv_assemble (1M)
+scans all the disks on the system and automatically
+assembles them into logical volumes.
+.IR xlv_assemble (1M)
+also creates any necessary device nodes.
+.P
+XLV device names always begin with
+.BI /dev/{r}xlv/ device_name
+where the
+.I device_name
+is assigned by the creator of the volume.
+See
+.IR xlv_make (1M)
+for how volumes are created.
+.P
+Device numbers range from 0 to one less than the maximum number of
+logical volume devices configured in the system.
+This is 10 by default;
+this number can be changed by rebuilding a kernel with
+.IR "lboot" (1M).
+.P
+There is a kernel driver, referred to as
+.IR "xlv" ,
+and some daemons
+for the logical volume devices.
+The driver is a 'pseudo device' not
+directly associated with any physical hardware; its function is to map
+requests on logical volume devices into requests on the underlying disk
+devices.
+The daemons take care of error recovery and dynamic reconfiguration
+of volumes.
+.SS Volume Objects
+XLV allows you to work with whole volumes and pieces of volumes.
+Pieces of
+volumes are useful for creating and reconfiguring volumes in units
+that are larger than individual disk partitions.
+.P
+Each
+.I volume
+consists of up to three
+.IR "subvolumes" .
+An
+.IR "xfs" (4)
+filesystem usually has a large
+.I "data"
+subvolume in which all the user files and metadata
+such as inodes are stored and a small
+.I "log"
+subvolume in which the filesystem
+log is stored.
+For high-performance and real-time applications, a volume can
+also have a
+.I real-time
+subvolume that contains only user files aligned at
+configurable block boundaries.
+Guaranteed rate I/O can be done to real-time
+subvolumes.
+See
+.IR "grio" (5).
+.P
+Each subvolume
+can be independently organized as 1 to 4
+.IR "plexes" .
+Plexes are
+sometimes known as mirrors.
+XLV makes sure that the data in all the plexes
+of a subvolume are the same.
+Plexes are useful for reliability since
+a subvolume remains available if any of its plexes are available.
+Since each subvolume is independently organized, you can choose to plex
+any, all, or none of the subvolumes within a volume.
+.P
+Each plex consists of up to 128
+.IR "volume elements" .
+Each volume element is a collection of
+.I "disk partitions"
+that may be either striped or concatenated.
+By adding volume elements, you can extend the size of a subvolume \-\- even
+one that is striped.
+Volume elements within a plex do not need to be of
+the same size.
+However, all the volume elements at the
+same offset in all the plexes of the subvolume must be the same size.
+For example, the first and second volume elements in a plex can have
+different sizes.
+But the first volume element in all the plexes of the
+subvolume must be the same size.
+This restriction is necessary because
+the volume element is the unit of recovery.
+Note that if XLV gets an unrecoverable disk error on one disk partition
+in a volume element, the entire volume element is taken offline.
+.P
+Each volume element can consist of from 1 to 100 disk partitions.
+The
+disks can be treated as either a
+.I "concatenated set"
+(in which case XLV writes to the partitions sequentially) or as a
+.I "striped set"
+(in which
+case XLV writes a stripe unit's worth of data to one disk and then
+rotates to the next disk in the stripe set.) In general, it is better
+to use volume elements that contain single disks when you want to
+concatenate disks together and only use volume elements with multiple disks
+when you want to use disk-striping.
+This is because the volume element is the unit of recovery.
+.P
+XLV allows you to create and work with volumes, subvolumes,
+plexes, and volume elements.
+The interesting operations associated with volumes are:
+creating them,
+assembling disk partitions into volumes, mounting them, changing
+volume configurations, shutting them down, and destroying them.
+.SS Naming Volume Objects
+Each XLV object is composed of a hierarchy of lower level objects.
+For
+example, a volume is composed of subvolumes that are in turn composed of
+plexes, etc.
+To let you refer to a component of an XLV object, XLV has
+adopted a hierarchical naming convention.
+For example:
+.TP 20
+.B "movies.data.0.5.50"
+Refers to the volume named
+.IR "movie" ,
+the
+.I "data"
+subvolume, plex
+.I 0
+of that subvolume, volume element
+.I 5
+within that plex, and disk partition
+.I 50
+within that volume element.
+Note that the numbers are zero-based.
+.TP
+.B "movies.log.2"
+Refers to plex number 2 in the log subvolume of the volume named
+.IR "movies" .
+.TP
+.B "movies.rt.1.5"
+Refers to volume element 5 within plex number 1
+of the real-time subvolume of the volume named
+.IR "movies" .
+.P
+If you create an object outside of a volume, then that object has a
+user-assigned name.
+For example,
+.B "spare_plex.2.1"
+refers to disk partition number 1 of volume element number
+2 of a standalone plex named
+.IR "spare_plex" .
+.I "spare_plex"
+does not currently belong to any subvolumes.
+.P
+These names are echoed by
+.IR "xlv_make" (1M)
+as objects are created.
+They are also useful in specifying the objects to change via
+.IR "xlv_mgr" (1M).
+.SS Creating Volumes
+.P
+Volumes are created via
+.IR "xlv_make" (1M).
+This utility writes the volume
+geometry to all the disks that belong to the volume object.
+The
+geometry is written to the volume headers.
+See
+.IR "vh" (7M).
+.SS Assembling Volumes
+After a volume has been created, it must be made known to the kernel
+driver before I/O can be initiated to the volume.
+The command
+.IR "xlv_assemble" (1M)
+scans all the disks attached to the system and
+assembles all the logical volumes that it finds.
+It then passes
+the configuration to the kernel.
+This is usually done during system
+startup.
+Once a volume has been assembled, I/O can be performed.
+.SS Working with Filesystems
+The normal filesystem utilities such as
+.IR "mkfs" (1M)
+and
+.IR "mount" (1M)
+work with logical volumes.
+.P
+A logical volume consisting of a single disk partition (that may be
+plexed) can be used as
+.IR "root" (7M).
+You cannot boot directly off a
+logical volume; you must specify the underlying disk partition.
+.SS Modifying Volumes
+The geometry of a volume object can be modified either offline or
+online.
+To modify a volume object offline, first unmount the
+filesystem, then destroy the volume object by using
+.IR xlv_mgr (1M).
+Then, you can run
+.IR "xlv_make" (1M)
+to create new XLV objects.
+Note that
+.I "xlv_make"
+only allows you to use disk partitions that are
+not currently part of volume objects.
+.P
+You can also modify volume objects while they are online by using
+.IR "xlv_mgr" (1M).
+You can grow a volume, add a plex, and remove a plex
+while the volume is actively being used.
+Note that I/O is
+blocked while the configuration is being changed.
+The blocked I/O
+is completed after the configuration has been written out to
+the disk labels.
+.P
+You can also use
+.I "xlv_mgr"
+to remove a volume element from a plex
+while the volume is online if there is at least one other plex that
+covers the range of disk blocks affected.
+Note that you can
+choose to plex only a portion of the address space of a subvolume.
+.SS Working with Plexes
+When there are multiple plexes, XLV recovers from read errors.
+In addition, XLV attempts to rewrite the data back to the
+failed plex.
+XLV masks write errors if it can write to at
+least one of the plexes.
+.P
+When a plexed volume starts up, XLV automatically makes sure that
+all the data among the plexes within each subvolume is consistent.
+This may involve copying the data from one plex to the others.
+While this is going on, the volume is available at a degraded
+performance.
+You can eliminate the need for plex recovery by
+shutting down the plex with
+.IR "xlv_shutdown" (1M).
+.I "xlv_shutdown"
+synchronizes the plexes and marks them as been the same so that
+when they restart, XLV knows that the plexes are consistent and can
+therefore avoid the plex copies.
+.SH FILES
+.nf
+/dev/xlv/*
+/dev/rxlv/*
+/var/sysgen/master.d/xlv
+.fi
+.SH SEE ALSO
+cfg(1M),
+lv_to_xlv(1M),
+xlv_assemble(1M),
+xlv_labd(1M),
+xlv_make(1M),
+xlv_mgr(1M),
+xlv_plexd(1M),
+xlv_shutdown(1M),
+xlvd(1M),
+grio(5).
+.SH NOTES
+XLV runs on both XFS and EFS filesystems.
+In addition, you can read and
+write to XLV devices using the raw device interfaces.
+.P
+XLV disk labels are stored on the disks themselves.
+Therefore, you can
+physically reposition the disk drives and XLV still assembles them
+correctly.
+.P
+You can upgrade from an existing
+.IR "lv" (7M)
+volume to an XLV volume by using
+.IR "lv_to_xlv" (1M).
+.P
+When you are running in the miniroot, the XLV device nodes are created
+in
+.I /root/dev/xlv
+and
+.IR /root/dev/rxlv .

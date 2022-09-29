@@ -1,0 +1,118 @@
+#!/usr/local/bin/perl
+#
+# set up the new config files for the annex boxes.
+#
+# $Header: /proj/irix6.5.7m/isms/eoe/cmd/ktools/RCS/Regenerate,v 1.5 1996/09/20 10:02:53 cwilson Exp $
+#
+# feed -d to not dist out
+# feed a single annex to only update that annex.
+#
+#
+$CONFIGFILE 	= "/usr/annex/portsfile";
+$CU_SYS		= "cu_system_names";
+$CU_DEV		= "cu_device_names";
+$ANNEXCONFIG	= "annex_config";
+
+$DONTDOIT = 1 if $ARGV[0] eq '-d';
+
+
+foreach ($CU_SYS, $CU_DEV, $ANNEXCONFIG) {
+    rename ($_, "$_.old");
+}
+
+open(CONF, $CONFIGFILE) || die "unable to open portsfile";
+while (<CONF>) {
+    ($conf) = /^#CONF (.*)/ if /^#CONF (.*)/;
+    ($note) = /^#NOTE (.*)/, $Note .= $note . "\n" if /^#NOTE (.*)/;
+    next if /^#/ && !/^#[NOTE|CONF]/;
+    $AnnexHost{$1} = "$2$;$3" if /^annex-host\s+(\S+)\s+(\d+)\s+(\S+)/;
+    
+    if ( /^(\S+)\s+.*rtelnetd/ ) {
+	push (@Rt, $1);
+    }
+
+    if ( /^([\w-]+\.(con|dbg)\.\d{1})\s+(\S+)\s+(\d+)/ ) {
+	$Annex{$3} .= $1 . '~' . $4 . $; ;
+    }
+    
+
+}    
+
+if (grep(/$ARGV[0]/, keys %Annex)) {
+    $UpdateOne = 1;
+}
+
+#
+# backup the current files
+#
+foreach $annex ($UpdateOne ? $ARGV[0] : keys Annex ) {
+    rename ($annex, "$annex.$ANNEXCONFIG.old");
+}
+
+#
+# now update the config files.
+#
+foreach $annex ($UpdateOne ? $ARGV[0] : keys Annex ) {
+    open (AX, ">$annex.$ANNEXCONFIG") || die "unable to open $ANNEXCONFIG, $!";
+
+    print AX "# Changes to the Engineering Annexes configuration\n";
+    print AX "# Effecting: " . `date` . "\n";
+
+    @L = (); $H = ();
+    print AX "annex $annex\n\n";
+    @hosts = split(/$;/, $Annex{$annex});
+    foreach (sort @hosts) {
+	($location, $port) = /(.*)~(.*)/;
+	($host) = $location =~ /^([\w-]+)\./;
+	$L[$port] = $location;
+	$H[$port] = $host;
+    }
+    for ($i = 1; $i <= (split(/$;/, $AnnexHost{$annex}))[0]; $i++) {
+	if ($L[$i]) {
+	    print AX "set port=$i user_name\t\"$H[$i]\"\n";
+	    print AX "set port=$i location\t\"$L[$i]\"\n";
+	    print AX "set port=$i mode \"slave\"\n";
+	    print AX "\n" if $oldhost ne $host;
+	    $oldhost = $host;
+	}
+	else {
+	    print AX "\n" if $oldhost ne "INVALID";
+	    print AX "set port=$i user_name\t\"INVALID\"\n";
+	    print AX "set port=$i location\t\"INVALID\"\n";
+	    print AX "set port=$i mode \"slave\"\n";
+	    print AX "\n" if $oldhost ne "INVALID";
+	    $oldhost = "INVALID";
+	}
+    }
+    print AX "#-------\n\n";
+    close (AX);
+}
+
+#
+# update cu devices file for rtelnetd
+#
+open (CUD, ">$CU_DEV") || die "unable to open $CU_DEV, $!";
+
+print CUD "# Changes to the Engineering Annexes CU device configuration\n";
+print CUD "# Effecting: " . `date` . "\n";
+
+foreach (@Rt) {
+    print CUD "Direct annex/$_\t- Any direct\n";
+}
+
+close CUD;
+
+#
+# now update the annexes
+#
+if ($DONTDOIT) {
+    print stderr "Updated config files *not* pushed to the annexes.\n";
+    exit 0;
+}
+
+print stderr "Now loading annexes with updated config file..\n" if !$DONTDOIT;
+
+foreach $annex ($UpdateOne ? $ARGV[0] : keys Annex ) {
+    print stderr "\n==>Updating $annex...\n";
+    print `../annex_server/na < $annex.$ANNEXCONFIG` if !$DONTDOIT;
+}    

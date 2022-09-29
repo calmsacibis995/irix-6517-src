@@ -1,0 +1,257 @@
+.TH pciio D3
+.SH NAME
+pciio: pciio_driver_register, pciio_driver_unregister, pciio_iterate, pciio_reset \- control PCI driver infrastructure
+.\" **********************
+.SH SYNOPSIS
+.\" **********************
+.nf
+.ft 3
+.sp .8v
+#include <sys/PCI/pciio.h>
+.sp .8v
+int
+pciio_driver_register (
+	pciio_vendor_id_t \f2vendor_id\fP,
+	pciio_device_id_t \f2device_id\fP,
+	char *\f2driver_prefix\fP,
+	unsigned \f2flags\fP);
+.sp .8v
+void
+pciio_driver_unregister (char *\f2driver_prefix\fP);
+.sp .8v
+void
+pciio_iterate (
+	char *\f2driver_prefix\fP,
+	pciio_iter_f *\f2func\fP);
+void
+pciio_reset (vertex_hdl_t \f2pconn\fP);
+.ft 1
+.fi
+.\" **********************
+.SS Arguments
+.\" **********************
+.PD 0
+.IP "\f2vendor_id\fP" 12n
+.IP "\f2device_id\fP" 12n
+.PD
+Values that the PCI device will present
+in its configuration space as its vendor and device ID codes.
+.IP "\f2driver_prefix\fP" 12n
+The prefix string for the driver's standard entry points
+as configured in
+.IR /var/sysgen/system .
+The infrastructure uses this prefix to locate the
+driver's cdevsw entry, in order to call the driver's
+attach and detach entry points.
+.IP "\f2flags\fP" 12n
+Normally passed as zero.
+.IP "\f2func\fP" 12n
+Address of a function to be applied to each of the connection
+points attached by this driver.
+.IP "\f2pconn\fP"
+is an appropriate PCI connection point.
+.\" **********************
+.SH DESCRIPTION
+.\" **********************
+The PCI infrastructure is a package of kernel services
+used by drivers for PCI devices to set up services for their devices.
+These services include:
+.IP \(bu 4n
+Locating all instances of the device in the system
+(documented in this page).
+.IP \(bu
+Manipulating the PCI configuration space
+for the device (see
+.IR pciio_config (D3)).
+.IP \(bu
+Constructing physical addresses to use for
+PIO access to the device (see
+.IR pciio_pio (D3)).
+.IP \(bu
+Constructing PCI addresses for the device to use for
+DMA access to memory (see
+.IR pciio_dma (D3)).
+.IP \(bu
+Arranging for a function to be called when the device
+requests interrupt service (see
+.IR pciio_intr (D3)).
+.IP \(bu
+Arranging for a function to be called when an error
+occurs during PIO to, or DMA from the device
+(see
+.IR pciio_error (D3)).
+.IP \(bu
+Accessing useful fields in some otherwise opaque
+data structures (see
+.IR pciio_get (D3)).
+.\" **********************
+.SS "Driver Registration"
+.\" **********************
+.IR pciio_driver_register ()
+is used by drivers to
+inform the infrastructure that they are interested in all PCI devices
+designated by specified device and vendor ID numbers.
+The infrastructure associates the specified ID numbers with the
+specified device driver prefix.
+When a device with these IDs is discovered, the infrastructure
+calls the attach entry point with that driver prefix,
+passing the hardware graph connection point vertex as the only parameter.
+This
+.I "connection point"
+is used in most calls to the infrastructure
+to identify the PCI device of interest.
+.P
+A loadable device driver calls
+.IR pciio_driver_register ()
+from its
+.IR reg ()
+entry point.
+A driver prelinked into the kernel should
+also make the call from
+.IR reg ()
+for consistency,
+but may call from the
+.IR init ()
+entry point if necessary.
+.P
+Device drivers may make multiple calls with
+different vendor and device ID numbers, representing
+several compatible PCI devices.
+.P
+Wildcard values PCIIO_VENDOR_ID_NONE and PCIIO_DEVICE_ID_NONE
+may be used if cards from any vendor or
+cards with any device code are of supported.
+When both vendor and device are wildcarded,
+the
+.IR attach ()
+routine is called for every PCI device connected to the system.
+.P
+When a loadable device driver calls
+.IR pciio_driver_register (),
+one or more calls to the driver's
+.IR attach ()
+function can occur before the infrastructure returns control to the caller.
+On some large systems, the
+.IR attach ()
+calls can be executed by other threads and
+possibly on other processors, concurrently
+with continued execution of the
+.IR reg ()
+entry point.
+.P
+.IR pciio_driver_unregister ()
+should be called by any unloadable device driver,
+from within the driver's
+.IR unreg ()
+entry point.
+This will trigger calls to the driver's
+.IR detach ()
+entry point, and remove the association between the driver and any
+vendor and device IDs.
+.\" **********************
+.SS "Connection Point Iteration"
+.\" **********************
+It is sometimes important for driver code to be able
+to go back and revisit each connection point that
+was passed to its
+.IR attach ()
+entry point; for example to disconnect interrupt and error
+handling functions before the driver unloads,
+or to reconnect these handlers after the driver is reloaded.
+.IR pciio_iterate ()
+provides a quick mechanism to have a private function
+called with each connection point that the infrastructure
+has matched with the specified driver.
+.P
+On large systems, the calls to
+.IR func ()
+can take place in multiple separate threads on multiple processors,
+so the function must use appropriate
+locking when accessing driver-global structures.
+.\" **********************
+.SS "Resetting a PCI card"
+.\" **********************
+.IR pciio_reset ()
+is used to attempt to activate the PCI Reset
+line connected to a specific card
+without affecting other devices on the PCI bus.
+When this can be done,
+the device is reset
+and basic configuration information is reloaded.
+.\" **********************
+.SH EXAMPLES
+.\" **********************
+Here is how a typical driver might make use
+of these functions:
+.nf
+.Ex
+static char	pcifoo_prefix[] = "pcifoo_";
+static char	pcifoo_edge[] = "foo";
+pcifoo_init(void)
+{
+	/* the first time through, we are not
+	 * registered, so this is a no-op.
+	 * after that, it triggers reload_me.
+	 */
+	pciio_iterate(pcifoo_prefix, pcifoo_reload_me);
+}
+pcifoo_unload(void)
+{
+	...
+	pciio_iterate(pcifoo_prefix, pcifoo_unload_me);
+	...
+}
+pcifoo_reg(void)
+{
+	pciio_driver_register(
+		PCIFOO_VENDOR_ID,
+		PCIFOO_DEVICE_ID,
+		pcifoo_prefix, 0);
+}
+pcifoo_unreg(void)
+{
+	pciio_driver_unregister(pcifoo_prefix);
+}
+pcifoo_reload_me(vertex_hdl_t conn)
+{
+	vertex_hdl_t	vhdl;
+	pcifoo_soft_t	pcifoo_soft;
+	if (GRAPH_SUCCESS !=
+		hwgraph_traverse(conn, pcifoo_edge, &vhdl))
+			return;
+	pcifoo_soft = device_info_get(vhdl);
+	if (!pcifoo_soft)
+		return;
+	if (pcifoo_soft->intr)
+		pciio_intr_connect(
+			pcifoo_soft->intr,
+			pcifoo_intr,
+			pcifoo_soft);
+}
+pcifoo_unload_me(vertex_hdl_t conn)
+{
+	vertex_hdl_t	vhdl;
+	pcifoo_soft_t	pcifoo_soft;
+	if (GRAPH_SUCCESS !=
+		hwgraph_traverse(conn, pcifoo_edge, &vhdl))
+			return;
+	pcifoo_soft = device_info_get(vhdl);
+	if (pcifoo_soft->intr)
+		pciio_intr_disconnect(pcifoo_soft->intr);
+}
+.Ee
+.\" **********************
+.\" .SH NOTES
+.\" **********************
+.\" **********************
+.SH "SEE ALSO"
+.\" **********************
+pciio_config(D3),
+pciio_dma(D3),
+pciio_error(D3),
+pciio_get(D3),
+pciio_intr(D3),
+pciio_pio(D3).
+.\" **********************
+.\" .SH DIAGNOSTICS
+.\" **********************

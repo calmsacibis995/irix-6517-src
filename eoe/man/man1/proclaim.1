@@ -1,0 +1,282 @@
+'\"macro stdmacro
+.TH proclaim 1M "30 Jul 1996"
+.UC 5
+.SH NAME
+proclaim \- client for Dynamic Host Configuration Protocol (DHCP)
+.SH SYNOPSIS
+\f3/usr/etc/proclaim\f1
+[ \f3\-B\f1 ]
+[ \f3\-b\f1 \f2lease_time\f1 ]
+[ \f3\-d \-s\f1 \f2server_addr\f1 ]
+[ \f3\-E\f1 ]
+    [ \f3\-e\f1 \f22nd_interface\f1 ]
+[ \f3\-I\f1 ]
+[ \f3\-i\f1 ]
+[ \f3\-l\f1 \f2lease_time\f1 ]
+[ \f3\-p\f1 ]
+    [ \f3\-r\f1 \f2lease_time\f1 \f3\-s\f1 \f2server_addr\f1 ]
+[ \f3\-t\f1 \f2repeat\f1 ]
+[ \f3\-x\f1 \f2max_timeout\f1 ]
+    [ \f3\-w \-h\f1 \f2host_name\f1 \f3\-a\f1 \f2ip_addr\f1 ]
+.SH DESCRIPTION
+.I Proclaim
+is a client that communicates with a DHCP server to obtain configuration
+parameters, including at least an IP address.
+The format of DHCP messages is based on the format of
+.I bootp
+messages, described in RFC 951.
+A detailed protocol specification of DHCP is in RFC 1541,
+available from the Network Information Center.
+.PP
+The DHCP protocol uses UDP/IP as its transport mechanism.
+The DHCP server receives service requests at the UDP port indicated in the
+.I bootp
+service description contained in the file
+.IR /etc/services ;
+see
+.IR services (4).
+.PP
+.I Proclaim
+can be used to setup and configure new systems automatically,
+and to move systems from one net to another without administrative intervention.
+It can also be used to automatically verify current configurations at reboot.
+Only the superuser can employ \f2proclaim\f1.
+If the primary network interface is changed,
+\f2proclaim\f1 updates the \f2netaddr\f1 variable in the NVRAM.
+.PP
+In the absence of the DHCPoptionsToGet keyword, \f2proclaim\f1 requests
+the following configuration parameters from an available DHCP server:
+.PP
+.RS
+.nf
+an IP address
+the lease duration (3 year default)
+the subnet mask
+hostname (users may be allowed to choose their own)
+NIS domainname if the NIS option is installed.
+IP address of the DHCP server; see \f2dhcp_bootp\f1(1M).
+.fi
+.RE
+.PP
+The DHCP server is started by
+.IR inetd (1M) ,
+as configured in the
+.IR inetd.conf
+file.
+The basic operation of the DHCP protocol is a series of
+packet exchanges as follows:
+.IP 1) 4n
+The client machine broadcasts a DHCPDISCOVER packet to the
+DHCP server's UDP port, using a UDP broadcast equivalent.
+The request packet includes the requester's network hardware address,
+and a list of desired configuration options as described above.
+.IP 2) 4n
+All the DHCP servers on the same network as the client machine
+receive the client's request as do the \f2bootp\f1 relay agents,
+which forward the request to other subnets.
+.IP 3) 4n
+The server looks up the requester in its configuration files
+to determine if it is configured to serve clients from the requesting subnet.
+The server now looks in the \f2propel\f1 database or
+the \f2/etc/ethers\f1 file (see \f2ethers\fR(4)) for an entry
+with the client's network hardware address.
+If an entry is found, the server checks the hostname of that entry against
+the \f2propel\f1 database or the \f2/etc/hosts\f1 file (see \f2hosts\f1(4))
+to complete the network hardware address to Internet address mapping.
+.IP
+If no entry is found, the server generates an appropriate IP address
+and hostname using its configuration files; see \f2dhcp_bootp\f1(1M).
+.IP 4) 4n
+The server now returns a response in the form of a DHCPOFFER packet,
+which also includes other configuration information requested by the client.
+.IP 5) 4n
+The client accepts the first valid offer from a server and broadcasts back
+a DHCPREQUEST message, which includes all the configuration options
+from the DHCPDISCOVER message plus the address of the selected server.
+.IP 6) 4n
+The selected server makes a permanent mapping for the client's hostname,
+IP address, and hardware address, and responds with a DHCPACK message.
+.IP 7) 4n
+On receiving the DHCPACK message from the server, the client writes
+the configuration information into the appropriate configuration files
+and then executes the networking initialization scripts.
+.PP
+If the server is configured in a manner where clients from specific subnets
+are allowed to choose their own hostname, then at the receipt of the DHCPOFFER
+message the client requests user input to either accept the offered hostname
+or specify a different one.  This dialog between the server and client
+continues until a valid and unique mutually acceptable name is selected.
+Alternately, the \f3\-w\f1 option can be used to request a hostname and/or
+IP address non-interactively.  The client will print an error and exit if 
+the requested hostname or address is invalid.
+.PP
+.I Proclaim
+sleeps after obtaining a new lease or after verifying an existing lease,
+until it is time to renew the lease.
+The client wakes up at times specified by the DHCP protocol
+and attempts to renew the lease until it succeeds or the current lease expires.
+If the client is unable to renew the lease then it can
+shutoff \f3network\fP access depending on the use of the \f3\-E\fP option.
+
+.SH OPTIONS
+.PP
+The \f3\-B\f1 option broadcasts a BOOTP packet to a BOOTP 1533 server.
+This is useful when you just want to obtain the other configuration data,
+and the IP address is not otherwise known to the BOOTP or DHCP server.
+The data is placed in the file \f3/var/adm/proclaim.data\f1.
+\f2proclaim\f1 does not change any networking state with this option.
+.PP
+The \f3\-b \f2lease_time\f1 option is used to manually rebind the lease; a 
+.I lease_time
+in seconds must be specified.
+.PP
+The \f3\-d\fP option allows the client to surrender its address lease
+and shutdown all networking.
+This option can only be used in conjunction with the
+\f3\-s \f2server_address\f1 option to specify the Proclaim server address.
+This usually is the server from where the original address lease was obtained.
+If there is a client running on the host use the 
+.B /etc/init.d/run-proclaim surrender
+command to surrender the lease.
+.PP
+The \f3\-E\fP option is used to specify that network access should be shut off 
+if the client is unable to renew the lease and the lease expires.
+The default behavior does not shut off network access if the lease expires.
+.PP
+The \f3\-e \f22nd_interface\f1 option
+is used to specify the device for a second network interface.
+.PP
+The \f3\-I\fP option is used to send a DHCPINFORM packet to a DHCP server.
+This is useful when an IP address was assigned to the host using some other
+means and it is required to obtain only other configuration parameters.
+.PP
+The \f3\-i\fP option is used where the client is seeking to verify a
+previously allocated, cached configuration.
+If the client receives a DHCPNAK response to this message,
+it means that either the 'requested IP address' parameter is incorrect
+or the client is on the wrong network.
+The client automatically requests a new address and lease
+and proceeds to install the new configuration.
+If there is no response, it means the server(s) has no record of this client.
+These messages are logged using the system logging daemon \f2syslogd\f1(1M). 
+If a client is running on the host use the
+.B /etc/init.d/run-proclaim verify
+command to verify the lease.
+.PP
+The \f3\-l \f2lease_time\f1 option is used to request a different address
+lease duration than the default of 3 years.
+The lease time needs to be specified in number of seconds.
+.PP
+The \f3\-p\fP option is used to print the status of the current lease
+and other configuration parameters.  This status is obtained from the
+.I /var/adm/proclaim.lease_info 
+file created at the time the lease was obtained.
+.PP
+The \f3\-r \f2lease_time \f3\-s \f2server_addr\f1
+option is used to manually renew the lease; a 
+.I lease_time 
+in seconds must be specified. The 
+.I server_addr
+specifies the server with which to renew the lease.
+The server address may be obtained by using the -p option of 
+.I proclaim.
+.PP
+The \f3\-t \f2invocations\f1 option is used to specify
+the number of invocations of the client using the 
+.IR run-proclaim (1M)
+script, after which the 
+.I autoconfig_ipaddress
+flag is set to off (see
+.IR chkconfig (1M)). 
+When this option is not specified the client may be run up to a default 2
+(or as specified in the 
+.I /etc/config/proclaim.options
+file) number of times using the script after which the flag is set to off.
+Use of the script to run the client requires the flag to be set to on.
+.PP
+The \f3\-x \f2max_timeout\f1 option is used to specify a maximum timeout
+(time to wait for a server to reply) in seconds.
+The current default is set to 6 seconds.
+.PP
+The \f3\-w \-h \f2host_name \f3\-a \f2ip_addr\f1
+option is used to choose a hostname and IP address without the user being 
+prompted by the client. If no 
+.I host_name
+or
+.I ip_addr
+is specified, the the hostname and IP address offered by the server will
+be used.  If only the
+.I host_name 
+is specified, the server will choose an appropriate IP address. This option was 
+added to make it possible to run \f2proclaim\f1 from a CGI script.
+
+.SS Options File
+Options may also be specified in the
+.I /etc/config/proclaim.options
+file.
+Options specified on the command line supersede those specified in this file.
+Lines beginning with a '#' are treated as comments.
+The option keywords in this file must be followed immediately by a colon,
+then by any number of tabs or spaces, and finally by the value of the option.
+.PP
+Here are the supported keywords:
+.RS
+.nf
+.ta \w'ShutdownOnExpiry\0\0'u
+Invocations	equivalent to \f3\-t\fP option
+MaxTimeout	equivalent to \f3\-x\fP option
+ServerAddress	equivalent to \f3\-s\fP option
+ShutdownOnExpiry	equivalent to \f3\-E\fP option
+Lease   	equivalent to \f3\-l\fP option
+DHCPoptionsToGet	additional options to request from DHCP server
+.fi
+.RE
+.PP
+Additional options which are not keywords specify whether 
+the 
+.I run-proclaim
+script should try to obtain configuration parameters for 
+all the network interfaces on the system. If none of these
+options are present then the 
+.I proclaim
+client is invoked for the primary interface only. 
+.PP
+The options are:
+.RS
+.nf
+\f3Primary on|off \fP
+\f3Interface\fP	interface \f3 on|off \fP 
+.fi
+.RE
+.PP
+The presence of an \f3on\fP invokes the 
+.I proclaim
+client and \f3off\fP does not invoke it for the specified
+interface when the 
+.I run-proclaim 
+script is executed with a \f3start\fP argument. The value of
+interface is the name, for example, ec1, xpi1, etc.
+.SH FILES
+.nf
+/etc/hosts
+/etc/ethers
+/etc/config/ifconfig-1.options
+/.rhosts
+/etc/sys_id
+/usr/etc/yp/ypdomain
+/etc/init.d/network
+/var/adm/proclaim.lease_info
+/var/adm/proclaim.data
+/etc/config/proclaim.options
+/etc/init.d/run-proclaim
+.fi
+
+.SH "SEE ALSO"
+bootp(1M),
+dhcp_bootp(1M),
+inetd(1M),
+propel(1M),
+run-proclaim(1M),
+syslogd(1M),
+ethers(4),
+hosts(4)

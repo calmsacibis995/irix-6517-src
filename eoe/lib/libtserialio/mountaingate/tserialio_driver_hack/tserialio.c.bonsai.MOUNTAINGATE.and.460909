@@ -1,0 +1,2218 @@
+/*
+ * Copyright (C) 1986, 1992, 1993, 1994, Silicon Graphics, Inc.
+ * All Rights Reserved.
+ *
+ * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Silicon Graphics, Inc.;
+ * the contents of this file may not be disclosed to third parties, copied or
+ * duplicated in any form, in whole or in part, without the prior written
+ * permission of Silicon Graphics, Inc.
+ *
+ * RESTRICTED RIGHTS LEGEND:
+ * Use, duplication or disclosure by the Government is subject to restrictions
+ * as set forth in subdivision (c)(1)(ii) of the Rights in Technical Data
+ * and Computer Software clause at DFARS 252.227-7013, and/or in similar or
+ * successor clauses in the FAR, DOD or NASA FAR Supplement. Unpublished -
+ * rights reserved under the Copyright Laws of the United States.
+ */
+
+/* Timestamped interface upper layer for modular serial i/o driver */
+
+#include <sys/types.h>
+#include <sys/systm.h>
+#include <sys/cred.h>
+#include <sys/uio.h>
+#include <sys/serialio.h>
+#include <sys/sysmacros.h>
+#include <sys/errno.h>
+#include <sys/debug.h>
+#include <sys/strmp.h>
+#include <sys/conf.h>
+#include <sys/kmem.h>
+#include <sys/termios.h>
+#include <sys/termio.h>
+#include <sys/stty_ld.h>
+#include <sys/proc.h>
+#include <sys/signal.h>
+#include <sys/cmn_err.h>
+#include <sys/callo.h>
+#include <sys/pfdat.h>
+#include <sys/ddi.h>
+#include <sys/mload.h>
+
+#include <sys/tserialio_pvt.h>
+
+#include <sys/atomic_ops.h>
+extern int fastclock; /* from ml/timer.c */
+extern void (*midi_timercallback_ptr)(void); /* from ml/timer.c */
+
+/* this func not prototyped.  from os/clock.c */
+toid_t dotimeout(processorid_t, void (*)(), void *, 
+                 __int64_t, pl_t, long, va_list ap);
+
+int tsiodevflag = D_MP;        /* required for dynamic loading */
+char *tsiomversion = M_VERSION;/* Required for dynamic loading */
+
+/* user rb structures ------------------------------------------- */
+
+/* how this driver works:
+ *
+ * this driver is able to perform +-1ms accurate timestamping of input
+ * serial bytes and scheduling of output serial bytes because it does
+ * its work off of the only reliable 1ms event on the system -- the 
+ * profiler tick at spl7 (midi_timercallback_ptr).  hopefully on OSes
+ * beyond 6.2 and bonsai, we will not need to use this hack, but for 
+ * now it is necessary.  this millisecond tick only executes on cpu 0.
+ *
+ * the received and transmitted data passes directly between user-mode
+ * and the spl7 interrupt routine by the use of an extremely lightweight,
+ * race-free ringbuffer which is mapped into the user address space.
+ * data transfer requires no system calls.  the urb data structure 
+ * encapsulates the state for one ringbuffer between user-mode and 
+ * the driver (in only one direction of transfer--so a traditional 
+ * TX/RX serialport connection requires two ringbuffers).
+ *
+ * for cases where the user-mode side wishes to block until the ringbuffer 
+ * is sufficiently full (RX) or empty (TX), this driver has a poll() entry
+ * point which user-mode can use to block until the ringbuffer reaches the 
+ * desired fillpoint.  if the user always used poll() to decide when to 
+ * read/write more data, then the user-mapped ringbuffer would not be
+ * much of a win (since user-mode would do about as many systems calls
+ * to accomplish the same task as traditional read()/write()).  however,
+ * typical real applications doing MIDI or video deck control are almost
+ * always doing something else as well (ie, audio or video!), and they
+ * quite often prefer to poll the device (in the sense of checking the 
+ * buffer's "nfilled" count, which can be done with no system calls),
+ * using the other operations they are doing (audio/video) to regulate
+ * their usage of the serial ringbuffer.  so the mapped ringbuffer is
+ * indeed a win.
+ *
+ * when it wants to wake up a poll()ing process, the interrupt cannot
+ * call pollwakeup(), because it is at spl7.  therefore, the interrupt
+ * has to schedule a timepoke (an immediate timeout) at a lower spl
+ * to actually call pollwakeup().  this is unfortunate.  hopefully,
+ * we will be able to avoid this post-6.2/bonsai.
+ *
+ * this driver currently does support fan-out of RX data to multiple
+ * user-mode consumers, but it does not support merging of TX data from 
+ * multiple user-mode producers (note: both of these things are needed in
+ * order for this driver to fully support MIDI).  so for now, for a given
+ * serial device which tsio owns, there are 0 or more urbs for the RX 
+ * direction on that device, and there are 0 or 1 urbs for the TX direction
+ * on that device.
+ */
+
+/* toplevel states:
+ *
+ * this driver is designed to be used via a library, not directly.
+ * since the library is the only real direct user of this device's
+ * entry points, we need only support a simple usage of the entry
+ * points, and protect against other usages that could be damaging.
+ *
+ * for this reason, the driver restricts the possible use of its entry
+ * points to a simple, linear set of states.  the driver will only
+ * allow a given fd to advance to the next state; any attempt to
+ * do otherwise results in a failed system call. 
+ *
+ * first the library open()s the driver, using the minor number to indicate
+ * the desired sio port number.  the driver is essentially a clone-open
+ * driver in that it sets the minor number to an index in urbtab below for
+ * use by all subsequent entry points.  we need this table of urb's rather
+ * than just using the tsio_upper structure for our state because the
+ * interrupt routine needs to iterate through all serial devices being managed
+ * by tsio (more below).
+ *
+ * then the library performs a TSIO_ACQUIRE_RB ioctl(), specifying the 
+ * remaining communications parameters, queue size, and a direction.
+ *
+ * then the library mmap()s the ringbuffer region.  this action actually
+ * starts data flowing.
+ *
+ * then the library unmap()s the ringbuffer region.  this terminates
+ * data flow.
+ *
+ * then the library close()s the file descriptor.
+ *
+ * we test for all possible orderings of system calls other than this.
+ *
+ * the toplevel_state field of the urb tells what state the urb is currently
+ * in.  this field is intended to be read only by top-level routines, not the
+ * interrupt handler or timepoke routines.
+ */
+#define TSIO_BETWEEN_OPEN_AND_ACQUIRE 0
+#define TSIO_BETWEEN_ACQUIRE_AND_MAP 1
+#define TSIO_BETWEEN_MAP_AND_UNMAP 2
+#define TSIO_BETWEEN_UNMAP_AND_CLOSE 3
+
+/* coordination of data structures
+ *
+ * 
+ * == here are the pieces of code which need to be coordinated:
+ * 
+ * - spl7 millisecond interrupt (no context)
+ * - spl0 timepoke (no context)
+ * - open
+ * - acquire ioctl
+ * - map
+ * - other ioctls (only allowed in TSIO_BETWEEN_MAP_AND_UNMAP toplevel state)
+ * - unmap
+ * - close
+ * 
+ * == here are the data structures, all of which are initially zero:
+ * 
+ * there is one sioport for each physical serial jack on the machine.
+ * our driver gets at sioports via the call sio_getport(), and claims
+ * ownership of the port by setting sioport->sio_callup to our callup
+ * vectors (while holding the port lock).
+ * 
+ * each sioport which our driver owns also has one tsio_upper structure,
+ * pointed to by sioport->sio_upper.  those tsio_upper structures are
+ * allocated out of porttab[].  for reasons explained below, each
+ * tsio_upper structure also contains a pointer back to its corresponding
+ * sioport.
+ * 
+ * then there is the urb (user ring buffer) data structure.  there is one
+ * urb for each user-mode open() of our driver.  each open() represents a
+ * connection to one physical port in one direction (TX or RX).
+ * 
+ * therefore, there is a many-to-one relationship between
+ * sioport+tsio_upper's and urbs.  each urb contains a pointer to the
+ * tsio_upper structure for its port (which itself contains a pointer to
+ * the sioport).
+ * 
+ * the fields relevant to coordination are:
+ * 
+ * - the table of urbs: urbtab[]
+ *     - urbtab[i].allocated - whether or not this entry in urbtab is taken
+ *     - urbtab[i].intrflags - whether or not the interrupt/timepoke routine 
+ *                             should try to transfer data on/wakeup this urb
+ *                             (actually a bitmask; see below)
+ * 
+ * - int n_urb_active - count of urbs with active field set
+ * 
+ * - the table of tsio_upper structures: porttab[]
+ *     - porttab[i].allocated - whether or not this entry in porttab is taken
+ *     - porttab[i].intrflags - whether or not the spl7 interrupt routine
+ *                              should try to transfer data on this port
+ *                              (actually a bitmask; see below)
+ *     - porttab[i].n_urb_allocated - number of urbs pointing here
+ *     - porttab[i].n_urb_active - number of activeurbs pointing here
+ * 
+ * - sio's sioport data structures
+ *     - sio_callup, which indicates whether tsio owns the port
+ *     - sio_upper, containing a pointer to our tsio_upper data structure
+ *     - sioport has its own spinlock (see below)
+ * 
+ * an 'active' urb is a urb with urbtab[i].intrflags&URB_ACTIVE set
+ * an 'active' port is a port with porttab[i].intrflags&PORT_ACTIVE set
+ * 
+ * == protection for driver entry points:
+ * 
+ * all driver entry points are single-threaded by the use of a global
+ * sleeping lock, LOCK_TSIO() and UNLOCK_TSIO().  This is a bit coarse.
+ * We could instead have 1. a global sleeping lock providing atomic
+ * access to all urbtab[i].allocated and porttab[i].allocated fields,
+ * which only open() and close() would need to lock, and 2. a sleeping
+ * lock in the urb providing atomic access to all the fields of that urb,
+ * which all of the driver entry points would use.
+ * 
+ * == protection for urbs between toplevel and non-toplevel routines
+ * 
+ * the field urbtab[i].intrflags is used to coordinate the toplevel
+ * routines (driver entry points) and non-toplevel routines (interrupt
+ * and timepoke).  when a urb is first activated, the toplevel routines
+ * can set up the urb, then set the urbtab[i].intrflags field to
+ * URB_ACTIVE.  this is pretty simple and has no coordination problems.
+ * however, when it's time to deactivate a urb, we must be more careful:
+ * 
+ * a. the toplevel routines want to clear the URB_ACTIVE bit of
+ * urbtab[i].intrflags so it's safe to deallocate all of the urb's
+ * resources.  they have to know that none of the non-toplevel routines
+ * are currently using the urb while they clear the bit.  they are
+ * willing to spin a little to guarantee this.
+ * 
+ * b. the non-toplevel routines want to access urbtab[i], and they use
+ * urbtab[i].intrflags to decide this.  if they see that the URB_ACTIVE
+ * bit is set, then they want to execute a little bit of code using that
+ * urb, with the guarantee that urbtab[i].intrflags&URB_ACTIVE will not
+ * change while they are using the urb.  these routines do not want to
+ * spin--they are holding off interrupts as they execute.
+ * 
+ * while this problem could be solved with spinlocks, this is overkill.
+ * there is no need for the non-toplevel routines to spin waiting for a
+ * lock: if the toplevel routines are currently deactivting the urb, then
+ * the non-toplevel routines simply want to give up and move on to the
+ * next urb without waiting.  
+ * 
+ * [in defense of spinlocks, it is true that a spinlock solution would
+ * not spin for long.  whenever the non-toplevel routines started
+ * spinning for the lock, they would be waiting for a very brief segment
+ * of code to complete in the routine currently holding the lock.
+ * because the spinlock would necessarily be an spl7 spinlock, that
+ * segment of code in the toplevel routine would not get preempted.  but
+ * the solution shown below works just as well; why waste the cycles?]
+ * 
+ * this non-spinlock solution is accomplished with the SGI atomic
+ * operation compare_and_swap_int, which performs this test and set
+ * atomically to all other users of the passed-in memory location:
+ * 
+ * int
+ * compare_and_swap_int(int *loc, int compare_value, int assign_value)
+ * {
+ *   if ( (*loc) == compare_value )
+ *     {
+ *       *loc = assign_value;
+ *       return 1;
+ *     }
+ *   return 0;
+ * }
+ * 
+ * here is how it is used:
+ * 
+ * - urbtab[i].intrflags is initially zero (inactive).
+ * - map() calls activate_urb, which sets urbtab[i].intrflags to URB_ACTIVE
+ * - the intr routine uses this technique to safely access a urb:
+ * 
+ *   while (urbtab[i].intrflags & URB_ACTIVE)
+ *     {
+ *       if (compare_and_swap_int(&urbtab[i].intrflags,
+ *                                (urbtab[i].intrflags & URB_INUSE_BY_TIMEPOKE)
+ *                                  | URB_ACTIVE,
+ *                                (urbtab[i].intrflags & URB_INUSE_BY_TIMEPOKE)
+ *                                  | URB_ACTIVE | URB_INUSE_BY_INTR))
+ *         {
+ *           {the ACTIVE bit was set, and now we have set our INUSE bit}
+ *           {it's safe to use the urb until we clear our INUSE bit}
+ *           ...
+ *           {clear our INUSE bit}
+ *           atomicClearInt(&urbtab[i].intrflags, URB_INUSE_BY_INTR);
+ *           break;
+ *         }
+ *     }
+ * 
+ * - the timepoke routine uses the exact same code, with the words
+ *   INTR and TIMEPOKE flipped around.
+ * 
+ * - unmap() calls deactivate_urb(), which uses this technique to safely
+ *   deactivate a urb:
+ * 
+ *   while (!compare_and_swap_int(&urbtab[i].intrflags, URB_ACTIVE, 0))
+ *     ; {spin}
+ * 
+ *   after this code segment, it is safe to deallocate the urb's resources;
+ *   the interrupt is not touching the urb and will not touch it again.
+ * 
+ * - how does this work?  each non-toplevel routine wants to see if the ACTIVE
+ *   bit is set.  if so, it atomically sets its INUSE bit, uses the urb, and  
+ *   then clears its INUSE bit.
+ * 
+ *   the toplevel routine wants to clear the ACTIVE bit.  it waits around
+ *   until the ACTIVE bit is the only bit set (meaning the INUSE bits are all
+ *   zero), and when that happens it atomically clears the ACTIVE bit 
+ *   (by setting the whole word to 0).
+ * 
+ *   there is one subtlety: there are two inuse bits, one for the intr and  
+ *   one for the timepoke.  each non-toplevel routine has to check for both 
+ *   ACTIVE and ACTIVE|URB_INUSE_BY_{the other non-toplevel routine}.  
+ *   the code which accomplishes this above does so by peeking at the value 
+ *   of the other non-toplevel routine's INUSE bit, and building a 
+ *   compare_value which is most likely to match in a compare_and_swap_int 
+ *   operation.  it is extremely unlikely but possible that intrflags 
+ *   will change between the time that the non-toplevel routine peeks at it 
+ *   and the time that compare_and_swap_int loads it as part of its ll/sc 
+ *   sequence.  the while() loop correctly handles all such cases.
+ * 
+ *   this while loop could be avoided by creating a slightly different atomic 
+ *   operation which did this atomically:
+ * 
+ *   int
+ *   testbits_and_setbits_int(int *loc, int test_bits, int set_bits)
+ *   {
+ *     if ( (*loc) & test_bits )
+ *       {
+ *         *loc |= set_bits;
+ *         return 1;
+ *       }
+ *     return 0;
+ *   }
+ *  
+ *   in which case the intr code would look like this, with no while loop:
+ * 
+ *   if (testbits_and_setbits_int(&urbtab[i].intrflags, 
+ *                                URB_ACTIVE, URB_INUSE_BY_INTR))
+ *     {
+ *       {the ACTIVE bit was set, and now we have set our INUSE bit}
+ *       {it's safe to use the urb until we clear our INUSE bit}
+ *       ...
+ *       {clear our INUSE bit}
+ *       atomicClearInt(&urbtab[i].intrflags, URB_INUSE_BY_{INTR|TIMEPOKE});
+ *     }  
+ * 
+ *   and the timepoke routine would work in a similar manner.
+ * 
+ *   but careful consideration will reveal that the idiom using 
+ *   compare_and_swap_int above is practically eqivalent to the idiom using
+ *   the fictitious testbits_and_setbits_int operation.  the cases where 
+ *   the compare_and_swap_int idiom will spin but the testbits_and_setbits_int
+ *   will not are exceedingly rare.  this must be weighed against maintenance
+ *   cost of another atomic op.
+ *                                   
+ * == protection for n_urb_active and n_urb_allocated between toplevel and 
+ *    non-toplevel routines
+ * 
+ * none.  the non-toplevel routines do not use any of the fields
+ * called n_urb_active or n_urb_allocated.  this includes the fields
+ * inside the tsio_upper structure and the global variables.
+ * 
+ * == protection for porttab[] between toplevel and non-toplevel routines
+ * 
+ * we have exactly the same protection issue for each sioport+tsio_upper
+ * as we do for each urb, except the problem is limited to the toplevel
+ * routine and the spl7 interrupt.  the solution we use is essentially
+ * the same.
+ * 
+ * - porttab[i].intrflags is initially zero (inactive).
+ * - map() calls activate_urb, which sets porttab[i].intrflags to PORT_ACTIVE
+ * - interrupt code which wants to manipulate a port first goes to the
+ *   tsio_upper structure for that port and does:
+ * 
+ *   if (compare_and_swap_int(&porttab[i].intrflags, 
+ *                            PORT_ACTIVE, 
+ *                            PORT_ACTIVE|PORT_INUSE_BY_INTR))
+ *     {
+ *       {the ACTIVE bit was set, and now we have set our INUSE bit also}
+ *       {it's safe to use the port until we clear our INUSE bit}
+ *       sioport *port = porttab[i].sioport;
+ *       ...
+ *       {clear our INUSE bit}
+ *       atomicClearInt(&porttab[i].intrflags, PORT_INUSE_BY_INTR);
+ *     }
+ * 
+ *   the code is simpler than the urb protection case because there's only
+ *   one INUSE bit.
+ * 
+ * - unmap() calls deactivate_urb(), which does this if the port is
+ *   closing down:
+ * 
+ *   while (!compare_and_swap_int(&porttab[i].intrflags, PORT_ACTIVE, 0))
+ *     ; {spin}
+ * 
+ *   after this code segment, it is safe to deallocate the port's resources;
+ *   the interrupt is not touching the port and will not touch it again.
+ * 
+ * == protection for sioports between toplevel and non-toplevel routines
+ * 
+ * sio has its own spinlock built into each sioport * which is supposed
+ * to protect the members of that sioport.  this spinlock is manipulated
+ * by LOCK_PORT() and UNLOCK_PORT().  this lock is used to protect access
+ * to a given sioport not only within the upper and lower layer driver
+ * that owns the port, but also other drivers that are checking if they
+ * can grab the port.
+ * 
+ * we are almost 100% ok with the sio LOCK_PORT() mechanism, but there
+ * is one problem.  we explain that below.
+ * 
+ * - coordination between different upper layers
+ * 
+ * we use LOCK_PORT() in the intended manner from our toplevel routines
+ * when we attempt to seize control of a port in the sio system.
+ * 
+ * once we have seized control (by setting sio_callup with the port lock
+ * held), the most any other driver should ever do when it has the
+ * LOCK_PORT() lock held is check sio_callup, see that we own the port,
+ * and give up.
+ * 
+ * - coordination within a given upper layer
+ * 
+ * within our upper layer, there is no need to use the sio port lock
+ * for coordination.  instead we have a simple rule: an inactive port (a
+ * port with intrflags&PORT_ACTIVE==0) may only be accessed by toplevel
+ * calls, and an active port may only be accessed by the spl7 interrupt.
+ * since the toplevel calls are all single-threaded, and since the spl7
+ * interrupt is only on cpu 0, there is no need to use LOCK_PORT() for
+ * our own benefit.
+ * 
+ * - coordination within a given lower layer 
+ * 
+ * LOCK_PORT() is also used by lower layers to coordinate their
+ * activities.  an upper layer is supposed to make all downcalls with the
+ * LOCK_PORT() lock held, and a lower layer might call LOCK_PORT() while
+ * servicing its hardware interrupts.  in fact, many of the lower-layer
+ * downcalls have code sequences such as ASSERT(sio_port_islocked(port)).
+ * 
+ * in order not to break this usage, we honor this from our toplevel
+ * routines by acquiring the port lock before making any downcall.
+ * 
+ * - the problem:
+ * 
+ * then comes the problem.  we have an spl7 interrupt routine, but the
+ * sio LOCK_PORT() lock is at splhi.
+ * 
+ * it would be disastrous to call LOCK_PORT() from our spl7 interrupt,
+ * because:
+ * 
+ * a. our spl7 interrupt can interrupt code at splhi which has already
+ * acquired the spinlock.  if we were to call LOCK_PORT() at that time,
+ * we would spin forever on our CPU and hose the machine (see
+ * os/ksync/README).  
+ * 
+ * b. even if that problem could somehow be avoided, our call to
+ * LOCK_PORT() on CPU 0 would conceivably have to wait for a routine at
+ * splhi on another CPU.  therefore, calling LOCK_PORT() from the spl7
+ * interrupt introduces all of the multi-millisecond unreliabilities and
+ * holdoffs that forced us to move this functionality to spl7 in the
+ * first place!  this would defeat the most basic goal of this driver: to
+ * provide millisecond-accurate measurement and scheduling of serial
+ * bytes.
+ * 
+ * what can we do?  
+ * 
+ * for a DEBUG kernel, there is a saving grace.  the port lock is
+ * actually at spl7 because of some interactions with kdebug.  so for
+ * DEBUG, we can call LOCK_PORT() from the intr routine.
+ * 
+ * it would be an expedient but inadvisable idea to raise the port lock
+ * to spl7 for non-DEBUG kernels.  this would be overkill for other upper
+ * layers, and would lead to performance problems and the further spread
+ * of spl7 disease throughout the kernel.
+ * 
+ * one other idea would be to omit calls to LOCK_PORT()/UNLOCK_PORT() in
+ * our spl7 interrupt handler for non-DEBUG, on the grounds that:
+ * 
+ * a. the debugging checks in the lower-layer downcalls are compiled out
+ * 
+ * b. because our upper layer already has built-in coordination 
+ *    for access to the sioport between our toplevel and spl7
+ *    interrupt routines (see above), and because lower-layer
+ *    downcalls only execute as a result of upper-layer calls, 
+ *    we might conclude that it is impossible for two pieces
+ *    of lower-layer code to collide for a port which is
+ *    being managed by our driver.
+ * 
+ * but this analysis leaves out one factor: lower layers can also have
+ * interrupt handlers, both hardware interrupt handlers and timeout
+ * interrupt handlers.  even though our upper layer carefully excludes
+ * simultaneous toplevel and non-toplevel downcalls, these lower layer
+ * interrupt handlers execute in an uncoordinated fashion.  often these
+ * interrupt handlers will try to access the hardware atomically by
+ * acquiring the LOCK_PORT lock and doing PIOs.  if our spl7 routine
+ * preempts one of these lower-layer interrupt handlers in its critical
+ * section, then we will either spin forever (if we call LOCK_PORT) or
+ * misprogram the hardware (if we don't call LOCK_PORT).  damned if we
+ * do, damned if we don't.
+ * 
+ * ...or perhaps not.  here's where we can inject a little reality.
+ * 
+ * our upper layer is based on polling from the ground up.  we do not
+ * want or request notification for any events such as breaks, flow
+ * control line changes, or data timeouts from the lower layer.  when a
+ * port is active, all we want to do is come in every millisecond, do a
+ * little DOWN_READ() and DOWN_WRITE(), and get out.  if there are data
+ * errors, we want to determine that by polling too.
+ * 
+ * therefore, we should be able to arrange it so that lower-layer
+ * interrupts are not needed for our port, and are disabled.
+ * this requires a little more knowledge of what is going on in the lower
+ * layer than is currently codified in serialio.h, but would be by
+ * far the most efficient solution to this problem.  
+ * 
+ * another problem that is often brought up at this juncture is that some
+ * chips (such as the 8530) have one interrupt status register for more
+ * than one physical port, and this status register cannot be read in one
+ * atomic read.  so for a given port currently connected to our upper layer,
+ * the lower layer may need to access some registers of _our_ port in order
+ * to check which interrupts came in for some _other_ port which may not
+ * be connected to our upper layer.  the lower layer code may need to
+ * do this access to our port in an atomic manner relative to port
+ * accesses which go on from our spl7 interrupt.  although this is a 
+ * problem in theory, it has not been one in practice.  all of the
+ * platforms which have been coded to use the serialio structure do not
+ * have this problem, except for the platforms served by zduart.c,
+ * and on those SP platforms we have always had a simple workaround
+ * of surrounding hardware accesses with spl7/splx calls.  it looks like
+ * all future serial devices we are likely to choose will not be 
+ * "damaged" in the way the 8530 is.  the only place where we would
+ * have a problem is if someone decided to port mpzduart.c to the 
+ * serialio structure, and in that case we could do a simliar workaround
+ * with spinlocks.
+ * 
+ * so we must run this proposed solution by the current writers of lower
+ * layers, to make sure there exists a mode where we can access the
+ * hardware in the desired way.  one key thing to remember here is that
+ * for MIDI, deck control, and many other forms of timestamped serial
+ * I/O, we want EXACTLY the opposite kind of behavior as we do from
+ * high-bandwidth serial applications such as modems.  we want the lowest
+ * possible latency (=small FIFO filled counts) and don't care too much
+ * about data rate (we're talking a few thousand bytes per second tops).
+ * modem applications want the absolute maximum data rate and are willing
+ * to buffer serial bytes up into huge packets (=latency) in order to get
+ * it.  one thing which will be challenging is explaining this fact to
+ * writers of lower layers, who have been taught by past experience that
+ * bandwidth is everything!!
+ * 
+ * --
+ * 
+ * if we cannot work out a scheme where lower-layer interrupt handlers
+ * are unnecessary or cannot be disabled, then these are some
+ * alternatives:
+ * 
+ * a. raise LOCK_PORT() to spl7 all the time, or
+ * 
+ * b. modify LOCK_PORT(), so that it acquires the port spinlock at an spl
+ * which depends on the particular upper layer being used.  this could be
+ * somewhat cleanly implemented by adding an splfunc_t sio_level next to
+ * sio_lock in struct sioport, which the upper layer could set, and which
+ * LOCK_PORT() and TRYLOCK_PORT() would pass to mutex_spinlock_spl() when
+ * acquiring the lock.  the only difficulty here would be smoothly
+ * managing the transition from one sio_level to the next when the upper
+ * layer changes.
+ * 
+ * clearly, these alternatives would not be as efficient.
+ * 
+ * XXX for now, we are doing b.  this is not satisfying -- tcl and I are
+ * trying to work out a way to get the better performance.
+ * 
+ */
+#define URB_ACTIVE            0x01
+#define URB_INUSE_BY_INTR     0x10
+#define URB_INUSE_BY_TIMEPOKE 0x20
+
+#define PORT_ACTIVE            0x01
+#define PORT_INUSE_BY_INTR     0x10
+
+/* Mountaingate stuff - see below */
+typedef void (*callback_t)(int minor, stamp_t now); /* Mountaingate */
+sioport_t *mg_current_sioport = NULL; /* Mountaingate */
+
+/*
+  tsio upper layer data that hangs off each sioport.
+  each sioport represents one physical port (TX and RX).
+*/
+typedef struct tsio_upper 
+{ 
+  int allocated;                /* this entry of porttab is used */
+  int intrflags;                /* whether intr should look at this port */
+  sioport_t *port;              /* sio data structure for this port */
+  int port_minor_number;        /* sio minor number given for port in open() */
+  int n_urb_allocated;          /* number of urbs pointing here */
+  int n_urb_active;             /* number of active urbs pointing here */
+  tsio_comm_params_t commparams; /* baud, stop, parity, ... */
+  callback_t mg_callback;       /* Mountaingate callback - see below */
+} tsio_upper;
+
+/*
+   user ring buffer.  represents one serial port open in one direction.
+*/
+typedef struct urb
+{
+  int allocated;                /* this entry of urbtab is used */
+  int intrflags;                /* whether intr/poke should look at this rb */
+  int toplevel_state;           /* which entry point: TSIO_BETWEEN_* */
+  int direction;                /* TSIO_TOMIPS, TSIO_FROMMIPS */
+  
+  int portidx;                  /* index of port in porttab */
+
+  urbheader_t *header;          /* pointer to user-mapped header */
+  unsigned char *data;          /* pointer to user-mapped rb data */
+  stamp_t *stamps;              /* pointer to user-mapped rb timestamps */
+
+  int maplen;      /* total bytes malloced for a region which contains:
+                      1. sizeof(urbheader_t) bytes of header
+                      2. the user's entire data ring buffer + 1 guard byte
+                      3. any padding needed here
+                      4. the user's enture stamp ring buffer + 1 guard stamp
+                      5. padding out to a page size
+                      this is what is mapped into user's address space
+                    */
+
+  int nlocs;        /* Same value as in tsio_acquireurb_t */
+  int TXheadRXtail; /* our tail for TOMIPS, our head for FROMMIPS transfers */
+
+  int itail;        /* used internally by spl7 interrupt */
+  int ihead;        /* used internally by spl7 interrupt */
+
+  struct pollhead pq; /* poll queue (for select, poll) */
+  int wakeup; /* indication from spl7 intr to spl0 wake_rbs timeout */
+} urb;
+
+#define N_URB 16                /* max # of user rbs on all ports */
+
+urb urbtab[N_URB];   /* table of user rbs for all ports */
+int n_urb_active;    /* number of urb slots in urbtab which are ready */
+                     /* to be accessed in interrupt handler. */
+
+tsio_upper porttab[N_URB]; /* table of ports which tsio is managing */
+
+
+#ifdef MP
+
+mutex_t tsio_mutex; /* global mutex that makes entry points single-threaded */
+#define INIT_TSIO_LOCK()    mutex_init(&tsio_mutex, MUTEX_DEFAULT, "tsio")
+#define DESTROY_TSIO_LOCK() mutex_destroy(&tsio_mutex)
+#define LOCK_TSIO()         mutex_lock(&tsio_mutex, 0)
+#define UNLOCK_TSIO()       mutex_unlock(&tsio_mutex)
+
+#else
+
+#define INIT_TSIO_LOCK()
+#define DESTROY_TSIO_LOCK()
+#define LOCK_TSIO()
+#define UNLOCK_TSIO()
+
+#endif
+
+/* Mountaingate functions ---------------------------------------------- */
+
+/* called when a portidx struct is being allocated */
+static void mg_clearout_port(int portidx)
+{
+  tsio_upper *upper = &porttab[portidx];
+  upper->mg_callback = NULL;
+}
+
+/* see Mountaingate proposal.  these functions assume tons of
+ * stuff, like that they're running at <=38400 baud on an O2 
+ * with certain OS software with a special driver that calls
+ * these after their user-mode code sets up a TSport, etc.
+ */
+void tsio_register_callback(int minor, callback_t funcptr)
+{
+  sioport_t *port;
+  tsio_upper *upper;
+  
+  /* function skips TSIO_ locks due to assumptions */
+  
+  port = sio_getport(minor);
+  
+  if (NULL == port)
+    return;
+
+  LOCK_PORT(port);
+
+  if (NULL == port->sio_upper)
+    {
+      UNLOCK_PORT(port);
+      return;
+    }
+
+  if (port->sio_callup != &tsio_callup)
+    {
+      UNLOCK_PORT(port);
+      return;
+    }
+
+  upper = (tsio_upper *)(port->sio_upper);
+  
+  upper->mg_callback = funcptr;
+  
+  UNLOCK_PORT(port);
+}
+
+static void mg_handle_port(int portidx, stamp_t now)
+{
+  tsio_upper *upper = &porttab[portidx];
+  sioport_t *port = upper->port;
+  
+  mg_current_sioport = port;
+  
+  /* this handler will call tsio_uart_{read,write} */
+  (*upper->mg_callback)(upper->port_minor_number, now);
+
+  mg_current_sioport = NULL;
+}
+
+int tsio_uart_read(unsigned char *buf, int atmost)
+{
+  int nrxbytes = 0;
+  int nread;
+  ASSERT(issplprof(getsr()));
+  ASSERT(mg_current_sioport);
+  ASSERT(!sio_port_islocked(mg_current_sioport));
+  LOCK_PORT(mg_current_sioport);
+  ASSERT(sio_port_islocked(mg_current_sioport));
+  /* XXX what does <0 return mean?  do we have to handle that? */
+  while (nrxbytes < atmost &&
+         (nread = DOWN_READ(mg_current_sioport,
+                            buf + nrxbytes,
+                            atmost - nrxbytes)) > 0)
+    nrxbytes += nread;
+  UNLOCK_PORT(mg_current_sioport);
+  return nrxbytes;
+}
+
+int tsio_uart_write(unsigned char *buf, int atmost)
+{
+  int rc;
+  ASSERT(issplprof(getsr()));
+  ASSERT(mg_current_sioport);
+  ASSERT(!sio_port_islocked(mg_current_sioport));
+  LOCK_PORT(mg_current_sioport);
+  ASSERT(sio_port_islocked(mg_current_sioport));
+  /* XXX do we have to handle negative return value? what is it? */
+  rc = DOWN_WRITE(mg_current_sioport, buf, atmost);
+  UNLOCK_PORT(mg_current_sioport);
+  return rc;
+}
+
+/* 1 millisecond interrupt function ------------------------------------ */
+
+stamp_t get_current_ust(void)
+{
+  int was_splprof = issplprof(getsr());
+  int s;
+  stamp_t ust;
+
+  if (!was_splprof)
+    s = splprof();
+  
+  update_ust();
+  get_ust_nano((unsigned long long *)(&ust));
+  
+  if (!was_splprof)
+    splx(s);
+
+  return ust;
+}
+
+/* see use of dotimeout() in spl7 interrupt function */
+int already_poked = 0;
+
+#ifdef DEBUG
+#define CHECK
+#else
+#undef CHECK
+#endif
+
+#ifdef CHECK
+#define TIMEPOKE_ENTERED 0xb00f
+int tsio_timepoke_mutex = 0;
+#endif
+
+void
+tsio_timepoke_to_wake_rbs()
+{
+  int urbidx;
+
+  /* there is a minor race between us and the intr.  when a urb needs to be
+   * woken up, the intr routine schedules a timepoke to this routine.
+   * before calling dotimeout(), the intr routine checks already_poked to
+   * make sure a poke is not already pending for an earlier wakeup.
+   * that way, wakeups on multiple urbs can be coalesced into one execution
+   * of this routine.  as soon as we set already_poked to 0, the intr routine
+   * can again schedule a timepoke.  this other timepoke, if it is serviced
+   * very quickly (unlikely but possible), could even overlap us!  two of these
+   * routines executing simultaneously would do Bad Things.
+   *
+   * this simple spl guards against this unlikely possibility on SP.
+   * XXX this will have to be a spinlock on MP (or hopefully sleeping lock)
+   * XXX or it could be a compare_and_swap+return plus a while loop;
+   *     this would be better for both SP and MP, but more complicated
+   *
+   * we cannot solve this problem by moving "already_poked = 0" to below the
+   * for loop.  if we did this, then there would be cases where the timepoke
+   * routine actually MISSED wakeups, because the intr routine could set the
+   * wakeup flag on a urb which we have already passed over, and it would not
+   * schedule another timepoke because already_poked==1.
+   */
+  int s = spl1(); /* block off overlapping timepokes till we're done */
+
+#ifdef CHECK
+  if (tsio_timepoke_mutex != 0)
+    {
+      printf("note: tsio_timepoke_to_wake_rbs re-entered\n");
+      return;
+    }
+  tsio_timepoke_mutex = TIMEPOKE_ENTERED;
+#endif
+
+  /* make it so spl7 intr routine can now schedule another poke */
+  already_poked = 0;
+
+  for (urbidx=0; urbidx < N_URB; urbidx++)
+    {
+      urb *urb = &urbtab[urbidx];
+      
+      /* PEEK: see comment in see_if_intr_should_use_urb() */
+      if (!urb->wakeup)
+        continue;
+
+      /* try and access this urb.  see comments at the top of this file
+       * for explanation.
+       *
+       * XXX we could ifdef compare_and_swap_int out completely for SP
+       */
+      while (urb->intrflags & URB_ACTIVE)
+        {
+          int other = (urb->intrflags & URB_INUSE_BY_INTR);
+          ASSERT(!(urb->intrflags & URB_INUSE_BY_TIMEPOKE));
+          if (compare_and_swap_int(&urb->intrflags,
+                                   other | URB_ACTIVE,
+                                   other | URB_ACTIVE | URB_INUSE_BY_TIMEPOKE))
+            {
+              /* the ACTIVE bit was set, and now we have set our INUSE bit */
+              /* it's safe to use the urb until we clear our INUSE bit */
+              
+              ASSERT(urb->allocated);
+              
+              if (urb->wakeup)
+                {
+                  /*
+                   * XXX all the man pages say never to wakeup on more than
+                   * one event at the same time.  but then again all 6-10 
+                   * drivers in irix/kern which have xxxxpoll() actually 
+                   * do this, so...
+                   */
+                  urb->wakeup = 0;
+                  pollwakeup(&urb->pq, POLLIN|POLLOUT|POLLRDNORM);
+                }
+              
+              /* clear our INUSE bit */
+              /* XXX we could ifdef this assign out completely for SP */
+              atomicClearInt(&urb->intrflags, URB_INUSE_BY_TIMEPOKE);
+
+              break;
+            }
+        }
+    }
+  
+#ifdef CHECK
+  tsio_timepoke_mutex = 0;
+#endif
+
+  splx(s);
+}
+
+void intr_is_done_using_urb(urb *urb);
+/*
+ * spl7 intr calls this to try and gain access to a urb.
+ * if we return 0, the urb was uninteresting and the intr routine should
+ *                 not access it (and should not call intr_is_done_using_urb)
+ * if we return 1, the urb was interesting and has been marked inuse.
+ *                 the intr routine should access it, then call
+ *                 intr_is_done_using_urb() to indicate that it's done.
+ */
+int see_if_intr_should_use_urb(urb *urb, int portidx, int direction)
+{
+  /* PEEK: make sure it's worth even trying to set our INUSE bit.
+   * this test is just an optimization to avoid doing the 
+   * compare_and_swap_int if we don't have to.  the values we peek at 
+   * can change if this urb is just now being set up or torn down, 
+   * so we'll have to test them again later, but this test will never 
+   * cause us to skip a urb that we should not have skipped.
+   */
+  if (urb->portidx != portidx ||
+      urb->direction != direction)
+    return 0;
+
+  /* try and access this urb.  see comments at the top of this file
+   * for explanation.
+   *
+   * XXX we could ifdef compare_and_swap_int out completely for SP
+   */
+  while (urb->intrflags & URB_ACTIVE)
+    {
+      int other = (urb->intrflags & URB_INUSE_BY_TIMEPOKE);
+      ASSERT(!(urb->intrflags & URB_INUSE_BY_INTR));
+      if (compare_and_swap_int(&urb->intrflags,
+                               other | URB_ACTIVE,
+                               other | URB_ACTIVE | URB_INUSE_BY_INTR))
+        {
+          /* the ACTIVE bit was set, and now we have set our INUSE bit */
+          /* it's safe to use the urb until we clear our INUSE bit */
+
+          ASSERT(urb->allocated);
+          
+          if (urb->portidx != portidx ||
+              urb->direction != direction)
+            {
+              intr_is_done_using_urb(urb);
+              return 0;
+            }
+          
+          return 1;
+        }
+    }
+  return 0;
+}
+int intr_currently_using_urb(urb *urb)
+{
+  return urb->intrflags & URB_INUSE_BY_INTR;
+}
+void intr_is_done_using_urb(urb *urb)
+{
+  /* clear our INUSE bit */
+  /* XXX we could ifdef atomicClearInt out completely for SP */
+  atomicClearInt(&urb->intrflags, URB_INUSE_BY_INTR);
+}
+
+/* bytes per millisecond that we handle in this routine.  128 means we
+ * can't handle more than 128,000 bytes a second, which is pretty 
+ * reasonable (that's 1,152,000baud at 9 symbols/byte).  this is used
+ * for input because we need to know how big of an array to make,
+ * and it's used for input and output in order to bound the amount of
+ * CPU time this routine can eat up.
+ */
+#define MAX_BYTES_PER_TICK 128
+
+void tsio_handle_port(int portidx, stamp_t now)
+{
+  tsio_upper *upper = &porttab[portidx];
+  sioport_t *port = upper->port;
+  int need_timepoke = 0;
+  int urbidx, i;
+
+  int n_tx_urbs = 0;
+  int last_tx_urb = -1; /* optimization for non-MIDI case */
+
+  int n_rx_urbs = 0;
+  unsigned char rxbytes[MAX_BYTES_PER_TICK];
+  int nrxbytes;
+
+  ASSERT(port);
+  
+  /* ==== iterate through TX/TSIO_FROMMIPS/output urb's on this port */
+  /*      acquire access to as many urbs as we can                   */
+  /*      get head/tail snapshots for those urbs                     */
+
+  for (urbidx=0; urbidx < N_URB; urbidx++)
+    {
+      urb *urb = &urbtab[urbidx];
+
+      if (see_if_intr_should_use_urb(urb, portidx, TSIO_FROMMIPS) == 0)
+        continue;
+
+      n_tx_urbs++;
+      last_tx_urb = urbidx;
+
+      /* get our (protected copy of) head */
+      
+      urb->ihead = urb->TXheadRXtail;
+      
+      /* get an uncorrupted snapshot of user tail */
+      {
+        urb->itail = ((volatile urbheader_t *)urb->header)->tail;
+        
+        /* check if user has corrupted header tail value */
+        if (urb->itail < 0 || urb->itail >= urb->nlocs) 
+          {
+            cmn_err(CE_WARN, "tsio intr: port %d user rb tail is corrupted\n", 
+                    upper->port_minor_number);
+            /*
+             * we forcibly set the user's tail to indicate that the
+             * buffer is empty; putting tail back into a valid state
+             * helps to prevent hundreds of identical cmn_err's from
+             * spewing out on the console.
+             *
+             * XXX is this likely to be good strategy on MP?
+             */
+            urb->itail = urb->ihead; /* assume buf is empty */
+            ((volatile urbheader_t *)urb->header)->tail = urb->itail;
+          }
+      }
+
+#ifdef DEBUG      
+      /* debugging */
+      if (upper->commparams.flags & TSIO_FLAGS_INTR_DEBUG)
+        {
+          static stamp_t then=0;
+          if (now - then > 1000000000LL)
+            {
+              printf("%lld: head %d tail %d headstamp %lld headdata %d\n",
+                     now, urb->ihead, urb->itail, 
+                     urb->stamps[urb->ihead], urb->data[urb->ihead]);
+              then = now;
+            }
+        }
+#endif
+    }
+      
+  /* ==== perform actual TX on hardware                        */
+  /*      adjust each urb->ihead, limited by each urb->itail */
+
+  if (n_tx_urbs > 0)
+    {
+      int n;
+      urb *urb;
+
+      ASSERT(n_tx_urbs == 1); /* WE DON'T DO MIDI NOW! */
+      ASSERT(last_tx_urb >= 0 && last_tx_urb < N_URB);
+      urb = &urbtab[last_tx_urb];
+      
+      LOCK_PORT(port); /* XXX see comment TOF for issue */
+
+      /* transfer any and all appropriate urb data */
+      n = 0;
+      while (n < MAX_BYTES_PER_TICK &&
+             urb->ihead != urb->itail &&
+             urb->stamps[urb->ihead] <= now)
+        {
+          unsigned char c = urb->data[urb->ihead];
+          
+          /* XXX do we have to handle negative return value? what is it? */
+          if (DOWN_WRITE(port, &c, 1) != 1)
+            break; /* hardware FIFO is full */
+          
+#ifdef DEBUG
+          if (upper->commparams.flags & TSIO_FLAGS_TX_DEBUG)
+            {
+              UNLOCK_PORT(port); /* XXX see comment TOF for issue */
+              printf("[%d]", c); /* debugging */
+              LOCK_PORT(port); /* XXX see comment TOF for issue */
+            }
+#endif
+              
+          urb->ihead++;
+          if (urb->ihead >= urb->nlocs) urb->ihead -= urb->nlocs;
+          n++;
+        }
+
+      UNLOCK_PORT(port); /* XXX see comment TOF for issue */
+    }
+      
+  /* ==== iterate through TX/TSIO_FROMMIPS/output urb's on this port */
+  /*      update heads, deal with wakeups                            */
+  /*      release urbs since we are now done with them               */
+
+  for (urbidx=0; urbidx < N_URB; urbidx++)
+    {
+      urb *urb = &urbtab[urbidx];
+
+      if (!intr_currently_using_urb(urb))
+        continue;
+
+      if (urb->ihead != urb->TXheadRXtail) /* did head change? */
+        {
+          /* update head of user's rb.  This is stored in TWO places: */
+          urb->TXheadRXtail = urb->ihead; /* FROMMIPS: head */
+          *((volatile int *)&(((urbheader_t *)urb->header)->head)) = 
+            urb->ihead;
+        }
+
+#ifdef DEBUG
+      /* debugging */
+      if (upper->commparams.flags & TSIO_FLAGS_INTR_DEBUG)
+        {
+          static stamp_t then=0;
+          
+          if (now - then > 1000000000LL)
+            {
+              int n_filled = urb->itail - urb->ihead;
+              if (n_filled < 0) n_filled += urb->nlocs;
+              printf("%lld: intreq %d, fillpt %lld, filled %d\n",
+                     now,
+                     ((volatile urbheader_t *)urb->header)->intreq,
+                     ((volatile urbheader_t *)urb->header)->fillpt,
+                     n_filled);
+              then = now;
+            }
+        }
+#endif
+      
+      /* wakeup user mode app if requested and nfilled < fillpt */
+      if (((volatile urbheader_t *)urb->header)->intreq)
+        {
+          int fillunits = ((volatile urbheader_t *)urb->header)->fillunits;
+          
+          /* compute # of bytes filled */
+          
+          stamp_t n_filled = urb->itail - urb->ihead;
+          if (n_filled < 0) n_filled += urb->nlocs;
+          
+          if (fillunits == TSIO_FILLUNITS_UST) /* make it UST instead */
+            {
+              if (n_filled != 0) /* if there are some UST stamps on q */
+                n_filled = urb->stamps[urb->itail] - now;
+              /* else n_filled = 0 UST also! */
+            }
+          
+          if (n_filled < ((volatile urbheader_t *)urb->header)->fillpt)
+            {
+              ((volatile urbheader_t *)urb->header)->intreq = 0;
+              /* we will perform actual pollwakeup() from lower spl */
+              urb->wakeup = 1;
+              need_timepoke = 1;
+            }
+        }
+      
+      intr_is_done_using_urb(urb);
+    }
+
+  /* ==== iterate through RX/TSIO_TOMIPS/input urb's on this port    */
+  /*      acquire access to as many urbs as we can                   */
+  /*      get head/tail snapshots for those urbs                     */
+  
+  for (urbidx=0; urbidx < N_URB; urbidx++)
+    {
+      urb *urb = &urbtab[urbidx];
+
+      if (see_if_intr_should_use_urb(urb, portidx, TSIO_TOMIPS) == 0)
+        continue;
+
+      n_rx_urbs++;
+
+      /* get our (protected copy of) tail */
+      
+      urb->itail = urb->TXheadRXtail;
+      
+      /* get an uncorrupted snapshot of user head */
+      {
+        urb->ihead = ((volatile urbheader_t *)urb->header)->head;
+        
+        /* check if user has corrupted header head value */
+        if (urb->ihead < 0 || urb->ihead >= urb->nlocs) 
+          {
+            cmn_err(CE_WARN, "tsio intr: port %d user rb head is corrupted\n",
+                    upper->port_minor_number);
+            /*
+             * we forcibly set the user's head to indicate that the
+             * buffer is full; putting head back into a valid state
+             * helps to prevent hundreds of identical cmn_err's from
+             * spewing out on the console.
+             *
+             * XXX is this likely to be good strategy on MP?
+             */
+            urb->ihead = urb->itail+1; /* assume buf is full */
+            if (urb->ihead >= urb->nlocs) urb->ihead -= urb->nlocs; /* wrap */
+            ((volatile urbheader_t *)urb->header)->head = urb->ihead;
+          }
+      }
+
+#ifdef DEBUG      
+      /* debugging */
+      if (upper->commparams.flags & TSIO_FLAGS_INTR_DEBUG)
+        {
+          static stamp_t then=0;
+          if (now - then > 1000000000LL)
+            {
+              printf("%lld: head %d tail %d tailstamp %lld taildata %d\n",
+                     now, urb->ihead, urb->itail, 
+                     urb->stamps[urb->itail], urb->data[urb->itail]);
+              then = now;
+            }
+        }
+#endif
+    }
+
+  /* ==== perform actual RX on hardware */
+
+  if (n_rx_urbs > 0)
+    {
+      int nread;
+      
+      /* get actual input data -> rxbytes */
+      
+      /* XXX must handle line and hardware errors--
+         annoyingly, this involves callback in current scheme */
+      /* XXX what does <0 return mean?  do we have to handle that? */
+      
+      LOCK_PORT(port); /* XXX see comment TOF for issue */
+
+      nrxbytes = 0;
+      while (nrxbytes < MAX_BYTES_PER_TICK &&
+             (nread = DOWN_READ(port,
+                                rxbytes + nrxbytes,
+                                MAX_BYTES_PER_TICK - nrxbytes)) > 0)
+        nrxbytes += nread;
+
+      UNLOCK_PORT(port); /* XXX see comment TOF for issue */
+    }
+
+  /* ==== iterate through RX/TSIO_TOMIPS/input urb's on this port    */
+  /*      update tails, deal with wakeups                            */
+  /*      release urbs                                               */
+
+  for (urbidx=0; urbidx < N_URB; urbidx++)
+    {
+      urb *urb = &urbtab[urbidx];
+
+      if (!intr_currently_using_urb(urb))
+        continue;
+
+      /* transfer all available data into urb */
+      for(i=0; i < nrxbytes; i++)
+        {
+          int n_fillable = urb->ihead - urb->itail - 1;
+          if (n_fillable < 0) n_fillable += urb->nlocs; /* wrap */
+          
+          if (n_fillable == 0) /* user buffer overflow; too bad, u lose */
+            break;
+          
+          urb->data[urb->itail] = rxbytes[i];
+          urb->stamps[urb->itail] = now;
+          
+          urb->itail++;
+          if (urb->itail >= urb->nlocs) urb->itail -= urb->nlocs;
+        }
+      
+      if (urb->itail != urb->TXheadRXtail) /* did tail change? */
+        {
+          /* update tail of user's rb.  This is stored in TWO places: */
+          urb->TXheadRXtail = urb->itail; /* FROMMIPS: tail */
+          *((volatile int *)&(((urbheader_t *)urb->header)->tail)) = 
+            urb->itail;
+        }
+
+#if 0      
+      /* debugging */
+      if (upper->commparams.flags & TSIO_FLAGS_INTR_DEBUG)
+        {
+          static stamp_t then=0;
+          
+          if (now - then > 1000000000LL)
+            {
+              int n_filled = urb->itail - urb->ihead;
+              if (n_filled < 0) n_filled += urb->nlocs;
+              printf("%lld: intreq %d, fillpt %lld, filled %d\n",
+                     now,
+                     ((volatile urbheader_t *)urb->header)->intreq,
+                     ((volatile urbheader_t *)urb->header)->fillpt,
+                     n_filled);
+              then = now;
+            }
+        }
+#endif
+      
+      /* wakeup user mode app if requested and nfilled >= fillpt */
+      if (((volatile urbheader_t *)urb->header)->intreq)
+        {
+          int fillunits = ((volatile urbheader_t *)urb->header)->fillunits;
+          
+          /* compute # of bytes filled */
+          
+          stamp_t n_filled = urb->itail - urb->ihead;
+          if (n_filled < 0) n_filled += urb->nlocs;
+          
+          if (fillunits == TSIO_FILLUNITS_UST) /* make it UST instead */
+            {
+              if (n_filled != 0) /* if there are some UST stamps on q */
+                n_filled = now - urb->stamps[urb->ihead];
+              /* else n_filled = 0 UST also! */
+            }
+          
+          if (n_filled >= ((volatile urbheader_t *)urb->header)->fillpt)
+            {
+              ((volatile urbheader_t *)urb->header)->intreq = 0;
+              /* we will perform actual pollwakeup() from lower spl */
+              urb->wakeup = 1;
+              need_timepoke = 1;
+            }
+        }
+      
+      intr_is_done_using_urb(urb);
+    }
+
+  /* ==== schedule timepoke if necessary */
+
+  /* if this spl7 routine needs to wakeup any processes with pollwakeup(),
+   * it will set need_timepoke, which schedules an spl0 timeout for now
+   * and performs the actual operation at a lower spl.
+   *
+   * already_poked exists to make sure that we don't schedule multiple
+   * timeouts before one is serviced.
+   */
+  if (need_timepoke && !already_poked)
+    {
+      va_list ap;
+      already_poked = 1;
+      va_start(ap,already_poked); /* give it a dummy arg */
+      dotimeout(cpuid(), tsio_timepoke_to_wake_rbs, 
+                0, TIMEPOKE_NOW, spl0, C_NORM, ap);
+      va_end(ap);
+    }
+}
+
+void
+tsio_tick(void *arg)
+{
+  stamp_t now = get_current_ust();
+  int portidx;
+
+#if 0
+#error This code does not work if DEBUG is not defined, due to
+#error the spl of the sio port lock.
+<CHOKE>
+#endif
+
+  for(portidx=0;  portidx < N_URB;  portidx++)
+    {
+      /* try and access this port.  see comments at the top of this file
+       * for explanation.
+       *
+       * XXX we could ifdef compare_and_swap_int out completely for SP
+       */
+      if (compare_and_swap_int(&porttab[portidx].intrflags, 
+                               PORT_ACTIVE, 
+                               PORT_ACTIVE|PORT_INUSE_BY_INTR))
+        {
+          if (porttab[portidx].mg_callback) /* Mountaingate */
+            mg_handle_port(portidx, now); /* Mountaingate */
+          else
+            tsio_handle_port(portidx, now);
+
+          /* now release this port */
+          /* XXX we could ifdef atomicClearInt out completely for SP */
+          atomicClearInt(&porttab[portidx].intrflags, PORT_INUSE_BY_INTR);
+        }
+    }
+}
+
+void
+start_tsio_ticks(void)
+{
+  midi_timercallback_ptr = (void (*)(void))tsio_tick;
+  atomicSetUint(&fastick_callback_required_flags,
+                FASTICK_CALLBACK_REQUIRED_MIDI_MASK);
+  if (!fastclock)
+    enable_fastclock();
+}
+
+void
+stop_tsio_ticks(void)
+{
+  atomicClearUint(&fastick_callback_required_flags,
+                  FASTICK_CALLBACK_REQUIRED_MIDI_MASK);
+  midi_timercallback_ptr = NULL;
+}
+
+/* urb activate/deactivate ----------------------------------------------- */
+
+static int tsio_getbytesize(tcflag_t cflag)
+{
+  int byte_size = 8;
+
+  /* set number of data bits */
+  switch (cflag & CSIZE) 
+    {
+    case CS5:
+      byte_size = 5;
+      break;
+    case CS6:
+      byte_size = 6;
+      break;
+    case CS7:
+      byte_size = 7;
+      break;
+    case CS8:
+      byte_size = 8;
+      break;
+    }
+
+  return byte_size;
+}
+
+int
+activate_urb(urb *urb)
+{
+  sioport_t *port;
+  tsio_upper *upper;
+
+  upper = &porttab[urb->portidx];
+  ASSERT(urb->portidx >= 0 && urb->portidx < N_URB);
+  port = upper->port;
+  ASSERT(port);
+
+  /* see if we're the first urb on this port */
+
+  if (upper->n_urb_active == 0)
+    {
+      /* yup -- initialize port */
+
+      LOCK_PORT(port);
+  
+      if (DOWN_OPEN(port)) 
+        { UNLOCK_PORT(port); return ENODEV; }
+      
+      if (DOWN_ENABLE_HFC(port, 0)) 
+        { UNLOCK_PORT(port); return ENODEV; }
+      
+      if (DOWN_NOTIFICATION(port, N_ALL, 0)) 
+        { UNLOCK_PORT(port); return ENODEV; }
+      
+      /* XXX assume RX_TIMEOUT off by default: accurate? */
+      /* if not, how do you set it off? does 0 mean off? */
+      
+      if (DOWN_SET_PROTOCOL(port, 
+                            (upper->commparams.flags & TSIO_FLAGS_RS422) ?
+                            PROTO_RS422 : PROTO_RS232))
+        { UNLOCK_PORT(port); return ENODEV; }
+        
+      if (DOWN_SET_EXTCLK(port, upper->commparams.extclock_factor))
+        { UNLOCK_PORT(port); return ENODEV; }
+      
+      if (DOWN_CONFIG(port, 
+                      upper->commparams.ospeed, 
+                      tsio_getbytesize(upper->commparams.cflag),
+                      upper->commparams.cflag & CSTOPB,
+                      upper->commparams.cflag & PARENB,
+                      upper->commparams.cflag & PARODD))
+        { UNLOCK_PORT(port); return ENODEV; }
+
+      if (DOWN_SET_DTR(port, 1))
+        { UNLOCK_PORT(port); return ENODEV; }
+      
+      if (DOWN_SET_RTS(port, 1))
+        { UNLOCK_PORT(port); return ENODEV; }
+
+      /* clear out RX bytes -- very important because intr routine
+       * relies on constantly small hw FIFO sizes if UST stamps
+       * are to be accurate.  ignore any errors.
+       */
+      {
+        char buf[16];
+        while(DOWN_READ(port, buf, sizeof(buf)) > 0);
+      }
+      /* XXX should also force drain of TX bytes in activate, 
+       * same reason -- does h/w and sio let us detect this?
+       * does it let us know how long to sleep for to drain h/w?
+       */
+
+      /* XXX neither drain code works if external clocking and there
+       * is no clock.  must set internal clock while draining.
+       */
+      UNLOCK_PORT(port);
+
+      ASSERT(upper->intrflags == 0);
+      upper->intrflags = PORT_ACTIVE; /* this is what intr looks at */
+    }
+
+  ASSERT(n_urb_active > 0 || urb->intrflags == 0);
+  urb->intrflags = URB_ACTIVE; /* this is what intr/timepoke look at */
+
+  /* if this is the first user rb for any port, start interrupts */
+  if (n_urb_active == 0)
+    start_tsio_ticks();
+
+  /* some bookkeeping.  neither intr nor timepoke look at these */
+  n_urb_active++;
+  upper->n_urb_active++;
+  
+  return 0;
+}
+
+void deactivate_urb(urb *urb)
+{
+  sioport_t *port;
+  tsio_upper *upper;
+
+  upper = &porttab[urb->portidx];
+  ASSERT(urb->portidx >= 0 && urb->portidx < N_URB);
+  port = upper->port;
+  ASSERT(port);
+
+  /* some bookkeeping.  neither intr nor timepoke look at these */
+  upper->n_urb_active--;
+  n_urb_active--;
+
+  /* if this is the last user rb for any port, stop interrupts */
+  if (n_urb_active == 0)
+    stop_tsio_ticks();
+
+  /* deactivate this urb.  see comments at the top of this file
+   * for explanation.
+   *
+   * XXX we could ifdef this compare_and_swap_int to just an assign for SP
+   */
+  ASSERT(urb->intrflags & URB_ACTIVE);
+  while (!compare_and_swap_int(&urb->intrflags, URB_ACTIVE, 0))
+    ; /* spin */
+  ASSERT(urb->intrflags == 0);
+
+  /* now it is safe to deallocate the urb's resources; the interrupt/timepoke
+   * will not touch the urb any more (and are not touching it now)
+   */
+
+  /* see if we were the last urb on this port */
+
+  ASSERT(upper->intrflags & PORT_ACTIVE);
+  if (upper->n_urb_active == 0)
+    {
+      /* XXX may want to flush TX/RX queues of hardware here to be nice
+       * to next guy.
+       */
+
+      /* deactivate this port.  see comments at the top of this file
+       * for explanation.
+       *
+       * XXX we could ifdef this compare_and_swap_int to just an assign for SP
+       */
+      while (!compare_and_swap_int(&upper->intrflags, PORT_ACTIVE, 0))
+        ; /* spin */
+      ASSERT(upper->intrflags == 0);
+      
+      /* now it is safe to deallocate the port's resources; the interrupt
+       * will not touch the port any more (and is not touching it now)
+       */
+    }
+}
+
+/* serialio fun --------------------------------------------------------- */
+
+void tsio_data_ready(sioport_t *port)
+{ cmn_err(CE_WARN, "tsio: spurious data_ready upcall"); }
+void tsio_output_lowat(sioport_t *port)
+{ cmn_err(CE_WARN, "tsio: spurious output_lowat upcall"); }
+void tsio_ncs(sioport_t *port, int ncs)
+{ cmn_err(CE_WARN, "tsio: spurious ncs upcall"); }
+void tsio_dDCD(sioport_t *port, int dcd)
+{ cmn_err(CE_WARN, "tsio: spurious dDCD upcall"); }
+void tsio_dCTS(sioport_t *port, int cts)
+{ cmn_err(CE_WARN, "tsio: spurious dCTS upcall"); }
+void tsio_detach(sioport_t *port)
+{ cmn_err(CE_WARN, "tsio: spurious detach upcall"); }
+
+static struct serial_callup tsio_callup = 
+{
+  tsio_data_ready,
+  tsio_output_lowat,
+  tsio_ncs,
+  tsio_dDCD,
+  tsio_dCTS,
+  tsio_detach
+};
+
+/* driver init ----------------------------------------------------------- */
+
+void
+tsioinit()
+{
+  int urbidx;
+#ifdef DEBUG
+  printf("tsioinit\n");
+#endif
+  INIT_TSIO_LOCK();
+  for (urbidx=0; urbidx < N_URB; urbidx++)
+    initpollhead(&urbtab[urbidx].pq);
+}
+
+/* driver unload --------------------------------------------------------- */
+
+void
+tsiounload()
+{
+#ifdef DEBUG
+  printf("tsiounload\n");
+#endif
+  /* XXX check for open fd's and close the various resources */
+  DESTROY_TSIO_LOCK();
+}
+
+/* driver open and close ------------------------------------------------- */
+
+#undef PRINTF_ON_MINOR_DEVICE_EVENT
+
+int
+tsioopen(dev_t *dev, int oflag, int otyp, cred_t *crp) 
+{
+  int m, i;
+  sioport_t *port;
+  int first_free_portidx, portidx;
+  int urbidx;
+
+  LOCK_TSIO();
+
+  m=getminor(*dev);
+#ifdef DEBUG
+#ifdef PRINTF_ON_MINOR_DEVICE_EVENT
+  printf("tsioopen m=%d\n", m);
+#endif
+#endif
+
+  /* minor number on input to open() serves as serial port number */
+
+  /* XXX do we need to exclude keyboard and mouse on any system? */
+      
+  if (NULL == (port = sio_getport(m)))
+    {
+      UNLOCK_TSIO();
+      return ENODEV;
+    }
+
+  /* Try to find a free urb */
+  
+  urbidx = -1;
+  for(i=0; i < N_URB; i++) 
+    {
+      if (urbtab[i].allocated == 0)
+        {
+          urbidx = i;
+          break;
+        }
+    }
+  if (urbidx == -1) /* no free urbs */
+    {
+      UNLOCK_TSIO();
+      return ENODEV;
+    }
+
+  /* see if this serial port is already opened by tsio via another urb */
+  /* otherwise find a free entry in porttab. */
+
+  first_free_portidx = -1;
+  for(i=0; i < N_URB; i++)
+    {
+      if (porttab[i].allocated == 0)
+        {
+          if (first_free_portidx == -1) first_free_portidx = i;
+        }
+      else if (porttab[i].port == port)
+        break;
+    }
+  if (i < N_URB) /* found already-opened port -- modify porttab[i] */
+    {
+      portidx = i;
+      ASSERT(portidx >= 0 && portidx < N_URB);
+      porttab[portidx].n_urb_allocated++;
+      ASSERT(porttab[portidx].port_minor_number == m); /* sanity check */
+      ASSERT(port->sio_callup == &tsio_callup); /* we better own the port */
+      ASSERT(port->sio_upper == &porttab[portidx]); /* ditto */
+    }
+  else /* nope--grab port and allocate a new entry in porttab */
+    {
+      if (first_free_portidx < 0) /* no free entries in porttab */
+        {
+          UNLOCK_TSIO();
+          return ENODEV;
+        }
+      portidx = first_free_portidx;
+      ASSERT(portidx >= 0 && portidx < N_URB);
+
+      /* 
+       * PEEK: make sure this port isn't owned by another upper layer.
+       * This test is an optimization to avoid acquiring the spinlock
+       * if we don't have to.  if and when we lock, we'll check again.
+       *
+       * XXX need to look at through volatile pointer?
+       */
+      if (port->sio_callup != NULL)
+        { 
+          ASSERT(port->sio_callup != &tsio_callup);
+          UNLOCK_TSIO();
+          return EBUSY;
+        }
+      
+      LOCK_PORT(port);
+
+      /* if it's not in porttab, we shouldn't own it */
+      /* it could be owned by nobody or another upper layer */
+      ASSERT(port->sio_callup == NULL ||
+             port->sio_callup != &tsio_callup);
+
+      /* make sure this port isn't owned by another upper layer */
+      /* XXX need to look at through volatile pointer ?? */
+      if (port->sio_callup != NULL)
+        { 
+          UNLOCK_PORT(port);
+          UNLOCK_TSIO();
+          return EBUSY;
+        }
+      
+      /* grab the port for ourselves.  this locks out other drivers */
+
+      port->sio_callup = &tsio_callup;
+      port->sio_upper = &porttab[portidx];
+      port->sio_lock_spl = spl7; /* we need spl7 lock, unfortunately */
+
+      porttab[portidx].intrflags = 0; /* just in case */
+      porttab[portidx].allocated = 1;
+      porttab[portidx].port = port;
+      porttab[portidx].port_minor_number = m;
+      porttab[portidx].n_urb_allocated = 1;
+      porttab[portidx].n_urb_active = 0;
+      mg_clearout_port(portidx); /* Mountaingate */
+
+      UNLOCK_PORT(port);
+    }
+
+  /* ok, all the port stuff went well, now allocate the urb */
+  
+  urbtab[urbidx].intrflags = 0; /* just in case */
+  urbtab[urbidx].allocated = 1;
+  urbtab[urbidx].portidx = portidx;
+  urbtab[urbidx].toplevel_state = TSIO_BETWEEN_OPEN_AND_ACQUIRE;
+
+  /* clone-open: make this open be for a new minor device number. */
+  /* use the index of the newly allocated entry in urbtab */
+
+  *dev = makedev(emajor(*dev), urbidx);
+
+  UNLOCK_TSIO();
+
+  return 0;
+}
+
+int
+tsioclose(dev_t dev, int flag, int otyp, cred_t *crp)
+{
+  int m;
+  urb *urb;
+  sioport_t *port;
+  tsio_upper *upper;
+
+  LOCK_TSIO();
+
+  m = getminor(dev);
+#ifdef DEBUG
+#ifdef PRINTF_ON_MINOR_DEVICE_EVENT
+  printf("tsioclose m=%d\n",m);
+#endif
+#endif
+
+  urb = &urbtab[m];
+  ASSERT(m >= 0 && m < N_URB);
+  upper = &porttab[urb->portidx];
+  ASSERT(urb->portidx >= 0 && urb->portidx < N_URB);
+  port = upper->port;
+  ASSERT(port);
+
+  /* if map happened, make sure unmap also happened */
+  /* the OS seems to do this automatically but... */
+  if (urb->toplevel_state == TSIO_BETWEEN_MAP_AND_UNMAP)
+    {
+      cmn_err(CE_WARN, "tsio close: close without unmap on port %d", 
+              porttab[urb->portidx].port_minor_number);
+
+      deactivate_urb(urb);
+      
+      /* now interrupt will not touch this urb */
+      
+      kvpfree(urb->header,btoc(urb->maplen));
+      urb->header = NULL;
+
+      urb->toplevel_state = TSIO_BETWEEN_UNMAP_AND_CLOSE;
+    }
+
+  /* do the deed */
+
+  upper->n_urb_allocated--;
+  urb->intrflags = 0;       /* just in case */
+  urb->toplevel_state = -1; /* just in case */
+  urb->direction = -1;      /* just in case */
+  urb->portidx = -1;        /* just in case */
+  urb->wakeup = 0;          /* just in case */
+  urb->allocated = 0;
+
+  /* see if this is the last urb on this port */
+
+  if (upper->n_urb_allocated == 0)
+    {
+      /* give port back to sio land */
+      LOCK_PORT(port);
+      port->sio_callup = NULL;
+      port->sio_upper = 0;
+      UNLOCK_PORT(port); /* the sioport is now history */
+
+      upper->intrflags = 0; /* just in case */
+      upper->port = NULL; /* just in case */
+      upper->allocated = 0;
+    }
+
+  UNLOCK_TSIO();
+
+  return(0);
+}
+
+/* driver ioctl ---------------------------------------------------------- */
+
+int
+tsioioctl(dev_t dev, int cmd, int arg, int mode, 
+          struct cred *cred, int *rval)
+{
+  int err, nbytes, status;
+  tsio_acquireurb_t tsio_acquireurb;
+  int m;
+  urb *urb;
+  sioport_t *port;
+  
+  LOCK_TSIO();
+
+  m=getminor(dev);
+  urb = &urbtab[m];
+  ASSERT(m >= 0 && m < N_URB);
+
+  /* 
+   *  user-mode library first does open(), then ioctl(TSIO_ACQUIRE_RB), 
+   *  then mmap() 
+   */
+  if (urb->toplevel_state == TSIO_BETWEEN_OPEN_AND_ACQUIRE &&
+      cmd != TSIO_ACQUIRE_RB)
+    { UNLOCK_TSIO();  return EINVAL; } 
+  
+  switch(cmd) 
+    {
+    case TSIO_ACQUIRE_RB:
+#ifdef DEBUG
+#ifdef PRINTF_ON_MINOR_DEVICE_EVENT
+      printf("tsioioctl: acquire m=%d\n", m);
+#endif
+#endif
+      
+      if (urb->toplevel_state != TSIO_BETWEEN_OPEN_AND_ACQUIRE)
+        { UNLOCK_TSIO(); return EINVAL; } 
+      
+      /* Read in the arguments */
+      if ((status = copyin((caddr_t)arg, (caddr_t) & tsio_acquireurb,
+                           sizeof(tsio_acquireurb_t))) == -1) 
+        { UNLOCK_TSIO(); return EFAULT; } 
+      
+      ASSERT(urb->portidx >= 0 && urb->portidx < N_URB);
+
+      /* driver does not support merging of TX data: only allow 
+       * >1 acquire for the RX direction on this port 
+       *
+       * in other words, WE DON'T DO MIDI NOW!
+       */
+      if (tsio_acquireurb.direction == TSIO_FROMMIPS) /* TX/output */
+        {
+          int urbidx;
+          
+          for (urbidx=0; urbidx < N_URB; urbidx++)
+            if (urbtab[urbidx].allocated &&
+                urbtab[urbidx].portidx == urb->portidx &&
+                urbtab[urbidx].toplevel_state!=TSIO_BETWEEN_OPEN_AND_ACQUIRE &&
+                urbtab[urbidx].direction == TSIO_FROMMIPS)
+              break;
+          
+          if (urbidx != N_URB)
+            { UNLOCK_TSIO(); return EBUSY; }  /* we no merge */
+        }
+
+      /* restriction on port's queuesize */
+      {
+        int capacity = tsio_acquireurb.nlocs-1;
+        if (capacity < 20 ||
+            capacity >= 102400)
+          { UNLOCK_TSIO(); return EINVAL; } 
+      }
+      
+      /* see if we're the first urb on this port. if so, we set comm params */
+      if (porttab[urb->portidx].n_urb_allocated == 1) /* the 1 is us! */
+        {
+          porttab[urb->portidx].commparams = tsio_acquireurb.commparams;
+        }
+      else /* port has been opened before -- comm params must match */
+        {
+          tsio_comm_params_t *curcp=&porttab[urb->portidx].commparams;
+          tsio_comm_params_t *newcp=&tsio_acquireurb.commparams;
+          
+          if (((curcp->cflag & TSIO_USED_CFLAGS) !=
+               (newcp->cflag & TSIO_USED_CFLAGS)) ||
+              (curcp->ospeed != newcp->ospeed) ||
+              (curcp->flags != newcp->flags) ||
+              (curcp->extclock_factor != newcp->extclock_factor))
+            { UNLOCK_TSIO(); return EBUSY; } 
+        }
+
+      /* acquire has succeeded. signify by setting toplevel_state */
+      urb->toplevel_state = TSIO_BETWEEN_ACQUIRE_AND_MAP;
+
+      urb->direction = tsio_acquireurb.direction;
+      urb->nlocs = tsio_acquireurb.nlocs;
+      urb->TXheadRXtail = 0;
+      break;
+
+    default:
+#ifdef DEBUG
+      printf("tsioioctl invalid m=%d cmd=%d\n", m, cmd);
+#endif
+      UNLOCK_TSIO();
+      return EINVAL;
+    }
+  
+  UNLOCK_TSIO();
+  return 0;
+}
+
+/* driver map/unmap ----------------------------------------------------- */
+
+int
+tsiomap(dev_t dev,       /* device number */
+        vhandl_t *vt,    /* handle to caller's virtual address space */
+        off_t off,       /* offset into device */
+        int len,         /* number of bytes to map */
+        int prot)        /* protections */
+{
+  int err;
+  urb *urb;
+  int m;
+  int dataoff;
+  int stampsoff;
+  int totallen;
+
+  LOCK_TSIO();
+
+  m=getminor(dev);
+#ifdef DEBUG
+#ifdef PRINTF_ON_MINOR_DEVICE_EVENT
+  printf("tsiomap m=%d len=%d\n", m, len);
+#endif
+#endif
+  urb = &urbtab[m];
+  ASSERT(m >= 0 && m < N_URB);
+  
+  /* 
+   * user-mode library first does open(), then ioctl(TSIO_ACQUIRE_RB), 
+   * then mmap() 
+   */
+  if (urb->toplevel_state != TSIO_BETWEEN_ACQUIRE_AND_MAP)
+    {
+      UNLOCK_TSIO();
+      return EINVAL;
+    }
+
+  /* future ioctls: if necessary, check for TSIO_BETWEEN_MAP_AND_UNMAP */
+
+  /* allocate memory for user rb: 
+   * header + data rb + pad + stamp rb + pad out to page 
+   */
+  dataoff = sizeof(urbheader_t);
+  stampsoff = roundup(dataoff+urb->nlocs, __builtin_alignof(stamp_t));
+  totallen = stampsoff + sizeof(stamp_t)*urb->nlocs;
+
+  /* note: both len and totallen are not rounded up to nearest pagesize */
+  
+  if (len != totallen) /* sanity check user input */
+    {
+      UNLOCK_TSIO();
+      return EINVAL;
+    }
+  
+#ifdef _VCE_AVOIDANCE
+  if (vce_avoidance)
+    urb->header = (urbheader_t *)kvpalloc(btoc(len),VM_VACOLOR,
+                                           colorof(v_getaddr(vt)));
+  else
+#endif /* _VCE_AVOIDANCE */
+    urb->header = (urbheader_t *)kvpalloc(btoc(len),0, 0);
+  
+  if(urb->header==NULL)
+    {
+      UNLOCK_TSIO();
+      return ENOMEM;
+    }
+  
+  urb->data = (unsigned char *)(((char *)urb->header) + dataoff);
+  urb->stamps = (stamp_t *)(((char *)urb->header) + stampsoff);
+  urb->maplen = len;
+  
+  /*
+   * clean the RB header,  because as soon as we make it
+   * active,  it's up for grabs by the interrupt routine. 
+   * We want intreq to be 0 to keep the interrupt routine 
+   * from trying to "wake" an RB that hasn't finished 
+   * initializing yet.
+   */
+  ((urbheader_t *)urb->header)->intreq = 0;
+  ((urbheader_t *)urb->header)->head = 0;
+  ((urbheader_t *)urb->header)->tail = 0;
+  ((urbheader_t *)urb->header)->fillpt=0;   /* rb fill point */
+  ((urbheader_t *)urb->header)->fillunits = TSIO_FILLUNITS_BYTES;
+
+  /*
+   * attempt to activate the urb.  this may involve initializing
+   * the sioport, which could fail.
+   */
+  if (err=activate_urb(urb))
+    {
+      kvpfree(urb->header,btoc(len));
+      urb->header = NULL;
+      UNLOCK_TSIO();
+      return(err);
+    }
+
+  /* Map it into the user's space.  If it can't be mapped, undo what we've
+   * done so far and return an error.
+   */
+  if (err=v_mapphys(vt, urb->header, len))
+    {
+      deactivate_urb(urb);
+      kvpfree(urb->header,btoc(len));
+      urb->header = NULL;
+      UNLOCK_TSIO();
+      return(err);
+    }
+
+  /* map has succeeded.  indicate by advancing to next toplevel_state */
+  urb->toplevel_state = TSIO_BETWEEN_MAP_AND_UNMAP;
+
+  UNLOCK_TSIO();
+
+  return 0;
+}
+
+int
+tsiounmap(dev_t dev,       /* device number */
+          vhandl_t *vt)    /* handle to caller's virtual address space */
+{
+  urb *urb;
+  int m;
+
+  LOCK_TSIO();
+
+  m=getminor(dev);
+
+#ifdef DEBUG
+#ifdef PRINTF_ON_MINOR_DEVICE_EVENT
+  printf("tsiounmap m=%d\n", m);
+#endif
+#endif
+  urb = &urbtab[m];
+  ASSERT(m >= 0 && m < N_URB);
+
+  if (urb->toplevel_state != TSIO_BETWEEN_MAP_AND_UNMAP)
+    {
+      UNLOCK_TSIO();
+      return EINVAL;
+    }
+
+  deactivate_urb(urb);
+  
+  /* now interrupt will not touch this urb */
+  
+  kvpfree(urb->header,btoc(urb->maplen));
+  urb->header = NULL;
+
+  /* unmap has succeeded.  indicate by advancing to next toplevel state */
+  urb->toplevel_state = TSIO_BETWEEN_UNMAP_AND_CLOSE;
+
+  UNLOCK_TSIO();
+
+  return 0; 
+}
+
+/* driver poll ----------------------------------------------------------- */
+
+int
+tsiopoll(dev_t dev,
+           register short events,
+           int anyyet,
+           short *reventsp,
+           struct pollhead **phpp) /* loadable module entry point */
+{
+  int m,ready;
+  urb *urb;
+  int fillunits;
+  
+  LOCK_TSIO();
+
+  ready = events;
+  m = getminor(dev);
+  urb = &urbtab[m];
+  ASSERT(m >= 0 && m < N_URB);
+
+  if (urb->toplevel_state != TSIO_BETWEEN_MAP_AND_UNMAP)
+    {
+      UNLOCK_TSIO();
+      return EINVAL;
+    }
+  
+  ASSERT(urb->header != NULL);
+  fillunits = ((volatile urbheader_t *)urb->header)->fillunits;
+
+  if (fillunits != TSIO_FILLUNITS_BYTES &&
+      fillunits != TSIO_FILLUNITS_UST)
+    {
+      cmn_err(CE_WARN, "tsio poll: port %d fillunits corrupted\n",
+              porttab[urb->portidx].port_minor_number);
+      UNLOCK_TSIO();
+      return EINVAL;
+    }
+  
+  if (urb->direction == TSIO_TOMIPS) /* RX, input */
+    {
+      stamp_t n_filled;
+      int tail = urb->TXheadRXtail; /* tail for RX */
+
+      /* get a snapshot of the user's rb head */
+      int head = ((volatile urbheader_t *)urb->header)->head;
+      
+      if (head < 0 || head >= urb->nlocs)
+        {
+          cmn_err(CE_WARN, "tsio poll: port %d user rb head is corrupted\n", 
+                  porttab[urb->portidx].port_minor_number);
+          /*
+           * we forcibly set the user's head to indicate that the
+           * buffer is full; putting head back into a valid state
+           * helps to prevent hundreds of identical cmn_err's from
+           * spewing out on the console.
+           */
+          head = tail+1;
+          if (head > urb->nlocs) head -= urb->nlocs;
+          ((volatile urbheader_t *)urb->header)->head = head;
+          UNLOCK_TSIO();
+          return EINVAL;
+        }
+      
+      /* first compute # of bytes filled */
+      
+      n_filled = tail - head;
+      if (n_filled < 0) n_filled += urb->nlocs; /* wrap */
+      
+      if (fillunits == TSIO_FILLUNITS_UST) /* make that UST filled instead */
+        {
+          if (n_filled != 0) /* if there are some UST stamps on queue */
+            n_filled = get_current_ust() - urb->stamps[head];
+        }
+      
+      if (n_filled < ((volatile urbheader_t *)urb->header)->fillpt)
+        {
+          ready &= ~(POLLIN | POLLRDNORM);
+
+          if (!anyyet)
+            *phpp = &urb->pq;
+          
+          ((volatile urbheader_t *)urb->header)->intreq = 1;
+        }
+    }
+  else if (urb->direction == TSIO_FROMMIPS) /* TX, output */
+    {
+      stamp_t n_filled;
+      int head = urb->TXheadRXtail; /* head for TX */
+
+      /* get a snapshot of user's rb tail */
+      int tail = ((volatile urbheader_t *)urb->header)->tail;
+      
+      if (tail < 0 || tail >= urb->nlocs)
+        {
+          cmn_err(CE_WARN, "tsio poll: port %d user rb tail is corrupted\n", 
+                  porttab[urb->portidx].port_minor_number);
+          /*
+           * we forcibly set the user's tail to indicate that the
+           * buffer is empty; putting tail back into a valid state
+           * helps to prevent hundreds of identical cmn_err's from
+           * spewing out on the console.
+           */
+          tail = head;
+          ((volatile urbheader_t *)urb->header)->tail = tail;
+          UNLOCK_TSIO();
+          return EINVAL;
+        }
+      
+      /* first compute # of bytes filled */
+      
+      n_filled = tail - head;
+      if (n_filled < 0) n_filled += urb->nlocs; /* wrap */
+      
+      if (fillunits == TSIO_FILLUNITS_UST) /* make that UST filled instead */
+        {
+          if (n_filled != 0) /* if there are some UST stamps on queue */
+            n_filled = urb->stamps[tail] - get_current_ust();
+        }
+
+      if (n_filled >= ((volatile urbheader_t *)urb->header)->fillpt)
+        {
+          ready &= ~POLLOUT;
+          
+          if (!anyyet)
+            *phpp = &urb->pq;
+          
+          ((volatile urbheader_t *)urb->header)->intreq = 1;
+        }
+    }
+
+  *reventsp = ready;
+
+  UNLOCK_TSIO();
+
+  return(0);
+}
+
+

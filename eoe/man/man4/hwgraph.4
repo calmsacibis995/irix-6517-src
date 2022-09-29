@@ -1,0 +1,203 @@
+'\"macro stdmacro
+.if n .pH g4.hwgraph @(#)hwgraph	1.1 of 11/1/96
+.nr X
+.if \nX=0 .ds x} hwgraph 4 ""  "\&"
+.if \nX=1 .ds x} hwgraph 4 ""
+.if \nX=2 .ds x} hwgraph 4 "" "\&"
+.if \nX=3 .ds x} hwgraph "" "" "\&"
+.TH \*(x}
+.SH NAME
+hwgraph, hwgfs, hw \- hardware graph and hardware graph file system
+.SH Internal Hardware Graph
+Internally, Irix system software maintains a directed graph called the 
+"hardware graph". The hwgraph represents the collection of all significant
+hardware connected to a system.  It represents each piece of hardware -- 
+modules, CPUs, memories, disk controllers, disk drives, disk partitions, 
+serial ports, ethernet ports, some system integrated circuits, etc. -- as a distinct 
+vertex in the graph.   There are some additional vertices that represent 
+collections of hardware (e.g. "the disks") or more abstract architectural 
+concepts (e.g. "a node").  The contents of the hardware graph are
+obviously system-dependent; but there are many common elements that
+cross system types.
+.PP
+Labeled edges are used to connect graph vertexes in a way that shows 
+some relationship between the underlying hardware.  For instance, an 
+edge labeled "3" originates at a vertex that represents the collection of
+all partitions on a drive.  It points to a vertex that represents the
+third partition on that drive.  Another example: An edge labeled 
+"memory" hanging off a vertex that represents a system node points 
+to a vertex that represents the memory on that node.
+.PP
+The internal hwgraph also supports arbitrarily-labeled 
+information associated with each vertex.  This allows device drivers to 
+associate useful data structures and other information with a 
+particular device.
+.PP
+The hardware graph is maintained by system software with the
+cooperation of device drivers using new device driver interfaces
+as described in the Device Driver Programmer's Guide.
+.SH Hardware graph filesystem (hwgfs)
+The internal hardware graph is exported to user-level through a 
+pseudo-file system (similar to
+.IR /proc (4)).
+The hwgfs file 
+system represents the collection of all interesting hardware and 
+pseudo-devices as a file system tree of special files and directories.  
+It is mounted at \f3/hw\fP by the kernel during system boot, 
+and can be re-mounted using
+.IR  /etc/mnthwgfs .
+In order to represent the directed 
+.I graph
+as a Unix file system 
+.IR tree ,
+hwgfs imposes an artificial hierarchy on the hardware graph, and it uses 
+hard links and symlinks to represent graph edges that are outside that 
+hierarchy.  Note that it 
+.I is
+usually the case that the hwgfs file system 
+contains symlinks that point back "up" to higher-level directories.  
+The implication is that there will be some symlinks under \f3/hw\fP that
+form 
+.I cycles
+which "ls -R" and other commands that recursively descend
+from a directory have trouble dealing
+with.  Note, however, that the "find" command handles symlinks
+very well and works as desired:
+.PP
+.RS
+find /hw -print | xargs ls -ld
+.RE
+.PP
+hwgfs does 
+.I not
+allow users to create or remove files or symlinks
+under \f3/hw\fP.  Rather, this section of the file system hierarchy is
+controlled exclusively by device drivers and other system software.
+In other words, \f3/hw\fP should be viewed purely as a 
+.IR reflection
+of the contents of the internal hardware graph.  
+The contents of the graph and the links within it may change
+across releases, and should not be depended upon.  They may
+also change when new hardware releases.
+.PP
+The internal hardware graph is updated dynamically when hardware is 
+added and removed, and the file system reflection of that graph is 
+updated accordingly.  For instance, when the 
+.IR fx (1m) 
+utility is used to 
+repartition a disk drive, the special files used for the old 
+partitioning automatically disappear and new special files that 
+represent the new partitioning automatically appear.
+.PP
+Since hwgfs is a pseudo-filesystem whose files don't actually use any
+disk space, there is no persistent information associated with files
+under \f3/hw\fP.  In particular, file attributes (mode, owner, group) are not
+stored across reboots under hwgfs.  Rather, reasonable default are used 
+for all hwgfs special files.  These defaults can be changed in the normal
+ways (i.e. with 
+.IR chmod (1),
+.IR chown (1),
+.IR chgrp (1)),
+but the changes only last until the 
+next time the system is rebooted.  In order to supply the appearance of
+special file attributes that are persistent across reboots, hwgfs uses
+the 
+.IR ioconfig (1m) 
+utility, controlled by the contents of the file
+.IR /etc/ioperms .
+.PP
+The \f3/dev\fP directory is the root of the recommended path for all device file
+usage, even though
+many of the files and directories under \f3/dev\fP are now symlinks into \f3/hw\fP.
+.PP
+For example, device names under \f3/hw\fP should not be used when mounting
+filesystems, or configuring the root filesystem for the kernel.
+Only a few administrative programs need to use the hardware graph pathnames
+under \f3/hw\fP to obtain additional info directly from the hardware graph.
+.PP
+System software (i.e. device drivers) may associate "labeled information"
+with a hwgraph vertex.  In particular, 
+.IR lboot (1m) 
+provides the ability to 
+associate administrative information with an instance of a device using 
+DEVICE_ADMIN directives.  Such information is interpreted by the 
+appropriate device driver.  Additionally, system software (i.e. device
+drivers) may choose to "export" such labeled information to user mode.
+When this is done, the information is available as an extended user-level
+attribute on the hwgfs file that represents that vertex; so it can be 
+obtained with an 
+.IR attr_get (2) 
+call.  
+.SH Major/Minor Numbers
+As in earlier releases, the system uses a 32-bit identifier known as a
+.I dev_t
+to identify a particular instance of a device (or special file).  In 
+previous releases, a dev_t consisted of a "major number" -- which 
+told the system which driver to use -- and a "minor number" which was
+a magic cookie interpreted by that driver.  Frequently a minor number
+was sliced into various bit-fields, including a "unit number"
+which the device driver used to index into an array of per-unit 
+data structures.  For backwards compatibility, the Irix kernel 
+continues to support this model for pseudo-drivers.
+.PP
+For hwgraph-aware drivers, things are a bit different:
+A 32-bit dev_t still uniquely identifies a device; but the major number
+is always 0 (regardless of which driver owns the special file) and the 
+minor number is a system-wide unique "vertex handle".
+From the vertex handle, system software uses system-level hwgraph interfaces
+to determine exactly which instance of a device is referenced.  The
+impact at user level is that there is no way for user code to
+interpret minor numbers of a hwgraph-aware device driver.
+The driver writer may provide a library (DSO)
+with appropriate formal interfaces for user-level operations, or the
+driver writer can export useful information which the user can retrieve
+with
+.IR attr_get (2).
+.PP
+Note that the dev_t (major/minor) for a particular device may change across 
+reboots.  In general, user code should not attempt to interpret the bits in a
+.IR dev_t ,
+nor is there a valid reason to store a dev_t on persistent storage for use
+across reboots.
+.SH Internal hwgraph Interfaces
+There is an extensive set of interfaces that allow device drivers and 
+other system software to manipulate the hardware graph.  
+.PP
+Basic operations on vertices include: 
+.RS
+create, destroy, clone, and get_next.  
+.RE
+.PP
+Basic operations on edges include: 
+.RS
+add, remove, and get_next.  
+.RE
+.PP
+Basic operations on labeled vertex information include: 
+.RS
+add, remove, replace, get, get_next, export, and unexport.
+.RE
+.PP
+There are many other operations, too.  These are all defined in the 
+Device Driver Programmer's Guide.
+.SH User-level Interfaces
+At user-level, users continue to see special files which represent hardware
+devices.  Users can create symlinks from normal file systems that point
+into the hwgfs file system.
+.PP
+The usual device driver operations (open, close, read, write, ioctl,
+etc.) and the usual file operations (stat, attr_get, etc.) work as expected.
+As mentioned earlier, chmod, chown, and chgrp work, but only until the next
+reboot.  For persistent changes to hwgfs special files, the user must use
+.IR ioconfig (1m).  
+(This may change in a future release of Irix.)
+.PP
+The
+.IR ls (1)
+command includes an 'S' option that can be used to display the canonical
+device name for a specified hwgfs file or directory.  A canonical device 
+name is a path starting with \f3/hw\fP that unambiguously identifies
+a device or collection of devices.
+.SH SEE ALSO
+attr_get(2), fx(1m), ioconfig(1m), lboot(1m), ls(1), MAKEDEV(1m),
+setdevperms(1m)

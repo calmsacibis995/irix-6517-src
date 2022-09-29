@@ -1,0 +1,408 @@
+'\"!  tbl | mmdoc
+'\"macro stdmacro
+.if n .pH g5.realtime @(#)realtime	40.20 of 5/1/91
+.nr X
+.if \nX=0 .ds x} realtime 5 "" "\&"
+.if \nX=1 .ds x} realtime 5 ""
+.if \nX=2 .ds x} realtime 5 "" "\&"
+.if \nX=3 .ds x} realtime "" "" "\&"
+.TH \*(x}
+.SH NAME
+\f4realtime\f1, \f4scheduler\f1 \- introduction to realtime and scheduler facilities
+.SH DESCRIPTION
+The IRIX operating system provides a rich set of realtime programming
+features that are collectively referred to as the REACT extensions.
+.P
+This document introduces the components of REACT, including:
+bounded response time, clocks, timers, signals, virtual memory control,
+asynchronous I/O, POSIX threads, scheduling policies, realtime priority band,
+processor isolation, process binding, and interrupt redirection.
+.P
+\f4Bounded Response Time\fP
+.P
+A realtime system provides bounded and usually fast response to
+specific external events, allowing applications to schedule a
+particular thread to run within a specified time limit after
+the occurrence of an event.
+.P
+IRIX guarantees deterministic response of one millisecond on certain
+uni-processor systems.  This realtime strategy guarantees the highest
+priority thread will execute within one millisecond from the time it was
+made runnable.
+.P
+On certain multi-processor machines (OCTANE, Origin200, Origin2000,
+and Onyx2), the one millisecond bounded response time guarantee is
+controlled by the systune variable \f2rtcpus\fP.  rtcpus represents
+a threshold at which the scheduler functionality that is required to
+meet this guarantee is enabled.  The threshold is based on the number
+of physical cpus in the system.  If rtcpus is set greater than or
+equal to the number of physical processors, the bounded response
+guarantee is enabled.  If rtcpus is set below the number of physical
+processors in the machine, the bounded response time guarantee is NOT
+enabled.  The default value for rtcpus is 0, which means that by
+default, the guarantee is not enabled.  In order to enable the
+guarantee, rtcpus must be set equal to or greater than the number of
+cpus in the system.  As an example, consider a four processor system.
+If rtcpus is set at a value between 0 and 3 (inclusive), the realtime
+guarantee is not enabled.  If rtcpus is set at 4 or greater, the
+realtime guarantee is enabled.  Note that enabling the realtime
+guarantee may cause overall system performance to degrade.
+.P
+Realtime applications requiring a lower latency guarantee can use the
+multi-processor realtime strategy to obtain a deterministic response of
+200 microseconds.  This strategy typically consists of having
+one processor service unpredictable loads, such as interrupts and system
+daemons, and the other processor(s) servicing high-priority realtime jobs.  
+.P
+\f4Clocks\fP
+.P
+In order to perform event timing, IRIX provides the POSIX 1003.1b
+\f2clock_gettime\fP(2) interface.  This interface can be used to
+access various system clocks, including: the realtime clock, and a low
+overhead free running hardware counter.
+.P
+\f4Timers\fP
+.P
+IRIX implements both BSD itimers and POSIX 1003.1b timers.
+POSIX timers are recommended For realtime application development,
+as they provide the highest resolution and flexibility (see
+\f2timer_create\fP(3c)).
+.P
+Timer expiration interrupts are dispatched to IRIX interrupt threads
+for handling.
+The priority at which these threads are scheduled is determined by
+the scheduling policy and priority of the thread which set the timer:
+.P
+.in +.5i
+If the thread setting the timer is running with a timeshare scheduling
+policy, then the associated interrupt thread will be scheduled at realtime
+priority one.
+.sp
+If the thread setting the timer is running with a realtime scheduling
+policy, then the priority of the associated interrupt thread will be the
+priority of the setting thread plus one. Priority 255, being the maximum
+realtime band priority, is an exception. If the thread setting the timer is
+running at priority 255, then the interrupt thread will also be scheduled at
+priority 255. Hence, realtime applications depending on system services
+shouldn't use priority 255 (see the \f4Realtime Priority Band\fP Section below).
+.P
+Once the timer expires, the interrupt thread will be scheduled ahead of
+the thread which set the timer.
+.P
+\f4Signals\fP
+.P
+IRIX supports the full semantics of both BSD and AT&T signals.
+In addition IRIX has implemented the POSIX 1003.1b queued signals which
+provide signal priorities and for queuing of signals such that
+exactly as many signals are received as were sent (see \f2sigqueue\fP(3)).
+.P
+\f4Memory Locking\fP
+.P
+A realtime application can avoid the overhead of page fault processing
+under IRIX by locking ranges of its text and data into memory.
+The POSIX \f2mlockall\fP(3c)
+system call can be used to lock down a process's entire virtual address space.
+Since it is not always desirable to lock down the entire virtual address
+space, IRIX provides the following system calls to lock and unlock a specified
+range of addresses in memory:
+\f2mpin\fP(2)/\f2munpin\fP(2)
+and
+\f2mlock\fP(3c)/\f2munlock\fP(3c).
+The major difference between the two sets is that
+mpin/munpin maintains a per page lock counter and mlock/munlock does not.
+Developers should choose the set that best suits their application and
+stick with it, as mixing the interfaces may result in unexpected
+behavior.
+.P
+\f4Asynchronous I/O\fP
+.P
+IRIX implements the POSIX 1003.1b interface to asynchronous I/O.
+Using this facility a programmer can queue a read or write request
+to a device and optionally receive a queued signal when the
+request completes.
+The
+.I read()
+or
+.I write()
+call will return when the request is queued rather than blocking the
+process pending completion of the I/O.
+Optionally, process priority can
+be used to establish the order in which queued requests are completed.
+.P
+\f4POSIX Thread Scope\fP
+.P
+POSIX threads (pthreads) supports both process and system scope threads.
+System scope threads enable pthread applications to obtain predictable
+scheduling behavior on a system level by using the kernel scheduler
+directly, bypassing the user-level pthread scheduler.
+For more information about the pthread scheduling model,
+see \f2pthread\fP(5).
+.P
+\f4Timeshare Scheduling\fP
+.P
+IRIX has an earnings-based scheduler for timeshare threads.
+Processes earn cpu microseconds of time base on their proportional
+share of the system. Their share of the system,
+and thus the rate at which they accumulate earnings,
+is determined by their nice value.
+.P
+While timeshare threads are not priority scheduled, they do have an
+independent timeshare priority band to represent \f2nice\fP(2) values.
+This band ranges from a low priority of 1 to a high priority of 40.
+A change in either the timeshare priority or the nice value results in
+a corresponding change to the nice value or timeshare priority respectively.
+.P
+Timeshare threads which are not the beneficiaries of priority
+inheritance are never scheduled ahead of realtime threads.
+.P
+\f4Batch Scheduling\fP
+.P
+Refer to \f2miser\fP(5).
+.P
+\f4Realtime Scheduling\fP
+.P
+IRIX supports the POSIX 1003.1b realtime scheduler interfaces, including:
+\f2sched_setscheduler\fP(2) and \f2sched_setparam\fP(2).
+.P
+These interfaces provide privileged applications with the control necessary
+for managing the cycles of the system processor(s).  Realtime scheduling
+policies, such as round-robin and first-in-first-out,
+may be selected along with a realtime priority.
+.P
+\f4Realtime Priority Band\fP
+.P
+A realtime thread may select one of a range of 256 priorities (0-255) in
+the realtime priority band, using POSIX interfaces \f2sched_setparam\fP()
+or \f2sched_setscheduler\fP().
+.P
+The higher the numeric value of the priority the more important the thread.
+.P
+Developers must consider the needs of the application and how it should
+interact with the rest of the system, before selecting a realtime priority.
+To aid in this decision, the priorities of the system threads should be
+considered.
+.P
+IRIX manages system threads to handle kernel tasks, such as paging
+and interrupts. System daemon threads execute between priority range
+\f290 and 109\fP inclusive, and system device driver interrupt threads execute
+between priority range \f2200 and 239\fP inclusive (see the following section
+for more information about interrupt threads).
+.P
+An application may set the priorities of its threads above that of the system
+threads, but this may effect the behavior of the system. For example, if the
+disk interrupt thread is blocked by higher priority user thread, disk data
+access will be delayed, pending completion of the user thread.
+.P
+Setting the priorities of application threads within or above the system
+thread ranges requires an advanced understanding of IRIX
+system threads and their priorities.  The priorities of the IRIX system threads
+may be found in \f2/var/sysgen/mtune/kernel\fP.  If necessary, these defaults
+may be changed using \f2systune\fP(1M), although this is not recommended for
+most users.
+.P
+Many soft realtime applications simply need to execute ahead of
+timeshare applications, in which case priority range 0 through and including
+89 is best suited.  Since timeshare applications are not priority
+scheduled, a thread running at the lowest realtime priority (0) will still
+execute ahead of all timeshare applications.  Note, however, that at times
+the operating system briefly promotes timeshare threads into the realtime band
+to handle timeouts, and avoid priority inversion.  In these special cases,
+the promoted thread's realtime priority is never boosted higher than 1.
+.P
+Applications cannot depend on system services if they are running ahead of
+the system, without observing the system responsiveness timing guidelines
+below.
+.P
+Interactive realtime applications (such as digital media) need low latency
+response times from the operating system, but changing interrupt thread
+behavior is undesirable. In this case, priority range 110 through and
+including 199 is best suited, allowing execution ahead of system daemons but
+behind interrupt threads.  Applications in this range are typically
+cooperating with a device driver, in which case, the correct priority
+for the application is the priority of the device driver interrupt thread
+minus 50 (see the following section). If the application is multi-threaded,
+and multiple priorities are warranted, then the priorities of the threads
+should be no greater than the priority of the device driver interrupt thread
+minus 50. Note that threads running at a higher priority than system daemon
+threads should never run for more than a few milliseconds at a time, in
+order to preserve system responsiveness.
+.P
+Hard realtime applications may use priorities 240 through and including 254
+for the most deterministic behavior and the lowest latencies.  However,
+if a thread running at this priority ever gets into a state where
+it is using 100% of the processor, the system may become completely
+unresponsive.  Threads running at a higher priority than the interrupt
+threads should never run for more that a few hundred microseconds
+at a time, in order to preserve system responsiveness.
+.P
+Priority 255, the highest realtime priority, should not be used by
+applications.  This priority is reserved for system use in order to
+handle timers for urgent realtime applications, and kernel debugger
+interrupts.  Applications executing at this priority run the risk of
+hanging the system.
+.P
+The proprietary IRIX interface for selecting a realtime priority,
+\f2schedctl\fP(), is still supported for binary compatibility, but it is
+no longer the interface of choice.  The non-degrading realtime priority
+range of schedctl() is re-mapped onto the POSIX realtime priority band as
+priorities 90 through 118 as follows: 39=90, 38=110, 37=111, 36=112, 35=113,
+34=114, etc..
+Note that the large gap between the first two priorities preserves the
+scheduling semantics of schedctl() threads and system daemons.
+.P
+Realtime users are encouraged to use tools such as par(1) and
+irixview(1) to observe the actual priorities and dynamic behaviors of
+all threads on a running system.
+.in -0.5i
+.P
+\f4Device Driver Interrupt Thread Priorities\fP
+.P
+As of IRIX 6.4, device drivers employ interrupt threads to handle device
+interrupts. Interrupt threads have default priorities in the range
+200 through and including 239.
+.P
+To make selecting an appropriate priority for an interrupt thread
+easier, IRIX defines device classes including: audio, video, network,
+disk, serial, parallel, tape, external.  Each device class has a priority
+assigned to it.  A complete listing of device classes, and their default
+priorities, can be found in \f2/var/sysgen/mtune/kernel\fP.
+.P
+For example, the value of \f2network_intr_pri\fP defines the interrupt thread
+priority of all network class devices.
+.P
+A device driver may set the priority of its interrupt thread to one of
+the defined classes, by using the class directive in its driver
+configuration file (located in the /var/sysgen/master.d directory).
+.P
+For example, /var/sysgen/master.d/if_ef includes the directive
+.P
+.br
+	+thread_class	network
+.P
+which means that the value of the systune(1M) variable
+.IR network_intr_pri
+will be used for the interrupt thread priority of this device.
+.P
+Devices whose class cannot be determined use the value of the
+variable
+.IR default_intr_pri:
+.P
+.br
+	+thread_class	default
+.P	
+The default priority of each device class may be changed using
+the appropriate systune(1M) variable in \f2/var/sysgen/mtune/kernel\fP.
+.P
+The thread_class value may be overridden for a particular driver
+by adding the 
+.IR thread_priority
+directive to the driver description file.
+For example:
+.P
+.br
+	+thread_priority	205
+.P
+On systems supporting the hardware graph, both of these values may be
+overridden for a particular device by using the DEVICE_ADMIN directive
+with the INTR_SWLEVEL attribute in the /var/sysgen/system/irix.sm file
+(q.v. for an example of this usage).
+.P
+\f4Processor Control\fP
+.P
+Using the
+.I sysmp()
+call or the
+.I mpadmin
+and
+.I runon
+commands a programmer may control the distribution of processes
+among the processors in a realtime system.
+For instance, it is
+possible to bind a particular process onto a processor and conversely,
+it is possible to restrict a processor to only run those processes that
+are explicitly bound to it.
+This makes it possible to dedicate one
+or more processors to particular processes.
+.P
+Nominally, when IRIX is running in a multiprocessor certain system services
+require synchronization of all processors in the complex.
+This is mainly done
+to synchronize the instruction caches and to synchronize the virtual to
+physical translation caches or tlbs.
+In order to reduce the worst case
+dispatch latency a processor can be
+.I isolated
+using the
+.I sysmp()
+call.
+This allows a process some control over when these synchronizing events
+take place.
+If the process never requests system services then there is no
+need to synchronize.
+If the process is sharing address space with other processes through use of either
+.I sproc()
+or
+.I sprocsp()
+then members of the share group should also avoid operations that would require IRIX
+to synchronize with the isolated processor.
+These include operations that explicitly
+flush caches, expand address space across 4 megabyte boundaries, release address space or
+change address space protections.
+Creation of new share group members through the use of
+.I sproc()
+requires the creation of a stack area which may result in a synchronization event.
+Use of the
+.I sprocsp()
+interface specifying a stack in section of locked memory is recommended.
+.P
+.I sysmp()
+can also be used to turn off normal IRIX clock processing on a particular
+processor and thus normal IRIX time slicing will not preempt the
+running process.
+Thus, if a processor is isolated, no devices
+are configured onto that processor, the clock service is disabled,
+the application process is restricted to the isolated processor and
+its virtual space is locked in memory then a user can achieve a fast
+bounded response time to an external event.
+.P
+\f4Interrupt Redirection\fP
+.P
+When the multi-processor realtime strategy is being used, it is often
+necessary to redirect unwanted PCI and VME interrupts away from the
+realtime processors.
+.P
+Control over which device interrupts are sent to which processor can
+be achieved by adding DEVICE_ADMIN directives to the
+\f2/usr/sysgen/system\fP file.
+.P
+The NOINTR directive may also be used to guarantee that no
+interrupts are randomly assigned for handling by the realtime processor.
+After the system file is modified
+.I lboot
+should be run to reconfigure the system.
+.SH SEE ALSO
+lboot(1),
+mpadmin(1),
+runon(1),
+systune(1M),
+mlockall(3c),
+mpin(2),
+munpin(2),
+plock(2),
+sched_setparam(2),
+sched_setscheduler(2),
+sproc(2),
+sysmp(2),
+syssgi(2),
+aio_error(3),
+aio_read(3),
+aio_return(3),
+aio_write(3),
+lio_listio(3),
+system(4),
+signal(5),
+sigqueue(3)
+timer_create(3c),
+pthread(3p)
+nice(1),
+renice(1m)

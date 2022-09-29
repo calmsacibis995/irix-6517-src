@@ -1,0 +1,536 @@
+
+-----------------------------------------------
+Field-Accurate Video Deck Control and Emulation
+OS Requirements and Solutions
+Rev 1.1
+Chris Pirazzi
+-----------------------------------------------
+
+Just the simplified basics that OS folks need to know in order to
+understand the requirements for video deck control.
+
+Then the details of the OS requirements and solutions we have so far.
+
+
+REAL-TIME REQUIREMENTS
+----------------------
+
+First and foremost: all the time requirements we give in this document
+are hard, guaranteed requirements.  When we say "X must happen M
+milliseconds after Y" we mean all the time, 100% of the time,
+guaranteed, and supported.  We are not talking about best-case or
+average-case performance.  We are giving bounds on worst-case
+performance.
+
+For video and decks, violating the timing requirements below always
+results in failures which are just as serious as SCSI parity errors or
+unrecoverable memory ECC errors.  Some of these failures will
+permanently destroy customer video material on videotape.  All of
+these failures will cause video customers to do what they would do
+with any damaged video equipment: they will return the machine to SGI
+and buy another brand.
+
+Therefore, in order to say we support deck control and emulation as
+described below, SGI must tell the customer precisely which SGI
+configurations support the guarantees, and then SGI must commit the
+engineering resources to deliver those guarantees on the target
+configurations and and fix the bug if the machine fails to deliver the
+guarantees.
+
+
+VIDEO
+-----
+
+Video enters and leaves an SGI machine in an industry-standard analog
+or digital signal format.  Video is divided up into video fields of
+equal duration.  You can think of a field as one image, roughly like
+one frame of a cinema film.  There is one video field every 20ms or
+16.68333...ms, depending on the flavor of video.  Each field has a
+well-defined starting point in time.  All video equipment (decks, SGI
+machines, ...) at a customer site is connected to a common per-field
+heartbeat signal called "house sync;" video fields always start on one
+of these heartbeats.
+
+
+THE DECK CONTROL PROTOCOL
+-------------------------
+
+Video decks (also called Video Tape Recorders, VTRs, VCRs, ...) we are
+concerned with have an RS-422 serial port.  A controller can send
+a command to the deck over the serial port, like:
+
+	- start rolling the tape now
+	- stop rolling the tape now
+	- start recording now
+	- stop recording now
+	- tell me which field you are playing or recording now
+          (the fields on tape are numbered sequentially)
+
+using the industry-standard Sony 9-Pin protocol (always 38400 baud,
+odd parity, 8 bits, 1 stop bit).  The deck always sends one response
+(usually ACK or NAK, but sometimes information) to each command from
+the controller.  The controller can then send another command.  The
+deck never initiates; it only transmits on the serial line in response
+to a command from the controller.  Commands and responses range from 2
+bytes to 18 bytes each.
+
+A serial line is idling when it is in marking state between the
+trailing edge of a stop bit and the leading edge of a start bit.  The
+serial line may not idle for more than 10ms between any two adjacent
+bytes of a command or response.
+
+The start of a command or response is the leading edge of the start
+bit of its first byte on the serial line.  The end of a command or
+response is the trailing edge of the stop bit of its last byte on the
+serial line.
+
+The deck must start a response 0 to 9 milliseconds after the end of
+any command from the controller.  The deck cannot predict what
+commands the controller will send.
+
+The controller must be able to pair up any response with the
+corresponding command.
+
+One of the commands, Status Sense, causes the deck to indicate whether
+the user has overridden the controller by pushing buttons on the deck's
+front panel, whether the deck is servolocked (rolling forward at a
+stable, 1x speed), and whether any error conditions (end of tape,
+mechanical failure, ...) have arisen on the deck.  The controller must
+send a Status Sense command at least every 300ms.  The delay between a
+change of status on the deck and the start of the controller's command
+in reaction to this change can be at most 300ms.
+
+Certain commands can behave field-accurately.  To get the field
+accuracy, the deck must be servolocked, the controller must start
+field-accurate-capable commands between D1 ms and D2 ms after the
+start of a field, and the command and its response must end before the
+start of the next field.  D1 and D2 depend on the deck.  D2-D1 >= 2ms.
+
+Current Time Sense is a field-accurate-capable command. A
+field-accurate Current Time Sense command causes the deck to respond
+with the number of the field that is currently playing out its output
+jack or recording at its input jack.  Certain state-changing commands,
+such as record on/off, are field-accurate-capable.  A field-accurate
+state-changing command will cause the deck to change its state after a
+fixed, guaranteed number of fields E.  E depends on the deck and the
+command.  The controller must have a field-accurate Current Time Sense
+response in order to compute the correct field in which to send a
+field-accurate state-changing command.  Assuming that the field
+accuracy conditions are maintained throughout, the delay between the
+end of a Current Time Sense response and the earliest time at which a
+controller is ready to issue a state-changing command can be at most
+300ms.
+
+A note about the two 300ms latency figures above: 300ms is a very,
+very bad latency.  It is the cutoff point after which a customer will
+declare the controller broken and send it back (hence it being a
+requirement).  Seeing as dedicated 422 controllers deliver latencies
+more on the order of 50ms, it will be extremely embarrassing if SGI
+cannot ship a machine that offers a guarantee less than 300ms.  We'll
+examine below how these latency figures translate into IRIX user
+thread scheduling requirements.
+
+Current industry practice adds a few more constraints not found in the
+Sony spec.  Many decks will ignore commands sent during a particular
+(525-2*243)/525==7.42...% or (625-288*2)/625==7.84% of the video field
+(depending on the flavor of video).  This means the controller must
+start all commands, not just field-accurate commands, between a
+deck-specific D1ms and D2ms after the start of field (D2-D1 >= 2ms).
+Many controllers assume that they can send at least two 3-byte
+commands and receive at least two 3-byte responses in one video field
+time.  This tightens the constraint on command and response idle time
+and deck response time.  Assuming no idle time at all during commands
+and responses, this means that the sum of the deck's response time to
+both commands cannot exceed 12ms.  This is calculated based on the
+shortest field time (16.68333...ms), minus the 7.42...% above, minus
+two 3-character command times, minus two 3-character response times.
+We make a simplifying assumption and say the deck must respond to each
+command within 6ms.
+
+
+VIDEO DECK CONTROL ON SGI: PROBLEMS
+-----------------------------------
+
+Video deck control is when an SGI machine is the controller.
+
+This is the most common configuration in animation houses and smaller
+video production setups, where the SGI machine is the customer's main
+control console for all devices.  Typically, the SGI's video output
+connects to the deck's video input, and the SGI's video input
+connects to the deck's video output.
+
+As stated above, the controller needs to send serial commands
+precisely relative to video field boundaries, and measure when serial
+responses come relative to those boundaries.  Since the controller
+(the SGI machine) in this case is also doing video I/O, there is one
+more requirement.  When it brings a field from a video wire into
+memory, the SGI must be able to match up that field with the serial
+commands and responses that coincided with the video field over the
+serial wire.  When it prepares to output an in-memory video field over
+a video wire, the SGI must be able to match up that field with the
+commands that the SGI will transmit at the same time over the serial
+wire.
+
+A solution to deck control must meet all of the above requirements.
+
+The simplest solution to deck control would be this:
+
+/* see frame-accurate commands above for the definition of D1 and D2 */
+while (1)
+{
+  rightnow = the time right now;
+  t = ask the Video Library what time the next field starts;
+  /* we want to wake up at t+D1 */
+  /* INVARIANT: the difference between rightnow and the time which 
+   *            nanosleep will use to determine our user thread's actual
+   *            wakeup time is less than:
+   *              D2-serial_transmit_latency-length_of_code_path_below-D1. 
+   */
+  nanosleep(t+D1 - rightnow);
+
+  /* INVARIANT: the current time is >= t+D1 */
+
+  if (we sent a command on the last field)
+    {
+      the deck will have sent us a response by now;
+      /* INVARIANT: our user thread can now read all the bytes 
+       *            of one serial response 
+       */
+      read one complete Sony protocol response from the deck;
+    }
+  
+  if (we're receiving video from the deck)
+    {
+      based on the most recent Sony protocol responses,
+        compute the field number of the video image from the last field;
+
+      /* INVARIANT: the video image from the last field is available */
+      grab the video image from the last field;
+      store the image and its field number somewhere;
+    } 
+  else /* we're sending video to the deck */
+    {
+      based on the most recent Sony protocol responses,
+        decide which video image to send out the video port next field;
+      send that image to the Video Library;
+      /* INVARIANT: the Video Library will begin to output that field
+       *            once the current one is done
+       */
+    }
+  
+  compute what command to send out the serial port in this field;
+  send that command out the serial port;
+  /* INVARIANT: the bytes will start coming out the serial port
+   *            at the latest in serial_transmit_latency
+   */
+
+  /* INVARIANT: the current time is <= t+D2-serial_transmit_latency */
+}
+
+Unfortunately, none of the invariants above are supported on any SP
+SGI platform, and some of them are not even supported on MP platforms.
+
+For the above code to work, we would need a guarantee that our code
+executes between time t+D1 and t+D2-serial_transmit_latency.
+Currently, SGI offers no lower bound on the amount of time a user
+thread will be running during any interval whatsoever on any SP SGI
+system, even if it is the highest priority thread.  We would need a
+guarantee that we can run for long enough to execute the code path
+above in a window of time (of length D2-D1-serial_transmit_latency)
+which could be as small as 2ms-serial_transmit_latency.
+
+The percent of that window during which we need to execute is tiny.
+The code path above involves little more than poking a couple of
+hardware registers and accessing maybe 200 cache lines.  SGI needs to
+provide enough systems information (cycle counting utilities,
+worst-case cache and TLB numbers) so that a developer can compute an
+upper bound on their code's cycle requirement.  However, CPU
+throughput is not likely to be an issue in practice.  The tough issue
+is likely to be user thread scheduling latency (ie, getting that tiny
+bit of code to run at all).
+
+Say the user thread scheduling problems are solved, as they are on MP
+systems with REACT/Pro or some of the MP kudzu systems.  This is still
+not enough:
+
+- Currently, SGI offers no lower bound on the amount of time between
+when a user thread sends a byte to the serial port and when that byte
+will actually go out the serial jack.  The code above refers to this
+as serial_transmit_latency.  We would need a guaranteed lower bound on
+serial_transmit_latency which is less than
+
+  D2-length_of_code_path_above-D1
+
+Since length_of_code_path_above is a small fraction of D2-D1, this
+should be just under 2ms in the worst case.
+
+- Currently, SGI offers no lower bound on the amount of time between
+when a byte arrives at the serial jack and when we can read that byte
+from a user thread.  We would need a guaranteed lower bound on this
+serial receive latency which is less than the worst-case amount of
+time between the end of the deck's response and the point D1 ms into
+the next field.  The worst-case command and response take 15.01...ms
+so this is at least 1.66...ms for the shortest field time.
+
+Both of these I/O latencies are easily achievable in all current SGI
+serial hardware designs.  However, SGI needs to support some software
+interface which guarantees these latency bounds.
+
+
+VIDEO DECK CONTROL ON SGI: TSERIALIO SOLUTION (?)
+-------------------------------------------------
+
+We needed to support deck control on O2.  The cleanest, simplest, and
+cheapest way would have been the method described above.  Our pleas to
+support these guarantees in IRIX 6.3 were unsuccessful.
+
+So we were forced to develop tserialio, a hack which relied on the
+following observations:
+
+- Since serial commands have to be sent D1 to D2 ms after the start of
+a field, and D2-D1 can be as small as 2ms, then this means we need to
+be able to schedule serial bytes relative to video fields with plus or
+minus one millisecond accuracy.
+
+- Since our serial hardware does not support timestamping or
+scheduling (nor should it!), some piece of software has to run during
+those crucial milliseconds to do the serial RX and TX.
+
+- The only event on IRIX 6.3 which is guaranteed to occur every
+millisecond is the nasty kernel profiler tick.  It would be
+unacceptably burdensome to hang deck control code off the profiler
+tick.  It is really necessary to put all the deck control code there?
+
+- No.  Accuracy is not the same as latency.  The deck control code
+needs to timestamp RX bytes and schedule TX bytes accurately, but its
+maximum latency---the maximum time it must take to react to an
+incoming serial signal by producing a corresponding outgoing serial
+signal---is more like 300ms.  As explained above, 300ms is the cutoff
+latency where the customer declares the machine broken and sends it
+back.  We should really offer a guarantee much less than 300ms, but
+for this document 300ms is the hard requirement.
+
+The accuracy comes from tserialio.  It is a very simple driver and
+user-mode library which gives a user thread a way to schedule serial
+bytes for transmission out the serial jack in the future, and measure
+the time at which bytes from the past arrived at the serial jack.  The
+measuring and timestamping is accurate to plus or minus one
+millisecond relative to the start of video fields.  The tserialio
+driver (a serialio upper layer) hangs off the profiler tick doing
+serial RX and TX.  It accounts for hardware and kernel software I/O
+latencies, so the user can think in terms of times at the serial jack.
+
+An application that does deck control using tserialio looks more like this:
+
+while (1)
+{
+  nanosleep(any amount of time less than 300ms);
+
+  /* INVARIANT: at most 300ms have transpired since we last emptied out
+   *            the tserialio input port.
+   */
+  for(each response that is waiting from the deck)
+    {
+      get the response and its starting time from tserialio;
+      map that starting time to a particular field;
+      interpret the response in the context of that field;
+    }
+
+  /* INVARIANT: at most 300ms have transpired since we last enqueued
+   *            300ms worth of commands on the tserialio output port.
+   */
+  use tserialio to send enough serial commands so that we've got 300ms 
+    worth of serial commands buffered up.  tell tserialio to send each
+    command at the start of field + D1 ms;
+
+  if (we're receiving video from the deck)
+    {
+      /* INVARIANT: at most 300ms have transpired since we last emptied out
+       *            the Video Library input port.
+       */
+      for(each video image that is waiting from the deck)
+        {
+          get the video image and its starting time from the Video Library;
+          map that starting time to a particular Sony protocol response;
+          based on the corresponding Sony protocol response,
+            compute the field number of that video image;
+          store the image and its field number somewhere;
+        }
+    } 
+  else /* we're sending video to the deck */
+    {
+      based on the most recent Sony protocol responses,
+        decide which video images to send out the video port next field;
+      /* INVARIANT: at most 300ms have transpired since we last enqueued
+       *            300ms worth of commands on the tserialio output port.
+       */
+      use the Video Library to send enough images so we have 300ms buffered up;
+    }
+}
+
+As you can see, it is much more complex.  Each time around the loop,
+the code has to schedule up to 300ms of commands in the future, and
+deal with up to 300ms worth of responses from the past.
+
+You may wonder how the application can relate the input and output
+times of video fields and serial signals.  The tserialio library and
+driver know nothing whatsoever about video.  Both tserialio and the
+Video Library place all incoming and outgoing data on the common UST
+timeline.  UST is a systemwide, unadjusted timebase with microsecond
+resolution.  The application asks the Video Library to tell it the UST
+of each video field, and then it tells tserialio to send serial bytes
+at that UST plus D1 ms.  The application receives responses from
+tserialio stamped with UST, and it uses the video field USTs from the
+Video Library to figure out which field that response came from.
+
+This deck control "solution" ships with Adobe Premiere on O2.  It
+works most of the time.
+
+But it is still not a solution: we've changed the latency requirement
+from 2ms to 300ms, but as we said before, SGI neither guarantees nor
+supports any particular latency!
+
+Even before we go and worry about millisecond scheduling of a user
+thread, it would help the situation if SGI would pick and publish some
+easily manageable user thread scheduling latency number which we can
+guarantee and support today on each system, so that developers inside
+and outside SGI know how far ahead they need to buffer in their deck
+control applications.  That number should be at most 300ms.
+
+At the moment, we code in peril and developers are turned away by our
+failure to guarantee any number in particular.
+
+
+
+VIDEO DECK EMULATION ON SGI
+---------------------------
+
+So, you might think that the OS is out of the woods in terms of
+delivering low latencies.  Unfortunately, you have to also consider
+the other half of the problem:
+
+Video deck emulation is when an SGI machine is the deck instead of the
+controller.
+
+This is the most common configuration in video production studios,
+where the customer controls tens or hundreds of decks (only some of
+which are actually SGI machines) simultaneously from a large,
+custom-made physical console.  The console also controls video
+switching networks and video signal processing boxes.  The console
+instructs the decks to play and record, and switches their video
+signals to each other and to and from the effects units.
+
+Now that the SGI machine is the deck, it must respond to commands from
+the controller with a corresponding response in 6ms.  The deck cannot
+predict what commands the controller will send it.  There is simply no
+way of getting around it: in order to do deck emulation, a user thread
+must be able to wake up, read a serial command, and transmit a serial
+response, such that the time from the end of the command on the serial
+line to the beginning of the response on the serial line does not
+exceed 6ms.  This requires both user thread scheduling latency and
+I/O latency guarantees.
+
+Since the SGI machine is also doing video I/O, it shares the
+requirements of matching up video fields with serial commands and
+responses, described above under video deck control.  For example, the
+deck must be able to match a video field up with a Current Time Sense
+command from the controller field-accurately, so that it can produce a
+field-accurate response.
+
+Since the controller will be sending state-changing commands to the
+SGI machine (the deck), it must be able to react to these commands on
+a precise field.  The deck gets to choose the latency E in fields
+which it takes to execute a given state-changing command.  This
+latency can be as high as 10 fields (around 170ms or 200ms, depending
+on video flavor).  So as long as we can guarantee user thread
+scheduling on a finer granularity than 170ms, then the state-changing
+problem is an accuracy problem.  It could be solved either by user
+thread scheduling latency and I/O latency guarantees, or some kernel
+hack to the video driver like tserialio was to the serial driver.
+Since we need 6ms user thread scheduling guarantees for the serial
+case above, we should only need an additional video I/O latency
+guarantee to achieve proper behavior for state-changing commands.
+
+
+SUMMARY: CONTROL
+----------------
+
+SGI does not currently offer the guarantees it takes to do correct
+deck control on any currently shipping platform, but in some cases
+this would be easy.  To support deck control, a platform must follow
+one of these two recipes:
+
+RECIPE A:
+
+- support tserialio, and
+- guarantee that a piece of code in a user thread can run at least once 
+  within each 300ms interval.
+
+or
+
+RECIPE B:
+
+- guarantee that a piece of code in a user thread can run once 
+  within a 2ms-serial_transmit_latency interval relative to the start 
+  of each video field, and
+- guarantee a serial_transmit_latency of at most 1ms, and
+- guarantee a serial receive latency of at most 1ms.
+
+Many developers wish to run on more than one SGI platform, and for the
+most part will be unwilling to rewrite their code to do this.  These
+developers would choose whatever recipe was available on most platforms.
+
+It would be greatly preferable to make recipe B available on all
+platforms.  It yields less OS code to test and less developer code to
+write.
+
+Recipe A may be easier to port in the short term, though in the long
+term it will have a higher continuing support cost than recipe B.
+Users access tserialio through a user-mode shared library, not by
+talking to a UNIX device node.  On systems where we guarantee that a
+user thread can run once in every:
+
+  1ms - serial_receive_latency - serial_transmit_latency
+
+interval, we can easily implement tserialio in user-mode only and need
+no kernel work.  Notice that these requirements are stricter than those
+for recipe B, so such a platform would also be able to support recipe B.
+
+Here is what we have now:
+
+Indigo, Indy, Indigo2: neither
+O2:                    recipe A minus the 300ms scheduling guarantee
+Octane:                neither
+Challenge/Onyx:        recipe B minus both serial latency guarantees
+Origin/Onyx2:          recipe B minus both serial latency guarantees
+
+
+SUMMARY: EMULATION
+------------------
+
+SGI does not currently offer the guarantees it takes to do correct
+deck emulation on any currently shipping platform.  To support deck
+emulation, a platform must follow this recipe:
+
+RECIPE
+
+- guarantee that a piece of code in a user thread can wake up, read a
+serial command, and transmit a serial response, such that the time
+from the end of the command on the serial line to the beginning of the
+response on the serial line does not exceed 6ms.  many mixes of user
+thread scheduling guarantees and serial I/O latency guarantees could
+achieve this.
+
+This recipe assumes the user thread can use these guarantees to
+execute state-changing commands from the controller in a timely
+manner.  In reality there may be some extra VL work (video I/O latency
+work) to make this happen.
+
+Here is what we have now:
+
+Indigo, Indy, Indigo2: neither scheduling nor I/O latency guarantees
+O2:                    neither scheduling nor I/O latency guarantees
+Octane:                neither scheduling nor I/O latency guarantees
+Challenge/Onyx:        scheduling, but no I/O latency guarantees
+Origin/Onyx2:          scheduling, but no I/O latency guarantees
+

@@ -1,0 +1,934 @@
+#!/sbin/sh
+#Tag 0x00000f00
+
+# Initialize/Shutdown the standard and optional network software.
+#
+# $Revision: 5.96 $
+#
+# If the IP address for this host is the default 192.0.2.1 Internet test
+# address, the software is configured for loopback (standalone) mode.
+# An Internet address other than the default must be chosen in order to
+# configure the network properly. See the "Network Administration" chapter
+# in the Network Communications Guide or details on selecting an address.
+#
+# NOTE: Defaults for network interface names and addresses can be changed by
+# editting /etc/config/netif.options. Therefore, you don't need to edit
+# this file.
+#
+# A daemon or subsystem is enabled if its configuration flag in the
+# /etc/config directory in the "on" state.  /sbin/chkconfig is used
+# to test a flag's state (see chkconfig(1M) for details). If the flag
+# file is missing, the flag is considered off.
+#
+#	Flag		Action if On
+#	network		Allow incoming & outgoing traffic. This flag can be
+#			 set off if you need to isolate the machine from
+#			 network without removing cables.
+#	verbose		Print name of daemons as they are started & other info
+#	gated		Start Cornell routing daemon instead of BSD routed
+#	mrouted		Start Stanford IP multicast routing daemon
+#			 (Useful only on gateways)
+#	named		Start 4.3BSD Internet domain name server
+#	rsvpd		Start ISI RSVP daemon
+#	rwhod		Start 4.3BSD rwho daemon
+#	timed		Start 4.3BSD time synchronization daemon
+#	timeslave	Start SGI time synchronization daemon
+#	hypernet	Initialize HyperNET controller and routes
+#	routed		Start 4.3BSD RIP routing daemon
+#	ipfilterd	Enable SGI IP Packet Filtering daemon
+#
+# The following flags are installed only in the optional products:
+#
+#	nfs		Start NFS daemons, mount NFS filesystems
+#	autofs		Start the NFS autofs daemon (overrides automount)
+#	automount	Start the NFS automounter daemon
+#	lockd		Start the NFS lock and status daemons
+#	pcnfsd		Start the PC-NFS server daemon
+#	rarpd		Start the Reverse ARP daemon
+#	snetd		Start the DLPI daemon - snetd
+#	nsd		Start the name service daemon - nsd
+#	ypmaster	Become the NIS master; start passwd server
+#	4DDN		Initialize 4DDN (DECnet) software
+#
+# Site-dependent options for daemons belong in "options" files in /etc/config.
+# Certain daemons require options so their options file must contain valid
+# information. See the daemon's manual page in section 1M for details on
+# valid options. If this host is on networks that use subnetting, add the
+# appropriate 'netmask' to the ifconfig-*.options files (see ifconfig(1M) for
+# details on netmasks).
+#
+#	File			Status
+#	autofs.options		optional
+#	automount.options	optional
+#	biod.options		optional
+#	gated.options		optional
+#	ifconfig-1.options	optional    (for primary network interface)
+#	ifconfig-2.options	optional    (for 1st gateway network interface)
+#	ifconfig-3.options	optional    (for 2nd gateway network interface)
+#	ifconfig-4.options	optional    (for 3rd gateway network interface)
+#	ifconfig-hy.options	optional    (for HyperNET interface)
+#	inetd.options		optional
+#	lockd.options		optional
+#	mrouted.options		optional
+#	named.options		optional
+#	netif.options		optional    (to select different primary &
+#					     gateway interfaces, etc.)
+#	nfsd.options		optional
+#	nsd.options		optional
+#	portmap.options		optional
+#	rarpd.options		optional
+#	routed.options		optional
+#	rpc.passwd.options	optional
+#	rsvpd.options		optional
+#	rwhod.options		optional
+#	snetd.options		optional
+#	static-route.options	optional    add static routes
+#	timed.options		optional
+#	timeslave.options	required
+#
+# In addition, site-dependent configuration commands related to networking
+# should be put in a separate shell script called /etc/init.d/network.local.
+# Make symbolic links in /etc/rc0.d and /etc/rc2.d to this file to have it
+# called during system startup and shutdown:
+#    ln -s /etc/init.d/network.local /etc/rc0.d/K39network # before network
+#    ln -s /etc/init.d/network.local /etc/rc2.d/S31network # after network
+# The script is called with one argument ("start" or "stop").
+#
+#
+# Copyright 1988-1995 Silicon Graphics, Inc.
+# All rights reserved.
+#
+# This is UNPUBLISHED PROPRIETARY SOURCE CODE of Silicon Graphics, Inc.;
+# the contents of this file may not be disclosed to third parties, copied or
+# duplicated in any form, in whole or in part, without the prior written
+# permission of Silicon Graphics, Inc.
+#
+# RESTRICTED RIGHTS LEGEND:
+# Use, duplication or disclosure by the Government is subject to restrictions
+# as set forth in subdivision (c)(1)(ii) of the Rights in Technical Data
+# and Computer Software clause at DFARS 252.227-7013, and/or in similar or
+# successor clauses in the FAR, DOD or NASA FAR Supplement. Unpublished -
+# rights reserved under the Copyright Laws of the United States.
+
+CONFIG=/etc/config
+IS_ON=/sbin/chkconfig
+
+# The verbose flag controls the printing of the names of daemons as they
+# are started and the printing of NFS-mounted filesystem names as they are
+# mounted and unmounted.
+
+if $IS_ON verbose; then
+    ECHO=echo
+    VERBOSE=-v
+    QUIET=
+    LOGGER='lfmt -l network -s warn'
+else		# For a quiet startup and shutdown
+    ECHO=:
+    VERBOSE=
+    QUIET=-q	# also used in static-route.options
+    LOGGER='lfmt -l network -s warn -G 3'
+fi
+
+PATH=$PATH:/usr/etc/yp:.
+NFS=/usr/etc
+YPDOMFILE=/var/yp/ypdomain
+YPSETDOM=/usr/bin/domainname
+IFCONFIG=/usr/etc/ifconfig
+ROUTE=/usr/etc/route
+MSGTIME=10			# number of seconds to display error message
+localhost=127.0.0.1		# definition of 'localhost' in /etc/hosts
+
+
+if $IS_ON cap_su_off && test "`sysconf MAC`" -eq 1; then
+    CSU=csu_off -C
+    csu_off () {
+	while true; do
+	    case "$1" in
+	    -M) shift 2;;
+	    -M?*) shift;;
+	    CAP*) shift;;
+	    -C) shift 2;;
+	    -C?*) shift;;
+	    *) break;;
+	    esac
+	done
+	shift
+	eval $*
+	return
+    }
+else
+    CSU="/sbin/suattr -C"
+fi
+CAP_MNT="$CSU CAP_MOUNT_MGT+ip -c"
+CAP_NET="$CSU CAP_NETWORK_MGT+ip -c"
+CAP_PORT="$CSU CAP_PRIV_PORT+ip -c"
+CAP_PORT_MNT="$CSU CAP_PRIV_PORT,CAP_MOUNT_MGT+ip -c"
+CAP_MREAD_MNT="$CSU CAP_MAC_READ,CAP_MOUNT_MGT+ip -c"
+CAP_DEMON="$CSU CAP_NETWORK_MGT,CAP_PRIV_PORT+ip -c"
+CAP_INFO="$CSU CAP_SYSINFO_MGT+ip -c"
+CAP_DEVNET="$CSU CAP_DEVICE_MGT,CAP_NETWORK_MGT+ip -c"
+
+
+nfs_on () {
+    $IS_ON nfs && test -x /usr/sbin/havenfs && $CAP_MNT "/usr/sbin/havenfs"
+    return
+}
+
+svr4net_on ()
+{
+    test -c /dev/tcp && (echo </dev/tcp) >/dev/null 2>&1
+    return
+}
+
+configure () {
+#  args:  $1 = interface name, $2 = address, $3 = ifconfig options filename
+#	  $4 = "primary" or ""
+    $ECHO "Configuring $1 as $2"
+    CONF_OPT="`cat $3 2> /dev/null`"
+    case "$1" {
+	ipg* | xpi* | rns*)
+	    if /usr/etc/smtconfig $1 $2 $4 $CONF_OPT 2> /dev/null
+	    then :
+	    else
+		$CAP_DEVNET "$IFCONFIG $1 inet $2 $4 $CONF_OPT" 2> /dev/null
+	    fi
+	    ;;
+	mtr*)
+	    if test -s /etc/config/${1}config.options; then
+		topt="`cat /etc/config/${1}config.options`"
+	    else
+		topt="restart"
+	    fi
+	    # load the firmware to the driver
+	    /usr/etc/mtrconfig $1 $topt 2> /dev/null
+	    $CAP_DEVNET "$IFCONFIG $1 inet $2 $4 $CONF_OPT" 2> /dev/null
+	    ;;
+	eg*)
+	    $ECHO "Downloading firmware for $1"
+	    /usr/etc/egconfig `cat $CONFIG/$1.options 2> /dev/null` $1
+	    $CAP_DEVNET "$IFCONFIG $1 inet $2 $4 $CONF_OPT" 2> /dev/null
+	    ;;
+        gsn*)
+	      # Initialize the GSN interface. 
+	      # Needs to be done before ifconfig of IP addr.
+	      if test -s /etc/init.d/network.gsn1; then
+                  /etc/init.d/network.gsn1 start
+	      fi
+	      $CAP_DEVNET "$IFCONFIG $1 inet $2 $4 $CONF_OPT" 2> /dev/null
+	      ;;
+	*)
+	    $CAP_DEVNET "$IFCONFIG $1 inet $2 $4 $CONF_OPT" 2> /dev/null
+	    ;;
+    }
+    if test $? -ne 0 ; then
+	$LOGGER "Failed to configure $1 as $2.\n"
+	sleep $MSGTIME
+	return 1
+    fi
+    return 0
+}
+
+# print a warning message when we try to configure the same interface twice
+config_conflict()
+{
+    echo "\nWARNING:  $1 has already been configured."
+    echo "Please read the notes in /etc/config/netif.options for "
+    echo "likely reasons for this and change your configuration\n"
+}
+
+
+DLMNTOPTS='-b /ns'
+if test "`/sbin/nvram diskless 2> /dev/null`" -eq 1; then
+    DLMNTOPTS='-b /,/usr,/sbin,/swap,/ns'
+    RFLUSHFLAG=-fqn
+    # If an interface is being used for diskless, don't shut it down when
+    #	turning off the system.
+    DLIF=`/sbin/nvram dlif 2> /dev/null`
+else
+    RFLUSHFLAG=-Fqn
+fi
+
+# Turn off an interface that needs to be turned off when the system
+#   is shutdown, but do not turn off the interface used by a diskless
+#   system, since that is catastrophic.
+#   Do not bother poking at non-existent interfaces.
+if_off () {
+#  args: $1 = interface name
+    eval _ifname='$HAVE_'$1
+    if test "$_ifname" = "$1" -a "$1" != "$DLIF"; then
+	$CAP_DEVNET "$IFCONFIG $1 down" 2> /dev/null
+    fi
+}
+
+
+# Discover the interfaces we have by creating variables of the
+#   form HAVE_xxx
+IFNAMES="`ifconfig -a \
+	| sed -n -e '/^lo0/d' -e '/^ /d' -e 's/^\([^:]*\):.*/HAVE_\1=\1/p'`"
+eval $IFNAMES
+
+
+case "$1" in
+'start')
+
+    # Check the Internet address to decide how to configure things.
+
+    HOSTNAME=`/usr/bsd/hostname`
+    netstate="loopback"
+    if test -x /usr/bsd/hostid; then
+	if $CAP_INFO "/usr/bsd/hostid -h $HOSTNAME"; then
+	    if test "`/usr/bsd/hostid`" = "0xc0000201"; then
+		reason="${HOSTNAME}'s Internet address is the default.\n"
+	    elif $IS_ON network; then
+		netstate="ok"
+	    fi
+	else
+	    $CAP_INFO "/usr/bsd/hostid 0"
+	    reason="Cannot find $HOSTNAME in /etc/hosts.\n"
+	fi
+    elif $IS_ON network; then
+	netstate="ok"	# assume it is ok
+    fi
+
+    if svr4net_on; then
+	SHORTNAME=`/usr/bsd/hostname -s`
+	echo $SHORTNAME $SHORTNAME > /etc/net/ticlts/hosts    2>/dev/null
+	echo $SHORTNAME $SHORTNAME > /etc/net/ticots/hosts    2>/dev/null
+	echo $SHORTNAME $SHORTNAME > /etc/net/ticotsord/hosts 2>/dev/null
+    fi
+
+    # Download remote host database
+    if test -x /usr/etc/rhost; then
+	$ECHO "Downloading Remote Host Database"
+	HOSTRESORDER=local $CAP_NET "/usr/etc/rhost"
+    fi
+
+    # The following tests determine the names and addresses of the primary
+    # and gateway interfaces for typical configurtations, where
+    #   Name    = interface name reported by "/usr/etc/netstat -i".
+    #   Address = hostname in /etc/hosts or an IP address in dot notation.
+    #
+    # Edit /etc/config/netif.options to override values computed below.
+    #
+    # Note: If this host has more than 2 interfaces, you must edit
+    # /etc/config/netif.options to set the ifXname and ifXaddr variables
+    # as appropriate, and if this host has more than 8 interfaces, you must
+    # also set if_num to the number of interfaces.
+    #
+    # Suggested addresses for the primary and gateway interfaces.
+    if1addr=$HOSTNAME
+    if2addr=gate-$HOSTNAME
+    if_num=9
+
+    # If FDDI is present, make it the primary interface and
+    # Ethernet the gateway interface.
+    if test -n "$HAVE_ipg0"; then
+	if1name=ipg0
+    elif test -n "$HAVE_xpi0"; then
+	if1name=xpi0
+    elif test -n "$HAVE_rns0"; then
+	if1name=rns0
+    fi
+
+    if test "$if1name"; then
+	if test -n "$HAVE_et0"; then
+	    # Challenge/Onyx & POWER Series systems
+	    if2name=et0
+	elif test -n "$HAVE_ec0"; then
+	    # Indigo & Personal Iris series
+	    if2name=ec0
+	elif test -n "$HAVE_ef0"; then
+	    if2name=ef0
+	elif test -n "$HAVE_fxp0"; then
+	    if2name=fxp0
+	fi
+    elif test -n "$HAVE_et0"; then
+	if1name=et0
+	if test -n "$HAVE_et1"; then
+	    if2name=et1
+	elif test -n "$HAVE_fxp0"; then
+	    if2name=fxp0
+	fi
+    elif test -n "$HAVE_ec0"; then
+	if1name=ec0
+	if test -n "$HAVE_ec1"; then
+	    if2name=ec1
+	    if test -n "$HAVE_ec2"; then
+		if3name=ec2
+	    fi
+	elif test -n "$HAVE_ec2"; then
+	    if2name=ec2
+	elif test -n "$HAVE_fxp0"; then
+	    if2name=fxp0
+	fi
+    elif test -n "$HAVE_ef0"; then
+	if1name=ef0
+	if test -n "$HAVE_ef1"; then
+	    if2name=ef1
+	fi
+    elif test -n "$HAVE_fxp0"; then
+	if1name=fxp0
+    fi
+
+    # Obtain site-dependent values for if1name,if1addr,...,if64name,if64addr.
+    if test -s $CONFIG/netif.options; then
+	. $CONFIG/netif.options
+    fi
+
+    # Do site-dependent ha work for pre-start
+    #
+    # The HA script must be started before doing anything with
+    # the interfaces because the HA script may change interface
+    # related parameters.
+    if test -s /etc/init.d/network.ha.prestart; then
+	. /etc/init.d/network.ha.prestart
+    fi
+
+    # IP Packet Filtering daemon.
+    #
+    # It should be started before any gateway interface is configured "up"
+    # in order to guarantee that all inbound packets are filtered.
+    if $IS_ON ipfilterd && test -x /usr/etc/ipfilterd; then
+	/sbin/killall ipfilterd
+	IPFILTERD_OPTS="`cat $CONFIG/ipfilterd.options 2> /dev/null`"
+	$CAP_NET "/usr/etc/ipfilterd $IPFILTERD_OPTS"
+	$ECHO "Starting ipfilterd."
+    fi
+
+    # Flush all old routes iff not diskless
+    $CAP_NET "$ROUTE $RFLUSHFLAG"
+
+    # Configure the main network interface.
+    if test "$netstate" = "ok"; then
+	# update E-Plex 8-port Ethernet firmware.
+	if test -x /usr/etc/epfirm; then
+	    $CAP_NET "/usr/etc/epfirm $VERBOSE"
+	    if test $? -ne 0 ; then
+		$LOGGER "Failed to install E-Plex firmware.\n"
+		sleep $MSGTIME
+	    fi
+	fi
+	if ! configure $if1name $if1addr $CONFIG/ifconfig-1.options primary; then
+	    reason="Cannot access primary interface, $if1name.\n"
+	    netstate="loopback"
+	fi
+    else
+	netstate="loopback"
+    fi
+
+    if test $netstate = "loopback"; then
+	$LOGGER "${reason}Using standalone network mode.\n"
+	sleep $MSGTIME
+
+	if test -n "$if1name"; then
+	    $CAP_DEVNET "$IFCONFIG $if1name inet $if1addr" 2>/dev/null
+	    $CAP_DEVNET "$IFCONFIG $if1name down" 2>/dev/null
+	fi
+	$CAP_DEVNET "$IFCONFIG lo0 $localhost"
+	$CAP_NET "$ROUTE -q add 224.0 $localhost -interface"
+
+    else
+	# Initialize other boards if this host is a gateway or multi-homed
+	# (no harm if they are missing). Systems with more than 2 interfaces
+	# must update /etc/config/netif.options (see comments in the file).
+	num=2
+
+	while test $num -le $if_num; do
+	    eval _ifname='$'if${num}name _ifaddr='$'if${num}addr
+	    if test -n "$_ifname"; then
+		eval _ifhave='$'HAVE_$_ifname
+		if test -n "$_ifhave"; then
+		    # before configuring, check that there is no name
+		    # conflict with a default value chosen automatically above.
+		    # we just check the first three interfaces, since these
+		    # can have their if?addr and if?name values set above.
+		    cc_num=1
+		    cc_lim=$num
+		    if test $cc_lim -gt 4 ; then
+			cc_lim=4
+		    fi
+		    while test $cc_num -lt $cc_lim; do
+			eval _ifname_cc='$'if${cc_num}name
+			eval _ifaddr_cc='$'if${cc_num}addr
+			if [ "$_ifname" = "$_ifname_cc" ] ; then
+			    config_conflict $_ifname
+			fi
+			if [ "$_ifaddr" = "$_ifaddr_cc" ] ; then
+			    config_conflict $_ifaddr
+			fi
+			cc_num=`expr $cc_num + 1`
+		    done
+		    configure $_ifname $_ifaddr $CONFIG/ifconfig-$num.options
+		fi
+	    fi
+	    num=`expr $num + 1`
+	done
+
+
+	# Initialize the HyperNET interface.
+	if $IS_ON hypernet && test -n "$HAVE_hy0"  &&
+		configure hy0 $HOSTNAME-hy $CONFIG/ifconfig-hy.options; then
+	    /usr/etc/hyroute hy0 -s /usr/etc/hyroute.conf
+	fi
+
+	# Initialize the HIPPI interface.
+	if test -s /etc/init.d/network.hippi; then
+		. /etc/init.d/network.hippi
+	fi
+
+	# Initialize ATM TCP/IP software.
+	if test -s /etc/init.d/network.atm; then
+		. /etc/init.d/network.atm
+	fi
+
+	# Configure network multi-client striping
+	if $IS_ON ls && test -s /etc/init.d/network.ls; then
+		. /etc/init.d/network.ls
+	fi
+
+	# Configure point-to-point network striping
+	if $IS_ON lsp && test -s /etc/init.d/network.lsp; then
+		. /etc/init.d/network.lsp
+	fi
+
+	# Initialize the loop-back interface
+	$CAP_DEVNET "$IFCONFIG lo0 $localhost"
+    fi
+
+    # Send traffic for this host through lo0 for better performance
+    HOSTRESORDER=local $CAP_NET "$ROUTE -q add $if1addr $localhost -host"
+
+    # make 255.255.255.255 do something by pointing out the primary interface
+    if test "$if1name"; then
+	BCAST=`$CAP_DEVNET "$IFCONFIG $if1name"	    \
+		| sed -n -e 's/.*broadcast \([0-9.]*\).*/\1/p' 2>/dev/null`
+	if test "$BCAST"; then
+	    $CAP_NET "$ROUTE -qn add 255.255.255.255 $BCAST"
+	fi
+    fi
+
+
+    # Add static routes before any routing daemons get theirs installed
+    if test $netstate = "ok" -a -s $CONFIG/static-route.options; then
+	. $CONFIG/static-route.options
+    fi
+
+    $ECHO "Network daemons:\c"
+
+    /sbin/killall gated routed mrouted rpcbind portmap named rsvpd
+
+    if test -x /usr/etc/satmpd; then
+	$CSU CAP_NETWORK_MGT,CAP_PRIV_PORT+ip -M userlow -c "/usr/etc/satmpd"
+						    $ECHO " satmpd\c"
+    fi
+
+    if test $netstate = "ok" ; then
+
+	# Start either gated or routed.
+	if $IS_ON gated && test -x /usr/etc/gated ; then
+	    GATED_OPTS="`cat $CONFIG/gated.options 2> /dev/null`"
+	    $CAP_PORT "/usr/etc/gated $GATED_OPTS" &
+						    $ECHO " gated\c"
+	elif $IS_ON routed && test -x /usr/etc/routed ; then
+	    ROUTED_OPTS="`cat $CONFIG/routed.options 2> /dev/null`"
+	    $CAP_DEMON "/usr/etc/routed $ROUTED_OPTS" &
+						    $ECHO " routed\c"
+	fi
+
+	# Set the default route for all IP multicast packets to the
+	#   primary interface.
+	HOSTRESORDER=local $CAP_NET "$ROUTE -q add 224.0 $if1addr -interface"
+
+	if $IS_ON mrouted && test -x /usr/etc/mrouted; then
+	    MROUTED_OPTS="`cat $CONFIG/mrouted.options 2> /dev/null`"
+	    $CAP_NET "/usr/etc/mrouted $MROUTED_OPTS" &
+						    $ECHO " mrouted\c"
+	fi
+    fi
+
+    # Start rpcbind(1M) if SVR4 networking has been installed.
+    if test -x /usr/etc/rpcbind && svr4net_on; then
+	/usr/etc/rpcbind `cat $CONFIG/rpcbind.options 2> /dev/null` &
+						    $ECHO " rpcbind\c"
+    elif test -x /usr/etc/portmap; then
+	PMAP_OPTS="`cat $CONFIG/portmap.options 2> /dev/null`"
+	$CAP_DEMON "/usr/etc/portmap $PMAP_OPTS" &
+						    $ECHO " portmap\c"
+    fi
+
+    # Berkeley Internet Name Domain server:
+    #
+    #   It has to be started before NIS and NFS so they can use hostnames
+    #   not in /etc/hosts.
+    if $IS_ON named && test -x /usr/sbin/named; then
+	NAMED_OPTS="`cat $CONFIG/named.options 2> /dev/null`"
+	$CSU CAP_NETWORK_MGT,CAP_PRIV_PORT,CAP_MAC_UPGRADE,CAP_MAC_DOWNGRADE,CAP_MAC_RELABEL_OPEN,CAP_MAC_MLD+ip -c "/usr/sbin/named $NAMED_OPTS" </dev/null &
+						    $ECHO " named\c"
+    fi
+
+    # RSVP daemon  (logs to /var/tmp/.rsvpd.log)
+    if $IS_ON rsvpd && test -x /usr/etc/rsvpd; then
+	RSVPD_OPTS="`cat $CONFIG/rsvpd.options 2> /dev/null`"
+	$CAP_DEMON "/usr/etc/rsvpd $RSVPD_OPTS" &
+						    $ECHO " rsvpd\c"
+    fi
+
+    $ECHO "."
+
+
+    # Define the NIS domain name.
+    if test -x $YPSETDOM; then
+	# The ypdomain file is needed only if NIS domain != Internet domain.
+	YPDOMAIN=`cat $YPDOMFILE 2> /dev/null`
+
+	if test ! "$YPDOMAIN" ; then
+	    # Extract the domain from the hostname.
+	    YPDOMAIN=`echo $HOSTNAME | sed -e 's/[^.]*\.\(.*\)/\1/'`
+	    if test "$YPDOMAIN" = "$HOSTNAME"; then
+		# Hostname does not contain domain.
+		YPDOMAIN=""
+	    fi
+	fi
+
+	# Set the domain even if NIS is not "on" so nsd can be
+	# started by hand later.
+	if test "$YPDOMAIN"; then
+	    $CAP_INFO "$YPSETDOM $YPDOMAIN"
+	fi
+    fi
+
+    # Fire up name service daemons.
+    #
+    # Note: nsd has replaced ypserv and ypbind.
+
+    if test $netstate = "ok" && $IS_ON nsd ; then
+	$ECHO "Name services:\c"
+	/sbin/killall -TERM nsd
+
+	if test -x $NFS/nsd; then
+	    NSD_OPTIONS="`cat $CONFIG/nsd.options 2> /dev/null`"
+	    $CSU CAP_MAC_UPGRADE,CAP_MAC_DOWNGRADE,CAP_MAC_RELABEL_OPEN,CAP_MAC_MLD,CAP_MOUNT_MGT,CAP_NETWORK_MGT,CAP_PRIV_PORT,CAP_MAC_WRITE+ip -c "$NFS/nsd $NSD_OPTIONS"
+							$ECHO " nsd\c"
+	fi
+
+	if $IS_ON ypserv ; then
+	    if ! grep -q -s nisserv /var/ns/domains/*/nsswitch.conf ; then
+		$LOGGER "No NIS domains found to serve.\nchkconfig ypserv off or ypinit the system.\n"
+	     fi
+        fi
+
+	if $IS_ON ypmaster ; then
+	    if test ! "$YPDOMAIN" ; then
+		$LOGGER "Cannot start NIS -- domain name not defined.\nEdit $YPDOMFILE to contain your domain name and reboot.\n"
+		sleep $MSGTIME
+	    else
+		YPDBDIR=/var/ns/domains/$YPDOMAIN
+
+		$CAP_INFO "$YPSETDOM $YPDOMAIN"
+		/sbin/killall rpc.passwd
+
+		if test -x $NFS/rpc.passwd; then
+
+		    # A reasonable alternate password file is '/etc/passwd.yp'
+		    #	This allows the valid accounts on the NIS master
+		    #	to not be all valid accounts in the network.
+
+		    PASSWD=`cat $CONFIG/rpc.passwd.options 2> /dev/null`
+
+		    $CAP_DEMON "$NFS/rpc.passwd ${PASSWD:=/etc/passwd} -m passwd" &
+							$ECHO " rpc.passwd\c"
+		fi
+	    fi
+	fi
+
+	$ECHO "."
+
+    fi
+
+    # Load the GSN static HARP mapping table. Needs to be done after named is launched.
+    if test -s /etc/init.d/network.gsn2; then
+        . /etc/init.d/network.gsn2
+    fi
+
+    # Fire up AFS if configured - this needs to occur after networking
+    # is enabled but before nfsd's are run
+    if test -x /etc/init.d/afs ; then
+	/etc/init.d/afs netstart
+    fi
+
+	#
+	# cachefs must start prior to exportfs
+	#
+	if test -x /etc/init.d/cachefs ; then
+	/etc/init.d/cachefs netstart
+	fi
+
+    # Fire up NFS daemons if the kernel supports NFS and the daemons are
+    # present and executable.  Also mount the NFS filesystems in /etc/fstab.
+    if test "$netstate" = "ok" && nfs_on ; then
+
+	# Clear this host from the client list (/etc/rmtab) of all
+	# servers on the network.  Remove any stale exports from
+	# the current exports list (/etc/xtab).
+
+	$CAP_PORT_MNT "/sbin/umount -aT nfs,nfs3,nfs3pref ${DLMNTOPTS}" > /dev/null 2>&1
+	$CAP_MREAD_MNT "$NFS/exportfs -au" > /dev/null 2>&1
+	$CAP_MREAD_MNT "$NFS/exportfs -a $VERBOSE"
+
+	$ECHO "NFS daemons:\c"
+
+	    /sbin/killall nfsd biod
+
+	    # NFS server daemons
+            if test -x $NFS/nfsd; then
+                NNFSD=`cat $CONFIG/nfsd.options 2> /dev/null`
+		$CAP_DEMON "$NFS/nfsd $NNFSD";
+                                $ECHO " nfsd\c"
+            fi
+
+	    # NFS client bio daemons
+	    if test -x $NFS/biod; then
+		NBIOD=`cat $CONFIG/biod.options 2> /dev/null`
+		$CAP_MNT "$NFS/biod ${NBIOD:=4}";
+				$ECHO " biod\c"
+	    fi
+
+	$ECHO "."
+
+	$CAP_PORT_MNT "/sbin/mount $VERBOSE -aT nfs,nfs3,nfs3pref ${DLMNTOPTS}"
+
+	if $IS_ON automount || $IS_ON autofs || $IS_ON lockd || \
+	   $IS_ON pcnfsd ; then
+	    $ECHO "Other NFS daemons:\c"
+
+	    # Start the NFS lock and status daemons
+	    if $IS_ON lockd ; then
+		if test -x $NFS/rpc.statd ; then
+		    /sbin/killall rpc.statd
+		    $CAP_NET "$NFS/rpc.statd ""`cat $CONFIG/statd.options 2> /dev/null`"
+							$ECHO " statd\c"
+		fi
+		if test -x $NFS/rpc.lockd ; then
+		    /sbin/killall rpc.lockd
+		    $CSU CAP_CHROOT,CAP_NETWORK_MGT,CAP_PRIV_PORT,CAP_DAC_WRITE,CAP_MAC_READ,CAP_MAC_WRITE+ip -c "$NFS/rpc.lockd ""`cat $CONFIG/lockd.options 2> /dev/null`" &
+							$ECHO " lockd\c"
+		fi
+	    fi
+
+	    # PC-NFS server daemon
+	    if $IS_ON pcnfsd && test -x $NFS/pcnfsd ; then
+		$NFS/pcnfsd & $ECHO " pcnfsd\c"
+	    fi
+
+	    # Start the NFS automounter daemon
+	    if $IS_ON autofs && test -x $NFS/autofsd && \
+				test -x $NFS/autofs; then
+		/sbin/killall -k 30 -TERM automount
+		/sbin/killall -k 10 autofs autofsd
+		AUTOFSD_OPTS="`cat $CONFIG/autofs.options 2> /dev/null`"
+		$CSU CAP_MOUNT_MGT,CAP_SCHED_MGT,CAP_MAC_READ,CAP_MAC_WRITE,CAP_AUDIT_WRITE,CAP_MAC_UPGRADE,CAP_MAC_DOWNGRADE,CAP_MAC_RELABEL_OPEN,CAP_MAC_MLD,CAP_NETWORK_MGT,CAP_PRIV_PORT+ip -c "$NFS/autofsd $AUTOFSD_OPTS" >/dev/null 2>&1
+							$ECHO " autofsd\c"
+		AUTOFS_OPTS="`cat $CONFIG/autofs.options 2> /dev/null`"
+		$CSU CAP_MOUNT_MGT,CAP_MAC_READ+ip -c "$NFS/autofs $AUTOFS_OPTS" >/dev/null 2>&1
+	    elif $IS_ON automount && test -x $NFS/automount ; then
+		/sbin/killall -k 30 -TERM automount
+		AUTOMOUNT_OPTS="`cat $CONFIG/automount.options 2> /dev/null`"
+		$NFS/automount $AUTOMOUNT_OPTS >/dev/null 2>&1
+							$ECHO " automount\c"
+	    fi
+
+
+	    $ECHO "."
+	fi
+    fi
+
+
+    # Daemons started below may reside on NFS filesystems.
+
+    $ECHO "Internet daemons:\c"
+
+	/sbin/killall inetd timed timeslave rarpd rwhod
+
+	# Internet super-server:
+	#
+	#  Invokes servers in /usr/etc/inetd.conf. Use the inetd.options file
+	#  to specify a different configuration file.
+
+	if test -x /usr/etc/inetd; then
+	    INETD_OPTS="`cat $CONFIG/inetd.options 2> /dev/null`"
+	    $CAP_DEMON "/usr/etc/inetd $INETD_OPTS" < /dev/null
+						$ECHO " inetd\c"
+	fi
+
+
+	# SVR4 service access controller
+	if test -x /usr/lib/saf/sac && svr4net_on; then
+	    rm -f /etc/saf/_sacpipe /etc/saf/tcp/_pmpipe
+	    /usr/lib/saf/sac -t 30  < /dev/null &
+						$ECHO " sac\c"
+	fi
+
+	# Time synchronization servers:
+	#  timed keeps time consistent among machines on a local network.
+	#  timeslave tracks changes made by a master time keeper.
+	#
+	#  Timed can be given options in $CONFIG/timed.options, detailed
+	#  in the timed(1M) man page.
+	#
+	#  Timeslave requires the name of host to follow (-H hostname)
+	#  or the name of clock device that listens to WWV (-C /dev/ttyXX).
+	#  Other options are listed in the man page.
+
+	if $IS_ON timed && test $netstate = "ok" -a -x /usr/etc/timed ; then
+	    TIMED_OPTS="`cat $CONFIG/timed.options 2> /dev/null`"
+	    $CSU CAP_TIME_MGT,CAP_PRIV_PORT,CAP_NETWORK_MGT,CAP_SCHED_MGT+ip -M userlow -c "/usr/etc/timed -M $TIMED_OPTS" &
+						$ECHO " timed\c"
+	fi
+	if $IS_ON timeslave && test -x /usr/etc/timeslave ; then
+	    if test -s $CONFIG/timeslave.options ; then
+		# timeslave cannotlive without timeslave.options
+		$CSU CAP_TIME_MGT,CAP_SCHED_MGT+ip -c "/usr/etc/timeslave `cat $CONFIG/timeslave.options`" &
+						$ECHO " timeslave\c"
+	    else
+		$LOGGER "timeslave not started -- options missing.\nAdd them to %s and reboot.\n" "$CONFIG/timeslave.options"
+		sleep $MSGTIME
+	    fi
+	fi
+
+
+	# RARPD: Reverse ARP daemon.
+	#
+	#  RARP is used by Sun diskless clients to discover their Internet
+	#  addresses, given their Ethernet addresses.
+
+	if $IS_ON rarpd && test $netstate = "ok" -a -x /usr/etc/rarpd ; then
+	    $CAP_PORT "/usr/etc/rarpd ""`cat $CONFIG/rarpd.options 2> /dev/null`" &
+						$ECHO " rarpd\c"
+	fi
+
+
+	# Rwhod: 4.3BSD system status daemon.
+	#
+	#  Important: if there are lots of hosts on the network,
+	#  DO NOT run rwhod because it can saturate the network.
+
+	if $IS_ON rwhod && test $netstate = "ok" -a -x /usr/etc/rwhod; then
+	    if test ! -d /var/spool/rwho; then
+		mkdir /var/spool/rwho
+	    fi
+		RWHOD_OPTS="`cat $CONFIG/rwhod.options 2> /dev/null`"
+		$CAP_DEMON "/usr/etc/rwhod $RWHOD_OPTS"
+						$ECHO " rwhod\c"
+	fi
+
+
+    $ECHO "."
+
+    # DLPI daemon must be started before 4DDN.
+    if $IS_ON snetd && test -x /usr/etc/snetd ; then
+	/usr/etc/snetd
+    fi
+
+    if $IS_ON 4DDN && test $netstate = "ok" -a -x /var/opt/dn/dnstart.sh; then
+	/sbin/killall -TERM dnserver
+	/var/opt/dn/dnstart.sh $VERBOSE
+    fi
+
+    # Do site-dependent ha work for post-start
+    if test -s /etc/init.d/network.ha.poststart; then
+	. /etc/init.d/network.ha.poststart
+    fi
+
+    ;;
+
+
+'stop')
+
+    #  Servers that might start shells.
+    USERS='rlogind rexecd rshd ftpd telnetd sethostd dnserver comlink latd'
+    #  The following servers should be killed immediately.
+    EDAEMONS='inetd bootp tftpd timed timeslave rarpd rwhod talkd fingerd
+		automount autofs rpc.mountd rpc.lockd rpc.statd
+		rpc.bootparamd rpc.rexd rpc.rstatd rpc.rusersd rpc.rwalld
+		rpc.ypupdated fal smtd sac listen osid'
+    #  Remote daemons
+    RDAEMONS='nsd rpc.passwd nfsd biod pcnfsd rpc.rquotad named gated
+		routed mrouted rsvpd'
+    #  These daemons should be kept alive until the last minute.
+    LDAEMONS='autofsd portmap rpcbind ppp slip ipfilterd snetd'
+
+    # Do site-dependent ha work for pre-stop
+    if test -s /etc/init.d/network.ha.prestop; then
+	. /etc/init.d/network.ha.prestop
+    fi
+
+    #  Kill (probable) shell process groups first
+    /sbin/killall -k 1 -g 1 $USERS
+    /sbin/killall -k 1 -TERM $EDAEMONS $USERS
+
+    $CAP_PORT_MNT "/sbin/umount $VERBOSE -kt nfs,nfs3,nfs3pref,lofs ${DLMNTOPTS}"
+    /sbin/killall -k 1 -TERM $RDAEMONS
+
+    #  Unexport any exported NFS filesystems (assumes netstate = ok)
+    #	Do this after killing the NFS demons so that clients do not
+    #	suffer errors on their read(2) requests, if they have hard-mounted
+    #	things.  /usr may not be mounted, so you must check to see
+    #	that exportfs is available.
+    if nfs_on && test -x $NFS/exportfs; then
+	$CAP_MREAD_MNT "$NFS/exportfs -au $VERBOSE"
+    fi
+
+    # cachefs shutdown must occur after exportfs but before the network
+    #	interfaces are shut down
+    if test -x /etc/init.d/cachefs ; then
+	/etc/init.d/cachefs netstop
+    fi
+
+    #  Blow away any background mounts and the broadcast umount since
+    #	the network will be shut down soon.
+    /sbin/killall mount umount $USERS $EDAEMONS $RDAEMONS $LDAEMONS
+
+    for _ifname in `echo $IFNAMES | sed -e 's/HAVE[^=]*=//g'`; do
+	case $_ifname in
+	# Shutdown FDDI to turn off the optical bypasses to cleanly take
+	#   the system out of the ring.
+	xpi*|ipg*|rns*) if_off $_ifname;;
+
+	# Shutdown ethernet (Indigo family (IP12/IP20/IP22))
+	ec1|ec2) if_off $_ifname;;
+	esac
+    done
+
+    # Shutdown HIPPI interface
+    if test -s /etc/init.d/network.hippi; then
+	. /etc/init.d/network.hippi
+    fi
+
+    # Shutdown GSN interface
+    if test -s /etc/init.d/network.gsn2; then
+    	# Unload GSN HARP table entries
+	. /etc/init.d/network.gsn2
+	# Shutdown GSN interface
+	. /etc/init.d/network.gsn1
+    fi
+
+    # Shutdown ATM TCP/IP software.
+    if test -s /etc/init.d/network.atm; then
+	. /etc/init.d/network.atm
+    fi
+
+    # Do site-dependent ha work for post-stop
+    if test -s /etc/init.d/network.ha.poststop; then
+	. /etc/init.d/network.ha.poststop
+    fi
+
+    ;;
+
+
+*)
+    echo "usage: $0 {start|stop}"
+    ;;
+esac
+
+# DECnet is a trademark of Digital Equipment Corp.
+# NFS is a trademark of Sun Microsystems, Inc.

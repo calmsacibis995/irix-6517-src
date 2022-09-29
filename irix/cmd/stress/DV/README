@@ -1,0 +1,75 @@
+==
+DV       data verification; copies random files of data across TCP and
+==       UNIX-domain sockets, using randomly-sized writes, and verifies that
+         it was transferred correctly
+
+genfile.c:
+----------
+	pass in a file name and a count.  Open the file and fill it with
+	count letters (randomly generate a letter and then fill the file
+	with BUFSIZE copies of that randomly generated letter).  
+
+genfiles.sh:
+------------
+	generated files of the size specified in the c.c static arrays.
+	This is called in runtests.
+
+libdv.c:
+--------
+	dodv takes a socket/pipe end, reads a line off of it.  Takes the
+	line up to the first \n and calls that a file name.  Randomly,
+	the file is either opened and read BUFSIZE * 8 bytes at a time
+	and written to the pipe given the the program.  The other alter-
+	native for the randomly picked path will divide the size of the
+	file by a number between 1 and 5 (randomly).  It then mmaps the
+	whole file.  It places pointers into the mmapped space to divide
+	the file up into 1 to 5 parts in a iovector and then writev's
+	the vector to the pipe.
+
+c.c:
+----
+	Takes in a host to connect this client to, number of client, port,
+	and an interval of time.  Sets up a socket to the host and forks
+	a child.  The parent sets up a signal to unlink a file the
+	inputted time away from now and then pauses.  The child, sets up
+	two signals to increment an exitflag, and sets an alarm for
+	interval time.  The file unlinked is called tfile.<host>.<pid>.
+	The child, in a loop, finishes setting up the socket connection,
+	wites a file name out of our list of files, into the socket,
+	shutsdown the socket on the send side, unlinks the file, opens
+	the file, and then reads from the socket and writes to the file.
+	Before ending the iteration, it compares the newly written file
+	to the file that it thought it would get over the socket and then
+	iterations to the next file in the file list.
+
+	Summary:  Does a loop where it passes a file name to a server, 
+	gets the file contents back, and then compares the file contents
+	to the expected file and then does it all over again till we
+	get signal of some sort to finish the loop.
+
+uc.c:
+-----
+	Same as c.c except uses unix domain sockets instead of tpc like 
+	c.c does.
+
+s.c:
+----
+	Similar to the client.  Set up the socket and listen to it.  Then
+	we run the specified number of servers on different cpus (start
+	doubling up when we run out of cpus).  Like client sets up to 
+	have a sigalrm after a certain amount of time.  The parent just
+	sets up the alarm and then the child, finishes up the socket and
+	calls dodv in a loop.
+
+us.c:
+-----
+	Same as s.c except with unix domain sockets instead.
+
+runtests:
+---------
+	Goes to a /usr/tmp/netdv directory and copies everything over,
+	generates files, then for the number of cycles that we give to
+	the program, it starts the 2 servers each of us and s and then
+	also two clients of each c and uc.  When we are done with an 
+	iteration, we look for core files and then kill the servers and
+	go to next iteration.

@@ -1,0 +1,737 @@
+<!-- Produced by version 4.3 (11/99) of SGI Frame/SGIDOCBK SGML translator -->
+<CHAPTER ID="LE40515-PARENT"><TITLE ID="LE40515-TITLE">System Administration for Guaranteed-Rate I/O</TITLE><PARA><INDEXTERM ID="ITch8-0"><PRIMARY>guaranteed-rate I/O. <EMPHASIS>See</EMPHASIS>
+ GRIO.</PRIMARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-1"><PRIMARY>GRIO</PRIMARY>
+<SECONDARY>description</SECONDARY>
+</INDEXTERM>
+Guaranteed-rate I/O, or GRIO for short, is a mechanism that enables a user application to reserve part of a system's I/O resources for its exclusive use. For example, it can be used to enable &ldquo;real-time&rdquo; retrieval and storage of data streams. GRIO manages the system resources among competing applications, so the actions of new processes do not affect the performance of existing ones. GRIO can read and write only files on a real-time subvolume of an XFS filesystem. To use GRIO, the subsystem <LITERAL>eoe.sw.xfsrt</LITERAL> must be installed.</PARA>
+<PARA>This chapter explains important guaranteed-rate I/O concepts, describes how to configure a system for GRIO; and provides instructions for creating an XLV logical volume for use with applications that use GRIO.</PARA>
+<PARA>The major sections in this chapter are:</PARA>
+<ITEMIZEDLIST><LISTITEM><PARA><XREF LINKEND="LE12274-PARENT"></PARA></LISTITEM>
+<LISTITEM><PARA><XREF LINKEND="LE38920-PARENT"></PARA></LISTITEM>
+<LISTITEM><PARA><XREF LINKEND="LE51346-PARENT"></PARA></LISTITEM>
+<LISTITEM><PARA><XREF LINKEND="LE26694-PARENT"></PARA></LISTITEM>
+<LISTITEM><PARA><XREF LINKEND="LE25747-PARENT"></PARA></LISTITEM>
+<LISTITEM><PARA><XREF LINKEND="LE38532-PARENT"></PARA></LISTITEM>
+<LISTITEM><PARA><XREF LINKEND="LE23933-PARENT"></PARA></LISTITEM>
+<LISTITEM><PARA><XREF LINKEND="LE22959-PARENT"></PARA></LISTITEM>
+</ITEMIZEDLIST>
+<PARA>For additional information, see the <COMMAND>grio</COMMAND>(5) reference page.</PARA>
+<NOTE><PARA><INDEXTERM ID="ITch8-2"><PRIMARY>FLEXlm licenses</PRIMARY>
+<SECONDARY>High Performance Guaranteed-Rate I/O</SECONDARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-3"><PRIMARY>GRIO</PRIMARY>
+<SECONDARY>streams</SECONDARY>
+</INDEXTERM>
+By default, IRIX supports four GRIO streams (concurrent uses of GRIO). To increase the number of streams to 40, you can purchase the High Performance Guaranteed-Rate I/O&mdash;5-40 Streams software option. For even more streams, you can purchase the High Performance Guaranteed-Rate I/O&mdash;Unlimited Streams software option. </PARA>
+</NOTE>
+<SECTION  ID="LE12274-PARENT"><TITLE  ID="LE12274-TITLE">Guaranteed-Rate I/O Overview</TITLE><PARA><INDEXTERM ID="ITch8-4"><PRIMARY>GRIO</PRIMARY>
+<SECONDARY>features</SECONDARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-5"><PRIMARY>GRIO</PRIMARY>
+<SECONDARY>description</SECONDARY>
+</INDEXTERM>
+The guaranteed-rate I/O system (GRIO) allows applications to reserve specific I/O bandwidth to and from the filesystem. Applications request guarantees by providing a file descriptor, data rate, duration, and start time. The filesystem calculates the performance available and, if the request is granted, guarantees that the requested level of performance can be met for a given time. This frees programmers from having to predict system I/O performance and is critical for media delivery systems such as video-on-demand.</PARA>
+<PARA><INDEXTERM ID="ITch8-6"><PRIMARY>GRIO</PRIMARY>
+<SECONDARY>overview</SECONDARY>
+</INDEXTERM>
+The GRIO mechanism is designed for use in an environment where many different processes attempt to access scarce I/O resources simultaneously. GRIO provides a way for applications to determine that resources are already fully utilized and attempts to make further use would have a negative performance impact.</PARA>
+<PARA>If the system is running a single application that needs access to all the system resources, the GRIO mechanism does not need to be used. Because there is no competition, the application gains nothing by reserving the resources before accessing them.</PARA>
+<PARA><INDEXTERM ID="ITch8-7"><PRIMARY>GRIO</PRIMARY>
+<SECONDARY>reservations</SECONDARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-8"><PRIMARY>real-time subvolumes</PRIMARY>
+<SECONDARY>GRIO files</SECONDARY>
+</INDEXTERM>
+Applications negotiate with the system to make a GRIO <FIRSTTERM>reservation</FIRSTTERM>, an agreement by the system to provide a portion of the bandwidth of a system resource for a period of time. The system resources supported by GRIO are files residing within real-time subvolumes of XFS filesystems. A reservation can by transferred to any process and to any file on the filesystem specified in the request.</PARA>
+<PARA><INDEXTERM ID="ITch8-9"><PRIMARY>GRIO</PRIMARY>
+<SECONDARY>rate</SECONDARY>
+</INDEXTERM>
+A GRIO reservation associates a data rate with a filesystem. A data rate is defined as the number of bytes per a fixed period of time (called the <FIRSTTERM>time quantum</FIRSTTERM>). The application receives data from or transmits data to the filesystem starting at a specific time and continuing for a specific period. For example, a reservation could be for 1.2 MB every 1.29 seconds, for the next three hours, to or from the filesystem on <FILENAME>/dev/xlv/video1</FILENAME>. In this example, 1.29 seconds is the time quantum of the reservation.</PARA>
+<PARA>The application issues a reservation request to the system, which either accepts or rejects the request. If the reservation is accepted, the application then associates the reservation with a particular file. It can begin accessing the file at the reserved time, and it can expect that it will receive the reserved number of bytes per time quantum throughout the time of the reservation. If the system rejects the reservation, it returns the maximum amount of bandwidth that can be reserved for the resource at the specified time. The application can determine whether the available bandwidth is sufficient for its needs and issue another reservation request for the lower bandwidth, or it can schedule the reservation for a different time. </PARA>
+<PARA>The GRIO reservation continues until it expires or an explicit <COMMAND>grio_unreserve_bw</COMMAND>( ) library call is made (for more information, see the <COMMAND>grio_unreserve_bw</COMMAND>(3) reference pages). A GRIO reservation is also removed on the last close of a file currently associated with a reservation.</PARA>
+<PARA><INDEXTERM ID="ITch8-10"><PRIMARY>GRIO</PRIMARY>
+<SECONDARY>file descriptors</SECONDARY>
+</INDEXTERM>
+If a process has a rate guarantee on a file, any reference by that process to that file uses the rate guarantee, even if a different file descriptor is used. However, any other process that accesses the same file does so without a guarantee or must obtain its own guarantee. This is true even when the second process has inherited the file descriptor from the process that obtained the guarantee.</PARA>
+<PARA>Sharing file descriptors between processes in an ancestral process group is supported for files used for GRIO, and the processes share the guarantee. For example, if a process got a rate guarantee of 2 Mb/s on a file and then forked, and the parent and child access the same file, they would be able to receive a combined rate of 2 Mb/s. If the child wanted a 4 Mb/s guarantee on the file, it would have to close and reopen the file and get a new rate guarantee of 4 Mb/s on it.</PARA>
+<PARA><INDEXTERM ID="ITch8-11"><PRIMARY>GRIO</PRIMARY>
+<SECONDARY>sizes to choose</SECONDARY>
+</INDEXTERM>
+Four sizes are important to GRIO:</PARA>
+<DEFLIST TERMLENGTH="NEXTLINE"><DEFLISTENTRY><TERM>Optimal I/O size</TERM>
+<LISTITEM><PARA>Optimal I/O size is the size of the I/O operations that the system actually issues to the disks. All the disks in the real-time subvolume of an XLV volume must have the same optimal I/O size. Optional I/O sizes of disks in real-time subvolumes of different XLV volumes can differ. For more information see <XREF LINKEND="LE39270-PARENT">.</PARA></LISTITEM>
+</DEFLISTENTRY>
+<DEFLISTENTRY><TERM>XLV volume stripe unit size</TERM>
+<LISTITEM><PARA>The XLV volume stripe unit size is the amount of data written to a single disk in the stripe. The XLV volume stripe unit size must be an even multiple of the optimal I/O size for the disks in that subvolume. See <XREF LINKEND="LE22348-TITLE"> for more information.</PARA></LISTITEM>
+</DEFLISTENTRY>
+<DEFLISTENTRY><TERM>Reservation size (also known as the rate)</TERM>
+<LISTITEM><PARA>The reservation size is the amount of I/O that an application issues in a single time quantum.</PARA>
+</LISTITEM>
+</DEFLISTENTRY>
+<DEFLISTENTRY><TERM>Application I/O size</TERM>
+<LISTITEM><PARA>The application I/O size is the size of the individual I/O requests that an application issues. An application I/O size that equals the reservation size is recommended, but not required. The reservation size must be an even multiple of the application I/O size, and the application I/O size must be an even multiple of the optimal I/O size.</PARA>
+</LISTITEM>
+</DEFLISTENTRY>
+</DEFLIST>
+<PARA>The application is responsible for making sure that all I/O requests are issued within a given time quantum, so that the system can provide the guaranteed data rate.</PARA>
+</SECTION>
+<SECTION  ID="LE38920-PARENT"><TITLE  ID="LE38920-TITLE">GRIO Guarantee Types</TITLE><PARA><INDEXTERM ID="ITch8-12"><PRIMARY>GRIO</PRIMARY>
+<SECONDARY>guarantee types</SECONDARY>
+</INDEXTERM>
+In addition to specifying the amount and duration of the reservation, the application must specify the type of guarantee desired. There are four different classes of options that need to be determined when obtaining a rate guarantee:</PARA>
+<ITEMIZEDLIST><LISTITEM><PARA>The rate guarantee can be made on a per-file or per-filesystem basis.</PARA>
+</LISTITEM>
+<LISTITEM><PARA>The rate guarantee can be private or shared. </PARA>
+</LISTITEM>
+<LISTITEM><PARA>The rate guarantee can be a fixed rotor, slip rotor, or non-rotor type.</PARA>
+</LISTITEM>
+<LISTITEM><PARA>The rate guarantee can have deadline or real-time scheduling, or it can be nonscheduled.</PARA>
+</LISTITEM>
+</ITEMIZEDLIST>
+<PARA><INDEXTERM ID="ITch8-13"><PRIMARY>GRIO</PRIMARY>
+<SECONDARY>default guarantee options</SECONDARY>
+</INDEXTERM>
+If the user does not specify any options, the rate guarantee has these options by default: shared, non-rotor options, and deadline scheduling. The per-file or per-filesystem guarantee is determined by the <COMMAND>libgrio</COMMAND> calls to make the reservation: either the <COMMAND>grio_reserve_file()</COMMAND> or <COMMAND>grio_reserve_file_system()</COMMAND> library calls.</PARA>
+<SECTION><TITLE>Per-File and Per-Filesystem Guarantees</TITLE><PARA><INDEXTERM ID="ITch8-14"><PRIMARY>GRIO</PRIMARY>
+<SECONDARY>per-file guarantees</SECONDARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-15"><PRIMARY>per-file guarantees</PRIMARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-16"><PRIMARY>GRIO</PRIMARY>
+<SECONDARY>per-filesystem guarantees</SECONDARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-17"><PRIMARY>per-filesystem guarantees</PRIMARY>
+</INDEXTERM>
+A <FIRSTTERM>per-file</FIRSTTERM> guarantee indicates that the given rate guarantee can be used only on one specific file. When a <FIRSTTERM>per-filesystem</FIRSTTERM> guarantee is obtained, the guarantee can be transferred to any file on the given filesystem.</PARA>
+</SECTION>
+<SECTION><TITLE>Private and Shared Guarantees</TITLE><PARA><INDEXTERM ID="ITch8-18"><PRIMARY>GRIO</PRIMARY>
+<SECONDARY>private guarantees</SECONDARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-19"><PRIMARY>private guarantees</PRIMARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-20"><PRIMARY>GRIO</PRIMARY>
+<SECONDARY>shared guarantees</SECONDARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-21"><PRIMARY>shared guarantees</PRIMARY>
+</INDEXTERM>
+A <FIRSTTERM>private</FIRSTTERM> guarantee can be used only by the process that obtained the guarantee; it cannot be transferred to another process. A <FIRSTTERM>shared</FIRSTTERM> guarantee can be transferred from one process to another. Shared guarantees are only transferable; they cannot be used by both processes at the same time.</PARA>
+</SECTION>
+<SECTION><TITLE>Rotor and Non-Rotor Guarantees</TITLE><PARA>The <FIRSTTERM>rotor</FIRSTTERM> type of guarantee (either fixed or slip) is also known as a VOD (video on demand) guarantee. It allows more streams to be supported per disk drive, but requires that the application provide careful control of when and where I/O requests are issued.</PARA>
+<PARA>Rotor guarantees are supported only when using a striped real-time subvolume. When an application accesses a file, the accesses are time-multiplexed among the drives in the stripe. An application can only access a single disk during any one time quantum, and consecutive accesses are assumed to be sequential. Therefore, the stripe unit must be set to the number of kilobytes of data that the application needs to access per time quantum. (The stripe unit is set with the <COMMAND>xlv_make</COMMAND> command when volume elements are created.) If the application tries to access data on a different disk when it has a slip rotor guarantee, the system attempts to change the process's rotor slot so that it can access the desired disk. If the application has a fixed rotor guarantee it is suspended until the appropriate time quantum for accessing the given disk.</PARA>
+<PARA>An application with a fixed rotor reservation that does not access a file sequentially, but rather skips around in the file, has a performance impact. For example, if the real-time subvolume is created on a four-way stripe, it could take as long as four (the size of the volume stripe) times the time quantum for the first I/O request after a seek to complete.</PARA>
+<PARA><FIRSTTERM>Non-rotor</FIRSTTERM> guarantees do not have such restrictions. Applications with non-rotor guarantees normally access the file in entire stripe size units, but can access smaller or larger units without penalty as long as they are within the bounds of the rate guarantee. The accesses to the file do not have to be sequential, but must be on stripe boundaries. If an application tries to access the file more quickly than the guarantee allows, the actions of the system are determined by the type of scheduling guarantee.</PARA>
+</SECTION>
+<SECTION><TITLE>An Example Comparing Rotor and Non-Rotor Guarantees</TITLE><PARA>Assume the system has eight disks, each supporting twenty-three 64 KB operations per second. (You can use the command <COMMAND>grio_bandwidth</COMMAND> to learn the number of I/O operations of a given size that can be performed on a particular disk in one second.) For non-rotor GRIO, if an application needs 512 KB of data each second, the eight disks are arranged in a eight-way stripe. The stripe unit is 64 KB. Each application read/write operation is 512 KB and causes concurrent read/write operations on each disk in the stripe. The application can access any part of the file at any time, provided that the read/write operation always starts at a stripe boundary. This configuration provides 23 process streams with 512 KB of data each second. </PARA>
+<PARA>With a rotor guarantee, the eight drives are given an optimal I/O size of 512&nbsp;KB. Each drive can support seven such operations each second. The higher rate (7&nbsp;x&nbsp;512 KB versus 23 x 64 KB) is achievable because the larger transfer size does less seeking. Again the drives are arranged in an eight-way stripe but with a stripe unit of 512 KB. Each drive can support seven 512K streams per second for a total of 8 * 7 = 56 streams. Each of the 56 streams is given a time period (also known as a time &ldquo;bucket&rdquo;). There are eight different time periods with seven different processes in each period. Therefore, 8 * 7 = 56 processes are accessing data in a given time unit. At any given second, the processes in a single time period are allowed to access only a single disk. </PARA>
+<PARA>Using a rotor guarantee more than doubles the number of streams that can be supported with the same number of disks. The tradeoff is that the time tolerances are very stringent. Each stream is required to issue the read/write operations within one time quantum. If the process issues the call too late and real-time scheduling is used, the request blocks until the next time period for that process on the disk. In this example, this could mean a delay of up to eight seconds. In order to receive the rate guarantee, the application must access the file sequentially. The time periods move sequentially down the stripe allowing each process to access the next 512 KB of the file.</PARA>
+</SECTION>
+<SECTION><TITLE>Real-Time Scheduling, Deadline Scheduling, and Nonscheduled Reservations</TITLE><PARA><INDEXTERM ID="ITch8-22"><PRIMARY>GRIO</PRIMARY>
+<SECONDARY>real-time scheduling</SECONDARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-23"><PRIMARY>real-time scheduling</PRIMARY>
+</INDEXTERM>
+Three types of reservation scheduling are possible: <FIRSTTERM>real-time</FIRSTTERM> scheduling, <FIRSTTERM>deadline</FIRSTTERM> scheduling, and <FIRSTTERM>non-scheduled</FIRSTTERM> reservations.</PARA>
+<PARA>Real-time scheduling means that an application receives a fixed amount of data in a fixed length of time. The data can be returned at any time during the time quantum. This type of reservation is used by applications that do only a small amount of buffering. If the application requests more data than its rate guarantee, the system suspends the application until it falls within the guaranteed bandwidth.</PARA>
+<PARA><INDEXTERM ID="ITch8-24"><PRIMARY>GRIO</PRIMARY>
+<SECONDARY>deadline scheduling</SECONDARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-25"><PRIMARY>deadline scheduling</PRIMARY>
+</INDEXTERM>
+Deadline scheduling means that an application receives a minimum amount of data in a fixed length of time. Such guarantees are used by applications that have a large amount of buffer space. The application requests I/O at a rate at least as fast as the rate guarantee and is suspended only when it is exceeding its rate guarantee and there is no additional device bandwidth available.</PARA>
+<PARA><INDEXTERM ID="ITch8-26"><PRIMARY>GRIO</PRIMARY>
+<SECONDARY>non-scheduled reservations</SECONDARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-27"><PRIMARY>non-scheduled reservations</PRIMARY>
+</INDEXTERM>
+Nonscheduled reservations means that the guarantee received by the application is only a reservation of system bandwidth. The system does not enforce the reservation limits and therefore cannot guarantee the I/O rate of any of the guarantees on the system. Nonscheduled reservations should be used with extreme care.</PARA>
+</SECTION>
+</SECTION>
+<SECTION  ID="LE51346-PARENT"><TITLE  ID="LE51346-TITLE">GRIO System Components</TITLE><PARA><INDEXTERM ID="ITch8-28"><PRIMARY>GRIO</PRIMARY>
+<SECONDARY>system components</SECONDARY>
+</INDEXTERM>
+Several components make up the GRIO mechanism: a system daemon, support commands, configuration files, and an application library.</PARA>
+<PARA><INDEXTERM ID="ITch8-29"><PRIMARY><COMMAND>ggd</COMMAND>
+ daemon</PRIMARY>
+<SECONDARY><COMMAND>description</COMMAND>
+</SECONDARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-30"><PRIMARY><FILENAME>/etc/rc2.d/S94grio</FILENAME>
+ file</PRIMARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-31"><PRIMARY>GRIO</PRIMARY>
+<SECONDARY>lock file</SECONDARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-32"><PRIMARY>daemons</PRIMARY>
+<SECONDARY>GRIO</SECONDARY>
+</INDEXTERM>
+The system daemon is <COMMAND>ggd</COMMAND>. It is started from the script <FILENAME>/etc/rc2.d/S94grio</FILENAME> when the system is started. It is always started; unlike some other daemons, it is not turned on and off with the <COMMAND>chkconfig</COMMAND> command. A lock file is created in the <FILENAME>/tmp</FILENAME> directory to prevent two copies of the daemon from running simultaneously. Requests for rate guarantees are made to the <COMMAND>ggd</COMMAND> daemon. The daemon reads the GRIO configuration file <FILENAME>/etc/grio_disks</FILENAME>. </PARA>
+<PARA><INDEXTERM ID="ITch8-33"><PRIMARY><FILENAME>/etc/grio_disks</FILENAME>
+ file</PRIMARY>
+</INDEXTERM>
+<FILENAME>/etc/grio_disks</FILENAME> describes the performance characteristics for the types of disk drives that are supported on the system, including how many I/O operations of each size (64 KB, 128 KB, 256 KB, or 512 KB) can be executed by each piece of hardware in one second. You can edit the file to add support for new drive types. (You can use the command <COMMAND>grio_bandwidth</COMMAND> to learn the number of I/O operations of a given size that can be performed on a particular disk in one second.) The format of this file is described in <XREF LINKEND="LE39270-PARENT">.</PARA><PARA>The command <COMMAND>grio_bandwidth</COMMAND> can be used to learn the number of I/O operations of a given size that can be performed on a particular disk in one second.</PARA>
+<PARA><INDEXTERM ID="ITch8-34"><PRIMARY><FILENAME>/usr/lib/libgrio.so</FILENAME>
+</PRIMARY>
+</INDEXTERM>
+The <FILENAME>/usr/lib/libgrio.so</FILENAME> libraries contain a collection of routines that enable an application to establish a GRIO session. The library routines are the only way in which an application program can communicate with the <COMMAND>ggd</COMMAND> daemon. The library also includes a library routine that applications can use to check the amount of bandwidth available on a filesystem. This enables them to quickly get an idea of whether or not a particular reservation might be granted&mdash;more quickly than actually making the request.</PARA>
+</SECTION>
+<SECTION  ID="LE26694-PARENT"><TITLE  ID="LE26694-TITLE">Hardware Configuration Requirements for GRIO</TITLE><PARA><INDEXTERM ID="ITch8-35"><PRIMARY>GRIO</PRIMARY>
+<SECONDARY>hardware configuration requirements</SECONDARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-36"><PRIMARY>hardware requirements</PRIMARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-37"><PRIMARY>prerequisite hardware</PRIMARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-38"><PRIMARY>real-time subvolumes</PRIMARY>
+<SECONDARY>hardware requirements</SECONDARY>
+</INDEXTERM>
+Guaranteed-rate I/O requires the hardware to be configured so that it follows these guidelines:</PARA>
+<ITEMIZEDLIST><LISTITEM><PARA>Put only real-time subvolume volume elements on a single disk (not log or data subvolume volume elements). This configuration is recommended for soft guarantees and required for hard guarantees.</PARA>
+</LISTITEM>
+<LISTITEM><PARA>Each XLV volume you create with a real-time subvolume must include a data subvolume, even if you do not intend to use it. The data subvolume is used by XFS to store inodes and other internal filesystem information.</PARA>
+</LISTITEM>
+<LISTITEM><PARA><INDEXTERM ID="ITch8-39"><PRIMARY>retry mechanisms</PRIMARY>
+</INDEXTERM>
+Disks used in the data and log subvolumes of the XLV logical volume must have their retry mechanisms enabled. The data and log subvolumes contain information critical to the filesystem and cannot afford an occasional disk error.</PARA>
+</LISTITEM>
+</ITEMIZEDLIST>
+</SECTION>
+<SECTION  ID="LE25747-PARENT"><TITLE  ID="LE25747-TITLE"><INDEXTERM ID="ITch8-40"><PRIMARY>GRIO</PRIMARY>
+<SECONDARY>hard guarantees</SECONDARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-41"><PRIMARY>hard guarantees</PRIMARY>
+</INDEXTERM>
+Configuring a System for GRIO</TITLE><CAUTION><PARA>The procedure in this section can result in the loss of data if it is not performed properly. It is recommended only for experienced IRIX system administrators.</PARA>
+</CAUTION>
+<PARA><INDEXTERM ID="ITch8-42"><PRIMARY>GRIO</PRIMARY>
+<SECONDARY>creating an XLV logical volume for</SECONDARY>
+</INDEXTERM>
+This section describes how to configure a system for GRIO: create an XLV logical volume with a real-time subvolume, make a filesystem on the volume and mount it, and configure and restart the <COMMAND>ggd</COMMAND> daemon. </PARA>
+<ORDEREDLIST><LISTITEM><PARA>Choose disk partitions for the XLV logical volume and confirm the hardware configuration as described in <XREF LINKEND="LE26694-PARENT">. This includes modifying the disk drive parameters as described in <XREF LINKEND="LE27801-PARENT">. Be sure to create a data disk partition and subvolume for each real-time subvolume you create.</PARA></LISTITEM>
+<LISTITEM><PARA>Determine the values of variables used while constructing the XLV logical volume:</PARA>
+<DEFLIST><DEFLISTENTRY><TERM><REPLACEABLE>vol_name</REPLACEABLE> </TERM>
+<LISTITEM><PARA>The name of the volume with a real-time subvolume.</PARA>
+</LISTITEM>
+</DEFLISTENTRY>
+<DEFLISTENTRY><TERM><REPLACEABLE>rate</REPLACEABLE> </TERM>
+<LISTITEM><PARA>The rate at which applications using this volume access the data. <REPLACEABLE>rate</REPLACEABLE> is the number of bytes per time quantum per stream (the rate) divided by 1 KB. This information may be available in published information about the applications or from the developers of the applications.</PARA>
+</LISTITEM>
+</DEFLISTENTRY>
+<DEFLISTENTRY><TERM><REPLACEABLE>num_disks</REPLACEABLE> </TERM>
+<LISTITEM><PARA>The number of disks included in the real-time subvolume of the volume.</PARA>
+</LISTITEM>
+</DEFLISTENTRY>
+<DEFLISTENTRY><TERM><REPLACEABLE>stripe_unit</REPLACEABLE> </TERM>
+<LISTITEM><PARA>When the real-time disks are striped (required for video on demand and recommended otherwise), this is the amount of data written to one disk before writing to the next. It is expressed in 512-byte sectors.</PARA>
+<PARA>For non-rotor guarantees:</PARA>
+<PROGRAMLISTING>
+<REPLACEABLE>stripe_unit</REPLACEABLE> = <REPLACEABLE>rate</REPLACEABLE> * 1K / <REPLACEABLE>(num_disks</REPLACEABLE> * 512)
+</PROGRAMLISTING>
+<PARA>For rotor guarantees:</PARA>
+<PROGRAMLISTING>
+<REPLACEABLE>stripe_unit</REPLACEABLE> = <REPLACEABLE>rate</REPLACEABLE> * 1K / 512
+</PROGRAMLISTING>
+</LISTITEM>
+</DEFLISTENTRY>
+<DEFLISTENTRY><TERM><REPLACEABLE>extent_size</REPLACEABLE> </TERM>
+<LISTITEM><PARA><INDEXTERM ID="ITch8-43"><PRIMARY>extent size</PRIMARY>
+</INDEXTERM>
+The filesystem extent size.</PARA>
+<PARA>For non-rotor guarantees:</PARA>
+<PROGRAMLISTING>
+<REPLACEABLE>extent_size</REPLACEABLE> = <REPLACEABLE>rate</REPLACEABLE> * 1K
+</PROGRAMLISTING>
+<PARA>For rotor guarantees:</PARA>
+<PROGRAMLISTING>
+<REPLACEABLE>extent_size</REPLACEABLE> = <REPLACEABLE>rate</REPLACEABLE> * 1K * <REPLACEABLE>num_disks</REPLACEABLE>
+</PROGRAMLISTING>
+</LISTITEM>
+</DEFLISTENTRY>
+<DEFLISTENTRY><TERM><REPLACEABLE>opt_IO_size</REPLACEABLE> </TERM>
+<LISTITEM><PARA><INDEXTERM ID="ITch8-44"><PRIMARY>optimal I/O size</PRIMARY>
+</INDEXTERM>
+The optimal I/O size. It is expressed in kilobytes. By default, the possible values for <REPLACEABLE>opt_IO_size</REPLACEABLE> are 64 (64 KB), 128 (128 KB), 256 (256&nbsp;KB), and 512 (512 KB). Other values can be added by editing the <FILENAME>/etc/grio_disks</FILENAME> file (see <XREF LINKEND="LE39270-PARENT"> for more information).</PARA><PARA>For non-rotor guarantees, <REPLACEABLE>opt_IO_size</REPLACEABLE> must be an even factor of <REPLACEABLE>stripe_unit</REPLACEABLE>, but not less than 64.</PARA>
+<PARA>For rotor guarantees <REPLACEABLE>opt_IO_size</REPLACEABLE> must be an even factor of <REPLACEABLE>rate</REPLACEABLE>. Setting <REPLACEABLE>opt_IO_size</REPLACEABLE> equal to <REPLACEABLE>rate</REPLACEABLE> is recommended.</PARA>
+<PARA><XREF LINKEND="LE57180-TITLE"> gives examples for the values of these variables.</PARA><TABLE FRAME="topbot"><TBLTITLE  ID="LE57180-TITLE">Examples of Values of Variables Used in Constructing an XLV Logical Volume Used for GRIO</TBLTITLE>
+<TGROUP COLS="4">
+<COLSPEC COLWIDTH="106*">
+<COLSPEC COLWIDTH="156*">
+<COLSPEC COLWIDTH="430*">
+<COLSPEC COLWIDTH="104*">
+<THEAD><ROW><ENTRY><PARA>Variable</PARA></ENTRY>
+<ENTRY><PARA>Type of Guarantee</PARA></ENTRY>
+<ENTRY><PARA>Comment</PARA></ENTRY>
+<ENTRY><PARA>Example 
+Value</PARA></ENTRY>
+</ROW>
+</THEAD>
+<TBODY><ROW><ENTRY><PARA><REPLACEABLE>vol_name</REPLACEABLE></PARA></ENTRY>
+<ENTRY><PARA>any</PARA></ENTRY>
+<ENTRY><PARA>This name matches the last component of the device 
+name for the volume, <FILENAME>/dev/xlv</FILENAME><FILENAME>/</FILENAME><FILENAME>vol_name</FILENAME>&ensp;</PARA></ENTRY>
+<ENTRY><PARA><LITERAL>xlv_grio</LITERAL></PARA></ENTRY>
+</ROW>
+<ROW><ENTRY><PARA><REPLACEABLE>rate</REPLACEABLE>&ensp;</PARA></ENTRY>
+<ENTRY><PARA>any</PARA></ENTRY>
+<ENTRY><PARA>For this example, assume 512 KB per second per 
+stream</PARA></ENTRY>
+<ENTRY><PARA>512</PARA></ENTRY>
+</ROW>
+<ROW><ENTRY><PARA><REPLACEABLE>num_disks</REPLACEABLE></PARA></ENTRY>
+<ENTRY><PARA>any</PARA></ENTRY>
+<ENTRY><PARA>For this example, assume 4 disks</PARA></ENTRY>
+<ENTRY><PARA>4</PARA></ENTRY>
+</ROW>
+<ROW><ENTRY><PARA><REPLACEABLE>stripe_uni
+t</REPLACEABLE></PARA></ENTRY>
+<ENTRY><PARA>non-rotor</PARA></ENTRY>
+<ENTRY><PARA>512*1K/(4*512)</PARA></ENTRY>
+<ENTRY><PARA>256</PARA></ENTRY>
+</ROW>
+<ROW><ENTRY><PARA></PARA></ENTRY>
+<ENTRY><PARA>rotor</PARA></ENTRY>
+<ENTRY><PARA>512*1K/512</PARA></ENTRY>
+<ENTRY><PARA>1024</PARA></ENTRY>
+</ROW>
+<ROW><ENTRY><PARA><REPLACEABLE>extent_siz
+e</REPLACEABLE></PARA></ENTRY>
+<ENTRY><PARA>non-rotor</PARA></ENTRY>
+<ENTRY><PARA>512 * 1K </PARA></ENTRY>
+<ENTRY><PARA>512 KB</PARA></ENTRY>
+</ROW>
+<ROW><ENTRY><PARA></PARA></ENTRY>
+<ENTRY><PARA>rotor</PARA></ENTRY>
+<ENTRY><PARA>512 * 1K * 4</PARA></ENTRY>
+<ENTRY><PARA>2048 KB</PARA></ENTRY>
+</ROW>
+<ROW><ENTRY><PARA><REPLACEABLE>opt_IO_si
+ze</REPLACEABLE></PARA></ENTRY>
+<ENTRY><PARA>non-rotor</PARA></ENTRY>
+<ENTRY><PARA>128/1 = 128 or 128/2 = 64 are possible</PARA></ENTRY>
+<ENTRY><PARA>64</PARA></ENTRY>
+</ROW>
+<ROW><ENTRY><PARA></PARA></ENTRY>
+<ENTRY><PARA>rotor</PARA></ENTRY>
+<ENTRY><PARA>Same as <REPLACEABLE>rate</REPLACEABLE>&ensp;</PARA></ENTRY>
+<ENTRY><PARA>512</PARA></ENTRY>
+</ROW>
+</TBODY>
+</TGROUP>
+</TABLE>
+</LISTITEM>
+</DEFLISTENTRY>
+</DEFLIST>
+</LISTITEM>
+<LISTITEM><PARA><INDEXTERM ID="ITch8-45"><PRIMARY><COMMAND>xlv_make</COMMAND>
+ command</PRIMARY>
+<SECONDARY><COMMAND>GRIO example</COMMAND>
+</SECONDARY>
+</INDEXTERM>
+Create an <COMMAND>xlv_make</COMMAND> script file that creates the XLV logical volume. (See <XREF LINKEND="LE25568-TITLE"> for more information.) <XREF LINKEND="LE17062-TITLE"> shows an example script file for a volume.</PARA><EXAMPLE  ID="LE17062-PARENT"><TITLE  ID="LE17062-TITLE">Configuration File for a Volume Used for GRIO</TITLE><PROGRAMLISTING>
+# Configuration file for logical volume <REPLACEABLE>vol_name</REPLACEABLE>. In this
+# example, data and log subvolumes are partitions 0 and 1 of
+# the disk at unit 1 of controller 1. The real-time
+# subvolume is partition 0 of the disks at units 1-4 of
+# controller 2.
+# 
+vol <REPLACEABLE>vol_name</REPLACEABLE><REPLACEABLE>&ensp;</REPLACEABLE>
+data 
+plex 
+ve dks1d1s0 
+log 
+plex 
+ve dks1d1s1 
+rt 
+plex 
+ve -stripe -stripe_unit <REPLACEABLE>stripe_unit</REPLACEABLE> dks2d1s0 dks2d2s0 dks2d3s0 dks2d4s0 
+show 
+end 
+exit 
+</PROGRAMLISTING>
+</EXAMPLE>
+</LISTITEM>
+<LISTITEM><PARA>Run <COMMAND>xlv_make</COMMAND> to create the volume:</PARA>
+<PROGRAMLISTING>
+# <USERINPUT>xlv_make</USERINPUT>&ensp;<REPLACEABLE>script_file</REPLACEABLE>
+</PROGRAMLISTING>
+<PARA><REPLACEABLE>script_file</REPLACEABLE> is the <COMMAND>xlv_make</COMMAND> script file you created in step 3<!-- This hardcoded numeric reference should be updated. -->.</PARA>
+</LISTITEM>
+<LISTITEM><PARA><INDEXTERM ID="ITch8-46"><PRIMARY><COMMAND>mkfs</COMMAND>
+ command</PRIMARY>
+<SECONDARY><COMMAND>for GRIO</COMMAND>
+</SECONDARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-47"><PRIMARY>extent size</PRIMARY>
+</INDEXTERM>
+Create the filesystem by entering this command:</PARA>
+<PROGRAMLISTING>
+# <USERINPUT>mkfs -r extsize=</USERINPUT><REPLACEABLE>extent_size</REPLACEABLE>&ensp;<USERINPUT>/dev/xlv/</USERINPUT><REPLACEABLE>vol_name</REPLACEABLE>
+</PROGRAMLISTING>
+</LISTITEM>
+<LISTITEM><PARA>To mount the filesystem immediately, enter these commands:</PARA>
+<PROGRAMLISTING>
+# <USERINPUT>mkdir</USERINPUT>&ensp;<REPLACEABLE>mountdir</REPLACEABLE>&ensp;
+# <USERINPUT>mount /dev/xlv/</USERINPUT><REPLACEABLE>vol_name</REPLACEABLE>&ensp;<REPLACEABLE>mountdir</REPLACEABLE>&ensp;
+</PROGRAMLISTING>
+<PARA><REPLACEABLE>mountdir</REPLACEABLE> is the full pathname of the directory that is the mount point for the filesystem.</PARA>
+</LISTITEM>
+<LISTITEM><PARA><INDEXTERM ID="ITch8-48"><PRIMARY><FILENAME>/etc/fstab</FILENAME>
+ file</PRIMARY>
+<SECONDARY><FILENAME>entries for XLV logical volumes</FILENAME>
+</SECONDARY>
+</INDEXTERM>
+To configure the system so that the new filesystem is automatically mounted when the system is booted, add this line to <FILENAME>/etc/fstab</FILENAME>:</PARA>
+<PROGRAMLISTING>
+<USERINPUT>/dev/xlv/</USERINPUT><REPLACEABLE>vol_name</REPLACEABLE>&ensp;<REPLACEABLE>mountdir</REPLACEABLE> xfs rw,raw=<USERINPUT>/dev/rxlv/</USERINPUT><REPLACEABLE>vol_name</REPLACEABLE> 0 0
+</PROGRAMLISTING>
+</LISTITEM>
+<LISTITEM><PARA><INDEXTERM ID="ITch8-49"><PRIMARY><COMMAND>ggd</COMMAND>
+ daemon</PRIMARY>
+<SECONDARY><COMMAND>restarting</COMMAND>
+</SECONDARY>
+</INDEXTERM>
+Restart the <COMMAND>ggd</COMMAND> daemon:</PARA>
+<PROGRAMLISTING>
+# <USERINPUT>/etc/init.d/grio stop</USERINPUT>&ensp;
+# <USERINPUT>/etc/init.d/grio start</USERINPUT>&ensp;
+</PROGRAMLISTING>
+<PARA>Now the user application can be started. Files created on the real-time subvolume volume can be accessed using guaranteed-rate I/O.</PARA>
+</LISTITEM>
+</ORDEREDLIST>
+</SECTION>
+<SECTION  ID="LE38532-PARENT"><TITLE  ID="LE38532-TITLE">Additional Procedures for GRIO</TITLE><PARA>The following subsections describe additional special-purpose procedures for configuring disks and GRIO system components. It is not advisable to perform these tuning procedures, because they can cause bad data to be returned from disk drives. However, in situations where data access speed is more important than data integrity, these tunings may be helpful.</PARA>
+<SECTION  ID="LE27801-PARENT"><TITLE  ID="LE27801-TITLE">Disabling Disk Error Recovery</TITLE><CAUTION><PARA>Setting disk drive parameters must be performed correctly on approved disk drive types only. Performing the procedure incorrectly, or performing it on an unapproved type of disk drive can severely damage the disk drive. Setting disk drive parameters should be performed only by experienced system administrators.</PARA>
+</CAUTION>
+<PARA><INDEXTERM ID="ITch8-50"><PRIMARY>error recovery</PRIMARY>
+<SECONDARY>disabling for GRIO</SECONDARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-51"><PRIMARY>GRIO</PRIMARY>
+<SECONDARY>disabling disk error recovery</SECONDARY>
+</INDEXTERM>
+The procedure for setting disk drive parameters is shown below. In this example all of the parameters shown in <XREF LINKEND="LE81204-TITLE"> are changed for a disk on controller 131 at drive address 1.<INDEXTERM ID="ITch8-52"><PRIMARY>disk drives</PRIMARY><SECONDARY>parameters for GRIO</SECONDARY>
+</INDEXTERM>
+</PARA>
+<TABLE FRAME="topbot"><TBLTITLE  ID="LE81204-TITLE">Disk Drive Parameters for GRIO</TBLTITLE>
+<TGROUP COLS="2">
+<COLSPEC COLWIDTH="438*">
+<COLSPEC COLWIDTH="134*">
+<THEAD><ROW><ENTRY><PARA>Parameter</PARA></ENTRY>
+<ENTRY><PARA>New Setting</PARA></ENTRY>
+</ROW>
+</THEAD>
+<TBODY><ROW><ENTRY><PARA>Auto bad block reallocation (read) </PARA></ENTRY>
+<ENTRY><PARA>Disabled </PARA></ENTRY>
+</ROW>
+<ROW><ENTRY><PARA>Auto bad block reallocation (write) </PARA></ENTRY>
+<ENTRY><PARA>Disabled </PARA></ENTRY>
+</ROW>
+<ROW><ENTRY><PARA>Delay for error recovery (disabling this parameter 
+enables the read continuous (RC) bit) </PARA></ENTRY>
+<ENTRY><PARA>Disabled </PARA></ENTRY>
+</ROW>
+</TBODY>
+</TGROUP>
+</TABLE>
+<ORDEREDLIST><LISTITEM><PARA>Start <COMMAND>fx</COMMAND> in expert mode:</PARA>
+<PROGRAMLISTING>
+# <USERINPUT>fx -x</USERINPUT>&ensp;
+fx version 6.4, Sep 29, 1996
+</PROGRAMLISTING>
+</LISTITEM>
+<LISTITEM><PARA>Specify the disk whose parameters you want to change by answering the prompts:</PARA>
+<PROGRAMLISTING>
+fx: "device-name" = (dksc) <USERINPUT>Enter</USERINPUT>&ensp;
+fx: ctlr# = (0) <USERINPUT>131</USERINPUT>&ensp;
+fx: drive# = (1) <USERINPUT>1</USERINPUT>&ensp;
+fx: lun# = (0)
+...opening dksc(131,1,0)
+
+
+...drive selftest...OK
+</PROGRAMLISTING>
+</LISTITEM>
+<LISTITEM><PARA>Confirm that the disk drive is disk drive type SGI 0664N1D 6s61 or disk drive type SGI 0664N1D 4I4I. These disk drive types are approved for changing disk parameters. The disk drive type appears in the next line of output:</PARA>
+<PROGRAMLISTING>
+Scsi drive type == SGI     0664N1D         6s61
+----- please choose one (? for help, .. to quit this menu)-----
+[exi]t               [d]ebug/             [l]abel/
+[b]adblock/          [exe]rcise/          [r]epartition/
+</PROGRAMLISTING>
+</LISTITEM>
+<LISTITEM><PARA>Show the current settings of the disk drive parameters (this command uses the shortcut of separating commands on a series of hierarchical menus with slashes):</PARA>
+<PROGRAMLISTING>
+fx &gt; <USERINPUT>label/show/parameters</USERINPUT>
+
+----- current drive parameters-----
+Error correction enabled          Enable data transfer on error
+Don't report recovered errors     Do delay for error recovery
+Don't transfer bad blocks         Error retry attempts          10
+Do auto bad block reallocation (read)
+Do auto bad block reallocation (write)
+Drive readahead  enabled          Drive buffered writes disabled
+Drive disable prefetch   65535    Drive minimum prefetch         0
+Drive maximum prefetch   65535    Drive prefetch ceiling     65535
+Number of cache segments     4
+Read buffer ratio        0/256    Write buffer ratio         0/256
+Command Tag Queueing disabled
+
+
+----- please choose one (? for help, .. to quit this menu)-----
+[exi]t               [d]ebug/             [l]abel/
+[b]adblock/          [exe]rcise/          [r]epartition/
+</PROGRAMLISTING>
+<PARA>The parameters in <XREF LINKEND="LE81204-TITLE"> correspond to <LITERAL>Do auto bad block reallocation (read)</LITERAL>, <LITERAL>Do auto bad block reallocation (write)</LITERAL>, and <LITERAL>Do delay for error recovery</LITERAL>, in that order. Each of them is currently enabled.</PARA>
+</LISTITEM>
+<LISTITEM><PARA>Give the command to start setting disk drive parameters and press <USERINPUT>Enter</USERINPUT> until you reach a parameter that you want to change:</PARA>
+<PROGRAMLISTING>
+fx&gt; <USERINPUT>label/set/parameters</USERINPUT>
+fx/label/set/parameters: Error correction = (enabled) <USERINPUT>Enter</USERINPUT>
+fx/label/set/parameters: Data transfer on error = (enabled) <USERINPUT>Enter</USERINPUT>
+fx/label/set/parameters: Report recovered errors = (disabled) <USERINPUT>Enter</USERINPUT>
+</PROGRAMLISTING>
+</LISTITEM>
+<LISTITEM><PARA>To change the delay for error recovery parameter to disabled, enter &ldquo;disable&rdquo; the prompt:</PARA>
+<PROGRAMLISTING WIDTH="wide">
+fx/label/set/parameters: Delay for error recovery = (enabled) <USERINPUT>disable</USERINPUT>
+</PROGRAMLISTING>
+</LISTITEM>
+<LISTITEM><PARA>Press <USERINPUT>Enter</USERINPUT> through other parameters that do not need changing:</PARA>
+<PROGRAMLISTING WIDTH="wide">
+fx/label/set/parameters: Err retry count = (10) <USERINPUT>Enter</USERINPUT>
+fx/label/set/parameters: Transfer of bad data blocks = (disabled) <USERINPUT>Enter</USERINPUT>
+</PROGRAMLISTING>
+</LISTITEM>
+<LISTITEM><PARA>To change the auto bad block reallocation parameters, enter <USERINPUT>disable</USERINPUT> at their prompts:</PARA>
+<PROGRAMLISTING WIDTH="wide">
+fx/label/set/parameters: Auto bad block reallocation (write) = (enabled) <USERINPUT>disable</USERINPUT>
+fx/label/set/parameters: Auto bad block reallocation (read) = (enabled) <USERINPUT>disable</USERINPUT>
+</PROGRAMLISTING>
+</LISTITEM>
+<LISTITEM><PARA>Press <USERINPUT>Enter</USERINPUT> through the rest of the parameters:</PARA>
+<PROGRAMLISTING>
+fx/label/set/parameters: Read ahead caching = (enabled) <USERINPUT>Enter</USERINPUT>
+fx/label/set/parameters: Write buffering = (disabled) <USERINPUT>Enter</USERINPUT>
+fx/label/set/parameters: Drive disable prefetch = (65535) <USERINPUT>Enter</USERINPUT>
+fx/label/set/parameters: Drive minimum prefetch = (0) <USERINPUT>Enter</USERINPUT>
+fx/label/set/parameters: Drive maximum prefetch = (65535) <USERINPUT>Enter</USERINPUT>
+fx/label/set/parameters: Drive prefetch ceiling = (65535) <USERINPUT>Enter</USERINPUT>
+fx/label/set/parameters: Number of cache segments = (4) <USERINPUT>Enter</USERINPUT>
+fx/label/set/parameters: Enable CTQ = (disabled) <USERINPUT>Enter</USERINPUT>
+fx/label/set/parameters: Read buffer ratio = (0/256) <USERINPUT>Enter</USERINPUT>
+fx/label/set/parameters: Write buffer ratio = (0/256) <USERINPUT>Enter</USERINPUT>
+</PROGRAMLISTING>
+</LISTITEM>
+<LISTITEM><PARA>Confirm that you want to make the changes to the disk drive parameters by entering &ldquo;yes&rdquo; to this question and start exiting <COMMAND>fx</COMMAND>:</PARA>
+<PROGRAMLISTING>
+&ensp;* * * * * W A R N I N G * * * * *
+about to modify drive parameters on disk dksc(131,1,0)! ok? <USERINPUT>yes</USERINPUT>
+
+----- please choose one (? for help, .. to quit this menu)-----
+[exi]t             [d]ebug/           [l]abel/           [a]uto
+[b]adblock/        [exe]rcise/        [r]epartition/     [f]ormat
+fx&gt; <USERINPUT>exit</USERINPUT>
+</PROGRAMLISTING>
+</LISTITEM>
+<LISTITEM><PARA>Confirm again that you want to make the changes to the disk drive parameters by pressing <USERINPUT>Enter</USERINPUT> in response to this question:</PARA>
+<PROGRAMLISTING WIDTH="wide">
+label info has changed for disk dksc(131,1,0).  write out changes? (yes) <USERINPUT>Enter</USERINPUT>
+</PROGRAMLISTING>
+</LISTITEM>
+</ORDEREDLIST>
+</SECTION>
+<SECTION  ID="LE20809-PARENT"><TITLE  ID="LE20809-TITLE">Restarting the ggd Daemon</TITLE><PARA><INDEXTERM ID="ITch8-53"><PRIMARY>daemons</PRIMARY>
+<SECONDARY>GRIO</SECONDARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-54"><PRIMARY>GRIO</PRIMARY>
+<SECONDARY>configuring the <COMMAND>ggd</COMMAND>
+ daemon</SECONDARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-55"><PRIMARY><COMMAND>ggd</COMMAND>
+ daemon</PRIMARY>
+<SECONDARY><COMMAND>restarting</COMMAND>
+</SECONDARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-56"><PRIMARY><FILENAME>/etc/init.d/grio</FILENAME>
+ file</PRIMARY>
+</INDEXTERM>
+After either the <FILENAME>/etc/grio_disks </FILENAME>or <FILENAME>/etc/config/ggd.options</FILENAME> files are modified, <COMMAND>ggd</COMMAND> must be restarted to make the changes take effect. Give these commands to restart <COMMAND>ggd</COMMAND>:</PARA>
+<PROGRAMLISTING>
+# <USERINPUT>/etc/init.d/grio stop</USERINPUT>&ensp;
+# <USERINPUT>/etc/init.d/grio start</USERINPUT>&ensp;
+</PROGRAMLISTING>
+<PARA>When <COMMAND>ggd</COMMAND> is restarted, current rate guarantees are lost.</PARA>
+</SECTION>
+<SECTION  ID="LE60320-PARENT"><TITLE  ID="LE60320-TITLE">Running ggd as a Real-time Process</TITLE><PARA><INDEXTERM ID="ITch8-57"><PRIMARY>real-time process</PRIMARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-58"><PRIMARY>CPUs</PRIMARY>
+<SECONDARY>restrict to running GRIO processes</SECONDARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-59"><PRIMARY><COMMAND>mpadmin</COMMAND>
+ command</PRIMARY>
+</INDEXTERM>
+Running <COMMAND>ggd</COMMAND> as a real-time process dedicates one or more CPUs to performing GRIO requests exclusively. Follow this procedure on a multiprocessor system to run <COMMAND>ggd</COMMAND> as a real-time process:</PARA>
+<ORDEREDLIST><LISTITEM><PARA>Create or modify the file <FILENAME>/etc/config/ggd.options</FILENAME> and add <COMMAND>-c</COMMAND>&ensp;<REPLACEABLE>cpunum</REPLACEABLE> to the file. <REPLACEABLE>cpunum</REPLACEABLE> is the number of a processor to be dedicated to GRIO. This causes the CPU to be marked isolated, restricted to running selected processes, and nonpreemptive. Processes using GRIO should mark their processes as real-time and runable only on CPU <REPLACEABLE>cpunum</REPLACEABLE>. The <COMMAND>sysmp</COMMAND>(2) reference page explains how to do this.</PARA>
+</LISTITEM>
+<LISTITEM><PARA>Restart the <COMMAND>ggd</COMMAND> daemon. See <XREF LINKEND="LE20809-PARENT"> for directions.</PARA></LISTITEM>
+<LISTITEM><PARA>After <COMMAND>ggd</COMMAND> is restarted, you can confirm that the CPU is marked by entering this command (<REPLACEABLE>cpunum</REPLACEABLE> is 3 in this example):</PARA>
+<PROGRAMLISTING>
+# <USERINPUT>mpadmin -s</USERINPUT>&ensp;
+processors: 0 1 2 3 4 5 6 7
+unrestricted: 0 1 2 5 6 7
+isolated: 3
+restricted: 3
+preemptive: 0 1 2 4 5 6 7
+clock: 0
+fast clock: 0
+</PROGRAMLISTING>
+</LISTITEM>
+<LISTITEM><PARA>To mark an additional CPU for real-time processes after <REPLACEABLE>ggd</REPLACEABLE> is restarted, enter these commands:</PARA>
+<PROGRAMLISTING>
+# <USERINPUT>mpadmin -r</USERINPUT><REPLACEABLE>cpunum2</REPLACEABLE>&ensp;
+# <USERINPUT>mpadmin -I</USERINPUT><REPLACEABLE>cpunum2</REPLACEABLE>&ensp;
+# <USERINPUT>mpadmin -C</USERINPUT><REPLACEABLE>cpunum2</REPLACEABLE>&ensp;
+</PROGRAMLISTING>
+</LISTITEM>
+</ORDEREDLIST>
+</SECTION>
+</SECTION>
+<SECTION  ID="LE23933-PARENT"><TITLE  ID="LE23933-TITLE">Using Real-Time Subvolumes</TITLE><PARA><INDEXTERM ID="ITch8-60"><PRIMARY>real-time subvolumes</PRIMARY>
+<SECONDARY>creating files</SECONDARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-61"><PRIMARY>real-time files</PRIMARY>
+</INDEXTERM>
+The files you create on the real-time subvolume of an XLV logical volume are known as real-time files. The next two sections describe the special characteristics of these files.</PARA>
+<SECTION><TITLE>Files on the Real-Time Subvolume and Commands</TITLE><PARA><INDEXTERM ID="ITch8-62"><PRIMARY>real-time subvolumes</PRIMARY>
+<SECONDARY>and utilities</SECONDARY>
+</INDEXTERM>
+Real-time files have some special characteristics that cause standard IRIX commands to operate in ways that you might not expect. In particular:</PARA>
+<ITEMIZEDLIST><LISTITEM><PARA>You cannot create real-time files using any standard commands. Only specially written programs can create real-time files. The section <XREF LINKEND="LE80308-PARENT"> explains how.</PARA></LISTITEM>
+<LISTITEM><PARA><INDEXTERM ID="ITch8-63"><PRIMARY><COMMAND>fcntl</COMMAND>
+ system call</PRIMARY>
+</INDEXTERM>
+Real-time files are displayed by <COMMAND>ls</COMMAND>, just as any other file. However, there is no way to tell from the <COMMAND>ls</COMMAND> output whether a particular file is on a data subvolume or is a real-time file on a real-time subvolume. Only a specially written program can determine the type of a file. The <COMMAND>F_FSGETXATTR fcntl</COMMAND>( ) system call can determine whether a file is a real-time or a standard data file. If the file is a real-time file, the <LITERAL>fsx_xflags</LITERAL> field of the <LITERAL>fsxattr</LITERAL> structure has the <LITERAL>XFS_XFLAG_REALTIME</LITERAL> bit set.</PARA>
+</LISTITEM>
+<LISTITEM><PARA><INDEXTERM ID="ITch8-64"><PRIMARY><COMMAND>df</COMMAND>
+ command and XLV</PRIMARY>
+</INDEXTERM>
+The <COMMAND>df</COMMAND> command displays the disk space in the data subvolume by default. When the <COMMAND>-r</COMMAND> option is given, the real-time subvolume's disk space and usage is added. <COMMAND>df</COMMAND> can report that there is free disk space in the filesystem when the real-time subvolume is full, and <COMMAND>df &ndash;r</COMMAND> can report that there is free disk space when the data subvolume is full.</PARA>
+</LISTITEM>
+</ITEMIZEDLIST>
+</SECTION>
+<SECTION  ID="LE80308-PARENT"><TITLE  ID="LE80308-TITLE"><INDEXTERM ID="ITch8-65"><PRIMARY>80587</PRIMARY>
+<SECONDARY>  File Creation on the Real-Time Subvolume</SECONDARY>
+</INDEXTERM>
+File Creation on the Real-Time Subvolume</TITLE><PARA>To create a real-time file, use the <COMMAND>F_FSSETXATTR fcntl</COMMAND>( ) system call with the <LITERAL>XFS_XFLAG_REALTIME</LITERAL> bit set in the <LITERAL>fsx_xflags</LITERAL> field of the <LITERAL>fsxattr</LITERAL> structure. This must be done after the file has first been created/opened for writing, but before any data has been written to the file. Once data has been written to a file, the file cannot be changed from a standard data file to a real-time file, nor can files created as real-time files be changed to standard data files.</PARA>
+<PARA><INDEXTERM ID="ITch8-66"><PRIMARY>direct I/O</PRIMARY>
+</INDEXTERM>
+Real-time files can only be read or written using direct I/O. Therefore, <COMMAND>read</COMMAND>( ) and <COMMAND>write</COMMAND>( ) system call operations to a real-time file must meet the requirements specified by the F<COMMAND>_DIOINFO fcntl</COMMAND>( ) system call. See the <COMMAND>open</COMMAND>(2) reference page for a discussion of the <LITERAL>O_DIRECT</LITERAL> option to the <COMMAND>open</COMMAND>( ) system call. </PARA>
+</SECTION>
+</SECTION>
+<SECTION  ID="LE22959-PARENT"><TITLE  ID="LE22959-TITLE">GRIO File Formats</TITLE><PARA><INDEXTERM ID="ITch8-67"><PRIMARY>GRIO</PRIMARY>
+<SECONDARY>file formats</SECONDARY>
+</INDEXTERM>
+The following subsections contain reference information about the contents of the two GRIO configuration files <FILENAME>/etc/grio_disks</FILENAME> and <FILENAME>/etc/config/ggd.options</FILENAME>.</PARA>
+<SECTION  ID="LE39270-PARENT"><TITLE  ID="LE39270-TITLE">/etc/grio_disks File Format</TITLE><PARA><INDEXTERM ID="ITch8-68"><PRIMARY><FILENAME>/etc/grio_disks</FILENAME>
+ file</PRIMARY>
+</INDEXTERM>
+<INDEXTERM ID="ITch8-69"><PRIMARY>optimal I/O size</PRIMARY>
+</INDEXTERM>
+The file <FILENAME>/etc/grio_disks</FILENAME> contains information that describes I/O bandwidth parameters of the various types of disk drives that can be used on the system. </PARA>
+<PARA>By default, <FILENAME>/etc/grio_disks</FILENAME> contains the parameters for disks supported by Silicon Graphics for optimal I/O sizes of 64 KB, 128 KB, 256 KB, and 512 KB. <XREF LINKEND="LE88535-TITLE"> lists some of these disks. <XREF LINKEND="LE80410-TITLE"> shows the optimal I/O sizes and the number of optimal I/O size requests each of the disks listed in <XREF LINKEND="LE88535-TITLE"> can handle in one second.</PARA><TABLE FRAME="topbot"><TBLTITLE  ID="LE88535-TITLE">Disks in /etc/grio_disks by Default </TBLTITLE>
+<TGROUP COLS="1">
+<COLSPEC COLWIDTH="412*">
+<THEAD><ROW><ENTRY><PARA>Disk ID String </PARA></ENTRY>
+</ROW>
+</THEAD>
+<TBODY><ROW><ENTRY><PARA><LITERAL>"SGI      IBM  DFHSS2E    1111"</LITERAL></PARA></ENTRY>
+</ROW>
+<ROW><ENTRY><PARA><LITERAL>"SGI      SEAGATE ST31200N8640"</LITERAL></PARA></ENTRY>
+</ROW>
+<ROW><ENTRY><PARA><LITERAL>"SGI      SEAGATE ST31200N9278"</LITERAL></PARA></ENTRY>
+</ROW>
+<ROW><ENTRY><PARA><LITERAL>"SGI      066N1D          4I4I"</LITERAL>&ensp;</PARA></ENTRY>
+</ROW>
+<ROW><ENTRY><PARA><LITERAL>"SGI      0064N1D         4I4I"</LITERAL>&ensp;</PARA></ENTRY>
+</ROW>
+<ROW><ENTRY><PARA><LITERAL>"SGI      0664N1D         4I4I"</LITERAL>&ensp;</PARA></ENTRY>
+</ROW>
+<ROW><ENTRY><PARA><LITERAL>"SGI      0664N1D         6S61"</LITERAL></PARA></ENTRY>
+</ROW>
+<ROW><ENTRY><PARA><LITERAL>"SGI      0664N1D         6s61"</LITERAL></PARA></ENTRY>
+</ROW>
+<ROW><ENTRY><PARA><LITERAL>"SGI      0664N1H         6s61"</LITERAL></PARA></ENTRY>
+</ROW>
+<ROW><ENTRY><PARA><LITERAL>"IBM OEM  0663E15         eSfS"</LITERAL></PARA></ENTRY>
+</ROW>
+<ROW><ENTRY><PARA><LITERAL>"IMPRIMIS 94601-15        1250"</LITERAL></PARA></ENTRY>
+</ROW>
+<ROW><ENTRY><PARA><LITERAL>"SEAGATE  ST4767          2590"</LITERAL></PARA></ENTRY>
+</ROW>
+</TBODY>
+</TGROUP>
+</TABLE>
+<TABLE FRAME="topbot"><TBLTITLE  ID="LE80410-TITLE">Optimal I/O Sizes and the Number of Requests per Second Supported </TBLTITLE>
+<TGROUP COLS="2">
+<COLSPEC COLWIDTH="164*">
+<COLSPEC COLWIDTH="278*">
+<THEAD><ROW><ENTRY><PARA>Optimal I/O Size</PARA></ENTRY>
+<ENTRY><PARA>Number of Requests per Second </PARA></ENTRY>
+</ROW>
+</THEAD>
+<TBODY><ROW><ENTRY><PARA>65536</PARA></ENTRY>
+<ENTRY><PARA>23 </PARA></ENTRY>
+</ROW>
+<ROW><ENTRY><PARA>131072</PARA></ENTRY>
+<ENTRY><PARA>16 </PARA></ENTRY>
+</ROW>
+<ROW><ENTRY><PARA>262144</PARA></ENTRY>
+<ENTRY><PARA>9 </PARA></ENTRY>
+</ROW>
+<ROW><ENTRY><PARA>524288</PARA></ENTRY>
+<ENTRY><PARA>5 </PARA></ENTRY>
+</ROW>
+</TBODY>
+</TGROUP>
+</TABLE>
+<PARA>To add other disks or to specify a different optimal I/O size, you must add information to the <FILENAME>/etc/grio_disks</FILENAME> file. If you modify <FILENAME>/etc/grio_disks</FILENAME>, you must restart the <COMMAND>ggd</COMMAND> daemon for the changes to take effect (see <XREF LINKEND="LE20809-PARENT">).</PARA><PARA>The records in <FILENAME>/etc/grio_disks</FILENAME> are in these two forms:</PARA>
+<PROGRAMLISTING>
+ADD "<REPLACEABLE>disk id string</REPLACEABLE>" <REPLACEABLE>optimal_iosize</REPLACEABLE>&ensp;<REPLACEABLE>number_optio_per_second</REPLACEABLE>&ensp;
+
+REPLACE <REPLACEABLE>devicename</REPLACEABLE>&ensp;<REPLACEABLE>optal_iosize number_optio_per_second</REPLACEABLE>
+</PROGRAMLISTING>
+<PARA>If the first field is the keyword ADD, the next field is a 28-character string that is the drive manufacturer's disk ID string. The next field is an integer denoting the optimal I/O size of the device in bytes. The last field is an integer denoting the number of optimal I/O size requests that the disk can satisfy in one second.</PARA>
+<PARA>Some examples of these records are:</PARA>
+<PROGRAMLISTING>
+ADD     &ldquo;SGI     SEAGATE ST31200N9278&rdquo;  64K     23 
+
+ADD     &ldquo;SGI             0064N1D 4I4I&rdquo;  50K     25 
+</PROGRAMLISTING>
+<PARA>If the first field is the keyword REPLACE, the next field is the pathname of a device (for a description of pathnames, see the <COMMAND>grio</COMMAND>(1M) man page). The third field is an integer denoting the optimal I/O size to be used on the device, and the number of I/O operations of that size that it can deliver per second.</PARA>
+<PARA>An example of a REPLACE record is:</PARA>
+<PROGRAMLISTING>
+REPLACE /dev/rdsk/dks136d1s0 50K 20
+</PROGRAMLISTING>
+</SECTION>
+<SECTION  ID="LE90579-PARENT"><TITLE  ID="LE90579-TITLE">/etc/config/ggd.options File Format </TITLE><PARA><INDEXTERM ID="ITch8-70"><PRIMARY><FILENAME>/etc/config/ggd.options</FILENAME>
+ file</PRIMARY>
+</INDEXTERM>
+<FILENAME>/etc/config/ggd.options</FILENAME> contains command-line options for the <COMMAND>ggd</COMMAND> daemon. Options you might include in this file are:</PARA>
+<DEFLIST><DEFLISTENTRY><TERM><COMMAND>-c</COMMAND>&ensp;<REPLACEABLE>cpunum</REPLACEABLE></TERM>
+<LISTITEM><PARA><INDEXTERM ID="ITch8-71"><PRIMARY>CPUs</PRIMARY>
+<SECONDARY>restrict to running GRIO processes</SECONDARY>
+</INDEXTERM>
+Dedicate CPU <REPLACEABLE>cpunum</REPLACEABLE> to performing GRIO requests exclusively.</PARA>
+</LISTITEM>
+</DEFLISTENTRY>
+<DEFLISTENTRY><TERM><COMMAND>-o</COMMAND>&ensp;<REPLACEABLE>iosize</REPLACEABLE></TERM>
+<LISTITEM><PARA><INDEXTERM ID="ITch8-72"><PRIMARY>CPUs</PRIMARY>
+<SECONDARY>restrict to running GRIO processes</SECONDARY>
+</INDEXTERM>
+Specify default optimal I/O size for all devices (e.g., 64, 128, 256, 512).</PARA>
+</LISTITEM>
+</DEFLISTENTRY>
+</DEFLIST>
+<PARA>If you change this file, you must restart <COMMAND>ggd</COMMAND> to make your changes take effect. See <XREF LINKEND="LE20809-PARENT"> for more information.</PARA></SECTION>
+</SECTION>
+</CHAPTER>

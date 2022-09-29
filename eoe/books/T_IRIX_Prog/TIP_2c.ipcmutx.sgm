@@ -1,0 +1,1332 @@
+<!-- Produced by version 3.14 (11/22/96) of SGI Frame/SGML translator -->
+<CHAPTER LBL="4"><TITLE><XREFTARGET ID="82386">Mutual Exclusion</TITLE><PARAGRAPH>You use mutual exclusion facilities whenever data is shared by multiple, independent processes or threads. Using such objects as <ITALICS>locks</ITALICS> (also called <ITALICS>mutexes</ITALICS>) and <ITALICS>semaphores</ITALICS>, you can:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>Ensure that only one process or thread uses a particular data structure at any time.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Synchronize activities, so that processes or threads can wait for the completion of events or actions by other processes or threads.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Coordinate the use of a shared collection such as a ring buffer or queue.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>In order to share data between processes, you share memory between them. Memory sharing is covered in <XREF IDREF="28345" TYPE="TITLE">Chapter&nbsp;3, &ldquo;Sharing Memory Between Processes.&rdquo;</XREF> When independent processes share access to data in disk files, they can ensure mutual exclusion using file locks, which are covered in <XREF IDREF="33600" TYPE="TITLE">Chapter&nbsp;7, &ldquo;File and Record Locking.&rdquo;</XREF></PARAGRAPH>
+<PARAGRAPH>This chapter covers the following major topics:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH><XREF IDREF="10476" TYPE="TITLE">&ldquo;Overview of Mutual Exclusion&rdquo;</XREF> defines such terms as <ITALICS>lock</ITALICS>, <ITALICS>mutex</ITALICS>, <ITALICS>semaphore</ITALICS>, and <ITALICS>barrier</ITALICS>.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="82695" TYPE="TITLE">&ldquo;POSIX Facilities for Mutual Exclusion&rdquo;</XREF> covers the POSIX functions for semaphores and mutexes.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="26308" TYPE="TITLE">&ldquo;IRIX Facilities for Mutual Exclusion&rdquo;</XREF> covers IRIX locks, barriers, and semaphores, and the test-and-set facility.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="41819" TYPE="TITLE">&ldquo;Using Compiler Intrinsics for Test-and-Set&rdquo;</XREF> covers System V semaphores.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="10476">Overview of Mutual Exclusion</TITLE><PARAGRAPH>IRIX offers five kinds of mutual exclusion, each kind with its limits and advantages:<INDEXTARGET ID="TIP_2c.ipcmutx1"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx1|mutual exclusion --></PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>Test-and-set instructions use special instructions in the MIPS CPU to update a memory location in a predictable way.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The lock (or mutex) enables processes to enforce serial use of data or code.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The condition variable lets a thread give up a lock and sleep until an event happens, then reclaim the lock and continue, all in a single operation.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The semaphore lets independent processes manage a countable resource in an orderly way.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The barrier lets processes coordinate their initialization.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>There is a hierarchy of complexity. Test-and-set instructions are a primitive facility that could be used to implement the others. The lock is a simple object that could be used to implement semaphores and barriers. The semaphore is the most flexible and general facility.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>Test-and-Set Instructions</TITLE><PARAGRAPH>The MIPS instruction architecture includes two instructions designed to let programs update memory from independent processes running concurrently in a multiprocessor.<INDEXTARGET ID="TIP_2c.ipcmutx2"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx2|Store Conditional instruction --><INDEXTARGET ID="TIP_2c.ipcmutx3"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx3|Load Linked instruction --><INDEXTARGET ID="TIP_2c.ipcmutx4"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx4|test-and-set:instructions --><INDEXTARGET ID="TIP_2c.ipcmutx5"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx5|mutual exclusion:test-and-set --></PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>The Load Linked (LL) instruction loads a 32- or 64-bit word from memory and also tags that cache line so that the hardware can recognize any change to memory from any CPU in a multiprocessor.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The Store Conditional (SC) instruction stores a 32- or 64-bit word into memory provided that the destination cache line has not been modified. If the cache line has been altered since the LL instruction was used, SC does not update memory and sets a branch condition.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>The combination of LL and SC can be used to guarantee that a change to a memory location is effective, even when multiple concurrent CPUs are trying to update the same location. You can use LL and SC only from an assembly language module. However, the IRIX kernel contains a family of services that are implemented using LL/SC, and you can call them from C or C++. These calls are discussed under <XREF IDREF="23095" TYPE="TITLE">&ldquo;Using Test-and-Set Functions&rdquo;</XREF>.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="62937">Locks</TITLE><PARAGRAPH>A <INDEXTARGET ID="TIP_2c.ipcmutx6"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx6|mutex --><INDEXTARGET ID="TIP_2c.ipcmutx7"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx7|mutual exclusion:mutex --><INDEXTARGET ID="TIP_2c.ipcmutx8"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx8|lock --><INDEXTARGET ID="TIP_2c.ipcmutx9"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx9|mutual exclusion:lock --><ITALICS>lock</ITALICS> is a small software object that stands for the exclusive right to use some resource. The resource could be the right to execute a section of code, or the right to modify a variable in memory, or the right to read or write in a file, or any other software operation that must by performed serially, by one process at a time. Before using a serial resource, the program <ITALICS>claims</ITALICS> the lock, and <ITALICS>releases</ITALICS> the lock when it is done with the resource.</PARAGRAPH>
+<PARAGRAPH>The POSIX standard refers to an object of this kind as a <ITALICS>mutex</ITALICS>, a contraction of &ldquo;mutual exclusion&rdquo; that is a conventional term in computer science. This book uses the simpler word &ldquo;lock&rdquo; when discussing locks in general and IRIX locks in particular, and uses &ldquo;mutex&rdquo; when discussing POSIX mutexes.</PARAGRAPH>
+<PARAGRAPH>You can use IRIX locks to coordinate between unrelated processes or lightweight processes through an IRIX shared memory arena. You can use POSIX mutexes to coordinate between POSIX threads in a threaded program only (not IRIX processes).</PARAGRAPH>
+<PARAGRAPH>You define the meaning of a lock in terms that are relevant to your program's design. You decide what resources can be used freely at any time, and you decide what resources must be used serially, by one process at a time. You create and initialize a lock for each serial resource.</PARAGRAPH>
+<PARAGRAPH>It is also your job to ensure that locks are used consistently in all parts of the program. Two errors are easy to make. You can forget to claim a lock, so that some part of the program uses a resource freely instead of serializing. Or you can forget to release a lock, so that other processes trying to claim the lock &ldquo;hang,&rdquo; or wait forever.</PARAGRAPH>
+<PARAGRAPH>Both of these errors can be hard to find because the symptoms can be intermittent. Most of the time, there is no contention for the use of a shared variable. For example, if one process sometimes fails to claim a lock before updating memory, the program can seem to run correctly for hours (or months) before it suffers precisely the right combination of coincidences that cause two processes to update the variable at the same time.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Semaphores</TITLE><PARAGRAPH>A <INDEXTARGET ID="TIP_2c.ipcmutx10"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx10|semaphore --><INDEXTARGET ID="TIP_2c.ipcmutx11"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx11|mutual exclusion:semaphore --><ITALICS>semaphore</ITALICS> is an integer count that is accessed atomically using two operations that are conventionally called P and V:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>The P operation (mnemonic de<ITALICS>p</ITALICS>lete) decrements the count. If the result is not negative, the operation succeeds and returns. If the result is negative, the P operation suspends the calling process until the count has been made nonnegative by another process doing a V operation.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The V operation (mnemonic re<ITALICS>v</ITALICS>i<ITALICS>v</ITALICS>e) increments the count. If this changes the value from negative to nonnegative, one process that is waiting in a P operation is unblocked.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>You can use a semaphore in place of a lock, to enforce serial use of resource. You initialize the semaphore to a value of 1. The P operation claims the semaphore, leaving it at 0 so that the next process to do P will be suspended. The V operation releases the semaphore.</PARAGRAPH>
+<PARAGRAPH>You can also use a semaphore to control access to a pool that contains a countable number for resources. For example, say that a buffer pool contains <VARIABLE>n</VARIABLE> buffers. A process can proceed if there is at least 1 buffer available in the pool, but if there are no buffers, the process should sleep until at least 1 buffer is returned.</PARAGRAPH>
+<PARAGRAPH>A semaphore, initialized to <VARIABLE>n</VARIABLE>, represents the population of the buffer pool. The pool itself might be implemented as a LIFO queue. The right to update the queue anchor (either to remove a buffer or to return one) is a separate resource that is guarded by a lock. The procedure for obtaining a buffer from the pool is as follows:</PARAGRAPH>
+<ORDEREDLIST><LIST><PARAGRAPH>Perform P on the pool semaphore. When the operation completes, you are assured there is at least one buffer in the pool; and you are also assured that the count representing the buffer you need has been decremented from the semaphore.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Claim the lock that guards the buffer queue anchor. This ensures that there will be no conflict with another process taking or returning a buffer at the same time.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Remove one buffer from the queue, updating the queue anchor. Step 1 assures that the queue is not empty.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Release the lock on the queue anchor.</PARAGRAPH>
+</LIST>
+</ORDEREDLIST>
+<PARAGRAPH>The procedure for returning a buffer to the pool is as follows:</PARAGRAPH>
+<ORDEREDLIST><LIST><PARAGRAPH>Claim the lock that guards the buffer queue anchor. This ensures that there will be no conflict with another process taking or returning a buffer at the same time.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Put the returned buffer back on the queue, updating the queue anchor. The queue could be empty at this time.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Release the lock on the queue anchor.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Perform V on the pool semaphore. This announces that at least one additional buffer is now free, and may unblock some process waiting for a buffer.</PARAGRAPH>
+</LIST>
+</ORDEREDLIST>
+<PARAGRAPH>The same two basic procedures work to allocate any collection of objects. For example, the semaphore could represent the number of open slots in a ring buffer, and the lock could stand for the right to update the ring buffer pointers. (A LIFO queue can be managed without a lock; see <XREF IDREF="58350" TYPE="TITLE">&ldquo;Using Compare-and-Swap&rdquo;</XREF>.)</PARAGRAPH>
+<PARAGRAPH>Semaphores created using POSIX functions, and semaphores created by the SVR4 IPC facility, can be used to coordinate IRIX processes or POSIX threads. Semaphores supported by the IRIX IPC facility can be used to coordinate IRIX processes only.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Condition Variables</TITLE><PARAGRAPH>A condition variable is a software object that represents the occurrence of an event. Typically the event is a software action such as &ldquo;other thread has supplied needed data.&rdquo;<INDEXTARGET ID="TIP_2c.ipcmutx12"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx12|condition variable --><INDEXTARGET ID="TIP_2c.ipcmutx13"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx13|mutual exclusion:condition variable --></PARAGRAPH>
+<PARAGRAPH>Condition variable support is included in the POSIX pthreads library, and can be used only to coordinate among POSIX threads, not between IRIX processes. (See <XREF IDREF="77267" TYPE="TITLE">Chapter&nbsp;13, &ldquo;Thread-Level Parallelism&rdquo;</XREF> for information on the pthread library.)</PARAGRAPH>
+<PARAGRAPH>A thread that wants to wait for an event claims the condition variable, which causes the thread to wait. The thread that recognizes the event signals the condition variable, releasing one or all threads that are waiting for the event.</PARAGRAPH>
+<PARAGRAPH>In the expected mode of use, there is a shared resource that can be depleted. Access to the resource is represented by a mutex. A thread claims the mutex, but then finds that the shared resource is depleted or unready. This thread needs to do three things:</PARAGRAPH>
+<ORDEREDLIST><LIST><PARAGRAPH>Give up the mutex so that some other thread can renew the shared resource.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Wait for the event that &ldquo;resource is now ready for use.&rdquo;</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Re-claim the mutex for the shared resource.</PARAGRAPH>
+</LIST>
+</ORDEREDLIST>
+<PARAGRAPH>These three actions are combined into one action using a condition variable. When a thread claims a condition variable, it must pass a mutex that it owns. The claim releases the mutex, waits, and reclaims the mutex in one operation.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Barriers</TITLE><PARAGRAPH>Barriers provide a convenient way of synchronizing parallel processes on multiprocessor systems. To understand barriers, think of a time when you planned to go to lunch with other people at your workplace. The group agrees to meet in the lobby of the building. Some of your coworkers reach the lobby early, and others arrive later. One comes running in last, apologizing. When all of you have gathered and you know that everyone is ready, you all leave the building in a group.<INDEXTARGET ID="TIP_2c.ipcmutx14"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx14|barrier --><INDEXTARGET ID="TIP_2c.ipcmutx15"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx15|mutual exclusion:barrier --></PARAGRAPH>
+<PARAGRAPH>A barrier is the software equivalent of the lobby where you waited. A group of processes are going to work on a problem. None should start until all the data has been initialized. However, starting each process is part of the initialization, and they cannot all be started at the same time. Each process must be created; each must join an arena and perhaps open a file; and you cannot predict when they will all be ready. To coordinate them, you create a barrier. Each process, when it is ready to start the main operation, calls <FUNCTION>barrier()</FUNCTION>, passing the address of the barrier and the number of processes that will meet. When that many processes have called <FUNCTION>barrier()</FUNCTION>, all of them are released to begin execution.</PARAGRAPH>
+<PARAGRAPH>Barriers are part of IRIX IPC and require the use of a shared arena. Barriers cannot be used to coordinate POSIX threads.</PARAGRAPH>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="82695">POSIX Facilities for Mutual Exclusion</TITLE><PARAGRAPH>The POSIX real-time extensions (detailed in IEEE standard 1003.1b) include named and unnamed semaphores. The POSIX threads library (detailed in IEEE standard 1003.1c) introduces mutexes and condition variables.<INDEXTARGET ID="TIP_2c.ipcmutx16"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx16|mutual exclusion:POSIX facilities --></PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="58542">Managing Unnamed Semaphores</TITLE><PARAGRAPH>An unnamed semaphore is a semaphore object that exists in memory only. An unnamed semaphore can be identified only by its memory address, so it can be shared only by processes or threads that share that memory location.<INDEXTARGET ID="TIP_2c.ipcmutx17"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx17|<FUNCTION>sem_destroy()</FUNCTION> --><INDEXTARGET ID="TIP_2c.ipcmutx18"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx18|<FUNCTION>sem_init()</FUNCTION> --><INDEXTARGET ID="TIP_2c.ipcmutx19"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx19|semaphore:POSIX unnamed --></PARAGRAPH>
+<PARAGRAPH>The functions for creating and freeing unnamed semaphores are summarized in <XREF IDREF="54928" TYPE="TABLE">Table&nbsp;4-1</XREF>. </PARAGRAPH>
+<TABLE COLUMNS="2"><CAPTION LBL="4-1"><PREFIX>Table 4-1 </PREFIX><XREFTARGET ID="54928"> <EMPHASIS>(continued)        </EMPHASIS>POSIX Functions to Manage Unnamed Semaphores</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="81"><PARAGRAPH>Function Name</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Purpose and Operation</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>sem_init(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Initialize a semaphore object, setting its value and preparing it for use.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>sem_destroy(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Make a semaphore unusable.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>The type of a POSIX semaphore is <VARIABLE>sem_t</VARIABLE>, which is declared in the header file <FILENAME>semaphore.h</FILENAME>. You create an unnamed semaphore by allocating memory for a <VARIABLE>sem_t</VARIABLE> variable, either dynamically or statically, and initializing it with <FUNCTION>sem_init()</FUNCTION>. The function in <XREF IDREF="54764" TYPE="TEXT">Example&nbsp;4-1</XREF> allocates and initializes an unnamed semaphore and returns its address. It returns NULL if there is a failure of either <FUNCTION>malloc()</FUNCTION> or <FUNCTION>sem_init()</FUNCTION>.</PARAGRAPH>
+<CODE><CAPTION LBL="4-1"><PREFIX>Example 4-1 </PREFIX><XREFTARGET ID="54764">Dynamic Allocation of POSIX Unnamed Semaphore</CAPTION>sem_t * allocUnnSem(unsigned initVal)
+{
+&nbsp;&nbsp;&nbsp;sem_t *psem = (sem_t*)malloc(sizeof(sem_t));
+&nbsp;&nbsp;&nbsp;if (psem) /* malloc worked */
+&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if (sem_init(psem,0,initVal))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;free(psem);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;psem = NULL;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;return psem;
+}
+</CODE>
+<PARAGRAPH>The function in <XREF IDREF="54764" TYPE="TEXT">Example&nbsp;4-1</XREF> passes the second argument of <FUNCTION>sem_init()</FUNCTION>, <VARIABLE>pshared</VARIABLE>, as 0, meaning the semaphore can only be used within the current process. A semaphore of this kind can be used to coordinate pthreads in a threaded program.</PARAGRAPH>
+<PARAGRAPH>If you want to use a semaphore to coordinate between IRIX processes with separate address spaces, you must create the semaphore with a nonzero <VARIABLE>pshared</VARIABLE>, and place the semaphore in a memory segment that is shared among all processes. This feature is fully supported. However, you should specify <VARIABLE>pshared</VARIABLE> as 0 when possible, because nonshared semaphores have higher performance.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Managing Named Semaphores</TITLE><PARAGRAPH>A named semaphore is named in the filesystem, so it can be opened by any process (subject to access permissions), even when the process does not share address space with the creator of the semaphore. The functions used to create and manage named semaphores are summarized in <INDEXTARGET ID="TIP_2c.ipcmutx20"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx20|semaphore:POSIX named --><XREF IDREF="93411" TYPE="TABLE">Table&nbsp;4-2</XREF>. </PARAGRAPH>
+<TABLE COLUMNS="2"><CAPTION LBL="4-2"><PREFIX>Table 4-2 </PREFIX><XREFTARGET ID="93411"> <EMPHASIS>(continued)        </EMPHASIS>POSIX Functions to Manage Named Semaphores</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="81"><PARAGRAPH>Function Name</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Purpose and Operation</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>sem_open(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Create or access a named semaphore, returning an address. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>sem_close(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Give up access to a named semaphore, releasing a file descriptor.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>sem_unlink(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Permanently remove a named semaphore.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>The <FUNCTION>sem_open()</FUNCTION> function takes the following arguments: </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH><VARIABLE>name</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Name of the semaphore in the form of a file pathname.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH><VARIABLE>oflag</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Either zero, or O_CREAT, or O_CREAT+O_EXCL.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH><VARIABLE>mode</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>The access permissions to apply if the semaphore is created.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH><VARIABLE>value</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Initial value of the semaphore.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<SECTION3 LBL="" HELPID = ""><TITLE>Creating a Named Semaphore</TITLE><PARAGRAPH>The POSIX standard leaves it to the implementation whether or not a named semaphore is represented by a disk file. The IRIX implementation does create a file to stand for each named semaphore (see <XREF IDREF="66952" TYPE="TITLE">&ldquo;POSIX IPC Name Space&rdquo;</XREF>). The file that stands for a semaphore takes up no disk space other than the file node in a directory.</PARAGRAPH>
+<PARAGRAPH>The <VARIABLE>oflag</VARIABLE> is used to handle the following cases:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>Specify 0 to receive an error if the semaphore does not exist; that is, to require that the semaphore must exist.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Specify O_CREAT+O_EXCL to receive an error if the semaphore does exist; that is, to require that the semaphore not exist.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Specify O_CREAT to have the semaphore created if necessary.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>When <FUNCTION>sem_open()</FUNCTION> creates a semaphore, it sets the file permissions specified by <VARIABLE>mode</VARIABLE>. These permissions control access to a semaphore by UID and GID, just as for a file. (See the <REFPAGE>open(2)</REFPAGE> and <REFPAGE>chmod(2)</REFPAGE> reference pages.)</PARAGRAPH>
+<PARAGRAPH>When <FUNCTION>sem_open()</FUNCTION> creates a semaphore, it sets the initial value to <VARIABLE>value</VARIABLE>, or to 0 if <VARIABLE>value</VARIABLE> is not specified. Otherwise the value depends on the history of the semaphore since it was created. The value of a semaphore is not preserved over a reboot (the POSIX standard says it is not valid to depend on the value of a semaphore over a reboot).</PARAGRAPH>
+<PARAGRAPH>A named semaphore is opened as a file, and takes up one entry in the file descriptor table for the process. There is no way to convert between the address of the <VARIABLE>sem_t</VARIABLE> and the file descriptor number, or vice versa. As a result, you cannot directly pass the semaphore to a function such as <FUNCTION>fcntl()</FUNCTION> or <FUNCTION>chmod()</FUNCTION>.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Closing and Removing a Named Semaphore</TITLE><PARAGRAPH>When a process stops using a named semaphore, it can close the semaphore, releasing the associated file descriptor slot. This is done with <FUNCTION>sem_close()</FUNCTION>. The semaphore name persists in the filesystem, and as long as the system is up, the current semaphore value persists in a table in memory.</PARAGRAPH>
+<PARAGRAPH>To permanently remove a semaphore, use <FUNCTION>sem_unlink()</FUNCTION>.</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Using Semaphores</TITLE><PARAGRAPH>POSIX named and unnamed semaphores can be used to coordinate the actions of IRIX processes and POSIX threads. They are the only mutual-exclusion objects that can be freely used to coordinate between threaded and unthreaded programs alike. (Message queues can be used between threaded and unthreaded programs also; see <INDEXTARGET ID="TIP_2c.ipcmutx21"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx21|semaphore:using POSIX --><XREF IDREF="48324" TYPE="TITLE">Chapter&nbsp;6, &ldquo;Message Queues.&rdquo;</XREF>)</PARAGRAPH>
+<PARAGRAPH>The functions that operate on semaphores are summarized in <XREF IDREF="44980" TYPE="TABLE">Table&nbsp;4-3</XREF>.</PARAGRAPH>
+<TABLE COLUMNS="2"><CAPTION LBL="4-3"><PREFIX>Table 4-3 </PREFIX><XREFTARGET ID="44980"> <EMPHASIS>(continued)        </EMPHASIS>POSIX Functions to Operate on Semaphores</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="81"><PARAGRAPH>Function Name</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Purpose and Operation</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>sem_getvalue(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Return a snapshot of the current value of a semaphore.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>sem_post(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Perform the P operation, incrementing a semaphore and possibly 
+unblocking a waiting process.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>sem_trywait(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Perform the V operation only if the value of the semaphore is 1 or more.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>sem_wait(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Perform the V operation, decrementing a semaphore and blocking if it 
+becomes negative.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>The abstract operation P is implemented as the <FUNCTION>sem_wait()</FUNCTION> function. Use this to decrement a semaphore's value and, if the result is negative, to suspend the calling function until the value is restored. The V operation is <FUNCTION>sem_post()</FUNCTION>.</PARAGRAPH>
+<PARAGRAPH>You can sample a semaphore's value using <FUNCTION>sem_getvalue()</FUNCTION>. The <FUNCTION>sem_trywait()</FUNCTION> operation is useful when a process or thread cannot tolerate being suspended.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Using Mutexes and Condition Variables</TITLE><PARAGRAPH>Two additional types of mutual exclusion are available only within a threaded program, to coordinate the actions of POSIX threads. The mutex is comparable to a lock or to a semaphore initialized to a count of 1. The condition variable provides a convenient way for a thread to give up ownership of a mutex, wait for something to happen, and then reclaim the mutex.</PARAGRAPH>
+<PARAGRAPH>Both of these facilities are covered in detail in <XREF IDREF="77267" TYPE="TITLE">Chapter&nbsp;13, &ldquo;Thread-Level Parallelism.&rdquo;</XREF> See the headings <XREF IDREF="98602" TYPE="TITLE">&ldquo;Mutexes&rdquo;</XREF> and <XREF IDREF="77156" TYPE="TITLE">&ldquo;Condition Variables&rdquo;</XREF>.&space;</PARAGRAPH>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="26308">IRIX Facilities for Mutual Exclusion</TITLE><PARAGRAPH>IRIX supports a wide selection of mutual-exclusion facilities, all tuned for use between processes that run concurrently in a multiprocessor.<INDEXTARGET ID="TIP_2c.ipcmutx22"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx22|mutual exclusion:IRIX facilities --></PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="66714">Using IRIX Semaphores</TITLE><PARAGRAPH>Two kinds of semaphores are supported in IRIX IPC: normal and polled. Both are allocated in a shared memory arena (see <INDEXTARGET ID="TIP_2c.ipcmutx23"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx23|semaphore:IRIX --><XREF IDREF="62381" TYPE="TITLE">&ldquo;IRIX Shared Memory Arenas&rdquo;</XREF>).</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="62459">Creating Normal Semaphores</TITLE><PARAGRAPH>The functions for managing normal semaphores are summarized in <XREF IDREF="36007" TYPE="TABLE">Table&nbsp;4-4</XREF>.</PARAGRAPH>
+<TABLE COLUMNS="2"><CAPTION LBL="4-4"><PREFIX>Table 4-4 </PREFIX><XREFTARGET ID="36007"> <EMPHASIS>(continued)        </EMPHASIS>IRIX Functions to Manage Nonpolled Semaphores</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="86"><PARAGRAPH>Function Name</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="302"><PARAGRAPH>Purpose and Operation</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="86"><PARAGRAPH>usnewsema(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="302"><PARAGRAPH>Allocate a semaphore in an arena and give it an initial value.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="86"><PARAGRAPH>usfreesema(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="302"><PARAGRAPH>Release arena memory used by a semaphore (does not release any process 
+waiting on the semaphore).</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="86"><PARAGRAPH>usinitsema(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="302"><PARAGRAPH>Reset a semaphore value and its metering information (does not release any 
+process waiting on the semaphore).</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="86"><PARAGRAPH>usctlsema(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="302"><PARAGRAPH>Set and reset semaphore metering information and other attributes.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="86"><PARAGRAPH>usdumpsema(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="302"><PARAGRAPH>Dump semaphore metering information to a file.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>To allocate a new shared-arena semaphore and set its initial value, call <FUNCTION>usnewsema()</FUNCTION>. Use <FUNCTION>usctlsema()</FUNCTION> to enable recursive use of the semaphore and to enable the collection of metering information. You can use the metering information to find out whether a semaphore is a bottleneck or not.</PARAGRAPH>
+<TIP><PREFIX>Tip</PREFIX>When reading the reference pages cited above, notice that <FUNCTION>usnewsema()</FUNCTION> returns the address of a <VARIABLE>usema_t</VARIABLE> object, and all the other functions take the address of a <VARIABLE>usema_t</VARIABLE>. That is, <VARIABLE>usema_t</VARIABLE> represents the type of the semaphore object itself, and you refer to a semaphore by its address. This is different from locks, which are discussed later in this chapter.</TIP>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Creating Polled Semaphores</TITLE><PARAGRAPH>A polled semaphore differs from a normal semaphore in the P operation. When decrementing the semaphore value produces a negative number, the calling process is not blocked. Instead, it receives a return code. The process then has to include the address of the semaphore in the list of events passed to <INDEXTARGET ID="TIP_2c.ipcmutx24"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx24|<FUNCTION>poll()</FUNCTION> --><INDEXTARGET ID="TIP_2c.ipcmutx25"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx25|semaphore:polledpolled semaphore --><FUNCTION>poll()</FUNCTION> (see the <REFPAGE>poll(2)</REFPAGE> reference page). The V operation, applied to a polled semaphore, does not release a block process but rather causes a <FUNCTION>poll()</FUNCTION> operation to end.</PARAGRAPH>
+<PARAGRAPH>You can use polled semaphores to integrate semaphore handling with other events for which you wait with <FUNCTION>poll()</FUNCTION>, such as file operations. You cannot combine the use of normal semaphores with the use of polled devices, since a single process cannot wait in a <FUNCTION>poll()</FUNCTION> call and in a <FUNCTION>uspsema()</FUNCTION> call at the same time. The functions for creating and controlling polled semaphores are summarized in <XREF IDREF="79063" TYPE="TABLE">Table&nbsp;4-5</XREF>. &nbsp;&nbsp;</PARAGRAPH>
+<TABLE COLUMNS="2"><CAPTION LBL="4-5"><PREFIX>Table 4-5 </PREFIX><XREFTARGET ID="79063"> <EMPHASIS>(continued)        </EMPHASIS>IRIX IPC Functions for Managing Polled Semaphores </CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="97"><PARAGRAPH>Function Name</PARAGRAPH>
+</CELL>
+<CELL LEFT="105" WIDTH="288"><PARAGRAPH>Purpose and Operation</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="97"><PARAGRAPH>usnewpollsema(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="105" WIDTH="288"><PARAGRAPH>Allocate a polled semaphore in an arena and give it an initial value.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="97"><PARAGRAPH>usopenpollsema(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="105" WIDTH="288"><PARAGRAPH>Assign a file descriptor to a polled semaphore. The file descriptor can be 
+passed to <FUNCTION>poll()</FUNCTION> or <FUNCTION>select()</FUNCTION>. This must be done before the semaphore can 
+be used.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="97"><PARAGRAPH>usclosepollsema(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="105" WIDTH="288"><PARAGRAPH>Release a file descriptor assigned with <FUNCTION>usopenpollsema()</FUNCTION>.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="97"><PARAGRAPH>usfreepollsema(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="105" WIDTH="288"><PARAGRAPH>Release arena memory used by a polled semaphore and invalidate any 
+file descriptors assigned to it.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Operating on Semaphores</TITLE><PARAGRAPH>The functions for semaphore operations are summarized in <XREF IDREF="58800" TYPE="TABLE">Table&nbsp;4-6</XREF>.&nbsp;&nbsp;&nbsp;</PARAGRAPH>
+<TABLE COLUMNS="2"><CAPTION LBL="4-6"><PREFIX>Table 4-6 </PREFIX><XREFTARGET ID="58800"> <EMPHASIS>(continued)        </EMPHASIS>IRIX IPC Functions for Semaphore Operations</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="86"><PARAGRAPH>Function Name</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="298"><PARAGRAPH>Purpose and Operation</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="86"><PARAGRAPH>uspsema(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="298"><PARAGRAPH>Perform the P operation on either type of semaphore.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="86"><PARAGRAPH>usvsema(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="298"><PARAGRAPH>Perform the V operation on either type of semaphore. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="86"><PARAGRAPH>ustestsema(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="298"><PARAGRAPH>Return the current (instantaneous) value of a semaphore.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="86"><PARAGRAPH>uscpsema(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="298"><PARAGRAPH>Perform the P operation only if the resulting count will be nonnegative.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="86"><PARAGRAPH>usinitsema(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="298"><PARAGRAPH>Reset a semaphore value and its metering information (does not release 
+any process waiting on the semaphore).</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="86"><PARAGRAPH>usctlsema(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="298"><PARAGRAPH>Set and reset semaphore metering information and other attributes.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="86"><PARAGRAPH>usdumpsema(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="298"><PARAGRAPH>Dump semaphore metering information to a file.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>To perform the P operation on a semaphore of either type, use <FUNCTION>uspsema()</FUNCTION>. When the decremented semaphore value is nonnegative, the function returns 1. The action when the decremented count would be negative differs between the polled and normal semaphores:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>When a normal semaphore count remains or becomes negative, the calling process is blocked; the function does not return until the count is nonnegative.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>When a polled semaphore count remains or becomes negative, the function returns 0 and the calling process must use <FUNCTION>poll()</FUNCTION> to find out when it becomes nonnegative.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>To perform the V operation on a semaphore of either type, call <FUNCTION>usvsema()</FUNCTION>.</PARAGRAPH>
+<PARAGRAPH>The <FUNCTION>uscpsema()</FUNCTION> function provides a conditional P operation: it performs a P operation on the semaphore only if it can do so without making the value negative. The <FUNCTION>ustestsema()</FUNCTION> function returns the current value of the semaphore&mdash;which of course is immediately out of date.</PARAGRAPH>
+<PARAGRAPH>The <FUNCTION>usinitsema()</FUNCTION> function reinitializes the semaphore to a specified value. Note that if you reinitialize a semaphore on which processes are waiting, the processes continues to wait. You should reinitialize a semaphore only in unusual circumstances.</PARAGRAPH>
+<PARAGRAPH>You can call <FUNCTION>usctlsema()</FUNCTION> to enable the keeping of either metering information&mdash;cumulative counts of usage&mdash;or a history trace. The metering information shows whether a semaphore is a bottleneck in the program's operations. The history trace can be used to analyze bugs.&space;</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="74453">Using Locks</TITLE><PARAGRAPH>IRIX locks are implemented differently depending on the hardware architecture of the computer using them. On a multiprocessor computer, locks are busy-wait locks, so the processor continually tries to acquire the lock until it succeeds. This implementation makes sense only on multiprocessor systems, where one processor can release the lock while another processor is &ldquo;spinning,&rdquo; trying to acquire the lock. On a uniprocessor, a process waiting to claim a lock is suspended until the lock is released by another process.<INDEXTARGET ID="TIP_2c.ipcmutx26"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx26|lock:IRIX --></PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE>Creating and Managing Locks</TITLE><PARAGRAPH>The functions for creating and controlling locks are summarized in <XREF IDREF="59275" TYPE="TABLE">Table&nbsp;4-7</XREF>. </PARAGRAPH>
+<TABLE COLUMNS="2"><CAPTION LBL="4-7"><PREFIX>Table 4-7 </PREFIX><XREFTARGET ID="59275"> <EMPHASIS>(continued)        </EMPHASIS>IRIX IPC Functions for Managing Locks</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="86"><PARAGRAPH>Function Name</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="298"><PARAGRAPH>Purpose and Operation</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="86"><PARAGRAPH>usnewlock(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="298"><PARAGRAPH>Allocate a lock in a specified arena.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="86"><PARAGRAPH>usfreelock(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="298"><PARAGRAPH>Release lock memory (does not release any process waiting on the lock).</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="86"><PARAGRAPH>usinitlock(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="298"><PARAGRAPH>Reset a lock and its metering information (does not release any process 
+waiting on the lock).</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="86"><PARAGRAPH>usctllock(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="298"><PARAGRAPH>Fetch and reset semaphore metering information or debugging 
+information.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="86"><PARAGRAPH>usdumplock(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="298"><PARAGRAPH>Dump lock metering information to a file.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>You decide whether the locks in an arena will have metering information or not. You specify this before creating the arena, to <FUNCTION>usconfig()</FUNCTION> (see <XREF IDREF="19447" TYPE="TITLE">&ldquo;Initializing Arena Attributes&rdquo;</XREF>). When lock metering is enabled, you can retrieve the information about a lock at any time to find out whether a lock is a bottleneck in a program.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Claiming and Releasing Locks</TITLE><PARAGRAPH>The functions for using locks are summarized in <XREF IDREF="53172" TYPE="TABLE">Table&nbsp;4-8</XREF>.</PARAGRAPH>
+<TABLE COLUMNS="2"><CAPTION LBL="4-8"><PREFIX>Table 4-8 </PREFIX><XREFTARGET ID="53172"> <EMPHASIS>(continued)        </EMPHASIS>IRIX IPC Functions for Using Locks</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="81"><PARAGRAPH>Function Name</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Purpose and Operation</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>ussetlock(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Seize a lock, suspending the caller if necessary, until the lock is available.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>usunsetlock(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Release a lock, making it available for other processes. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>uscsetlock(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Seize a lock if it is available; otherwise return a 1.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>uswsetlock(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Seize a lock, suspending the caller if necessary; takes a specified number of 
+spins as an argument.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>ustestlock(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Test a lock, returning 0 if it is instantaneously available and 1 if it is not 
+available.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<TIP><PREFIX>Tip</PREFIX>When reading the reference pages cited above, notice that <FUNCTION>usnewlock()</FUNCTION> returns a <VARIABLE>ulock_t</VARIABLE> object, which is simply a pointer. All the functions that operate on locks take a <VARIABLE>ulock_t</VARIABLE> object&mdash;not a pointer to a <VARIABLE>ulock_t</VARIABLE>. That is, the <VARIABLE>ulock_t</VARIABLE> type represents a handle or reference to a lock, not a lock itself. This differs from the treatment of semaphores, which is described under <XREF IDREF="62459" TYPE="TITLE">&ldquo;Creating Normal Semaphores&rdquo;</XREF>.</TIP>
+<PARAGRAPH>On uniprocessors, none of the functions <FUNCTION>us[c,w]setlock()</FUNCTION> spin; if the lock is available they return immediately, and if it is not, they suspend the calling process and give up the CPU. On multiprocessors, <FUNCTION>ussettlock()</FUNCTION> spins for a default number of times before it suspends the process. The function <FUNCTION>uswsetlock()</FUNCTION> is the same, but you can specify the number of spins to take before suspending.</PARAGRAPH>
+<PARAGRAPH>A process can call <FUNCTION>usunsetlock()</FUNCTION> on a lock that is either not locked or locked by another process. In either case, the lock is unlocked. &ldquo;Double tripping&rdquo;&mdash;calling a set-lock function twice with the same lock&mdash;is also permissible. The caller blocks until another process unsets the lock.&space;</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="72904">Using Barriers</TITLE><PARAGRAPH>The functions to manage and use barriers are summarized in <INDEXTARGET ID="TIP_2c.ipcmutx27"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx27|barrier:IRIX --><XREF IDREF="94413" TYPE="TABLE">Table&nbsp;4-9</XREF>. </PARAGRAPH>
+<TABLE COLUMNS="2"><CAPTION LBL="4-9"><PREFIX>Table 4-9 </PREFIX><XREFTARGET ID="94413"> <EMPHASIS>(continued)        </EMPHASIS>IRIX IPC Functions for Barriers</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="86"><PARAGRAPH>Function Name</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="298"><PARAGRAPH>Purpose and Operation</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="86"><PARAGRAPH>new_barrier(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="298"><PARAGRAPH>Allocate and initialize a barrier in a specified arena. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="86"><PARAGRAPH>free_barrier(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="298"><PARAGRAPH>Release the storage associated with a barrier. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="86"><PARAGRAPH>barrier(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="298"><PARAGRAPH>Wait at a barrier until a specified number of processes have gathered.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="86"><PARAGRAPH>init_barrier(3P) </PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="298"><PARAGRAPH>Reinitialize a barrier (does not release any processes waiting).</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>The main process uses <FUNCTION>new_barrier()</FUNCTION> to allocate a barrier in some arena. To use the barrier, each process calls <FUNCTION>barrier()</FUNCTION>, passing the number of processes that are supposed to meet before proceeding.</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>The <FUNCTION>barrier()</FUNCTION> function assumes that it is used on a multiprocessor. It always passes time by spinning in an empty loop. When used on a uniprocessor (or when used on a multiprocessor with fewer available CPUs than barrier processes), a call to <FUNCTION>barrier(</FUNCTION><VARIABLE>n</VARIABLE><FUNCTION>)</FUNCTION> can be quite inefficient. The waiting functions spin until each in turn uses up its time-slice. In general it is not a good idea to use <FUNCTION>barrier()</FUNCTION> except in a multiprocessor with a number of CPUs approximately equal to the number of coordinating processes.&space;</NOTE>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="23095">Using Test-and-Set Functions</TITLE><PARAGRAPH>The C library includes a family of functions that apply the MIPS instructions Load Linked and Store Conditional to modify memory words in a reliable way in a multiprocessor. These functions are detailed in the <INDEXTARGET ID="TIP_2c.ipcmutx28"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx28|test-and-set --><INDEXTARGET ID="TIP_2c.ipcmutx29"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx29|test-and-set:library functions for --><REFPAGE>test_and_set(3)</REFPAGE> and <REFPAGE>uscas(3)</REFPAGE> reference pages. In addition, the MIPSpro C and C++ compilers, version 7.0 and after, contain built-in support for these operations.</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE>Using Test-and-Set</TITLE><PARAGRAPH>All test-and-set functions solve a similar problem: how to update the contents of a memory word reliably from two or more CPUs concurrently. Use a test-and-set function to avoid the traditional &ldquo;race&rdquo; condition. For example, suppose that two or more processes could execute code to increment a variable, as in the C expression <VARIABLE>++shared</VARIABLE>:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>Process A loads <VARIABLE>shared</VARIABLE> into a register and adds 1 to it.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Process B loads <VARIABLE>shared</VARIABLE> into a register and adds 1 to it.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Process A stores the value in memory.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Process B stores the value in memory.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>The result is to increment <VARIABLE>shared</VARIABLE> by 1 when it should be incremented by 2. However, if both processes use <VARIABLE>test_then_add(&amp;shared,1)</VARIABLE> instead, they are assured that both increments will occur regardless of timing.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="58350">Using Compare-and-Swap</TITLE><PARAGRAPH>The test-and-set functions are not adequate to do race-free pointer manipulation; you need a compare-and-swap function for that. The C library includes the <INDEXTARGET ID="TIP_2c.ipcmutx30"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx30|<FUNCTION>uscas()</FUNCTION> --><INDEXTARGET ID="TIP_2c.ipcmutx31"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx31|<FUNCTION>uscas32</FUNCTION> --><INDEXTARGET ID="TIP_2c.ipcmutx32"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx32|compare-and-swap --><FUNCTION>uscas()</FUNCTION> and <FUNCTION>uscas32()</FUNCTION> functions for this purpose. Use <FUNCTION>uscas()</FUNCTION> to work with pointer-sized values (which can be either 32 or 64 bits depending on compile options). Use <FUNCTION>uscas32()</FUNCTION> to work with words that should always be 32 bits in every program.</PARAGRAPH>
+<PARAGRAPH>The compare-and-swap functions take four arguments: </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH><VARIABLE>destp</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="337"><PARAGRAPH>Address of the target memory field you want to update.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH><VARIABLE>old</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="337"><PARAGRAPH>Expected current value of the memory field.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH><VARIABLE>new</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="337"><PARAGRAPH>Desired new value, based on the expected old value.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH><VARIABLE>u</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="337"><PARAGRAPH>Address of any IRIX shared memory arena.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>The arena address <VARIABLE>u</VARIABLE> is not actually used by the functions. However, the functions cannot work until <FUNCTION>usinit()</FUNCTION> has been called at least once. Passing an arena address ensures that this has happened.</PARAGRAPH>
+<PARAGRAPH>Use a compare-and-swap function in a loop like the following:</PARAGRAPH>
+<ORDEREDLIST><LIST><PARAGRAPH>Copy the current value of the target memory field.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Calculate a new value based on that current value.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Use compare-and-swap to install the new value, provided that the current value has not changed during step 2.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>If the compare failed so the swap was not done (<FUNCTION>uscas()</FUNCTION> returns 0), another process has changed the target: return to step 1 and repeat.</PARAGRAPH>
+</LIST>
+</ORDEREDLIST>
+<PARAGRAPH>The code in <XREF IDREF="23822" TYPE="TEXT">Example&nbsp;4-2</XREF> illustrates how this type of loop can be used to manage a simple LIFO queue.</PARAGRAPH>
+<CODE><CAPTION LBL="4-2"><PREFIX>Example 4-2 </PREFIX><XREFTARGET ID="23822">Using Compare-and-Swap on a LIFO Queue</CAPTION>#include&nbsp;&lt;ulocks.h>
+typedef&nbsp;struct&nbsp;item_s&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;struct&nbsp;item_s&nbsp;*next;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;... other fields ...&nbsp;*/
+}&nbsp;item_t;
+void&nbsp;push_item(&nbsp;item_t&nbsp;**lifo,&nbsp;item_t&nbsp;*new,&nbsp;usptr_t&nbsp;*u)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;item_t&nbsp;*old;
+&nbsp;&nbsp;&nbsp;&nbsp;do&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;new->next&nbsp;=&nbsp;old&nbsp;=&nbsp;*lifo;
+&nbsp;&nbsp;&nbsp;&nbsp;}&nbsp;while(0&nbsp;==&nbsp;uscas(lifo,(ptrdiff_t)old,(ptrdiff_t)new,u));
+}
+item_t&nbsp;*&nbsp;pull_item(&nbsp;item_t&nbsp;**lifo,&nbsp;usptr_t&nbsp;*u)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;item_t&nbsp;*old,&nbsp;*new;&nbsp;&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;do&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;old&nbsp;=&nbsp;*lifo;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!old)&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;new&nbsp;=&nbsp;old->next;
+&nbsp;&nbsp;&nbsp;&nbsp;}&nbsp;while(0&nbsp;==&nbsp;uscas(lifo,(ptrdiff_t)old,(ptrdiff_t)new,u));
+&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;old;
+}
+#include&nbsp;&lt;stdio.h>
+main()
+{
+&nbsp;&nbsp;&nbsp;&nbsp;usptr_t&nbsp;*arena&nbsp;=&nbsp;usinit("/var/tmp/cas.arena");
+&nbsp;&nbsp;&nbsp;&nbsp;item_t&nbsp;*lifo&nbsp;=&nbsp;NULL;
+&nbsp;&nbsp;&nbsp;&nbsp;item_t&nbsp;t1,&nbsp;t2;
+&nbsp;&nbsp;&nbsp;&nbsp;item_t&nbsp;*p1,&nbsp;*p2;
+&nbsp;&nbsp;&nbsp;&nbsp;push_item(&amp;lifo,&nbsp;&amp;t1,&nbsp;arena);
+&nbsp;&nbsp;&nbsp;&nbsp;push_item(&amp;lifo,&nbsp;&amp;t2,&nbsp;arena);
+&nbsp;&nbsp;&nbsp;&nbsp;p2&nbsp;=&nbsp;pull_item(&amp;lifo,&nbsp;arena);
+&nbsp;&nbsp;&nbsp;&nbsp;p1&nbsp;=&nbsp;pull_item(&amp;lifo,&nbsp;arena);
+&nbsp;&nbsp;&nbsp;&nbsp;printf("%x&nbsp;==&nbsp;%x&nbsp;?\n",&nbsp;&amp;t1,&nbsp;p1);
+&nbsp;&nbsp;&nbsp;&nbsp;printf("%x&nbsp;==&nbsp;%x&nbsp;?\n",&nbsp;&amp;t2,&nbsp;p2);
+}
+</CODE>
+<PARAGRAPH>In <XREF IDREF="23822" TYPE="TEXT">Example&nbsp;4-2</XREF>, the <FUNCTION>push_item()</FUNCTION> function pushes an <VARIABLE>item_t</VARIABLE> onto a LIFO queue, and <FUNCTION>pull_item()</FUNCTION> removes and returns the first <VARIABLE>item_t</VARIABLE> from a queue. Both use <FUNCTION>uscas()</FUNCTION> to update the queue anchor. The <FUNCTION>main()</FUNCTION> function contains a unit-test of the functions, first pushing two items, then pulling them off, finally displaying the addresses to verify that what was pushed, could be pulled.&space;</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Using Compiler Intrinsics for Test-and-Set</TITLE><PARAGRAPH>The MIPSpro C and C++ compilers version 7.0 introduce the intrinsic functions summarized in <INDEXTARGET ID="TIP_2c.ipcmutx33"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx33|compiler intrinsic for atomic operations --><INDEXTARGET ID="TIP_2c.ipcmutx34"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx34|compare-and-swap:compiler intrinsic --><INDEXTARGET ID="TIP_2c.ipcmutx35"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx35|test-and-set:compiler intrinsics for --><XREF IDREF="56034" TYPE="TABLE">Table&nbsp;4-10</XREF>. </PARAGRAPH>
+<TABLE COLUMNS="3"><CAPTION LBL="4-10"><PREFIX>Table 4-10 </PREFIX><XREFTARGET ID="56034"> <EMPHASIS>(continued)        </EMPHASIS>Compiler Intrinsics for Atomic Operations</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="135"><PARAGRAPH>Intrinsic Prototype</PARAGRAPH>
+</CELL>
+<CELL LEFT="140" WIDTH="207"><PARAGRAPH>Purpose</PARAGRAPH>
+</CELL>
+<CELL LEFT="355" WIDTH="46"><PARAGRAPH>Barrier</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="135"><PARAGRAPH>__<VARIABLE>op</VARIABLE>_and_fetch(p,v...)</PARAGRAPH>
+</CELL>
+<CELL LEFT="140" WIDTH="207"><PARAGRAPH>Atomically execute <KEYWORD>{*p </KEYWORD>
+<VARIABLE></VARIABLE><VARIABLE>op</VARIABLE>
+<KEYWORD></KEYWORD><KEYWORD>= v; *p;}</KEYWORD>. The op can be 
+<KEYWORD>add</KEYWORD>, <KEYWORD>sub</KEYWORD>, <KEYWORD>or</KEYWORD>, <KEYWORD>and</KEYWORD>, <KEYWORD>xor</KEYWORD>, and <KEYWORD>nand</KEYWORD>.</PARAGRAPH>
+</CELL>
+<CELL LEFT="355" WIDTH="46"><PARAGRAPH>Full</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="135"><PARAGRAPH>__fetch_and_<VARIABLE>op</VARIABLE>(p,v...)</PARAGRAPH>
+</CELL>
+<CELL LEFT="140" WIDTH="207"><PARAGRAPH>Atomically execute <KEYWORD>{t = *p; *p</KEYWORD>&space;<VARIABLE>op</VARIABLE>
+<KEYWORD></KEYWORD><KEYWORD>= v; t;}</KEYWORD>. The op can 
+be <KEYWORD>add</KEYWORD>, <KEYWORD>sub</KEYWORD>, <KEYWORD>or</KEYWORD>, <KEYWORD>and</KEYWORD>, <KEYWORD>xor</KEYWORD>, and <KEYWORD>nand</KEYWORD>.</PARAGRAPH>
+</CELL>
+<CELL LEFT="355" WIDTH="46"><PARAGRAPH>Full</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="135"><PARAGRAPH>__lock_test_and_set(p,v...)</PARAGRAPH>
+</CELL>
+<CELL LEFT="140" WIDTH="207"><PARAGRAPH>Atomically execute <KEYWORD>{t = *p; *p</KEYWORD>&space;<KEYWORD>= v; t;}</KEYWORD>.</PARAGRAPH>
+</CELL>
+<CELL LEFT="355" WIDTH="46"><PARAGRAPH>Backward</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="135"><PARAGRAPH>__lock_release(p...)</PARAGRAPH>
+</CELL>
+<CELL LEFT="140" WIDTH="207"><PARAGRAPH>Atomically execute <KEYWORD>{*p</KEYWORD>&space;<KEYWORD>= 0;}</KEYWORD>.</PARAGRAPH>
+</CELL>
+<CELL LEFT="355" WIDTH="46"><PARAGRAPH>Forward</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="135"><PARAGRAPH>__compare_and_swap(p,w,v...)</PARAGRAPH>
+</CELL>
+<CELL LEFT="140" WIDTH="207"><PARAGRAPH>Atomically execute<KEYWORD> (w==*p) ?(*p=v, 1): 0</KEYWORD>.</PARAGRAPH>
+</CELL>
+<CELL LEFT="355" WIDTH="46"><PARAGRAPH>Full</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="135"><PARAGRAPH>__synchronize(...)</PARAGRAPH>
+</CELL>
+<CELL LEFT="140" WIDTH="207"><PARAGRAPH>Issue the MIPS-3 instruction sync to synchronize 
+the cache with memory.</PARAGRAPH>
+</CELL>
+<CELL LEFT="355" WIDTH="46"><PARAGRAPH>Full</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>Each of the compiler intrinsics except <FUNCTION>__synchronize()</FUNCTION> causes the compiler to generate inline code using Load Linked and Store Conditional to update memory predictably. In this respect they are similar to the library functions documented in the <REFPAGE>test_and_set(3)</REFPAGE> and <REFPAGE>uscas(3)</REFPAGE> reference pages. For example, the statement</PARAGRAPH>
+<EXAMPLE>
+__add_and_fetch(&amp;shared,1);
+</EXAMPLE>
+<PARAGRAPH>is functionally equivalent to the library call</PARAGRAPH>
+<EXAMPLE>
+test_then_add(&amp;shared,1);
+</EXAMPLE>
+<PARAGRAPH>The compiler intrinsic <FUNCTION>__compare_and_swap()</FUNCTION> is simpler to use than <FUNCTION>uscas()</FUNCTION> since you do not have to create a shared memory arena first, and avoids the overhead of a system call.</PARAGRAPH>
+<PARAGRAPH>The compiler intrinsics are different from the library functions, and different from an assembly language subroutine you might write, in one important way. The optimizer phases of the compiler recognize these intrinsics as barriers to code motion. The &ldquo;Barrier&rdquo; column in <XREF IDREF="56034" TYPE="TABLE">Table&nbsp;4-10</XREF> shows this effect. For example, the compiler cannot move code in either direction across s use of <FUNCTION>__compare_and_swap()</FUNCTION>. However, it can move code backward (but not forward) across <FUNCTION>__lock_test_and_set(). </FUNCTION></PARAGRAPH>
+<PARAGRAPH>You can make the code motion barrier explicit or general. If you invoke <FUNCTION>__compare_and_swap()</FUNCTION> passing only the pointer and two value arguments, the compiler can move no code across that source line. Alternatively, you can list specific variables as additional arguments to <FUNCTION>__compare_and_swap()</FUNCTION> (this is why the functions are shown as having a variable number of arguments). When you do so, the compiler cannot move assignments to the named variables across this point, but can move assignments to other variables, if the optimizer needs to. </PARAGRAPH>
+<PARAGRAPH><XREFTARGET ID="41819"><XREFTARGET ID="99107">System V Facilities for Mutual Exclusion</PARAGRAPH>
+<PARAGRAPH>The System V Release 4 (SVR4) semaphore facility lets you create persistent semaphores that can be used to coordinate any processes or threads. The SVR4 facility differs from POSIX named semaphores in two ways:<INDEXTARGET ID="TIP_2c.ipcmutx36"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx36|semaphore:SVR4 --><INDEXTARGET ID="TIP_2c.ipcmutx37"><!-- POSTPROCESSDATA: TIP_2c.ipcmutx37|mutual exclusion:SVR4 facilities --></PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>Each object is a set of from 1 to 25 independent semaphores, rather than a single semaphore. A process can operate on any selection of semaphores in a set in one system call.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>You can use SVR4 semaphores in ways that IRIX and POSIX do not support: incrementing or decrementing by more than 1, and waiting for a zero value.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The name of a set is an integer in a kernel table, rather than a pathname in the filesystem (see <XREF IDREF="10403" TYPE="TITLE">&ldquo;SVR4 IPC Name Space&rdquo;</XREF>).</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>The functions used to create and operate on semaphore sets are summarized in <XREF IDREF="16331" TYPE="TABLE">Table&nbsp;4-11</XREF>. </PARAGRAPH>
+<TABLE COLUMNS="2"><CAPTION LBL="4-11"><PREFIX>Table 4-11 </PREFIX><XREFTARGET ID="16331"> <EMPHASIS>(continued)        </EMPHASIS>SVR4 Semaphore Management Functions</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="99"><PARAGRAPH>Function Name</PARAGRAPH>
+</CELL>
+<CELL LEFT="105" WIDTH="288"><PARAGRAPH>Purpose and Operation</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="99"><PARAGRAPH>semget(2) </PARAGRAPH>
+</CELL>
+<CELL LEFT="105" WIDTH="288"><PARAGRAPH>Create a semaphore set, or return the ID of a semaphore set.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="99"><PARAGRAPH>semctl(2) </PARAGRAPH>
+</CELL>
+<CELL LEFT="105" WIDTH="288"><PARAGRAPH>Query or change semaphore values; query or change semaphore set 
+attributes.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="99"><PARAGRAPH>semop(2) </PARAGRAPH>
+</CELL>
+<CELL LEFT="105" WIDTH="288"><PARAGRAPH>Perform operations on one or more semaphores in a set.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>Semaphores are also discussed in the <REFPAGE>intro(2)</REFPAGE> reference page. You can display semaphore sets from the command line using <COMMAND>ipcs</COMMAND>, and remove them with <COMMAND>ipcrm</COMMAND> (see the <REFPAGE>ipcs(1)</REFPAGE> and <REFPAGE>ipcr(1)</REFPAGE> reference pages).</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Creating or Finding a Semaphore Set</TITLE><PARAGRAPH>A process creates a semaphore set, or locates an existing set, using the <FUNCTION>semget()</FUNCTION> system function. The function creates a set only if the specified key is IPC_PRIVATE, or no set with that key exists, and the IPC_CREAT flag is used. When it creates a set, the arguments to the function establish</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>the numeric key of the set</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>the number of semaphores in the set, from 1 to 25</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>the access permissions to the set</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>In addition, the effective user ID and group ID of the calling process become the creator and owner identification of the new semaphore set. (See <XREF IDREF="17926" TYPE="TITLE">&ldquo;Example Uses of semget()&rdquo;</XREF> for example code.)</PARAGRAPH>
+<PARAGRAPH>When <FUNCTION>semget()</FUNCTION> locates an existing set, access is controlled by the access permissions of the set and by the user ID and group ID of the calling process.</PARAGRAPH>
+<PARAGRAPH>The value returned by <FUNCTION>semget()</FUNCTION> is the ID number of the semaphore set. It is used to identify the segment to other functions.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Managing Semaphore Sets</TITLE><PARAGRAPH>The <FUNCTION>semctl()</FUNCTION> function gives you the ability to get information about a semaphore set, or to modify its attributes. These operations are summarized in <XREF IDREF="46665" TYPE="TABLE">Table&nbsp;4-12</XREF>.</PARAGRAPH>
+<TABLE COLUMNS="3"><CAPTION LBL="4-12"><PREFIX>Table 4-12 </PREFIX><XREFTARGET ID="46665"> <EMPHASIS>(continued)        </EMPHASIS>SVR4 Semaphore Set Management Operations</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="72"><PARAGRAPH>Keyword</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="157"><PARAGRAPH>Operation</PARAGRAPH>
+</CELL>
+<CELL LEFT="245" WIDTH="157"><PARAGRAPH>Can Be Used By</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH>IPC_STAT</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="157"><PARAGRAPH>Get information about the set.</PARAGRAPH>
+</CELL>
+<CELL LEFT="245" WIDTH="157"><PARAGRAPH>Any process having read access.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH>IPC_SET</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="157"><PARAGRAPH>Set owner UID, owner GID, or access 
+permissions.</PARAGRAPH>
+</CELL>
+<CELL LEFT="245" WIDTH="157"><PARAGRAPH>Creator UID, owner UID, or 
+superuser.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH>IPC_RMID</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="157"><PARAGRAPH>Remove the set from the IPC name 
+space.</PARAGRAPH>
+</CELL>
+<CELL LEFT="245" WIDTH="157"><PARAGRAPH>Creator UID, owner UID, or 
+superuser.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH>GETALL</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="157"><PARAGRAPH>Copy current values of all semaphores 
+to an array.</PARAGRAPH>
+</CELL>
+<CELL LEFT="245" WIDTH="157"><PARAGRAPH>Any process having read access.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH>SETALL</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="157"><PARAGRAPH>Set current values of all semaphores 
+from an array of integers.</PARAGRAPH>
+</CELL>
+<CELL LEFT="245" WIDTH="157"><PARAGRAPH>Any process having write access.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>Examples of some of these uses can be found under <XREF IDREF="23435" TYPE="TITLE">&ldquo;Example Uses of semctl() for Management&rdquo;</XREF>.</PARAGRAPH>
+<PARAGRAPH>In addition, <FUNCTION>semctl()</FUNCTION> allows you to query or set information about individual semaphores within the set, as summarized in <XREF IDREF="96845" TYPE="TABLE">Table&nbsp;4-13</XREF>. </PARAGRAPH>
+<TABLE COLUMNS="3"><CAPTION LBL="4-13"><PREFIX>Table 4-13 </PREFIX><XREFTARGET ID="96845">SVR4 Semaphore Management Operations</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="72"><PARAGRAPH>Keyword</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="157"><PARAGRAPH>Operation</PARAGRAPH>
+</CELL>
+<CELL LEFT="245" WIDTH="157"><PARAGRAPH>Can Be Used By</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH>GETVAL</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="157"><PARAGRAPH>Return value of one semaphore.</PARAGRAPH>
+</CELL>
+<CELL LEFT="245" WIDTH="157"><PARAGRAPH>Any process having read access.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH>GETPID</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="157"><PARAGRAPH>Return process ID of the process that 
+last operated on a semaphore.</PARAGRAPH>
+</CELL>
+<CELL LEFT="245" WIDTH="157"><PARAGRAPH>Any process having read access.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH>GETNCNT</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="157"><PARAGRAPH>Return number of processes waiting 
+for one semaphore to exceed zero</PARAGRAPH>
+</CELL>
+<CELL LEFT="245" WIDTH="157"><PARAGRAPH>Any process having read access.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH>GETZCNT</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="157"><PARAGRAPH>Return number of processes waiting 
+for one semaphore to equal zero.</PARAGRAPH>
+</CELL>
+<CELL LEFT="245" WIDTH="157"><PARAGRAPH>Any process having read access.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH>SETVAL</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="157"><PARAGRAPH>Set current value of one semaphores.</PARAGRAPH>
+</CELL>
+<CELL LEFT="245" WIDTH="157"><PARAGRAPH>Any process having write access.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>Examples of some of these uses can be seen under <XREF IDREF="19883" TYPE="TITLE">&ldquo;Example Uses of semctl() for Query&rdquo;</XREF>.</PARAGRAPH>
+<CAUTION><PREFIX>Caution</PREFIX>Some operations of the <FUNCTION>semctl()</FUNCTION> function use only three arguments, but some operations require a fourth argument (see reference page <REFPAGE>semctl(2)</REFPAGE> for details). When passing a fourth argument to <FUNCTION>semctl()</FUNCTION>, it is <ITALICS>extremely</ITALICS> important that you pass a <VARIABLE>union semun</VARIABLE>, as specified in the reference page. You might look at the contents of the union and think that, since all its fields are addresses, there is no effective difference between passing a union and passing a plain address of a buffer or array. However, if your program is compiled with the -n32 or -64 options, the alignment of the two kinds of arguments is different. Always pass an address as shown in the example programs in this chapter:</CAUTION>
+<CODE>
+union semun arg4;
+...
+arg4.buffer = &amp;ds_buffer;
+semctl(a,b,c,arg4);
+</CODE>
+<PARAGRAPH>If your program passes only the address, as in</PARAGRAPH>
+<CODE>
+semctl(a,b,c,&amp;ds_buffer);
+</CODE>
+<PARAGRAPH>the code will not work correctly when compiled -n32 or -64.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Using Semaphore Sets</TITLE><PARAGRAPH>You perform operations on the semaphores in a set by calling <FUNCTION>semop()</FUNCTION>. This function takes a semaphore set ID, and an array of one or more semaphore operation structures. Each of the operation structures specifies the following:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>The index of a semaphore in the set, numbering the semaphores from 0</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>A number specifying one of three operations:</PARAGRAPH>
+<BULLETLISTIND><BULLETIND><PARAGRAPH>Zero, meaning to test the semaphore for equality to 0.</PARAGRAPH>
+</BULLETIND>
+<BULLETIND><PARAGRAPH>A positive number such as 1, meaning to increment the semaphore value, possibly releasing waiting processes or threads (the V operation).</PARAGRAPH>
+</BULLETIND>
+<BULLETIND><PARAGRAPH>A negative number such as -1, meaning to decrement the semaphore value when that can be done without making it negative (the P operation).</PARAGRAPH>
+</BULLETIND>
+</BULLETLISTIND>
+</BULLET>
+<BULLET><PARAGRAPH>A flag word that can specify these flags:</PARAGRAPH>
+<BULLETLISTIND><BULLETIND><PARAGRAPH>IPC_NOWAIT, do not suspend but return an error if the Zero test fails or the P operation cannot be done.</PARAGRAPH>
+</BULLETIND>
+<BULLETIND><PARAGRAPH>SEM_UNDO, undo this operation if it succeeds but an operation later in the array should fail.</PARAGRAPH>
+</BULLETIND>
+</BULLETLISTIND>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>In the simplest case, you pass an array containing just one operation, to increment or decrement one semaphore by 1 (the traditional V or P operation). Used this way, a semaphore in a set is functionally the same as an IRIX or POSIX semaphore.</PARAGRAPH>
+<PARAGRAPH>SVR4 semaphores permit additional operations not available with IRIX or POSIX semaphores. The negative or positive value in the operation structure is not required to be 1, so you can increment or decrement a semaphore by more than 1 in an operation. The wait-for-zero operation allows one process or thread to monitor the state of a semaphore, independent of the P and V operations performed on the semaphore by other processes or threads.</PARAGRAPH>
+<PARAGRAPH>You can also perform a sequence of operations&mdash;a sequence of P, or V, or zero-wait operations, or a mix of operation types&mdash;on multiple semaphores in a single call. To do this, you specify an array containing more than one operation structure. The <FUNCTION>semop()</FUNCTION> function performs each operation in sequence.</PARAGRAPH>
+<PARAGRAPH>You can use this feature, for example, to claim multiple resources, each represented by a different semaphore. Your array would specify the P operation on each of the semaphores in sequence. When <FUNCTION>semop()</FUNCTION> returns successfully, you own all the resources. A similar, multiple V operation returns all the resources at once.</PARAGRAPH>
+<PARAGRAPH>The IPC_NOWAIT and SEM_UNDO flags are important when claiming multiple resources at once. Specify SEM_UNDO on all operations; and specify IPC_NOWAIT on all but the first one. If the second or later resource is unavailable, <FUNCTION>semop()</FUNCTION> restores all preceding claims and returns an error code. As long as all processes or threads operate on semaphores in the same order, this logic prevents deadlocks, and it avoids long, fruitless suspensions.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Example Programs</TITLE><PARAGRAPH>The programs in this section allow you to experiment with semaphore sets from the command line:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH><XREF IDREF="11060" TYPE="TEXT">Example&nbsp;4-3</XREF> on <XREF IDREF="11060" TYPE="TEXT">page&nbsp;102</XREF> can be used to experiment with <FUNCTION>semget()</FUNCTION>, creating semaphore sets with different sizes and permissions.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="36062" TYPE="TEXT">Example&nbsp;4-4</XREF> on <XREF IDREF="36062" TYPE="TEXT">page&nbsp;104</XREF> can be used to test <FUNCTION>semctl()</FUNCTION> for displaying and changing owner IDs and permissions.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="78203" TYPE="TEXT">Example&nbsp;4-5</XREF> on <XREF IDREF="78203" TYPE="TEXT">page&nbsp;106</XREF> can be used to test <FUNCTION>semctl()</FUNCTION> for sampling the values of semaphores, or to display the state of a semaphore set.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="87434" TYPE="TEXT">Example&nbsp;4-6</XREF> on <XREF IDREF="87434" TYPE="TEXT">page&nbsp;108</XREF> can be used to test <FUNCTION>semop()</FUNCTION> for single or multiple operations.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="17926">Example Uses of semget()</TITLE><PARAGRAPH>The program in <XREF IDREF="11060" TYPE="TEXT">Example&nbsp;4-3</XREF>, <COMMAND>semget</COMMAND>, invokes <FUNCTION>semget()</FUNCTION> with arguments you specify on the command line: </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>-k <VARIABLE>key</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>Numeric key to identify the semaphore set, required; for example <COMMAND>-k 99</COMMAND>. 
+Default is IPC_PRIVATE.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>-p <VARIABLE>perms</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>Access permissions to apply to a created set; for example, <COMMAND>-p 0664</COMMAND>. Default 
+is octal 0600.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>-s <VARIABLE>setsize</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>Number of semaphores in a created set; for example <COMMAND>-s 8</COMMAND>. The limit is 25, 
+but feel free to experiment with larger numbers to see the return code.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>-c </PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>Use IPC_CREAT. No set is created unless this is specified.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>-x </PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>Use IPC_EXCL. Use with <COMMAND>-c</COMMAND> to require that a set not exist.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<CODE><CAPTION LBL="4-3"><PREFIX>Example 4-3 </PREFIX><XREFTARGET ID="11060">Program to Demonstrate semget()</CAPTION>/*
+||&nbsp;semget:&nbsp;program&nbsp;to&nbsp;test&nbsp;semget(2)&nbsp;for&nbsp;creating&nbsp;semaphores.
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;semget&nbsp;[-k&nbsp;&lt;key>]&nbsp;[-c]&nbsp;[-x]&nbsp;[-p&nbsp;&lt;perms>]&nbsp;[-s&nbsp;&lt;setsize>]
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-k&nbsp;&lt;key>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;the&nbsp;key&nbsp;to&nbsp;use,&nbsp;default&nbsp;==&nbsp;0&nbsp;==&nbsp;IPC_PRIVATE
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-p&nbsp;&lt;perms>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;permissions&nbsp;to&nbsp;use,&nbsp;default&nbsp;is&nbsp;0666
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-s&nbsp;&lt;setsize>&nbsp;&nbsp;&nbsp;&nbsp;size&nbsp;to&nbsp;use,&nbsp;default&nbsp;is&nbsp;1
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-c&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;use&nbsp;IPC_CREAT
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-x&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;use&nbsp;IPC_EXCL
+*/
+#include&nbsp;&lt;unistd.h>&nbsp;/*&nbsp;for&nbsp;getopt()&nbsp;*/
+#include&nbsp;&lt;sys/sem.h>&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;for&nbsp;shmget&nbsp;etc&nbsp;*/
+#include&nbsp;&lt;errno.h>&nbsp;&nbsp;/*&nbsp;errno&nbsp;and&nbsp;perror&nbsp;*/
+#include&nbsp;&lt;stdio.h>
+int&nbsp;main(int&nbsp;argc,&nbsp;char&nbsp;**argv)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;key_t&nbsp;key&nbsp;=&nbsp;IPC_PRIVATE;/*&nbsp;key&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;nsems&nbsp;=&nbsp;1;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;setsize&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;perms&nbsp;=&nbsp;0600;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;permissions&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;semflg&nbsp;=&nbsp;0;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;flag&nbsp;values&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;struct&nbsp;semid_ds&nbsp;ds;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;info&nbsp;struct&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;union&nbsp;semun&nbsp;arg4;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;way&nbsp;to&nbsp;pass&nbsp;&amp;ds&nbsp;properly&nbsp;aligned&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;c,&nbsp;semid;
+&nbsp;&nbsp;&nbsp;&nbsp;while&nbsp;(&nbsp;-1&nbsp;!=&nbsp;(c&nbsp;=&nbsp;getopt(argc,argv,"k:p:s:xc"))&nbsp;)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;switch&nbsp;(c)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'k':&nbsp;/*&nbsp;key&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;key&nbsp;=&nbsp;(key_t)&nbsp;strtoul(optarg,&nbsp;NULL,&nbsp;0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'s':&nbsp;/*&nbsp;setsize&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;nsems&nbsp;=&nbsp;(int)&nbsp;strtoul(optarg,&nbsp;NULL,&nbsp;0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'p':&nbsp;/*&nbsp;permissions&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perms&nbsp;=&nbsp;(int)&nbsp;strtoul(optarg,&nbsp;NULL,&nbsp;0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'c':
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;semflg&nbsp;|=&nbsp;IPC_CREAT;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'x':
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;semflg&nbsp;|=&nbsp;IPC_EXCL;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;default:&nbsp;/*&nbsp;unknown&nbsp;or&nbsp;missing&nbsp;argument&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;-1;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;semid&nbsp;=&nbsp;semget(key,nsems,semflg+perms);
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(-1&nbsp;!=&nbsp;semid)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;printf("semid&nbsp;=&nbsp;%d\n",semid);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;arg4.buf&nbsp;=&nbsp;&amp;ds;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(-1&nbsp;!=&nbsp;semctl(semid,0,IPC_STAT,arg4))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;printf(
+&nbsp;&nbsp;&nbsp;&nbsp;"owner&nbsp;uid.gid:&nbsp;%d.%d&nbsp;&nbsp;creator&nbsp;uid.gid:&nbsp;%d.%d&nbsp;&nbsp;mode:&nbsp;0%o&nbsp;nsems:%d\n",
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ds.sem_perm.uid,ds.sem_perm.gid,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ds.sem_perm.cuid,ds.sem_perm.cgid,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ds.sem_perm.mode,&nbsp;ds.sem_nsems);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("semctl(IPC_STAT)");
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("semget()");
+&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;errno;
+} 
+</CODE>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="23435">Example Uses of semctl() for Management</TITLE><PARAGRAPH>The program in <XREF IDREF="36062" TYPE="TEXT">Example&nbsp;4-4</XREF>, <COMMAND>semmod</COMMAND>, allows you to call <FUNCTION>semctl()</FUNCTION> from the command line to display the size, permissions, and owner and creator IDs of a semaphore set, and to change the permissions and owner. It takes the following arguments on the command line: </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>-k <VARIABLE>key</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>Numeric key to identify the semaphore set; for example <COMMAND>-k 99</COMMAND>.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>-i <VARIABLE>id</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>Semaphore ID number, alternative to specifying the key.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>-p <VARIABLE>perms</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>Access permissions to apply to the selected set; for example, <COMMAND>-p 0664</COMMAND>.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>-u <VARIABLE>uid</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>New user ID for the semaphore owner.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>-g <VARIABLE>gid</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>New group ID for the semaphore owner.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>If only the key or ID is given, the program only displays the state of the set. When you specify permissions, owner, or group, the program first queries the current information to initialize an information structure. Then it inserts the new items you specified, and calls <FUNCTION>semctl()</FUNCTION> with IPC_SET to change the information.</PARAGRAPH>
+<CODE><CAPTION LBL="4-4"><PREFIX>Example 4-4 </PREFIX><XREFTARGET ID="36062">Program to Demonstrate semctl() for Management</CAPTION>/*
+||&nbsp;semmod:&nbsp;program&nbsp;to&nbsp;test&nbsp;semctl(2)&nbsp;for&nbsp;status,&nbsp;ownership&nbsp;and&nbsp;permissions.
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;semmod&nbsp;{-k&nbsp;&lt;key>&nbsp;|&nbsp;-i&nbsp;&lt;semid>}&nbsp;[-p&nbsp;&lt;perms>]&nbsp;[-u&nbsp;&lt;user>]&nbsp;[-g&nbsp;&lt;group>]
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-k&nbsp;&lt;key>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;the&nbsp;key&nbsp;to&nbsp;use,&nbsp;or..
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-i&nbsp;&lt;semid>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;..the&nbsp;semid&nbsp;to&nbsp;use
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-p&nbsp;&lt;perms>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;permissions&nbsp;to&nbsp;set&nbsp;with&nbsp;IPC_SET
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-u&nbsp;&lt;uid>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;uid&nbsp;to&nbsp;set&nbsp;as&nbsp;owner&nbsp;with&nbsp;IPC_SET
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-g&nbsp;&lt;gid>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;gid&nbsp;to&nbsp;set&nbsp;as&nbsp;owner&nbsp;with&nbsp;IPC_SET
+*/
+#include&nbsp;&lt;unistd.h>&nbsp;/*&nbsp;for&nbsp;getopt()&nbsp;*/
+#include&nbsp;&lt;sys/sem.h>&nbsp;/*&nbsp;for&nbsp;shmget&nbsp;etc&nbsp;*/
+#include&nbsp;&lt;errno.h>&nbsp;/*&nbsp;errno&nbsp;and&nbsp;perror&nbsp;*/
+#include&nbsp;&lt;stdio.h>
+int&nbsp;main(int&nbsp;argc,&nbsp;char&nbsp;**argv)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;key_t&nbsp;key;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;key&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;semid&nbsp;=&nbsp;-1;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;object&nbsp;ID&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;perms,&nbsp;popt&nbsp;=&nbsp;0;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;perms&nbsp;to&nbsp;set,&nbsp;if&nbsp;given&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;uid,&nbsp;uopt&nbsp;=&nbsp;0;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;uid&nbsp;to&nbsp;set,&nbsp;if&nbsp;given&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;gid,&nbsp;gopt&nbsp;=&nbsp;0;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;gid&nbsp;to&nbsp;set,&nbsp;if&nbsp;given&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;val,&nbsp;vopt&nbsp;=&nbsp;0;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;setall&nbsp;value&nbsp;if&nbsp;given&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;struct&nbsp;semid_ds&nbsp;ds;
+&nbsp;&nbsp;&nbsp;&nbsp;union&nbsp;semun&nbsp;arg4;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;way&nbsp;to&nbsp;pass&nbsp;semctl&nbsp;4th&nbsp;arg,&nbsp;properly&nbsp;aligned&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;c;
+&nbsp;&nbsp;&nbsp;&nbsp;while&nbsp;(&nbsp;-1&nbsp;!=&nbsp;(c&nbsp;=&nbsp;getopt(argc,argv,"k:i:p:u:g:"))&nbsp;)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;switch&nbsp;(c)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'k':&nbsp;/*&nbsp;key&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;key&nbsp;=&nbsp;(key_t)&nbsp;strtoul(optarg,&nbsp;NULL,&nbsp;0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'i':&nbsp;/*&nbsp;semid&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;semid&nbsp;=&nbsp;(int)&nbsp;strtoul(optarg,&nbsp;NULL,&nbsp;0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'p':&nbsp;/*&nbsp;permissions&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perms&nbsp;=&nbsp;(int)&nbsp;strtoul(optarg,&nbsp;NULL,&nbsp;0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;popt&nbsp;=&nbsp;1;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'u':&nbsp;/*&nbsp;uid&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;uid&nbsp;=&nbsp;(int)&nbsp;strtoul(optarg,&nbsp;NULL,&nbsp;0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;uopt&nbsp;=&nbsp;1;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'g':&nbsp;/*&nbsp;gid&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;gid&nbsp;=&nbsp;(int)&nbsp;strtoul(optarg,&nbsp;NULL,&nbsp;0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;gopt&nbsp;=&nbsp;1;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;default:&nbsp;/*&nbsp;unknown&nbsp;or&nbsp;missing&nbsp;argument&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;-1;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(-1&nbsp;==&nbsp;semid)&nbsp;/*&nbsp;-i&nbsp;not&nbsp;given,&nbsp;must&nbsp;have&nbsp;-k&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;semid&nbsp;=&nbsp;semget(key,0,0);
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(-1&nbsp;!=&nbsp;semid)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;arg4.buf&nbsp;=&nbsp;&amp;ds;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(0&nbsp;==&nbsp;semctl(semid,0,IPC_STAT,arg4))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;((popt)||(uopt)||(gopt))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(popt)&nbsp;ds.sem_perm.mode&nbsp;=&nbsp;perms;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(uopt)&nbsp;ds.sem_perm.uid&nbsp;=&nbsp;uid;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(gopt)&nbsp;ds.sem_perm.gid&nbsp;=&nbsp;gid;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(0&nbsp;==&nbsp;semctl(semid,0,IPC_SET,arg4)&nbsp;)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;semctl(semid,0,IPC_STAT,arg4);&nbsp;/*&nbsp;refresh&nbsp;info&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("semctl(IPC_SET)");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;printf(
+&nbsp;&nbsp;&nbsp;&nbsp;"owner&nbsp;uid.gid:&nbsp;%d.%d&nbsp;&nbsp;creator&nbsp;uid.gid:&nbsp;%d.%d&nbsp;&nbsp;mode:&nbsp;0%o&nbsp;nsems:%d\n",
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ds.sem_perm.uid,ds.sem_perm.gid,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ds.sem_perm.cuid,ds.sem_perm.cgid,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ds.sem_perm.mode,&nbsp;ds.sem_nsems);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("semctl(IPC_STAT)");
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("semget()");
+}
+</CODE>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="19883">Example Uses of semctl() for Query</TITLE><PARAGRAPH>The program in <XREF IDREF="78203" TYPE="TEXT">Example&nbsp;4-5</XREF>, <COMMAND>semsnap</COMMAND>, displays a snapshot of the current values of all semaphores in a set you specify. The value of each semaphore is displayed in the first row (GETVAL), followed by the count of processes waiting in a P operation (GETNCNT) and the count of processes waiting for zero (GETZCNT). The arguments are as follows: </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>-k <VARIABLE>key</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>Numeric key to identify the semaphore set; for example <COMMAND>-k 99</COMMAND>.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>-i <VARIABLE>id</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>Semaphore ID number, alternative to specifying the key.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<CODE><CAPTION LBL="4-5"><PREFIX>Example 4-5 </PREFIX><XREFTARGET ID="78203">Program to Demonstrate semctl() for Sampling</CAPTION>/*
+||&nbsp;semsnap:&nbsp;program&nbsp;to&nbsp;test&nbsp;semctl(2)&nbsp;for&nbsp;semaphore&nbsp;status&nbsp;commands
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;semsnap&nbsp;{-k&nbsp;&lt;key>&nbsp;|&nbsp;-i&nbsp;&lt;semid>}
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-k&nbsp;&lt;key>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;the&nbsp;key&nbsp;to&nbsp;use,&nbsp;or..
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-i&nbsp;&lt;semid>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;..the&nbsp;semid&nbsp;to&nbsp;use
+*/
+#include&nbsp;&lt;unistd.h>&nbsp;/*&nbsp;for&nbsp;getopt()&nbsp;*/
+#include&nbsp;&lt;sys/sem.h>&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;for&nbsp;shmget&nbsp;etc&nbsp;*/
+#include&nbsp;&lt;errno.h>&nbsp;&nbsp;/*&nbsp;errno&nbsp;and&nbsp;perror&nbsp;*/
+#include&nbsp;&lt;stdio.h>
+int&nbsp;main(int&nbsp;argc,&nbsp;char&nbsp;**argv)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;key_t&nbsp;key;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;key&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;semid&nbsp;=&nbsp;-1;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;object&nbsp;ID&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;nsems,&nbsp;j;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;setsize,&nbsp;and&nbsp;loop&nbsp;variable&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;ushort_t&nbsp;semvals[25];&nbsp;&nbsp;&nbsp;/*&nbsp;snapshot&nbsp;of&nbsp;values&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;ushort_t&nbsp;semns[25];&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;snapshot&nbsp;of&nbsp;P-waiting&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;ushort_t&nbsp;semzs[25];&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;snapshot&nbsp;of&nbsp;zero-waiting&nbsp;*/&nbsp;&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;struct&nbsp;semid_ds&nbsp;ds;
+&nbsp;&nbsp;&nbsp;&nbsp;union&nbsp;semun&nbsp;arg4;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;semctl&nbsp;4th&nbsp;argument,&nbsp;properly&nbsp;aligned&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;c;
+&nbsp;&nbsp;&nbsp;&nbsp;while&nbsp;(&nbsp;-1&nbsp;!=&nbsp;(c&nbsp;=&nbsp;getopt(argc,argv,"k:i:"))&nbsp;)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;switch&nbsp;(c)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'k':&nbsp;/*&nbsp;key&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;key&nbsp;=&nbsp;(key_t)&nbsp;strtoul(optarg,&nbsp;NULL,&nbsp;0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'i':&nbsp;/*&nbsp;semid&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;semid&nbsp;=&nbsp;(int)&nbsp;strtoul(optarg,&nbsp;NULL,&nbsp;0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;default:&nbsp;/*&nbsp;unknown&nbsp;or&nbsp;missing&nbsp;argument&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;-1;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(-1&nbsp;==&nbsp;semid)&nbsp;/*&nbsp;-i&nbsp;not&nbsp;given,&nbsp;must&nbsp;have&nbsp;-k&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;semid&nbsp;=&nbsp;semget(key,0,0);
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(-1&nbsp;!=&nbsp;semid)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;arg4.buf&nbsp;=&nbsp;&amp;ds;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(0&nbsp;==&nbsp;semctl(semid,0,IPC_STAT,arg4))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;nsems&nbsp;=&nbsp;ds.sem_nsems;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;arg4.array&nbsp;=&nbsp;semvals;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;semctl(semid,0,GETALL,arg4);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;(j=0;&nbsp;j&lt;nsems;&nbsp;++j)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;semns[j]&nbsp;=&nbsp;semctl(semid,j,GETNCNT);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;semzs[j]&nbsp;=&nbsp;semctl(semid,j,GETZCNT);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;printf("vals:");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;(j=0;&nbsp;j&lt;nsems;&nbsp;++j)&nbsp;printf("&nbsp;%2d",semvals[j]);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;printf("\nncnt:");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;(j=0;&nbsp;j&lt;nsems;&nbsp;++j)&nbsp;printf("&nbsp;%2d",semns[j]);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;printf("\nzcnt:");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;(j=0;&nbsp;j&lt;nsems;&nbsp;++j)&nbsp;printf("&nbsp;%2d",semzs[j]);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;putc('\n',stdout);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("semctl(IPC_STAT)");
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("semget()");
+}
+</CODE>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Example Uses of semop()</TITLE><PARAGRAPH>The program in <XREF IDREF="87434" TYPE="TEXT">Example&nbsp;4-6</XREF>, <COMMAND>semop</COMMAND>, performs one or more semaphore operations on a set you specify. You can use it to specify any sequence of operations (including nonsensical sequences) from the command line. The command arguments are: </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>-k <VARIABLE>key</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>Numeric key to identify the semaphore set; for example <COMMAND>-k 99</COMMAND>.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>-i <VARIABLE>id</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>Semaphore ID number, alternative to specifying the key.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>-n </PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>Apply IPC_NOWAIT to all following operations.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>-u </PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>Apply SEM_UNDO to all following operations.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>-p <VARIABLE>sem</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>Apply the P (decrement by 1) operation to <VARIABLE>sem</VARIABLE>; for example, <COMMAND>-p 1</COMMAND>.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>-v <VARIABLE>sem</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>Apply the V (increment by 1) operation to <VARIABLE>sem</VARIABLE>; for example, <COMMAND>-v 1</COMMAND>.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>-z <VARIABLE>sem</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>Wait for <VARIABLE>sem</VARIABLE> to contain 0; for example, <COMMAND>-z 4</COMMAND>.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>You can give a sequence of operations. For example, consider the following sequence:</PARAGRAPH>
+<ORDEREDLIST><LIST><PARAGRAPH>Wait for zero in semaphore 4.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Increment semaphore 0, with undo if a following operation fails.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Decrement semaphore 2, not waiting and with undo.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Decrement semaphore 3, not waiting and with undo.</PARAGRAPH>
+</LIST>
+</ORDEREDLIST>
+<PARAGRAPH>The sequence above can be specified as follows:</PARAGRAPH>
+<EXAMPLE>
+semop -k 0x101 -z 4 -u -v 0 -n -p 2 -p 3
+</EXAMPLE>
+<PARAGRAPH>The program does not support incrementing or decrementing by other than 1, and there is no way to turn off IPC_NOWAIT or SEM_UNDO once it is on.</PARAGRAPH>
+<CODE><CAPTION LBL="4-6"><PREFIX>Example 4-6 </PREFIX><XREFTARGET ID="87434">Program to Demonstrate semop()</CAPTION>/*
+||&nbsp;semop:&nbsp;program&nbsp;to&nbsp;test&nbsp;semop(2)&nbsp;for&nbsp;all&nbsp;functions.
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;semop&nbsp;{-k&nbsp;&lt;key>&nbsp;|&nbsp;-i&nbsp;&lt;semid>}&nbsp;[-n]&nbsp;[-u]&nbsp;{-p&nbsp;&lt;n>&nbsp;|&nbsp;-v&nbsp;&lt;n>&nbsp;|&nbsp;-z&nbsp;&lt;n>}...
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-k&nbsp;&lt;key>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;the&nbsp;key&nbsp;to&nbsp;use,&nbsp;or..
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-i&nbsp;&lt;semid>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;..the&nbsp;semid&nbsp;to&nbsp;use
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-n&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;use&nbsp;the&nbsp;IPC_NOWAIT&nbsp;flag&nbsp;on&nbsp;following&nbsp;ops
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-u&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;use&nbsp;the&nbsp;SEM_UNDO&nbsp;flag&nbsp;on&nbsp;following&nbsp;ops
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-p&nbsp;&lt;n>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;do&nbsp;the&nbsp;P&nbsp;operation&nbsp;(+1)&nbsp;on&nbsp;semaphore&nbsp;&lt;n>
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-v&nbsp;&lt;n>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;do&nbsp;the&nbsp;V&nbsp;operation&nbsp;(-1)&nbsp;on&nbsp;semaphore&nbsp;&lt;n>
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-z&nbsp;&lt;n>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;wait&nbsp;for&nbsp;&lt;n>&nbsp;to&nbsp;become&nbsp;zero
+*/
+#include&nbsp;&lt;unistd.h>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;for&nbsp;getopt()&nbsp;*/
+#include&nbsp;&lt;sys/sem.h>&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;for&nbsp;shmget&nbsp;etc&nbsp;*/
+#include&nbsp;&lt;errno.h>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;errno&nbsp;and&nbsp;perror&nbsp;*/
+#include&nbsp;&lt;stdio.h>
+int&nbsp;main(int&nbsp;argc,&nbsp;char&nbsp;**argv)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;key_t&nbsp;key;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;key&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;semid&nbsp;=&nbsp;-1;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;object&nbsp;ID&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;nsops&nbsp;=&nbsp;0;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;setsize,&nbsp;and&nbsp;loop&nbsp;variable&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;short&nbsp;flg&nbsp;=&nbsp;0;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;flag&nbsp;to&nbsp;use&nbsp;on&nbsp;all&nbsp;ops&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;struct&nbsp;semid_ds&nbsp;ds;
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;c,&nbsp;s;
+&nbsp;&nbsp;&nbsp;&nbsp;struct&nbsp;sembuf&nbsp;sops[25];
+&nbsp;&nbsp;&nbsp;&nbsp;while&nbsp;(&nbsp;-1&nbsp;!=&nbsp;(c&nbsp;=&nbsp;getopt(argc,argv,"k:i:p:v:z:nu"))&nbsp;)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;switch&nbsp;(c)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'k':&nbsp;/*&nbsp;key&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;key&nbsp;=&nbsp;(key_t)&nbsp;strtoul(optarg,&nbsp;NULL,&nbsp;0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'i':&nbsp;/*&nbsp;semid&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;semid&nbsp;=&nbsp;(int)&nbsp;strtoul(optarg,&nbsp;NULL,&nbsp;0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'n':&nbsp;/*&nbsp;use&nbsp;nowait&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;flg&nbsp;|=&nbsp;IPC_NOWAIT;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'u':&nbsp;/*&nbsp;use&nbsp;undo&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;flg&nbsp;|=&nbsp;SEM_UNDO;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'p':&nbsp;/*&nbsp;do&nbsp;the&nbsp;P()&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;sops[nsops].sem_num&nbsp;=&nbsp;(ushort_t)&nbsp;strtoul(optarg,&nbsp;NULL,&nbsp;0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;sops[nsops].sem_op&nbsp;=&nbsp;-1;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;sops[nsops++].sem_flg&nbsp;=&nbsp;flg;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'v':&nbsp;/*&nbsp;do&nbsp;the&nbsp;V()&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;sops[nsops].sem_num&nbsp;=&nbsp;(ushort_t)&nbsp;strtoul(optarg,&nbsp;NULL,&nbsp;0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;sops[nsops].sem_op&nbsp;=&nbsp;+1;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;sops[nsops++].sem_flg&nbsp;=&nbsp;flg;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'z':&nbsp;/*&nbsp;do&nbsp;the&nbsp;wait-for-zero&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;sops[nsops].sem_num&nbsp;=&nbsp;(ushort_t)&nbsp;strtoul(optarg,&nbsp;NULL,&nbsp;0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;sops[nsops].sem_op&nbsp;=&nbsp;0;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;sops[nsops++].sem_flg&nbsp;=&nbsp;flg;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;default:&nbsp;/*&nbsp;unknown&nbsp;or&nbsp;missing&nbsp;argument&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;-1;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(-1&nbsp;==&nbsp;semid)&nbsp;/*&nbsp;-i&nbsp;not&nbsp;given,&nbsp;must&nbsp;have&nbsp;-k&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;semid&nbsp;=&nbsp;semget(key,0,0);
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(-1&nbsp;!=&nbsp;semid)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(0&nbsp;!=&nbsp;semop(semid,sops,nsops)&nbsp;)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("semop()");
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("semget()");
+}
+</CODE>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Using the Examples</TITLE><PARAGRAPH>The following commands demonstrate the use of the example programs. First, a semaphore set is created by <COMMAND>semget</COMMAND> and its existence verified with <COMMAND>ipcs</COMMAND>:</PARAGRAPH>
+<CODE>
+$ ipcs -s
+IPC status from /dev/kmem as of Wed Jun 19 11:19:37 1996
+T     ID     KEY        MODE       OWNER    GROUP
+Semaphores:
+$ semget -k 0xfab -c -x -p 0666 -s 4
+semid = 130
+owner uid.gid: 1110.20  creator uid.gid: 1110.20  mode: 0100666 nsems:4
+$ ipcs -s
+IPC status from /dev/kmem as of Wed Jun 19 11:19:59 1996
+T     ID     KEY        MODE       OWNER    GROUP
+Semaphores:
+s    130 0x00000fab --ra-ra-ra-  cortesi     user
+</CODE>
+<PARAGRAPH>The effect of the IPC_EXCL flag is tested:</PARAGRAPH>
+<CODE>
+$ semget -k 0xfab -c -x
+semget(): File exists
+</CODE>
+<PARAGRAPH>The permissions are changed using <COMMAND>semmod</COMMAND>:</PARAGRAPH>
+<CODE>
+$ semmod -i 130 -p 0640
+owner uid.gid: 1110.20  creator uid.gid: 1110.20  mode: 0100640 nsems:4
+$ ipcs -s
+IPC status from /dev/kmem as of Wed Jun 19 11:20:09 1996
+T     ID     KEY        MODE       OWNER    GROUP
+Semaphores:
+s    130 0x00000fab --ra-r-----  cortesi     user
+</CODE>
+<PARAGRAPH>The present state of the four semaphores in the set is displayed, then <COMMAND>semop</COMMAND> is used to increment the first two.</PARAGRAPH>
+<CODE>
+$ semsnap -i 130
+vals:  0  0  0  0
+ncnt:  0  0  0  0
+zcnt:  0  0  0  0
+$ semop -i 130 -v 0 -v 1
+$ semsnap -i 130
+vals:  1  1  0  0
+ncnt:  0  0  0  0
+zcnt:  0  0  0  0
+</CODE>
+<PARAGRAPH>One instance of <COMMAND>semop</COMMAND> is started in the background to wait on a sequence of operations. The <COMMAND>semsnap</COMMAND> display verifies that one process is waiting on zero in semaphore 0:</PARAGRAPH>
+<CODE>
+$ semop -i 130 -z 0 -p 1 -p 2 &amp;
+9956
+$ semsnap -i 130
+vals:  1  1  0  0
+ncnt:  0  0  0  0
+zcnt:  1  0  0  0
+</CODE>
+<PARAGRAPH>Semaphore 0 is decremented, and <COMMAND>semsnap</COMMAND> reveals that there is no longer a process waiting for zero in that semaphore, but that now a process is waiting for semaphore 2 to be incremented:</PARAGRAPH>
+<CODE>
+$ semop -i 130 -p 0
+$ semsnap -i 130
+vals:  0  1  0  0
+ncnt:  0  0  1  0
+zcnt:  0  0  0  0
+</CODE>
+<PARAGRAPH>Semaphore 2 is incremented and now there are no processes waiting:</PARAGRAPH>
+<CODE>
+$ semop -i 130 -v 2
+$ semsnap -i 130
+vals:  0  0  0  0
+ncnt:  0  0  0  0
+zcnt:  0  0  0  0
+</CODE>
+<PARAGRAPH>Another process is put in the background waiting on semaphore 0. Then the semaphore set is removed with <COMMAND>ipcrm</COMMAND>. The waiting instance of <COMMAND>semop</COMMAND> ends, displaying the error code from <FUNCTION>semop()</FUNCTION>:</PARAGRAPH>
+<CODE>
+$ semop -i 130 -p 0 &amp;
+9962
+$ ipcrm -s 130
+$ semop(): Identifier removed
+</CODE>
+<PARAGRAPH>&space;</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+</SECTION1>
+</CHAPTER>

@@ -1,0 +1,199 @@
+#!/bin/sh
+#
+# Copyright 1998, Silicon Graphics, Inc.
+# ALL RIGHTS RESERVED
+# 
+# UNPUBLISHED -- Rights reserved under the copyright laws of the United
+# States.   Use of a copyright notice is precautionary only and does not
+# imply publication or disclosure.
+# 
+# U.S. GOVERNMENT RESTRICTED RIGHTS LEGEND:
+# Use, duplication or disclosure by the Government is subject to restrictions
+# as set forth in FAR 52.227.19(c)(2) or subparagraph (c)(1)(ii) of the Rights
+# in Technical Data and Computer Software clause at DFARS 252.227-7013 and/or
+# in similar or successor clauses in the FAR, or the DOD or NASA FAR
+# Supplement.  Contractor/manufacturer is Silicon Graphics, Inc.,
+# 2011 N. Shoreline Blvd. Mountain View, CA 94039-7311.
+# 
+# THE CONTENT OF THIS WORK CONTAINS CONFIDENTIAL AND PROPRIETARY
+# INFORMATION OF SILICON GRAPHICS, INC. ANY DUPLICATION, MODIFICATION,
+# DISTRIBUTION, OR DISCLOSURE IN ANY FORM, IN WHOLE, OR IN PART, IS STRICTLY
+# PROHIBITED WITHOUT THE PRIOR EXPRESS WRITTEN PERMISSION OF SILICON
+# GRAPHICS, INC.
+#
+# Report processes currently using process-based event counters
+#
+# $Id: ecfind,v 1.1 1998/12/06 23:38:00 kenmcd Exp $
+
+_usage()
+{
+    echo "Usage: ecfind [-tv]"
+}
+
+PATH=/bin:/usr/bin
+export PATH
+
+verbose=false
+terse=false
+while getopts "tv?" c
+do
+    case $c
+    in
+	t)	terse=true
+		;;
+	v)	verbose=true
+		;;
+	?)	_usage
+		exit 0
+		;;
+    esac
+done
+shift `expr $OPTIND - 1`
+
+if [ $# -ne 0 ]
+then
+    _usage
+    exit 1
+fi
+
+# have to be R10K or R12K for event counters to be available
+#
+if hinv -t cpu | egrep 'R10000|R12000' >/dev/null
+then
+    :
+else
+    echo "ecfind: Error, event counters only supported on R10000 or R12000 CPUs"
+    exit 1
+fi
+
+# have to be root to make any progress
+#
+id=`id | sed -e "s/(.*//" -e "s/.*=//"`
+if [ "$id" != 0 ]
+then
+    echo "ecfind: Error, to report process-based event counter use, you must be root"
+    exit 1
+fi
+
+tmp=/var/tmp/$$
+status=0
+trap "rm -f $tmp.*; exit \$status" 0 1 2 3 15
+
+# Notes:
+#  1.	0x9 in last filter comes from (HWPERF_CM_ENABLED | HWPERF_CM_PROC)
+#	see <sys/hwperftypes.h>
+#  2.	for some icrash versions, output contains '>> ' prefix, sed is
+#	used to strip these out
+#  3.	sometimes icrash adds carriage return (^M) suffix, tr is used to
+#	strip these out
+#  4.	-e cmd not supported by all icrash versions, hence
+#	( cmds ...; echo quit ) | icrash
+#
+
+# icrash version and kernel data structure checks
+# the "px deadbeef" command adds a marker to separate the two sections
+# of output, so we only need to run icrash once here
+#
+( echo '?' \
+  ; echo 'px deadbeef' \
+  ; echo 'whatis (uthread_t *)0' \
+  ; echo 'whatis (uthread_t *)0->ut_perfmon' \
+  ; echo 'whatis (uthread_t *)0->ut_perfmon.pm_cpu_mon' \
+  ; echo 'whatis (uthread_t *)0->ut_perfmon.pm_cpu_mon->cm_flags' \
+  ; echo quit \
+) \
+| icrash 2>&1 \
+| tr -d '\015' >$tmp.tmp
+
+if sed -e '/0xdeadbeef/q' <$tmp.tmp | egrep uthread >/dev/null
+then
+    # icrash suports uthread command
+    :
+else
+    # oops
+    #
+    echo "ecfind: Cannot find processes using event counters  ..."
+    echo "    The version of icrash (`icrash -v 2>&1`) on IRIX `uname -R 2>&1`"
+    echo "    does not support the \"uthread\" command required for this script"
+    echo "    to operate correctly."
+    status=1
+    exit
+fi
+
+if egrep '(Syntax error)|(No such member)' $tmp.tmp >/dev/null
+then
+    # the uthread definition would appear to have changed
+    #
+    echo "ecfind: Cannot find processes using event counters  ..."
+    echo "    The kernel thread data structures would appear to have changed"
+    echo "    and the required flags cannot be located."
+    echo "    The following output from icrash may help diagnose how this"
+    echo "    script needs to be changed:"
+    sed -e '1,/0xdeadbeef/d' -e 's/^/    /' $tmp.tmp
+    status=1
+    exit
+fi
+
+# output from the icrash uthread command and the mapping to sed's
+# substrings
+#
+# a800000102bbc000     2152040                 0                 0  pmcd
+#        \1               \2                  \3                \4   \5
+#
+# this becomes the icrash command
+#
+# px "2152040","pmcd",(uthread_t *)a800000102bbc000->ut_perfmon.pm_cpu_mon->cm_flags
+#
+# to which icrash responds thus ...
+#
+# 2152040 pmcd 0x409b
+#
+( echo uthread; echo quit ) \
+| icrash 2>&1 \
+| tr -d '\015' \
+| tee $tmp.uthread \
+| ( sed -n \
+	-e 's/^>> //' \
+	-e '/^[ 0-9a-f][ 0-9a-f][ 0-9a-f][ 0-9a-f][ 0-9a-f][ 0-9a-f][ 0-9a-f][ 0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f] /{
+s/\([^ ][^ ]*\)  *\([^ ][^ ]*\)  *\([^ ][^ ]*\) *\([^ ][^ ]*\) *\([^ ][^ ]*\).*/px "\2","\5",(uthread_t *)\1->ut_perfmon.pm_cpu_mon->cm_flags/
+p
+}' \
+    ; echo quit \
+  ) \
+| tee $tmp.icmds \
+| icrash 2>&1 \
+| tee $tmp.flags \
+| sed -n \
+    -e 's/^>> //' \
+    -e 's///' \
+    -e '/^[0-9].* 0x9$/s/ 0x9$//p' \
+| sort -n >$tmp.terse
+
+if $terse
+then
+    cat $tmp.terse
+else
+    if [ -s $tmp.terse ]
+    then
+	echo "Processes using process-based event counters ..."
+	echo "NR == 1 { print }" >$tmp.nawk
+	nawk '{ print "$2 == " $1 " { print }" }' <$tmp.terse >>$tmp.nawk
+	ps -ef \
+	| nawk -f $tmp.nawk
+    else
+	echo "No processes are using process-based event counters."
+    fi
+fi
+
+if $verbose
+then
+    echo
+    echo "Output from icrash \"uthread\" command ..."
+    cat $tmp.uthread
+    echo
+    echo "Input to icrash ..."
+    cat $tmp.icmds
+    echo
+    echo "Threads, pids, command name and flags ..."
+    cat $tmp.flags
+fi

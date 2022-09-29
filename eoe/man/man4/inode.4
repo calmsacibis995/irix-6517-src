@@ -1,0 +1,158 @@
+.TH inode 4
+.SH NAME
+inode \- format of an Extent File System inode
+.SH SYNOPSIS
+.nf
+\f3#include <sys/param.h>\f1
+\f3#include <sys/fs/efs_ino.h>\f1
+.fi
+.SH DESCRIPTION
+An
+.I inode
+is the volume data structure used by the Extent File System (EFS)
+to implement the abstraction of a file.
+(This is not to be confused with the \f2in-core inode\f1 used by
+the operating system to manage memory-resident EFS files.)
+.PP
+An
+inode
+contains the type (for example, plain file, directory, symbolic link,
+or device file) of the file; its owner, group, and public access permissions;
+the owner and group ID numbers; its size in bytes;
+the number of links (directory references) to the file;
+and the times of last access and last modification to the file.
+In addition, there is a
+list of data blocks claimed by the file.
+.PP
+An
+inode
+under the Extent File System has the following structure.
+.Ex
+#define	EFS_DIRECTEXTENTS	12
+.sp .8v
+/*
+ * Extent based filesystem inode as it appears on disk.
+ * The efs inode is 128 bytes long.
+ */
+struct	efs_dinode {
+	ushort	di_mode;		/* type and access permissions */
+	short	di_nlink;		/* number of links */
+	ushort	di_uid;		/* owner's user ID number */
+	ushort	di_gid;		/* group's group ID number */
+	off_t	di_size;		/* number of bytes in file */
+	time_t	di_atime;		/* time of last access (to contents) */
+	time_t	di_mtime;		/* of last modification (of contents) */
+	time_t	di_ctime;		/* of last modification to inode */
+	long 	di_gen;		/* generation number */
+	short	di_numextents;	/* # of extents */
+	u_char	di_version;	/* version of inode */
+	u_char	di_spare;		/* UNUSED */
+	union {
+		extent	di_extents[EFS_DIRECTEXTENTS];
+		dev_t	di_dev;	/* device for IFCHR/IFBLK */
+	} di_u;
+};
+.Ee
+The types
+.IR ushort ,
+.IR off_t ,
+.IR time_t ,
+and
+.I dev_t
+are defined in
+.IR types (5).
+The
+.I extent
+type is defined as follows:
+.Ex
+typedef struct	extent {
+	unsigned int
+		ex_magic:8,	/* magic #, must be 0 */
+		ex_bn:24,		/* bb # on volume */
+		ex_length:8,	/* length of this extent in bb's */
+		ex_offset:24;	/* logical file offset in bb's */
+} extent;
+.Ee
+.I di_mode
+contains the type of the file
+(plain file, directory, and so on),
+and its read, write, and execute permissions
+for the file's owner, group, and public.
+.I di_nlink
+contains the number of links to the inode.
+Correctly formed directories have
+a minimum of two links:
+a link in the directory's parent
+and the `.' link in the directory itself.
+Additional links may be caused by `..' links from subdirectories.
+.PP
+.I di_uid
+and
+.I di_gid
+contain the user ID and group ID of the file
+(used to determine which set of access permissions apply:
+owner, group, or public).
+.I di_size
+contains the length of the file in bytes.
+.PP
+.I di_atime
+is the time of last access to the file's contents.
+.I di_mtime
+is the time of last modification of the file's contents.
+.I di_ctime
+is the time of last modification of the inode,
+as opposed to the contents of the file it represents.
+These times are given in seconds since
+the beginning of 1970 GMT.
+.PP
+.I di_gen
+is the inode generation number used to sequence instantiations of the inode.
+.PP
+An extent descriptor maps a logical segment of a file to
+a physical segment (extent) on the volume.
+The physical
+segment is characterized by a starting address and a length, both
+in basic blocks (of 512 bytes) and a logical file offset, also in basic blocks.
+.PP
+.I di_numextents
+is the number of extents claimed by the file.
+If it is less than or equal to
+.I EFS_DIRECTEXTENTS
+then the extent descriptors appear directly in the inode as
+.IR "di_u.di_extents[0 .. di_numextents-1]" .
+When the number of extents exceeds this range, then
+.I "di_u.di_extents[0 .. di_u.di_extents[0].ex_offset-1]"
+are indirect extents that map blocks holding extent information.
+There are at most
+.I EFS_DIRECTEXTENTS
+indirect extents.
+.PP
+If the inode is a block or character special inode,
+.I "di_u.di_numexents"
+is 0,
+and
+.I "di_u.di_dev"
+contains a
+number
+identifying the device.
+.PP
+If the inode is a symbolic link and
+.I "di_u.di_numexents"
+is 0, the symbolic link path string is stored in the extent descriptor
+area of the inode.
+A symbolic link is created with in-line data only when the data string
+fits within the extent descriptor area, and the tuneable parameter
+.B efs_line
+is non-zero (see \f2systune\f1(1M)).
+.SH FILES
+/usr/include/sys/param.h
+.br
+/usr/include/sys/types.h
+.br
+/usr/include/sys/inode.h
+.br
+/usr/include/sys/stat.h
+.SH SEE ALSO
+stat(2),
+efs(4),
+types(5).

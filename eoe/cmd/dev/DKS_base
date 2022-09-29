@@ -1,0 +1,91 @@
+#!/sbin/ksh
+
+mk_ctlrnumber()
+{
+	# construct scsi controller number part of minor number from hinv info
+	number=$(( ($1 / 10) * 8 + $1 % 10)) 
+}
+
+# A function for clarity.  install is used because it will not
+# remake devices if they are already correct (saving time)
+# and will preserve local modifications to ownership and modes.
+mknod() 
+{
+	if [ $2 = c ]; then typ=-chr; else typ=-blk; fi
+	install -root "" -rawidb "" -f . -m 600 $typ $3,$4 $1
+}
+
+/sbin/hinv | \
+sed -n -e '/^Integral SCSI controller /'p -e '/^GIO SCSI controller /'p | \
+sed 's/://g' | \
+while read a b c ctlr d ; do
+    mk_ctlrnumber $ctlr
+    for targ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+	for i in 0 1 6 7 15; do
+	    minor=$(( $i + $targ * 16 + $number * 256));
+	    mknod dsk/dks${ctlr}d${targ}s$i b ${B_DKS} $minor &
+	    mknod rdsk/dks${ctlr}d${targ}s$i c ${C_DKS} $minor &
+	done;
+	minor=$(( 8 + $targ * 16 + $number * 256));
+	mknod rdsk/dks${ctlr}d${targ}vh c ${C_DKS} $minor &
+	minor=$(( 10 + $targ * 16 + $number * 256));
+	mknod rdsk/dks${ctlr}d${targ}vol c ${C_DKS} $minor &
+	wait;
+    done;
+done
+
+/sbin/hinv -c disk | grep lun | egrep 'Disk|PC Card' | sed 's/[:,]//g' | \
+while read a b c targ l lun d e f ctlr g; do
+   mk_ctlrnumber $ctlr
+   for i in 0 1 6 7 15; do
+	minor=$(( $i + $targ * 16 + $number * 256));
+	minor=$(( $minor + $lun * 32768));
+	mknod dsk/dks${ctlr}d${targ}l${lun}s$i b ${B_DKS} $minor &
+	mknod rdsk/dks${ctlr}d${targ}l${lun}s$i c ${C_DKS} $minor &
+   done;
+   minor=$(( 8 + $targ * 16 + $number * 256));
+   minor=$(( $minor + $lun * 32768));
+   mknod rdsk/dks${ctlr}d${targ}l${lun}vh c ${C_DKS} $minor &
+   minor=$(( 10 + $targ * 16 + $number * 256));
+   minor=$(( $minor + $lun * 32768));
+   mknod rdsk/dks${ctlr}d${targ}l${lun}vol c ${C_DKS} $minor &
+   wait;
+done
+
+/sbin/hinv -c scsi | grep "RAID controller" | sed 's/://g' | \
+while read a b c targ d e f ctlr g; do
+   mk_ctlrnumber $ctlr
+   for lun in 0 1 2 3 4 5; do
+       for i in 0 1 6 7 15; do
+	    minor=$(( $i + $targ * 16 + $number * 256));
+	    minor=$(( $minor + $lun * 32768));
+	    mknod dsk/dks${ctlr}d${targ}l${lun}s$i b ${B_DKS} $minor &
+	    mknod rdsk/dks${ctlr}d${targ}l${lun}s$i c ${C_DKS} $minor &
+       done;
+       minor=$(( 8 + $targ * 16 + $number * 256));
+       minor=$(( $minor + $lun * 32768));
+       mknod rdsk/dks${ctlr}d${targ}l${lun}vh c ${C_DKS} $minor &
+       minor=$(( 10 + $targ * 16 + $number * 256));
+       minor=$(( $minor + $lun * 32768));
+       mknod rdsk/dks${ctlr}d${targ}l${lun}vol c ${C_DKS} $minor &
+       wait;
+   done;
+done
+
+# Only make RAID nodes for those devices that are attached and turned on.
+/sbin/hinv -c disk | grep '^Disk drive: .* on SCSI controller .*: RAID$' | \
+sed 's/://g' | \
+while read a b c targ d e f ctlr g ; do
+    mk_ctlrnumber $ctlr
+    mid=dks${ctlr}d${targ};
+    for i in 0 1 2 6 7 15; do
+	minor=$(( $targ * 16 + $number * 256 + $i));
+	mknod rad${ctlr}d${targ}s$i b ${B_RAD} $minor &
+	mknod rad${ctlr}d${targ}s$i c ${C_RAD} $minor &
+    done;
+    minor=$(( $targ * 16 + $number * 256 + 8));
+    mknod rad${ctlr}d${targ}vh c ${C_RAD} $minor &
+    minor=$(( $targ * 16 + $number * 256 + 10));
+    mknod rad${ctlr}d${targ}vol c ${C_RAD} $minor &
+    wait;
+done

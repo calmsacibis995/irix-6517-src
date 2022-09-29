@@ -1,0 +1,238 @@
+#!/bin/csh
+#
+#	cpapack is an example of a csh script that you might run out
+#	of your crontab each night.  It cycles through the NetCPA data
+#	directory given as an argument and runs netpack in any
+#	directories older than a certain number of years, months,
+#	or days.  If no argument is given, the current directory
+#	is used.
+#
+#	WARNING:  The script uses the -r option to netpack which
+#	removes the original data files when the directory is packed.
+#
+#	The information in this software is subject to change without
+#	notice and should not be construed as a commitment by
+#	Silicon Graphics, Inc.
+#
+#	$Revision: 1.2 $
+#
+
+# db controls how many days back to pack.
+@ db = 8
+
+# mb controls how many months back to pack.
+@ mb = 2
+
+# yb controls how many years back to pack.
+@ yb = 2
+
+# Number of days in each month (except leap years)
+set month = ( 31 28 31 30 31 30 31 31 30 31 30 31 )
+
+# Set up path
+if ($1 == "") then
+	set p = $cwd
+else
+	set p = $1
+endif
+
+set y = `date +%Y`
+set m = `date +%m`
+set d = `date +%d`
+
+#
+#	Pack the days
+#
+
+# Figure out up to which day to pack
+@ y1 = $y
+@ m1 = $m
+@ d1 = $d - $db
+while ($d1 <= 0)
+	@ m1--
+	if ($m1 == 0) then
+		@ y1--
+		@ m1 = 12
+	endif
+	@ d1 += $month[$m1]
+	if ($m1 == 2 && $y1 % 4 == 0 \
+		     && ($y1 % 100 != 0 || $y1 % 400 == 0)) @ d1++
+end
+
+if ($m1 < 10) set m1 = "0$m1"
+if ($d1 < 10) set d1 = "0$d1"
+echo "Packing all days up to $m1/$d1/$y1"
+
+# Pack up to that day
+cd $p
+foreach yy (`/bin/ls -d [12]*`)
+	set py = "$p/$yy"
+	if (! -d $py) then
+		echo "$py is not a year directory."
+		continue
+	endif
+	if ($yy > $y1) continue
+
+	cd $py
+	foreach mm (`/bin/ls`)
+		set pm = "$py/$mm"
+		if (! -d $pm) then
+			echo "$pm is not a month directory."
+			continue
+		endif
+		if ($yy == $y1 && $mm > $m1) continue
+
+		cd $pm
+		foreach dd (`/bin/ls`)
+			set pd = "$pm/$dd"
+			if (! -d $pd) then
+				echo "$pd is not a day directory."
+				continue
+			endif
+			if ($yy == $y1 && $mm == $m1 && $dd > $d1) continue
+
+			cd $pd
+			set fl
+			foreach f (`/bin/ls`)
+				set pf = "$pd/$f"
+				if (! -f $pf) then
+					echo "$pf not a plain file."
+					continue
+				endif
+				set fl = ($fl $f)
+			end
+
+			if ($#fl == 0) then
+				echo "No hourly data files in $pd."
+				continue
+			endif
+			if ($#fl == 1) then
+				# echo "$pd already packed."
+				continue
+			endif
+			echo "Packing $mm/$dd/$yy..."
+			echo netpack -rvp $p $fl
+		end
+	end
+end
+
+#
+#	Pack the months
+#
+domonth:
+
+# Figure out up to which month to pack
+@ y1 = $y
+@ m1 = $m - $mb
+while ($m1 <= 0)
+	@ y1--
+	@ m1 += 12
+end
+
+if ($m1 < 10) set m1 = "0$m1"
+echo "Packing all months up to $m1/$y1"
+
+# Pack up to that month
+cd $p
+foreach yy (`/bin/ls -d [12]*`)
+	set py = "$p/$yy"
+	if (! -d $py) then
+		echo "$py is not a year directory."
+		continue
+	endif
+	if ($yy > $y1) continue
+
+	cd $py
+	foreach mm (`/bin/ls`)
+		set pm = "$py/$mm"
+		if (! -d $pm) then
+			echo "$pm is not a month directory."
+			continue
+		endif
+		if ($yy == $y1 && $mm > $m1) continue
+
+		cd $pm
+		set fl
+		foreach dd (`/bin/ls`)
+			set pd = "$pm/$dd"
+			if (! -d $pd) then
+				echo "$pd is not a day directory."
+				continue
+			endif
+
+			cd $pd
+			foreach f (`/bin/ls`)
+				set pf = "$pd/$f"
+				if (! -f $pf) then
+					echo "$pf not a plain file."
+					continue
+				endif
+				set fl = ($fl $dd/$f)
+			end
+		end
+		if ($#fl == 0) then
+			echo "No daily data files in $pm."
+			continue
+		endif
+		if ($#fl == 1) then
+			# echo "$pm already packed."
+			continue
+		endif
+		cd $pm
+		echo "Packing $mm/$yy..."
+		echo netpack -rvp $p $fl
+	end
+end
+
+#
+#	Pack the years
+#
+doyear:
+
+# Figure out up to which year to pack
+@ y1 = $y - $yb
+
+echo "Packing all years up to $y1"
+
+# Pack up to that year
+cd $p
+foreach yy (`/bin/ls -d [12]*`)
+	set py = "$p/$yy"
+	if (! -d $py) then
+		echo "$py is not a year directory."
+		continue
+	endif
+	if ($yy > $y1) continue
+
+	cd $py
+	set fl
+	foreach mm (`/bin/ls`)
+		set pm = "$py/$mm"
+		if (! -d $pm) then
+			echo "$pm is not a month directory."
+			continue
+		endif
+		if ($yy == $y1 && $mm > $m1) continue
+
+		cd $pm
+		foreach dd (`/bin/ls`)
+			set pd = "$pm/$dd"
+			if (! -f $pd) then
+				echo "$pd is not a plain file."
+				continue
+			endif
+			set fl = ($fl $dd/$f)
+		end
+	end
+	if ($#fl == 0) then
+		echo "No monthly data files in $py."
+		continue
+	endif
+	if ($#fl == 1) then
+		# echo "$py already packed."
+		continue
+	endif
+	cd $py
+	echo "Packing $yy..."
+	echo netpack -rvp $p $fl
+end

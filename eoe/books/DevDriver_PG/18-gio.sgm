@@ -1,0 +1,940 @@
+<!-- Produced by version 3.14 (11/22/96) of SGI Frame/SGML translator -->
+<CHAPTER LBL="19"><TITLE><XREFTARGET ID="57274">GIO Device Drivers</TITLE><PARAGRAPH>The GIO bus is a synchronous, multiplexed address-data bus connecting high-speed devices to main memory and CPU for Silicon Graphics workstations. This chapter gives an overview of the GIO architecture, and describes the special kernel functions used to manage a device on the GIO bus. The main topics are as follows:<INDEXTARGET ID="18-gio1"><!-- POSTPROCESSDATA: 18-gio1|driver:types:GIO bus --><INDEXTARGET ID="18-gio2"><!-- POSTPROCESSDATA: 18-gio2|GIO bus --></PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH><XREF IDREF="96005" TYPE="TITLE">&ldquo;GIO Bus Overview&rdquo;</XREF> describes the hardware implementation of the GIO bus.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="26737" TYPE="TITLE">&ldquo;Configuring a GIO Device&rdquo;</XREF> discusses the use of the VECTOR line to describe a GIO device to IRIX.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="69895" TYPE="TITLE">&ldquo;Writing a GIO Driver&rdquo;</XREF> discusses the work done in each entry point of a GIO device driver.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="23199" TYPE="TITLE">&ldquo;Memory Parity Workarounds&rdquo;</XREF> covers an important hardware issue.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="70412" TYPE="TITLE">&ldquo;Example GIO Driver&rdquo;</XREF> displays major parts of a driver for a hypothetical GIO device.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="96005">GIO Bus Overview</TITLE><PARAGRAPH>The GIO bus is a family of buses with different electrical requirements and form factors. However, the only systems that use GIO and are supported by IRIX 6.5 are the Indigo<SUPERSCRIPT>2</SUPERSCRIPT>, POWER Indigo<SUPERSCRIPT>2</SUPERSCRIPT>, and Indigo<SUPERSCRIPT>2</SUPERSCRIPT> Maximum IMPACT workstations. These systems support the GIO64 bus, a 64-bit, synchronous, multiplexed address-data bus that can run at speeds up to 33 MHz. It supports both 32- and 64-bit devices. GIO64 has two slightly different varieties: non-pipelined for internal system memory, and pipelined for graphics and pipelined GIO64 slot devices.</PARAGRAPH>
+<PARAGRAPH>Older systems (Indigo, Indy) used a 32-bit version of the GIO bus.</PARAGRAPH>
+<PARAGRAPH>The Indigo<SUPERSCRIPT>2</SUPERSCRIPT> has three physical sockets, but the lower two are paired as a single logical slot&mdash;the double socket provides extra electrical and mechanical support for heavy cards. The Indigo<SUPERSCRIPT>2</SUPERSCRIPT> Maximum Impact has four physical sockets, with each pair ganged as one logical slot. Thus all systems have two GIO slots, electrically speaking.</PARAGRAPH>
+<PARAGRAPH>The form factor depends on the specific platform in which the device is installed. GIO64 boards are the size of an EISA board. Slots in Indigo2 systems can accept either an EISA board or a GIO64 board. These two types of boards share common board dimensions but have different connectors for attaching to their respective buses. GIO devices can be either single or double-wide (that is, taking one or two sockets).</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="38923">GIO Bus Address Spaces</TITLE><PARAGRAPH>Each GIO device has a range of bus addresses to which it responds. These addresses correspond to device registers or on-board memory, depending on the GIO device.<INDEXTARGET ID="18-gio3"><!-- POSTPROCESSDATA: 18-gio3|GIO bus:address space mapping --></PARAGRAPH>
+<PARAGRAPH>The address range for a GIO bus device is determined in part by the slot number of the device. The hardware must be designed to determine which slot the device is in and make the appropriate adjustments to respond to that slot's address range.</PARAGRAPH>
+<PARAGRAPH>Indigo<SUPERSCRIPT>2</SUPERSCRIPT> systems support three GIO address spaces, referred to as <VARIABLE>gfx</VARIABLE>, <VARIABLE>exp0</VARIABLE>, and <VARIABLE>exp1</VARIABLE>. The <VARIABLE>gfx</VARIABLE> address space is used by the graphics card.</PARAGRAPH>
+<PARAGRAPH><XREF IDREF="12635" TYPE="TABLE">Table&nbsp;19-1</XREF> shows the slot names and address spaces available on the Indigo<SUPERSCRIPT>2</SUPERSCRIPT> systems. </PARAGRAPH>
+<TABLE COLUMNS="3"><CAPTION LBL="19-1"><PREFIX>Table 19-1 </PREFIX><XREFTARGET ID="12635"> <EMPHASIS>(continued)        </EMPHASIS>GIO Slot Names and Addresses</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="45"><PARAGRAPH>Slot Name</PARAGRAPH>
+</CELL>
+<CELL LEFT="50" WIDTH="129"><PARAGRAPH>32-bit Address</PARAGRAPH>
+</CELL>
+<CELL LEFT="185" WIDTH="216"><PARAGRAPH>64-bit Address</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="45"><PARAGRAPH><VARIABLE>gfx</VARIABLE></PARAGRAPH>
+</CELL>
+<CELL LEFT="50" WIDTH="129"><PARAGRAPH>0x1f00&nbsp;0000&ndash;0x1f3f</PARAGRAPH>
+&nbsp;ffff<PARAGRAPH></PARAGRAPH>
+</CELL>
+<CELL LEFT="185" WIDTH="216"><PARAGRAPH>0x9000&nbsp;0000&nbsp;1f00&nbsp;0000&ndash;0x9000&nbsp;0000&nbsp;1f3f&nbsp;ffff</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="45"><PARAGRAPH><VARIABLE>exp0</VARIABLE></PARAGRAPH>
+</CELL>
+<CELL LEFT="50" WIDTH="129"><PARAGRAPH>0x1f40&nbsp;0000&ndash;0x1f5f&nbsp;ffff</PARAGRAPH>
+</CELL>
+<CELL LEFT="185" WIDTH="216"><PARAGRAPH>0x9000&nbsp;0000&nbsp;1f40&nbsp;0000&ndash;0x9000&nbsp;0000&nbsp;1f5f&nbsp;ffff</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="45"><PARAGRAPH><VARIABLE>exp1</VARIABLE></PARAGRAPH>
+</CELL>
+<CELL LEFT="50" WIDTH="129"><PARAGRAPH>0x1f60&nbsp;0000&ndash;0x1f9f&nbsp;ffff</PARAGRAPH>
+</CELL>
+<CELL LEFT="185" WIDTH="216"><PARAGRAPH>0x9000&nbsp;0000&nbsp;1f60&nbsp;0000&ndash;0x9000&nbsp;0000&nbsp;1f9f&nbsp;ffff</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>In 64-bit systems (Indigo<SUPERSCRIPT>2</SUPERSCRIPT> Maximum Impact), two additional high-order bits are needed to select the physical address of the GIO space, so each of the above addresses is prefixed by 0x9000&nbsp;0000.</PARAGRAPH>
+<PARAGRAPH>GIO-bus devices use only one interrupt level &mdash; interrupt 1. Interrupts 0 and 2 are used by the graphics system and may not be used by GIO-bus devices.</PARAGRAPH>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="26737">Configuring a GIO Device</TITLE><PARAGRAPH>A GIO device is described to the system, and related to its device driver, using a VECTOR line in a file in the <INDEXTARGET ID="18-gio4"><!-- POSTPROCESSDATA: 18-gio4|GIO bus:configuring --><FILENAME>/var/sysgen/system</FILENAME> directory (see <XREF IDREF="98580" TYPE="TITLE">&ldquo;Configuring a Kernel&rdquo;</XREF>). </PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>GIO VECTOR Line</TITLE><PARAGRAPH>The VECTOR line for a GIO device uses the &ldquo;old style&rdquo; syntax documented in <INDEXTARGET ID="18-gio5"><!-- POSTPROCESSDATA: 18-gio5|VECTOR statement:GIO bus --><FILENAME>/var/sysgen/system/irix.sm</FILENAME>. The important elements in a VECTOR line for GIO are as follows: </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH><COMMAND>bustype</COMMAND></PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Specified as <COMMAND>GIO </COMMAND>for GIO devices. The VECTOR statement can be 
+used for other types of buses as well.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH><COMMAND>module</COMMAND>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>The base name of the device driver for this device, as used in the 
+<FILENAME>/var/sysgen/master.d</FILENAME> database (see <XREF IDREF="91260" TYPE="TITLE">&ldquo;Master Configuration Database&rdquo;</XREF> and <XREF IDREF="69523" TYPE="TITLE">&ldquo;How Names Are Used in Configuration&rdquo;</XREF>).</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH><COMMAND>adapter</COMMAND>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Always 0, or omitted, for GIO, since there is never more than one 
+GIO bus adapter in current systems.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH><COMMAND>ctlr</COMMAND>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>The &ldquo;controller&rdquo; number is simply an integer parameter that is 
+passed to the device driver at boot time. It can be used, for example, 
+to specify a logical unit number.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH><COMMAND>base </COMMAND></PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Device base address, as shown in <XREF IDREF="12635" TYPE="TABLE">Table&nbsp;19-1</XREF>.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH><COMMAND>probe</COMMAND> or <COMMAND>exprobe</COMMAND>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Specify a hardware test that can be applied at boot time to find out if 
+the device exists.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>You use the <COMMAND>probe</COMMAND> or <COMMAND>exprobe</COMMAND> parameter to program a test for the existence of the device at boot time. If the device does not respond (because it is offline or because it has been removed from the system), the <COMMAND>lboot</COMMAND> command will not invoke the device driver for this device. This facility is used in distributed <FILENAME>/var/sysgen/system/irix.sm</FILENAME> files in order to choose between the graphics board in slot <ITALICS>gfx</ITALICS> or in slot <ITALICS>exp0</ITALICS>. </PARAGRAPH>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="69895">Writing a GIO Driver</TITLE><PARAGRAPH>GIO bus devices are controlled only from kernel-level drivers; there is no provision for memory-mapping GIO devices into user-level address spaces.</PARAGRAPH>
+<PARAGRAPH>A GIO device driver is a kernel-level driver compiled, linked, and loaded into the kernel as described in <XREF IDREF="82892" TYPE="TITLE">Chapter&nbsp;9, &ldquo;Building and Installing a Driver.&rdquo;</XREF> A GIO driver can call on the kernel functions described in <XREF IDREF="19192" TYPE="TITLE">Chapter&nbsp;7, &ldquo;Structure of a Kernel-Level Driver.&rdquo;</XREF> However, a GIO driver has to use some special features in its <VARIABLE>pfx</VARIABLE><FUNCTION>edtinit()</FUNCTION> and <VARIABLE>pfx</VARIABLE><FUNCTION>intr()</FUNCTION> entry points.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="40427">GIO-Specific Kernel Functions</TITLE><PARAGRAPH>Three GIO-specific functions are used in setting up a GIO device. They are only documented here; there are no reference pages for them. The functions are declared as external in the CPU-specific include files <INDEXTARGET ID="18-gio6"><!-- POSTPROCESSDATA: 18-gio6|GIO bus:kernel services --><FILENAME>sys/IP20.h</FILENAME> and <FILENAME>sys/IP22.h</FILENAME>. (When compiling for a POWER Indigo<SUPERSCRIPT>2</SUPERSCRIPT>, which uses an IP26 CPU, you include <FILENAME>sys/IP22.h</FILENAME> as well as <FILENAME>sys/IP26.h</FILENAME>.)</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE>Registering an Interrupt Handler</TITLE><PARAGRAPH>The <INDEXTARGET ID="18-gio7"><!-- POSTPROCESSDATA: 18-gio7|kernel functions:<FUNCTION>setgiovector</FUNCTION>() --><FUNCTION>setgiovector()</FUNCTION> function registers an interrupt service function for a GIO device interrupt with the kernel's interrupt dispatcher, or unregisters one. The function prototype is</PARAGRAPH>
+<CODE>
+void
+setgiovector(int level, int slot,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;void (*func)(__psint_t, struct eframe_s *),
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;__psint_t arg);
+</CODE>
+<PARAGRAPH>The arguments are as follows: </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="54"><PARAGRAPH><VARIABLE>level</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="60" WIDTH="288"><PARAGRAPH>The interrupt level; must be GIO_INTERRUPT_1 for all devices 
+except the graphics board.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="54"><PARAGRAPH><VARIABLE>slot</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="60" WIDTH="288"><PARAGRAPH>The slot number, 0 or 1.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="54"><PARAGRAPH><VARIABLE>func</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="60" WIDTH="288"><PARAGRAPH>The address of the interrupt handling function (typically the 
+<VARIABLE>pfx</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>intr()</FUNCTION> entry point of the device driver), or else NULL to 
+unregister.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="54"><PARAGRAPH><VARIABLE>arg</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="60" WIDTH="288"><PARAGRAPH>A &ldquo;pointer-sized integer&rdquo; value to be passed as the first 
+argument of the interrupt handler when it is invoked.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<NOTE><PREFIX>Note</PREFIX>If either the <VARIABLE>level</VARIABLE> or <VARIABLE>slot</VARIABLE> number is out of range, <FUNCTION>setgiovector()</FUNCTION> issues an error message with the CE_PANIC level, causing a kernel panic.</NOTE>
+<PARAGRAPH>When <VARIABLE>func</VARIABLE> is not NULL, the specified function is registered to receive interrupts at the given <VARIABLE>level</VARIABLE> from the given <VARIABLE>slot</VARIABLE>. When an interrupt occurs, the function is called with two arguments. The first is the value specified as <VARIABLE>arg</VARIABLE>, a &ldquo;pointer-sized integer,&rdquo; typically the address of device-specific information. The second is the interrupt registers. The structure <VARIABLE>eframe_s</VARIABLE> is declared in<FILENAME>&space;sys/reg.h</FILENAME>. However, this structure is of no interest.</PARAGRAPH>
+<PARAGRAPH>This function can be used with a NULL for the <VARIABLE>func</VARIABLE> argument to unregister an interrupt routine that was previously registered. You must unregister an interrupt handler in a loadable device driver prior to unloading, when called at the <VARIABLE>pfx</VARIABLE><FUNCTION>unload()</FUNCTION> entry point (see <XREF IDREF="57773" TYPE="TITLE">&ldquo;Entry Point unload()&rdquo;</XREF>).</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="32510">Configuring a Slot</TITLE><PARAGRAPH>The function <INDEXTARGET ID="18-gio8"><!-- POSTPROCESSDATA: 18-gio8|kernel functions:<FUNCTION>setgioconfig</FUNCTION>() --><FUNCTION>setgioconfig()</FUNCTION> configures the GIO slot for a particular use. The function prototype is</PARAGRAPH>
+<EXAMPLE>
+void&lbreak;setgioconfig(int slot, int flags);
+</EXAMPLE>
+<PARAGRAPH>The arguments are as follows: </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="54"><PARAGRAPH><VARIABLE>slot</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="60" WIDTH="333"><PARAGRAPH>The slot number, 0 or 1.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="54"><PARAGRAPH><VARIABLE>flags</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="60" WIDTH="333"><PARAGRAPH>A set of bit-flags from the constants GIO_ARB_* declared in <FILENAME>sys/mc.h</FILENAME>.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<NOTE><PREFIX>Note</PREFIX>If the <VARIABLE>slot</VARIABLE> number is out of range, <FUNCTION>setgioconfig()</FUNCTION> either issues an error message with the CE_PANIC level or suffers an assertion failure, causing a kernel panic.</NOTE>
+<PARAGRAPH>The flags that can be combined to make the <VARIABLE>flags</VARIABLE> argument are </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="135"><PARAGRAPH>GIO64_ARB_EXP0_SIZE_64 </PARAGRAPH>
+</CELL>
+<CELL LEFT="140" WIDTH="252"><PARAGRAPH>Configure for 64-bit transfers; otherwise transfers will 
+be 32-bit.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="135"><PARAGRAPH>GIO64_ARB_EXP0_RT </PARAGRAPH>
+</CELL>
+<CELL LEFT="140" WIDTH="252"><PARAGRAPH>Configure as a real-time device; otherwise it will be a 
+long burst device.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="135"><PARAGRAPH>GIO64_ARB_EXP0_MST </PARAGRAPH>
+</CELL>
+<CELL LEFT="140" WIDTH="252"><PARAGRAPH>Configure as a bus master; otherwise it will be a slave.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="135"><PARAGRAPH>GIO64_ARB_EXP0_PIPED </PARAGRAPH>
+</CELL>
+<CELL LEFT="140" WIDTH="252"><PARAGRAPH>Configure slot as a pipelined device, otherwise it will be 
+a non-pipelined device. For Indigo<SUPERSCRIPT>2</SUPERSCRIPT> systems, this must 
+be set.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="75510">splgio0, splgio1, splgio2</TITLE><PARAGRAPH>Three functions can be used to set the processor interrupt mask to block GIO-bus interrupts. As of IRIX 6.2, the only systems that support the GIO bus are uniprocessor systems, in which <FUNCTION>spl()</FUNCTION>-type functions are effective. When writing a device driver that might be ported to a multiprocessor, you should avoid functions of this type, and use other means of getting mutual exclusion (see <XREF IDREF="75168" TYPE="TITLE">&ldquo;Priority Level Functions&rdquo;</XREF>).</PARAGRAPH>
+<PARAGRAPH>The prototypes of the GIO <FUNCTION>spl()</FUNCTION> functions are</PARAGRAPH>
+<CODE>
+long splgio0();
+long splgio1();
+long splgio2();
+</CODE>
+<PARAGRAPH>Devices other than graphics drivers would typically only have a reason to use <FUNCTION>splgio1()</FUNCTION>, because 1 is the interrupt level of non-graphics GIO devices. </PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>GIO Driver edtinit() Entry Point</TITLE><PARAGRAPH>The device driver specified by the <INDEXTARGET ID="18-gio9"><!-- POSTPROCESSDATA: 18-gio9|GIO bus:edtinit entry point --><INDEXTARGET ID="18-gio10"><!-- POSTPROCESSDATA: 18-gio10|entry points:edtinit --><COMMAND>module</COMMAND> parameter is invoked at its <VARIABLE>pfx</VARIABLE><FUNCTION>edtinit()</FUNCTION> entry point, where it receives most of the other information specified in the VECTOR statement (see <XREF IDREF="14072" TYPE="TITLE">&ldquo;Entry Point edtinit()&rdquo;</XREF>).</PARAGRAPH>
+<PARAGRAPH>The <VARIABLE>pfx</VARIABLE><FUNCTION>edtinit()</FUNCTION> entry point is called only in response to a VECTOR line. However, a VECTOR line need not contain a <COMMAND>probe</COMMAND> or <COMMAND>exprobe</COMMAND> test of the hardware.</PARAGRAPH>
+<PARAGRAPH>The driver should not assume that its hardware exists; instead it should use the <FUNCTION>badaddr()</FUNCTION> kernel function to test the addresses passed in the edt_t object to make sure they are usable (see <XREF IDREF="54173" TYPE="TITLE">&ldquo;Testing Device Physical Addresses&rdquo;</XREF>).</PARAGRAPH>
+<PARAGRAPH><XREF IDREF="22142" TYPE="TEXT">Example&nbsp;19-1</XREF> displays a skeleton version of the <VARIABLE>pfx</VARIABLE><FUNCTION>edtinit()</FUNCTION> entry point of a hypothetical GIO device driver. This example uses GIO-specific functions that are described in a following section, <XREF IDREF="40427" TYPE="TITLE">&ldquo;GIO-Specific Kernel Functions&rdquo;</XREF>.</PARAGRAPH>
+<CODE><CAPTION LBL="19-1"><PREFIX>Example 19-1 </PREFIX><XREFTARGET ID="22142">GIO Driver edtinit() Entry Point</CAPTION>#include &lt;sys/edt.h>
+void
+hypoth_edtinit(register struct edt *e)
+{
+&nbsp;&nbsp;&nbsp;int slot, val;
+&nbsp;&nbsp;&nbsp;/* Check to see if the device is present */
+&nbsp;&nbsp;&nbsp;if(badaddr_val(e->e_base, sizeof(int), &amp;val) ||
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(val &amp;&amp; GBD_MASK) != GBD_BOARD_ID) {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if (showconfig)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;cmn_err (CE_CONT,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"gbdedtinit: board not installed.");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return;
+&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;/* figure out slot from base on VECTOR line in 
+&nbsp;&nbsp;&nbsp;/* system file*/
+&nbsp;&nbsp;&nbsp;if(e->e_base == (caddr_t)0xBf400000)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;slot = GIO_SLOT_0;
+&nbsp;&nbsp;&nbsp;else if(e->e_base == (caddr_t)0xBF600000)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;slot = GIO_SLOT_1;
+&nbsp;&nbsp;&nbsp;else {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;cmn_err (CE_NOTE,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"ERROR from edtinit: Bad base address %x\n",e->e_base);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return;
+&nbsp;&nbsp;&nbsp;}
+#ifdef IP20&nbsp;&nbsp;&nbsp;/* For Indigo R4000, set up board as a
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; realtime bus master */
+&nbsp;&nbsp;&nbsp;setgioconfig(slot,GIO64_ARB_EXP0_RT|GIO64_ARB_EXP0_MST);
+#endif
+#ifdef (IP22|IP26)&nbsp;&nbsp;&nbsp;/* For Indy, Indigo2, set up board as a
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; pipelined realtime bus master  */
+&nbsp;&nbsp;&nbsp;setgioconfig(slot,GIO64_ARB_EXP0_RT|GIO64_ARB_EXP0_PIPED);
+#endif
+&nbsp;&nbsp;&nbsp;/* Save the device addresses, because
+&nbsp;&nbsp;&nbsp; * they won't be available later.
+&nbsp;&nbsp;&nbsp; */
+&nbsp;&nbsp;&nbsp;gbd_device[slot == GIO_SLOT_0 ? 0 : 1] =
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(struct gbd_device *)e->e_base;
+&nbsp;&nbsp;&nbsp;gbd_memory[slot == GIO_SLOT_0 ? 0 : 1] =
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(char *)e->e_base2;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;  /* Where "unit_#" is any parameter passed to
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;  /* the interrupt handler (gbdintr) */
+&nbsp;&nbsp;&nbsp;setgiovector(GIO_INTERRUPT_1,slot,gbdintr,unit_#);
+}
+</CODE>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="28230">GIO Driver Interrupt Handler</TITLE><PARAGRAPH>A GIO driver must contain an interrupt entry point. It does not have to be named <INDEXTARGET ID="18-gio11"><!-- POSTPROCESSDATA: 18-gio11|GIO bus:interrupt handler --><INDEXTARGET ID="18-gio12"><!-- POSTPROCESSDATA: 18-gio12|entry points:interrupt --><VARIABLE>pfx</VARIABLE><FUNCTION>intr()</FUNCTION> because it is registered using the <FUNCTION>giosetvector()</FUNCTION> function.</PARAGRAPH>
+<PARAGRAPH>When the device generates an interrupt, the general GIO interrupt handler calls your driver's registered interrupt routine and passes it the argument that was specified to <FUNCTION>setgiovector()</FUNCTION> as the argument. This is typically a unit number, or the address of a device-specific information structure.</PARAGRAPH>
+<PARAGRAPH>Within the interrupt routine, the driver must wake up the sleeping upper-half process, if one is waiting on the transfer to complete. In a block device driver, the interrupt routine calls <FUNCTION>iodone()</FUNCTION> to indicate that a block type I/O transfer for the buffer is complete (see <XREF IDREF="78884" TYPE="TITLE">&ldquo;Waiting for Block I/O to Complete&rdquo;</XREF>).</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Using PIO</TITLE><PARAGRAPH>Programmed I/O (PIO) is used to transfer small amounts of data between memory and device registers. PIO is typically used for control functions and to set up device registers prior to DMA (see <INDEXTARGET ID="18-gio13"><!-- POSTPROCESSDATA: 18-gio13|Programmed I/O (PIO):GIO bus --><XREF IDREF="80616" TYPE="TITLE">&ldquo;Using DMA&rdquo;</XREF>).</PARAGRAPH>
+<PARAGRAPH>PIO can be as simple as storing a variable into a bus address (as passed to the <VARIABLE>pfx</VARIABLE><FUNCTION>edtinit()</FUNCTION> entry point). <XREF IDREF="28539" TYPE="TEXT">Example&nbsp;19-2</XREF> displays fragmentary code of a hypothetical character device driver for a GIO device that controls a printer. This <VARIABLE>pfx</VARIABLE><FUNCTION>write()</FUNCTION> entry point copies data from the user address space to device memory using the <FUNCTION>uiomove()</FUNCTION> function (see <XREF IDREF="75852" TYPE="TITLE">&ldquo;Transferring Data Through a uio_t Object&rdquo;</XREF>). Then it stores an explicit command in the device to start it, and sleeps until the device interrupts.</PARAGRAPH>
+<CODE><CAPTION LBL="19-2"><PREFIX>Example 19-2 </PREFIX><XREFTARGET ID="28539">Hypothetical PIO Routine for GIO</CAPTION>/* device write routine entry point (for character devices)*/
+int
+hypoth_write(dev_t dev, uio_t *uio)
+{
+&nbsp;&nbsp;&nbsp;int unit = geteminor(dev)&amp;1;
+&nbsp;&nbsp;&nbsp;int size, err=0, s;
+&nbsp;&nbsp;&nbsp;/* while there is data to transfer */
+&nbsp;&nbsp;&nbsp;while((size=uio->uio_resid) > 0) {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/* Transfer no more than GBD_MEMSIZE bytes */
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;size = size &lt; GBD_MEMSIZE ? size : GBD_MEMSIZE;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/* decrements size, updates uio fields, copies data */
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if(err=uiomove(gbd_memory[unit], size, UIO_WRITE, uio))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/* prevent interrupts until we sleep */
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;s = splgio1();
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/* Transfer is complete; start output */
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;gbd_device[unit]->count = size;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;gbd_device[unit]->command = GBD_GO;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;gbd_state[unit] = GBD_SLEEPING;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;while (gbd_state[unit] != GBD_DONE) {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;sleep(&amp;gbd_state[unit], PRIBIO);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/* restore the interrupt level after waking up */
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;splx(s);
+&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;return err;
+}
+</CODE>
+<PARAGRAPH>An expression like <VARIABLE>gdb_device[unit]->command=GBD_GO</VARIABLE> represents storing a command value in a device register. Presumably the <VARIABLE>gdb_device</VARIABLE> array is set up with a device address for each slot in the <VARIABLE>pfx</VARIABLE><FUNCTION>edtinit()</FUNCTION> entry point.</PARAGRAPH>
+<PARAGRAPH>The code in <XREF IDREF="28539" TYPE="TEXT">Example&nbsp;19-2</XREF> uses <FUNCTION>splgio1()</FUNCTION> to block an interrupt from occurring after it has started the device in operation and before it has entered the blocked state using <FUNCTION>sleep()</FUNCTION>. If this was not done, there is a small window of time during which an interrupt could occur and be handled before the upper-half routine had begun sleeping. Then it would sleep forever.</PARAGRAPH>
+<PARAGRAPH>An alternate way to handle this same situation in a multiprocessor system is to use a mutual-exclusion lock to get exclusive use of the device registers, and a synchronization variable to wait for the interrupt (see <XREF IDREF="41132" TYPE="TITLE">&ldquo;Using Synchronization Variables&rdquo;</XREF>).</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="80616">Using DMA</TITLE><PARAGRAPH>DMA access achieves higher throughput than PIO when the device transfers more than a few words of data at a time. DMA is typically set up by programming device registers with the target address and length, and leaving the device to generate a series of stores or loads from memory. The details of device control are hardware-dependent.<INDEXTARGET ID="18-gio14"><!-- POSTPROCESSDATA: 18-gio14|Direct Memory Access (DMA):GIO bus --></PARAGRAPH>
+<PARAGRAPH>The direction of a DMA transfer is measured with respect to the device, which operates independently. A DMA operation is either a DMA <ITALICS>read</ITALICS> (of memory data out to the device) or a DMA <ITALICS>write</ITALICS> (by the device, of data into memory).</PARAGRAPH>
+<PARAGRAPH>DMA buffers should be cache-aligned in memory (see <XREF IDREF="40016" TYPE="TITLE">&ldquo;Setting Up a DMA Transfer&rdquo;</XREF>). Prior to a DMA read, the driver should make sure that cached data has been written to memory using <FUNCTION>dki_cache_wb()</FUNCTION>. Prior to a DMA write, the driver should make sure the CPU knows that cached data is invalid (or is about to become invalid) using <FUNCTION>dki_cache_inval()</FUNCTION> (see <XREF IDREF="65953" TYPE="TITLE">&ldquo;Managing Memory for Cache Coherency&rdquo;</XREF>).</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE>DMA To Multiple Pages</TITLE><PARAGRAPH>Some devices can perform DMA only in a single transfer of data to a range of contiguous addresses. Such a device must be programmed separately for each individual page of data. Other devices are capable of transferring a series of page units to different addresses; that is, they support &ldquo;scatter/gather&rdquo; capability. These devices can be programmed once to transfer an entire buffer of data, regardless of whether the buffer spans multiple pages.</PARAGRAPH>
+<PARAGRAPH>In either case, the <VARIABLE>pfx</VARIABLE><FUNCTION>strategy()</FUNCTION> entry point of a block device driver must calculate the physical addresses of a series of one or more pages, and program them into the device. When the device does not support scatter/gather, it is set up and started on each page of data individually, with an interrupt after each page. When the device supports scatter/gather, it is programmed with a list of page addresses all at once.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>DMA With Scatter/Gather Capability</TITLE><PARAGRAPH><XREF IDREF="99612" TYPE="TEXT">Example&nbsp;19-3</XREF> shows the skeleton of a <VARIABLE>pfx</VARIABLE><FUNCTION>strategy()</FUNCTION> entry point for a block device driver for a hypothetical GIO device that supports scatter/gather capability.</PARAGRAPH>
+<CODE><CAPTION LBL="19-3"><PREFIX>Example 19-3 </PREFIX><XREFTARGET ID="99612">Strategy Code for Hypothetical Scatter/Gather GIO Device</CAPTION>/* Actual device setup for DMA, etc., if your board has
+&space;* hardware scatter/gather DMA support.
+&space;* Called from the hypo_write() routine via physio().
+&space;*/
+void
+hypo_strategy(struct buf *bp)
+{
+&nbsp;&nbsp;&nbsp;int unit = geteminor(bp->b_dev)&amp;1;
+&nbsp;&nbsp;&nbsp;int npages;
+&nbsp;&nbsp;&nbsp;volatile unsigned *sgregisters; /* ->device regs */
+&nbsp;&nbsp;&nbsp;int i, v_addr;
+&nbsp;&nbsp;&nbsp;/* MISSING: any checking for initial state. */
+&nbsp;&nbsp;&nbsp;/* Get address of the scatter/gather registers */
+&nbsp;&nbsp;&nbsp;sgregisters = gbd_device[unit]->sgregisters;
+&nbsp;&nbsp;&nbsp;/* Get the kernel virtual address of the data; note
+&nbsp;&nbsp;&nbsp; * b_dmaaddr may be NULL if the BP_ISMAPPED(bp) macro
+&nbsp;&nbsp;&nbsp; * indicates false; in that case, the field bp->b_pages
+&nbsp;&nbsp;&nbsp; * is a pointer to a linked list of pfdat structure pointers;
+&nbsp;&nbsp;&nbsp; * that saves creating a virtual mapping and then decoding
+&nbsp;&nbsp;&nbsp;&nbsp;* that mapping back to physical addresses. BP_ISMAPPED will
+&nbsp;&nbsp;&nbsp;&nbsp;* never be false for character devices, only block devices.
+&nbsp;&nbsp;&nbsp; */
+&nbsp;&nbsp;&nbsp;if(!BP_ISMAPPED(bp)) {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;cmn_err(CE_WARN,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"gbd driver can't handle unmapped buffers");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;bioerror(bp, EIO);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;biodone(bp);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return;
+&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;v_addr = bp->b_dmaaddr;
+&nbsp;&nbsp;&nbsp;/*&nbsp;Compute&nbsp;number&nbsp;of&nbsp;pages&nbsp;affected&nbsp;by&nbsp;this&nbsp;request.
+&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;The&nbsp;numpages()&nbsp;macro&nbsp;(sysmacros.h)&nbsp;returns&nbsp;the&nbsp;number&nbsp;of&nbsp;pages
+&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;that&nbsp;span&nbsp;a&nbsp;given&nbsp;length&nbsp;starting&nbsp;at&nbsp;a&nbsp;given&nbsp;address,&nbsp;allowing
+&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;for&nbsp;partial&nbsp;pages.&nbsp;&nbsp;Unrealistically,&nbsp;we&nbsp;limit&nbsp;this&nbsp;to&nbsp;the
+&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;number&nbsp;of&nbsp;scatter/gather&nbsp;registers&nbsp;on&nbsp;board.
+&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;Note&nbsp;that&nbsp;this&nbsp;sample&nbsp;driver&nbsp;doesn't&nbsp;handle&nbsp;the
+&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;case&nbsp;of&nbsp;requests&nbsp;>&nbsp;than&nbsp;#&nbsp;of&nbsp;registers!
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;npages&nbsp;=&nbsp;numpages&nbsp;(v_addr,&nbsp;bp->b_bcount);
+&nbsp;&nbsp;&nbsp;if(npages&nbsp;>&nbsp;GBD_NUM_DMA_PGS)&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;bp->b_resid&nbsp;=&nbsp;IO_NBPP&nbsp;*&nbsp;(npages&nbsp;-&nbsp;GBD_NUM_DMA_PGS);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;npages&nbsp;=&nbsp;GBD_NUM_DMA_PGS;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;cmn_err(CE_WARN,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&ldquo;request&nbsp;too&nbsp;large,&nbsp;only&nbsp;%d&nbsp;pages&nbsp;max&rdquo;,&nbsp;npages);
+&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;/* Translate the virtual address of each page to a
+&nbsp;&nbsp;&nbsp; * physical page number and load it into the next
+&nbsp;&nbsp;&nbsp; * scatter/gather register.
+&nbsp;&nbsp;&nbsp; * btop() converts the byte value to a page value after
+&nbsp;&nbsp;&nbsp; * rounding down the byte value to a full page.
+&nbsp;&nbsp;&nbsp; */
+&nbsp;&nbsp;&nbsp;for (i = 0; i &lt; npages; i++) {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*sgregisters++ = btop(kvtophys(v_addr));
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;v_addr += IO_NBPP;
+&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;/* Program the device for input or output */
+&nbsp;&nbsp;&nbsp;if ((bp->b_flags &amp; B_READ) == 0)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;gbd_device[unit]->direction = GBD_WRITE;
+&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;gbd_device[unit]->direction = GBD_READ;
+/* Start the device going and return. The caller, either a
+&nbsp;* file system or uiophysio(), waits for the iodone() call
+&nbsp;* from the interrupt routine.
+&nbsp;*/
+&nbsp;&nbsp;&nbsp;gbd_device[unit]->command = GBD_GO;
+}
+</CODE>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>DMA Without Scatter/Gather Support</TITLE><PARAGRAPH>When the GIO device does not provide scatter/gather capability, the driver must program the transfer of each memory page individually, ensuring that the device does not attempt to store or load across a page boundary. The usual method is as follows:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>In the <VARIABLE>pfx</VARIABLE><FUNCTION>strategy()</FUNCTION> routine, save the address of the <VARIABLE>buf_t</VARIABLE> for use by the <VARIABLE>pfx</VARIABLE><FUNCTION>intr()</FUNCTION> entry point.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>In the <VARIABLE>pfx</VARIABLE><FUNCTION>strategy()</FUNCTION> routine, program the device to transfer the data for the first page, and start the device going.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>In the <VARIABLE>pfx</VARIABLE><FUNCTION>intr()</FUNCTION> entry point, calculate the number of bytes remaining to transfer. If the count is zero, signal <FUNCTION>biodone()</FUNCTION>. If the count is nonzero, program the device to transfer the next page of data.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>Under this design, there is no explicit loop over the successive pages of the transfer visible in the code. The loop is implicit in the fact that the <VARIABLE>pfx</VARIABLE><FUNCTION>intr()</FUNCTION> entry point starts a new transfer, and so will be called again, until the transfer is complete.</PARAGRAPH>
+<PARAGRAPH><XREF IDREF="87951" TYPE="TEXT">Example&nbsp;19-4</XREF> shows the code of the <VARIABLE>pfx</VARIABLE><FUNCTION>strategy()</FUNCTION> routine for a hypothetical GIO device without scatter/gather.</PARAGRAPH>
+<CODE><CAPTION LBL="19-4"><PREFIX>Example 19-4 </PREFIX><XREFTARGET ID="87951">Strategy() Code for GIO Device Without Scatter/Gather</CAPTION>/* Actual device setup for DMA, etc., when the board
+&nbsp;* does NOT have hardware scatter/gather DMA support.
+&nbsp;* Called from the hypo_write() routine via physio().
+&nbsp;*/
+void
+hypo_strategy(struct buf *bp)
+{
+&nbsp;&nbsp;&nbsp;int unit = geteminor(bp->b_dev)&amp;1;
+&nbsp;&nbsp;&nbsp;/* MISSING: any checking for initial state. */
+&nbsp;&nbsp;&nbsp;/* Get the kernel virtual address of the data; note
+&nbsp;&nbsp;&nbsp;* b_dmaaddr may be NULL if the BP_ISMAPPED(bp) macro
+&nbsp;&nbsp;&nbsp;* indicates false; in that case, the field bp->b_pages
+&nbsp;&nbsp;&nbsp;* is a pointer to a linked list of pfdat structure
+&nbsp;&nbsp;&nbsp;* pointers; that saves creating a virtual mapping and
+&nbsp;&nbsp;&nbsp;* then decoding that mapping back to physical addresses.
+&nbsp;&nbsp;&nbsp;* BP_ISMAPPED will never be false for character devices,
+&nbsp;&nbsp;&nbsp;* only block devices.
+&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;if(!BP_ISMAPPED(bp)) {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;cmn_err(CE_WARN,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"gbd driver can't handle unmapped buffers");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;bioerror(bp, EIO);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;biodone(bp);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return;
+&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;/* Save ->buf_t where interrupt handler can find it */
+&nbsp;&nbsp;&nbsp;gbd_curbp[unit] = bp; 
+&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;* Initialize the current transfer address and count.
+&nbsp;&nbsp;&nbsp;* The first transfer should finish the rest of the
+&nbsp;&nbsp;&nbsp;* page, but do no more than the total byte count.
+&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;gbd_curaddr[unit] = bp->b_dmaaddr;
+&nbsp;&nbsp;&nbsp;gbd_totcount[unit] = bp->b_count;
+&nbsp;&nbsp;&nbsp;gbd_curcount[unit] = IO_NBPP-
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;((unsigned int)gbd_curaddr[unit] &amp; (IO_NBPP-1));
+&nbsp;&nbsp;&nbsp;if (bp->b_count &lt; gbd_curcount[unit])
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;gbd_curcount[unit] = bp->b_count;
+&nbsp;&nbsp;&nbsp;/* Tell the device starting physical address, count,
+&nbsp;&nbsp;&nbsp;* and direction */
+&nbsp;&nbsp;&nbsp;gbd_device[unit]->startaddr = kvtophys(gbd_curaddr[unit]);
+&nbsp;&nbsp;&nbsp;gbd_device[unit]->count = gbd_curcount[unit];
+&nbsp;&nbsp;&nbsp;if (bp->b_flags &amp; B_READ) == 0)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;gbd_device[unit]->direction = GBD_WRITE;
+&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;gbd_device[unit]->direction = GBD_READ;
+&nbsp;&nbsp;&nbsp;gbd_device[unit]->command = GBD_GO;&nbsp;&nbsp;&nbsp;/* start DMA */
+&nbsp;&nbsp;&nbsp;/* and return; upper layers of kernel wait for iodone(bp) */
+}
+</CODE>
+<PARAGRAPH>An alternate design might seem conceptually simpler: to put an explicit loop in the <VARIABLE>pfx</VARIABLE><FUNCTION>strategy()</FUNCTION> routine, starting each page transfer and waiting on a semaphore until the <VARIABLE>pfx</VARIABLE><FUNCTION>intr()</FUNCTION> routine is called. Such a design keeps the complexity in the <VARIABLE>pfx</VARIABLE><FUNCTION>strategy()</FUNCTION> routine, making the <VARIABLE>pfx</VARIABLE><FUNCTION>intr()</FUNCTION> routine as simple as possible. However, it has a high cost in performance because the <VARIABLE>pfx</VARIABLE><FUNCTION>strategy</FUNCTION> routine must wake up and be dispatched for every page.</PARAGRAPH>
+<PARAGRAPH>Scatter/gather programming can be simplified by the use of the <FUNCTION>sgset()</FUNCTION> function, which calculates the physical addresses and lengths for each page in the transfer (see the <REFPAGE>sgset(D3)</REFPAGE> reference page). The <FUNCTION>sgset()</FUNCTION> function is limited to use with hardware that uses a fixed mapping of bus addresses to memory addresses, which is the case in the workstations supporting GIO. For example, <FUNCTION>sgset()</FUNCTION> cannot be used in the Challenge or Onyx line; it always returns -1 in those systems.</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="23199">Memory Parity Workarounds</TITLE><PARAGRAPH>Beginning with IRIX 5.3, parity checking is enabled on the SysAD bus, which connects the CPU to memory in workstations that use the GIO bus (see <INDEXTARGET ID="18-gio15"><!-- POSTPROCESSDATA: 18-gio15|parity check with GIO --><INDEXTARGET ID="18-gio16"><!-- POSTPROCESSDATA: 18-gio16|SysAD bus parity checks --><INDEXTARGET ID="18-gio17"><!-- POSTPROCESSDATA: 18-gio17|GIO bus:memory parity checking with --><XREF IDREF="39422" TYPE="GRAPHIC">Figure&nbsp;19-1</XREF>). Unfortunately, with certain GIO cards, errors can occur if memory reads complete before the Memory Controller (MC) finishes calculating parity.</PARAGRAPH>
+<PARAGRAPH><FIGURE><GRAPHIC FILE="18-gio.sysad.gif" POSITION="INLINE" SCALE="FALSE"><CAPTION LBL="19-1"><PREFIX>Figure 19-1 </PREFIX><XREFTARGET ID="39422">The SysAD Bus in Relation to GIO</CAPTION>
+</FIGURE>
+</PARAGRAPH>
+<PARAGRAPH>Some GIO cards do not drive all 32 GIO data lines during CPU PIO reads. These reads from the GIO card are either 8-bit or 16-bit transfers, so the lines are left floating. The problem is that to generate parity bits for the SysAD bus, the Memory Controller (MC) must calculate parity for all 32 bits. Since the calculation must occur before the CPU read completes, it is possible that one (or more) of the floating bits may change while parity is being calculated. Thus, when the CPU read completes, it may be received as a parity error on the SysAD bus.</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>Diagnosis is complicated by the fact that this problem may not show up on every transaction. It occurs only when one of the data lines that is left floating happens to change state between the start of the MC parity calculation and the completion of the CPU read. A device and its driver can appear to function correctly for some time before the problem occurs.</NOTE>
+<PARAGRAPH>When writing a driver for a GIO card that does not drive all 32 data lines, you must either disable SysAD parity checking completely, or disable it during the time your driver is performing PIO transfers. Three kernel functions are supplied for these purposes; none of them take arguments.</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH><FUNCTION>is_sysad_parity_enabled()</FUNCTION> returns a nonzero value if SysAD parity checking is enabled.&space;</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><FUNCTION>disable_sysad_parity()</FUNCTION> turns off parity checking on the SysAD bus.&space;</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><FUNCTION>enable_sysad_parity()</FUNCTION> returns SysAD parity checking to normal.&space;</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>To completely disable SysAD parity checking removes the system's ability to recover from a parity error in main memory. As a short-term fix, a driver could simply call <FUNCTION>disable_sysad_parity()</FUNCTION> in the <VARIABLE>pfx</VARIABLE><FUNCTION>init()</FUNCTION> or <VARIABLE>pfx</VARIABLE><FUNCTION>edtinit()</FUNCTION> entry point.</PARAGRAPH>
+<PARAGRAPH>It is much better to disable parity checking only during the time the device is being used. The advantage here is that the software recovery procedures for memory parity errors are almost always in effect.</PARAGRAPH>
+<PARAGRAPH>To selectively disable parity checking, put wrappers around your driver's PIO transactions to disable SysAD parity checking before a transfer, and to re-enable it after the PIO completes. <XREF IDREF="64475" TYPE="TEXT">Example&nbsp;19-5</XREF> shows a skeleton of such a wrapper.</PARAGRAPH>
+<CODE><CAPTION LBL="19-5"><PREFIX>Example 19-5 </PREFIX><XREFTARGET ID="64475">Disabling SysAD Parity Checking During PIO</CAPTION>void
+do_PIO_without_parity()
+{
+&nbsp;&nbsp;&nbsp;int was_enabled = is_sysad_parity_enabled();
+&nbsp;&nbsp;&nbsp;if (was_enabled)&nbsp;disable_sysad_parity();
+/* do driver PIO transfers */
+if (was_enabled) enable_sysad_parity();
+}
+</CODE>
+<PARAGRAPH>The reason that the function in <XREF IDREF="64475" TYPE="TEXT">Example&nbsp;19-5</XREF> saves the current state of parity, and only re-enables parity when it was enabled on entry, is that parity checking could have been turned off in some higher-level routine. For example, an interrupt handler could be entered during execution of a device driver function that disables parity checking. If the interrupt handler turned parity checking back on regardless of its former state, errors would occur.</PARAGRAPH>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="70412">Example GIO Driver</TITLE><PARAGRAPH>The code in <INDEXTARGET ID="18-gio18"><!-- POSTPROCESSDATA: 18-gio18|driver:examples:GIO bus --><INDEXTARGET ID="18-gio19"><!-- POSTPROCESSDATA: 18-gio19|GIO bus:example driver --><INDEXTARGET ID="18-gio20"><!-- POSTPROCESSDATA: 18-gio20|example driver --><XREF IDREF="91758" TYPE="TEXT">Example&nbsp;19-6</XREF> displays a complete device driver for a hypothetical device. The driver prefix is <ITALICS>gbd</ITALICS> (for &ldquo;GIO board&rdquo;). </PARAGRAPH>
+<CODE><CAPTION LBL="19-6"><PREFIX>Example 19-6 </PREFIX><XREFTARGET ID="91758">Complete Driver for Hypothetical GIO Device</CAPTION>/*&nbsp;Source&nbsp;for&nbsp;a&nbsp;hypothetical&nbsp;GIO&nbsp;board&nbsp;device;&nbsp;it&nbsp;can&nbsp;be&nbsp;compiled&nbsp;for
+&nbsp;*&nbsp;devices&nbsp;that&nbsp;support&nbsp;DMA&nbsp;(with&nbsp;or&nbsp;without&nbsp;scatter&nbsp;gather&nbsp;support),
+&nbsp;*&nbsp;or&nbsp;for&nbsp;PIO&nbsp;mode&nbsp;only.&nbsp;&nbsp;This&nbsp;version&nbsp;is&nbsp;designed&nbsp;for&nbsp;IRIX&nbsp;6.2&nbsp;or&nbsp;later.
+&nbsp;*&nbsp;Dave&nbsp;Olson,&nbsp;5/93.&nbsp;&nbsp;6.2&nbsp;port&nbsp;by&nbsp;Dave&nbsp;Cortesi&nbsp;9/95.
+*/
+&nbsp;
+/*&nbsp;Compilation:&nbsp;Define&nbsp;the&nbsp;environment&nbsp;variable&nbsp;CPUBOARD&nbsp;as&nbsp;IP20,&nbsp;IP22,
+&nbsp;*&nbsp;or&nbsp;IP26&nbsp;(the&nbsp;only&nbsp;GIO&nbsp;platforms).&nbsp;Then&nbsp;include&nbsp;the&nbsp;build&nbsp;rules&nbsp;from
+&nbsp;*&nbsp;/var/sysgen/Makefile.kernio&nbsp;to&nbsp;set&nbsp;$CFLAGS&nbsp;including:
+#&nbsp;&nbsp;&nbsp;_K32U32&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;kernel&nbsp;in&nbsp;32&nbsp;bit&nbsp;mode&nbsp;running&nbsp;only&nbsp;32&nbsp;bit&nbsp;binaries
+#&nbsp;&nbsp;&nbsp;_K64U64&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;kernel&nbsp;in&nbsp;64&nbsp;bit&nbsp;mode&nbsp;running&nbsp;32/64&nbsp;bit&nbsp;binaries&nbsp;(IP26)
+#&nbsp;&nbsp;&nbsp;-DR4000&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;R4000&nbsp;machine&nbsp;(IP20,&nbsp;IP22)
+#&nbsp;&nbsp;&nbsp;-DTFP&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;R8000&nbsp;machine&nbsp;(IP26)
+#&nbsp;&nbsp;&nbsp;-G&nbsp;8&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;global&nbsp;pointer&nbsp;set&nbsp;to&nbsp;8&nbsp;(GIO&nbsp;drivers&nbsp;cannot&nbsp;be&nbsp;loadable)
+#&nbsp;&nbsp;&nbsp;-elf&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;produce&nbsp;an&nbsp;elf&nbsp;executable
+&nbsp;*/
+&nbsp;
+/*&nbsp;the&nbsp;following&nbsp;definitions&nbsp;choose&nbsp;between&nbsp;PIO&nbsp;vs&nbsp;DMA&nbsp;supporting
+&nbsp;*&nbsp;boards,&nbsp;and&nbsp;if&nbsp;DMA&nbsp;is&nbsp;supported,&nbsp;whether&nbsp;hardware&nbsp;scatter/gather
+&nbsp;*&nbsp;is&nbsp;supported.&nbsp;*/
+#define&nbsp;GBD_NODMA&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;0&nbsp;&nbsp;&nbsp;/*&nbsp;non-zero&nbsp;for&nbsp;PIO&nbsp;version&nbsp;of&nbsp;driver&nbsp;*/
+#define&nbsp;GBD_NUM_DMA_PGS&nbsp;8&nbsp;&nbsp;&nbsp;/*&nbsp;0&nbsp;for&nbsp;no&nbsp;hardware&nbsp;scatter/gather
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;support,&nbsp;else&nbsp;number&nbsp;of&nbsp;pages&nbsp;of
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;scatter/gather&nbsp;per&nbsp;request&nbsp;*/
+#include&nbsp;&lt;sys/param.h>
+#include&nbsp;&lt;sys/systm.h>
+#include&nbsp;&lt;sys/cpu.h>
+#include&nbsp;&lt;sys/buf.h>
+#include&nbsp;&lt;sys/cred.h>
+#include&nbsp;&lt;sys/uio.h>
+#include&nbsp;&lt;sys/ddi.h>
+#include&nbsp;&lt;sys/errno.h>
+#include&nbsp;&lt;sys/cmn_err.h>
+#include&nbsp;&lt;sys/edt.h>
+#include&nbsp;&lt;sys/conf.h>&nbsp;/*&nbsp;for&nbsp;flags&nbsp;D_MP&nbsp;*/
+&nbsp;
+/*&nbsp;gbd&nbsp;(for&nbsp;Gio&nbsp;BoarD)&nbsp;is&nbsp;the&nbsp;driver&nbsp;prefix,&nbsp;specified&nbsp;in&nbsp;the
+&nbsp;*&nbsp;file&nbsp;/var/sysgen/master.d/gbd&nbsp;and&nbsp;in&nbsp;VECTOR&nbsp;module=gbd&nbsp;lines.
+&nbsp;*&nbsp;This&nbsp;driver&nbsp;is&nbsp;multiprocessor-safe&nbsp;(even&nbsp;though&nbsp;no&nbsp;GIO&nbsp;platform
+&nbsp;*&nbsp;is&nbsp;a&nbsp;multiprocessor).
+&nbsp;*/
+int&nbsp;gbddevflags&nbsp;=&nbsp;D_MP;
+&nbsp;
+/*&nbsp;these&nbsp;defines&nbsp;and&nbsp;structures&nbsp;defining&nbsp;the&nbsp;(hypothetical)&nbsp;hardware
+&nbsp;*&nbsp;interface&nbsp;would&nbsp;normally&nbsp;be&nbsp;in&nbsp;a&nbsp;separate&nbsp;header&nbsp;file
+&nbsp;*/
+#define&nbsp;GBD_BOARD_ID&nbsp;&nbsp;&nbsp;&nbsp;0x75
+#define&nbsp;GBD_MASK&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;0xff&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;use&nbsp;0xff&nbsp;if&nbsp;using&nbsp;only&nbsp;first&nbsp;byte
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;of&nbsp;ID&nbsp;word,&nbsp;use&nbsp;0xffff&nbsp;if&nbsp;using
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;whole&nbsp;ID&nbsp;word
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+#define&nbsp;GBD_MEMSIZE&nbsp;0x8000
+/*&nbsp;command&nbsp;definitions&nbsp;*/
+#define&nbsp;GBD_GO&nbsp;1
+/*&nbsp;state&nbsp;definitions&nbsp;*/
+#define&nbsp;GBD_SLEEPING&nbsp;1
+#define&nbsp;GBD_DONE&nbsp;2
+/*&nbsp;direction&nbsp;of&nbsp;DMA&nbsp;definitions&nbsp;*/
+#define&nbsp;GBD_READ&nbsp;0
+#define&nbsp;GBD_WRITE&nbsp;1
+/*&nbsp;status&nbsp;defines&nbsp;*/
+#define&nbsp;GBD_INTR_PEND&nbsp;&nbsp;&nbsp;0x80
+&nbsp;
+/*&nbsp;device&nbsp;register&nbsp;interface&nbsp;to&nbsp;the&nbsp;board&nbsp;*/
+typedef&nbsp;struct&nbsp;gbd_device&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;__uint32_t&nbsp;&nbsp;command;
+&nbsp;&nbsp;&nbsp;&nbsp;__uint32_t&nbsp;&nbsp;count;
+&nbsp;&nbsp;&nbsp;&nbsp;__uint32_t&nbsp;&nbsp;direction;
+&nbsp;&nbsp;&nbsp;&nbsp;__uint32_t&nbsp;&nbsp;offset;
+&nbsp;&nbsp;&nbsp;&nbsp;__uint32_t&nbsp;&nbsp;status;&nbsp;/*&nbsp;errors,&nbsp;interrupt&nbsp;pending,&nbsp;etc.&nbsp;*/
+#if&nbsp;(!GBD_NODMA)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;if&nbsp;hardware&nbsp;DMA&nbsp;*/
+#if&nbsp;(GBD_NUM_DMA_PGS)&nbsp;&nbsp;&nbsp;/*&nbsp;if&nbsp;hardware&nbsp;scatter/gather&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;board&nbsp;register&nbsp;points&nbsp;to&nbsp;array&nbsp;of&nbsp;GBD_NUM_DMA_PGS&nbsp;target
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;addresses&nbsp;in&nbsp;board&nbsp;memory.&nbsp;&nbsp;Board&nbsp;can&nbsp;relocate&nbsp;the&nbsp;array
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;by&nbsp;changing&nbsp;the&nbsp;content&nbsp;of&nbsp;sgregisters.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;volatile&nbsp;paddr_t&nbsp;&nbsp;&nbsp;&nbsp;*sgregisters;&nbsp;
+#else&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;dma&nbsp;to&nbsp;contiguous&nbsp;segment&nbsp;only&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;paddr_t&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;startaddr;
+#endif
+#endif
+}&nbsp;gbd_regs;
+&nbsp;
+static&nbsp;struct&nbsp;gbd_info&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;gbd_regs&nbsp;&nbsp;&nbsp;&nbsp;*gbd_device;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;->board&nbsp;regs&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;char&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*gbd_memory;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;->on-board&nbsp;memory&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;sema_t&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;use_lock;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;upper-half&nbsp;exclusion&nbsp;from&nbsp;board&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;lock_t&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;reg_lock;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;spinlock&nbsp;for&nbsp;interrupt&nbsp;exclusion&nbsp;*/
+#if&nbsp;GBD_NODMA
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;gbd_state;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;transfer&nbsp;state&nbsp;of&nbsp;PIO&nbsp;driver&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;sv_t&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;intr_wait;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;sync&nbsp;var&nbsp;for&nbsp;waiting&nbsp;on&nbsp;intr&nbsp;*/
+#else&nbsp;/*&nbsp;DMA&nbsp;supported&nbsp;somehow&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;buf_t&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*curbp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;current&nbsp;buf&nbsp;struct&nbsp;*/
+#if&nbsp;(0&nbsp;==&nbsp;GBD_NUM_DMA_PGS)&nbsp;&nbsp;/*&nbsp;software&nbsp;scatter/gather&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;caddr_t&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;curaddr;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;current&nbsp;address&nbsp;to&nbsp;transfer&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;curcount;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;count&nbsp;being&nbsp;transferred&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;totcount;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;total&nbsp;size&nbsp;this&nbsp;transfer&nbsp;*/
+#endif
+#endif
+}&nbsp;gbd_globals[2];
+&nbsp;
+void&nbsp;gbdintr(int,&nbsp;struct&nbsp;eframe_s&nbsp;*);
+&nbsp;
+/*&nbsp;early&nbsp;device&nbsp;table&nbsp;initialization&nbsp;routine.&nbsp;Validate&nbsp;the&nbsp;values
+&nbsp;*&nbsp;from&nbsp;a&nbsp;VECTOR&nbsp;line&nbsp;and&nbsp;save&nbsp;in&nbsp;the&nbsp;per-device&nbsp;info&nbsp;structure.
+&nbsp;*/
+void
+gbdedtinit(register&nbsp;edt_t&nbsp;*e)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;slot;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;which&nbsp;slot&nbsp;this&nbsp;device&nbsp;is&nbsp;in&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;__uint32_t&nbsp;val&nbsp;=&nbsp;0;&nbsp;/*&nbsp;board&nbsp;ID&nbsp;value&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;register&nbsp;struct&nbsp;gbd_info&nbsp;*inf;
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;Check&nbsp;to&nbsp;see&nbsp;if&nbsp;the&nbsp;device&nbsp;is&nbsp;present&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;if(!badaddr(e->e_base,&nbsp;sizeof(__uint32_t)))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;val&nbsp;=&nbsp;*(__uint32_t&nbsp;*)(e->e_base);
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;((val&nbsp;&amp;&amp;&nbsp;GBD_MASK)&nbsp;!=&nbsp;GBD_BOARD_ID)&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(showconfig)&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;cmn_err&nbsp;(CE_CONT,&nbsp;&ldquo;gbdedtinit:&nbsp;board&nbsp;not&nbsp;installed.&rdquo;);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return;
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;figure&nbsp;out&nbsp;slot&nbsp;from&nbsp;VECTOR&nbsp;base=&nbsp;value&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;if(e->e_base&nbsp;==&nbsp;(caddr_t)0xBF400000)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;slot&nbsp;=&nbsp;GIO_SLOT_0;
+&nbsp;&nbsp;&nbsp;&nbsp;else&nbsp;if(e->e_base&nbsp;==&nbsp;(caddr_t)0xBF600000)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;slot&nbsp;=&nbsp;GIO_SLOT_1;
+&nbsp;&nbsp;&nbsp;&nbsp;else&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;cmn_err&nbsp;(CE_NOTE,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&ldquo;ERROR&nbsp;from&nbsp;edtinit:&nbsp;Bad&nbsp;base&nbsp;address&nbsp;%x\n&rdquo;,&nbsp;e->e_base);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return;
+&nbsp;&nbsp;&nbsp;&nbsp;}
+#if&nbsp;IP20&nbsp;/*&nbsp;for&nbsp;Indigo&nbsp;R4000,&nbsp;set&nbsp;up&nbsp;board&nbsp;as&nbsp;a&nbsp;realtime&nbsp;bus&nbsp;master&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;setgioconfig(slot,GIO64_ARB_EXP0_RT&nbsp;|&nbsp;GIO64_ARB_EXP0_MST);
+#endif
+#if&nbsp;(IP22|IP26)&nbsp;/*&nbsp;for&nbsp;Indigo2,&nbsp;set&nbsp;up&nbsp;as&nbsp;a&nbsp;pipelined,&nbsp;realtime&nbsp;bus&nbsp;master&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;setgioconfig(slot,GIO64_ARB_EXP0_RT&nbsp;|&nbsp;GIO64_ARB_EXP0_MST);
+#endif
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;Initialize&nbsp;the&nbsp;per-device&nbsp;(per-slot)&nbsp;info,&nbsp;including&nbsp;the
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;device&nbsp;addresses&nbsp;from&nbsp;the&nbsp;edt_t.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;inf&nbsp;=&nbsp;&amp;gbd_globals[GIO_SLOT_0&nbsp;?&nbsp;0&nbsp;:&nbsp;1];
+&nbsp;&nbsp;&nbsp;&nbsp;inf->gbd_device&nbsp;=&nbsp;(struct&nbsp;gbd_device&nbsp;*)e->e_base;
+&nbsp;&nbsp;&nbsp;&nbsp;inf->gbd_memory&nbsp;=&nbsp;(char&nbsp;*)e->e_base2;
+&nbsp;&nbsp;&nbsp;&nbsp;initsema(&amp;inf->use_lock,1);
+&nbsp;&nbsp;&nbsp;&nbsp;spinlock_init(&amp;inf->reg_lock,NULL);
+&nbsp;&nbsp;&nbsp;&nbsp;setgiovector(GIO_INTERRUPT_1,slot,gbdintr,0);
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(showconfig)&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;cmn_err&nbsp;(CE_CONT,&nbsp;&ldquo;gbdedtinit:&nbsp;board&nbsp;%x&nbsp;installed\n&rdquo;,&nbsp;e->e_base);
+&nbsp;&nbsp;&nbsp;&nbsp;}
+}
+/*&nbsp;OPEN:&nbsp;minor&nbsp;number&nbsp;used&nbsp;to&nbsp;select&nbsp;slot.&nbsp;Merely&nbsp;test&nbsp;that
+&nbsp;*&nbsp;the&nbsp;device&nbsp;was&nbsp;initialized.
+&nbsp;*/
+/*&nbsp;ARGSUSED&nbsp;*/
+gbdopen(dev_t&nbsp;*devp,&nbsp;int&nbsp;flag,&nbsp;int&nbsp;otyp,&nbsp;cred_t&nbsp;*crp)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;if(!&nbsp;(gbd_globals[geteminor(*devp)&amp;1].gbd_device)&nbsp;)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;ENXIO;&nbsp;&nbsp;&nbsp;/*&nbsp;board&nbsp;not&nbsp;present&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;0;&nbsp;&nbsp;&nbsp;/*&nbsp;OK&nbsp;*/
+}
+/*&nbsp;CLOSE:&nbsp;Nothing&nbsp;to&nbsp;do.&nbsp;*/
+/*&nbsp;ARGSUSED&nbsp;*/
+gbdclose(dev_t&nbsp;dev,&nbsp;int&nbsp;flag,&nbsp;int&nbsp;otyp,&nbsp;cred_t&nbsp;*crp)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;0;
+}
+#if&nbsp;(GBD_NODMA)&nbsp;/*****&nbsp;Non-DMA,&nbsp;therefore&nbsp;character,&nbsp;device&nbsp;******/
+/*&nbsp;WRITE:&nbsp;for&nbsp;character&nbsp;device&nbsp;using&nbsp;PIO&nbsp;*/
+/*&nbsp;READ&nbsp;entry&nbsp;point&nbsp;same&nbsp;except&nbsp;for&nbsp;direction&nbsp;of&nbsp;transfer&nbsp;*/
+int
+gbdwrite(dev_t&nbsp;dev,&nbsp;uio_t&nbsp;*uio)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;unit&nbsp;=&nbsp;geteminor(dev)&amp;1;
+&nbsp;&nbsp;&nbsp;&nbsp;struct&nbsp;gbd_info&nbsp;*inf&nbsp;=&nbsp;&amp;gbd_globals[unit];
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;size,&nbsp;err=0,&nbsp;lk;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;Exclude&nbsp;any&nbsp;other&nbsp;top-half&nbsp;(read/write)&nbsp;user&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;psema(&amp;inf->use_lock,PZERO)
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;while&nbsp;there&nbsp;is&nbsp;data&nbsp;to&nbsp;transfer&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;while((size=uio->uio_resid)&nbsp;>&nbsp;0)&nbsp;{
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;Transfer&nbsp;no&nbsp;more&nbsp;than&nbsp;GBD_MEMSIZE&nbsp;bytes&nbsp;per&nbsp;operation&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;size&nbsp;=&nbsp;(size&nbsp;&lt;&nbsp;GBD_MEMSIZE)&nbsp;?&nbsp;size&nbsp;:&nbsp;GBD_MEMSIZE;
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;Copy&nbsp;data&nbsp;from&nbsp;user-process&nbsp;memory&nbsp;to&nbsp;board&nbsp;memory.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;uiomove()&nbsp;updates&nbsp;uio&nbsp;fields&nbsp;and&nbsp;copies&nbsp;data
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if(!&nbsp;(err=uiomove(inf->gbd_memory,&nbsp;size,&nbsp;UIO_WRITE,&nbsp;uio))&nbsp;)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;Block&nbsp;out&nbsp;the&nbsp;interrupt&nbsp;handler&nbsp;with&nbsp;a&nbsp;spinlock,&nbsp;then
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;program&nbsp;the&nbsp;device&nbsp;to&nbsp;start&nbsp;the&nbsp;transfer.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;lk&nbsp;=&nbsp;mutex_spinlock(&amp;inf->reg_lock);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;inf->gbd_device->count&nbsp;=&nbsp;size;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;inf->gbd_device->command&nbsp;=&nbsp;GBD_GO;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;inf->gbd_state&nbsp;=&nbsp;GBD_INTR_PEND;&nbsp;/*&nbsp;validate&nbsp;an&nbsp;interrupt&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;Give&nbsp;up&nbsp;the&nbsp;spinlock&nbsp;and&nbsp;sleep&nbsp;until&nbsp;gdbintr()&nbsp;signals&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;sv_wait(&amp;inf->intr_wait,PZERO,&amp;inf->reg_lock,lk);
+&nbsp;&nbsp;&nbsp;&nbsp;}&nbsp;/*&nbsp;while(size)&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;vsema(&amp;inf->use_lock);&nbsp;/*&nbsp;let&nbsp;another&nbsp;process&nbsp;use&nbsp;board&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;err;
+}
+/*&nbsp;INTERRUPT:&nbsp;for&nbsp;PIO&nbsp;only&nbsp;board&nbsp;*/
+/*&nbsp;ARGSUSED1&nbsp;*/
+void
+gbdintr(int&nbsp;unit,&nbsp;struct&nbsp;eframe_s&nbsp;*ef)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;register&nbsp;struct&nbsp;gbd_info&nbsp;*inf&nbsp;=&nbsp;&amp;gbd_globals[unit];
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;lk;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;get&nbsp;exclusive&nbsp;use&nbsp;of&nbsp;device&nbsp;regs&nbsp;from&nbsp;upper-half&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;lk&nbsp;=&nbsp;mutex_spinlock(&amp;inf->reg_lock);
+&nbsp;&nbsp;&nbsp;&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;if&nbsp;the&nbsp;interrupt&nbsp;is&nbsp;not&nbsp;from&nbsp;our&nbsp;device,&nbsp;ignore&nbsp;it&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;if(inf->gbd_device->status&nbsp;&amp;&nbsp;GBD_INTR_PEND)&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;MISSING:&nbsp;test&nbsp;device&nbsp;status,&nbsp;clean&nbsp;up&nbsp;after&nbsp;interrupt,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;post&nbsp;errors&nbsp;into&nbsp;inf->state&nbsp;for&nbsp;upper-half&nbsp;to&nbsp;see.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;Provided&nbsp;the&nbsp;upper-half&nbsp;expected&nbsp;this,&nbsp;wake&nbsp;it&nbsp;up&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(inf->gbd_state&nbsp;&amp;&nbsp;GBD_INTR_PEND)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;sv_signal(&amp;inf->intr_wait);
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;mutex_spinunlock(&amp;inf->reg_lock,lk);
+}
+&nbsp;
+#else&nbsp;/********&nbsp;DMA&nbsp;version&nbsp;of&nbsp;driver&nbsp;************/
+
+void&nbsp;gbd_strategy(struct&nbsp;buf&nbsp;*);
+&nbsp;
+/*&nbsp;WRITE&nbsp;entry&nbsp;point&nbsp;(for&nbsp;character&nbsp;driver&nbsp;of&nbsp;DMA&nbsp;board).
+&nbsp;*&nbsp;Call&nbsp;uiophysio()&nbsp;to&nbsp;set&nbsp;up&nbsp;and&nbsp;call&nbsp;gbd_strategy&nbsp;routine,
+&nbsp;*&nbsp;where&nbsp;the&nbsp;transfer&nbsp;is&nbsp;actually&nbsp;done.
+*/
+int
+gbdwrite(dev_t&nbsp;dev,&nbsp;uio_t&nbsp;*uiop)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;uiophysio((int&nbsp;(*)())gbd_strategy,&nbsp;0,&nbsp;dev,&nbsp;B_WRITE,&nbsp;uiop);
+}
+/*&nbsp;READ&nbsp;entry&nbsp;point&nbsp;same&nbsp;except&nbsp;for&nbsp;direction&nbsp;of&nbsp;transfer&nbsp;*/
+#if&nbsp;GBD_NUM_DMA_PGS&nbsp;>&nbsp;0
+
+/*&nbsp;STRATEGY&nbsp;for&nbsp;hardware&nbsp;scatter/gather&nbsp;DMA&nbsp;support.
+&nbsp;*&nbsp;Called&nbsp;from&nbsp;gbdwrite()/gbdread()&nbsp;via&nbsp;physio().
+&nbsp;*&nbsp;Called&nbsp;from&nbsp;file-system/paging&nbsp;code&nbsp;directly.
+&nbsp;*/
+void
+gbd_strategy(register&nbsp;struct&nbsp;buf&nbsp;*bp)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;unit&nbsp;=&nbsp;geteminor(bp->b_edev)&amp;1;
+&nbsp;&nbsp;&nbsp;&nbsp;register&nbsp;struct&nbsp;gbd_info&nbsp;*inf&nbsp;=&nbsp;&amp;gbd_globals[unit];
+&nbsp;&nbsp;&nbsp;&nbsp;register&nbsp;gbd_regs&nbsp;*regs&nbsp;=&nbsp;inf->gbd_device;
+&nbsp;&nbsp;&nbsp;&nbsp;volatile&nbsp;paddr_t&nbsp;*sgregisters;
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;npages;
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;i,&nbsp;lk;
+&nbsp;&nbsp;&nbsp;&nbsp;caddr_t&nbsp;v_addr;
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;Get&nbsp;the&nbsp;kernel&nbsp;virtual&nbsp;address&nbsp;of&nbsp;the&nbsp;data.&nbsp;Note&nbsp;that
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;b_dmaaddr&nbsp;is&nbsp;NULL&nbsp;when&nbsp;the&nbsp;&nbsp;BP_ISMAPPED(bp)&nbsp;macro
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;indicates&nbsp;false;&nbsp;in&nbsp;that&nbsp;case,&nbsp;the&nbsp;field&nbsp;bp->b_pages
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;is&nbsp;a&nbsp;pointer&nbsp;to&nbsp;a&nbsp;linked&nbsp;list&nbsp;of&nbsp;pfdat&nbsp;structure
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;pointers;&nbsp;that&nbsp;saves&nbsp;creating&nbsp;a&nbsp;virtual&nbsp;mapping&nbsp;and
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;then&nbsp;decoding&nbsp;that&nbsp;mapping&nbsp;back&nbsp;to&nbsp;physical&nbsp;addresses.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;BP_ISMAPPED&nbsp;will&nbsp;never&nbsp;be&nbsp;false&nbsp;for&nbsp;character&nbsp;devices,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;only&nbsp;block&nbsp;devices.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if(!BP_ISMAPPED(bp))&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;cmn_err(CE_WARN,&nbsp;&ldquo;gbd&nbsp;driver&nbsp;can't&nbsp;handle&nbsp;unmapped&nbsp;buffers&rdquo;);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;bp->b_flags&nbsp;|=&nbsp;B_ERROR;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;iodone(bp);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return;
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;v_addr&nbsp;=&nbsp;bp->b_dmaaddr;
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;Compute&nbsp;number&nbsp;of&nbsp;pages&nbsp;affected&nbsp;by&nbsp;this&nbsp;request.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;The&nbsp;numpages()&nbsp;macro&nbsp;(sysmacros.h)&nbsp;returns&nbsp;the&nbsp;number&nbsp;of&nbsp;pages
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;that&nbsp;span&nbsp;a&nbsp;given&nbsp;length&nbsp;starting&nbsp;at&nbsp;a&nbsp;given&nbsp;address,&nbsp;allowing
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;for&nbsp;partial&nbsp;pages.&nbsp;&nbsp;Unrealistically,&nbsp;we&nbsp;limit&nbsp;this&nbsp;to&nbsp;the
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;number&nbsp;of&nbsp;scatter/gather&nbsp;registers&nbsp;on&nbsp;board.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;Note&nbsp;that&nbsp;this&nbsp;sample&nbsp;driver&nbsp;doesn't&nbsp;handle&nbsp;the
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;case&nbsp;of&nbsp;requests&nbsp;>&nbsp;than&nbsp;#&nbsp;of&nbsp;registers!
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;npages&nbsp;=&nbsp;numpages&nbsp;(v_addr,&nbsp;bp->b_bcount);
+&nbsp;&nbsp;&nbsp;&nbsp;if(npages&nbsp;>&nbsp;GBD_NUM_DMA_PGS)&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;bp->b_resid&nbsp;=&nbsp;IO_NBPP&nbsp;*&nbsp;(npages&nbsp;-&nbsp;GBD_NUM_DMA_PGS);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;npages&nbsp;=&nbsp;GBD_NUM_DMA_PGS;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;cmn_err(CE_WARN,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&ldquo;request&nbsp;too&nbsp;large,&nbsp;only&nbsp;%d&nbsp;pages&nbsp;max&rdquo;,&nbsp;npages);
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;Get&nbsp;exclusive&nbsp;upper-half&nbsp;use&nbsp;of&nbsp;device.&nbsp;The&nbsp;sema&nbsp;is&nbsp;released
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;wherever&nbsp;iodone()&nbsp;is&nbsp;called,&nbsp;here&nbsp;or&nbsp;in&nbsp;the&nbsp;int&nbsp;handler.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;psema(&amp;inf->use_lock,PZERO)
+&nbsp;&nbsp;&nbsp;&nbsp;inf->curbp&nbsp;=&nbsp;bp;
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;Get&nbsp;exclusive&nbsp;use&nbsp;of&nbsp;the&nbsp;device&nbsp;regs,&nbsp;blocking&nbsp;the&nbsp;int&nbsp;handler&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;lk&nbsp;=&nbsp;mutex_spinlock(&amp;inf->reg_lock);
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;MISSING:&nbsp;set&nbsp;up&nbsp;board&nbsp;to&nbsp;transfer&nbsp;npages&nbsp;discreet&nbsp;segments.&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;Get&nbsp;address&nbsp;of&nbsp;the&nbsp;scatter-gather&nbsp;registers&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;sgregisters&nbsp;=&nbsp;regs->sgregisters;
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;Provide&nbsp;the&nbsp;beginning&nbsp;byte&nbsp;offset&nbsp;and&nbsp;count&nbsp;to&nbsp;the&nbsp;device.&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;regs->offset&nbsp;=&nbsp;io_poff(bp->b_dmaaddr); /* in immu.h */
+&nbsp;&nbsp;&nbsp;&nbsp;regs->count&nbsp;=&nbsp;(IO_NBPP&nbsp;-&nbsp;inf->gbd_device->offset)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+&nbsp;(npages-1)*IO_NBPP;
+&nbsp;&nbsp;&nbsp;&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;Translate&nbsp;the&nbsp;virtual&nbsp;address&nbsp;of&nbsp;each&nbsp;page&nbsp;to&nbsp;a
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;physical&nbsp;page&nbsp;number&nbsp;and&nbsp;load&nbsp;it&nbsp;into&nbsp;the&nbsp;next
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;scatter-gather&nbsp;register.&nbsp;&nbsp;The&nbsp;btoct(K)&nbsp;macro
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;converts&nbsp;the&nbsp;byte&nbsp;value&nbsp;to&nbsp;a&nbsp;page&nbsp;value&nbsp;after
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;rounding&nbsp;down&nbsp;the&nbsp;byte&nbsp;value&nbsp;to&nbsp;a&nbsp;full&nbsp;page.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;(i&nbsp;=&nbsp;0;&nbsp;i&nbsp;&lt;&nbsp;npages;&nbsp;i++)&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*sgregisters++&nbsp;=&nbsp;btoct(kvtophys(v_addr));
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;v_addr&nbsp;+=&nbsp;IO_NBPP;
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;((bp->b_flags&nbsp;&amp;&nbsp;B_READ)&nbsp;==&nbsp;0)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;regs->direction&nbsp;=&nbsp;GBD_WRITE;
+&nbsp;&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;regs->direction&nbsp;=&nbsp;GBD_READ;
+&nbsp;&nbsp;&nbsp;&nbsp;regs->command&nbsp;=&nbsp;GBD_GO;&nbsp;/*&nbsp;start&nbsp;DMA&nbsp;*/
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;release&nbsp;use&nbsp;of&nbsp;the&nbsp;device&nbsp;regs&nbsp;to&nbsp;the&nbsp;interrupt&nbsp;handler&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;mutex_spinunlock(inf->reg_lock,lk);
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;and&nbsp;return;&nbsp;upper&nbsp;layers&nbsp;of&nbsp;kernel&nbsp;wait&nbsp;for&nbsp;iodone(bp)&nbsp;*/
+}
+&nbsp;
+/*&nbsp;INTERRUPT:&nbsp;for&nbsp;hardware&nbsp;DMA&nbsp;support.&nbsp;This&nbsp;is&nbsp;over-simplified
+&nbsp;*&nbsp;because&nbsp;the&nbsp;above&nbsp;strategy&nbsp;routine&nbsp;never&nbsp;accepts&nbsp;a&nbsp;transfer
+&nbsp;*&nbsp;larger&nbsp;than&nbsp;the&nbsp;device&nbsp;can&nbsp;handle&nbsp;in&nbsp;a&nbsp;single&nbsp;operation.
+&nbsp;*/
+/*&nbsp;ARGSUSED1&nbsp;*/
+void
+gbdintr(int&nbsp;unit,&nbsp;struct&nbsp;eframe_s&nbsp;*ef)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;register&nbsp;struct&nbsp;gbd_info&nbsp;*inf&nbsp;=&nbsp;&amp;gbd_globals[unit];
+&nbsp;&nbsp;&nbsp;&nbsp;register&nbsp;gbd_regs&nbsp;*regs&nbsp;=&nbsp;inf->gbd_device;
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;error&nbsp;=&nbsp;0;
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;lk;
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;get&nbsp;exclusive&nbsp;use&nbsp;if&nbsp;device&nbsp;regs&nbsp;from&nbsp;upper-half&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;lk&nbsp;=&nbsp;mutex_spinlock(&amp;inf->reg_lock);
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;If&nbsp;interrupt&nbsp;was&nbsp;not&nbsp;from&nbsp;this&nbsp;device,&nbsp;exit&nbsp;quick&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!&nbsp;(regs->status&nbsp;&amp;&nbsp;GBD_INTR_PEND)&nbsp;)&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;mutex_spinunlock(&amp;inf->reg_lock,lk);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return;
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;MISSING:&nbsp;read&nbsp;board&nbsp;registers,&nbsp;clear&nbsp;interrupt,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;and&nbsp;note&nbsp;any&nbsp;errors&nbsp;in&nbsp;the&nbsp;&ldquo;error&rdquo;&nbsp;variable.&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;if(error)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;inf->curbp->b_flags&nbsp;|=&nbsp;B_ERROR;
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;release&nbsp;lock&nbsp;on&nbsp;exclusive&nbsp;use&nbsp;of&nbsp;device&nbsp;regs&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;mutex_spinunlock(&amp;inf->reg_lock,lk);
+&nbsp;&nbsp;&nbsp;&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;wake&nbsp;up&nbsp;any&nbsp;kernel/file-system&nbsp;waiting&nbsp;for&nbsp;this&nbsp;I/O&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;iodone(inf->curbp);
+&nbsp;&nbsp;&nbsp;&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;unlock&nbsp;use&nbsp;of&nbsp;device&nbsp;to&nbsp;other&nbsp;upper-half&nbsp;driver&nbsp;code&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;vsema(&amp;inf->use_lock);
+}
+&nbsp;
+#else&nbsp;/******&nbsp;&nbsp;GBD_NUM_DMA_PGS&nbsp;==&nbsp;0;&nbsp;no&nbsp;hardware&nbsp;scatter/gather&nbsp;******/
+&nbsp;
+/*&nbsp;STRATEGY:&nbsp;for&nbsp;software-controlled&nbsp;scatter/gather.
+&nbsp;*&nbsp;Called&nbsp;from&nbsp;the&nbsp;gbdwrite()&nbsp;routine&nbsp;via&nbsp;uiophysio().
+&nbsp;*/
+void
+gbd_strategy(struct&nbsp;buf&nbsp;*bp)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;unit&nbsp;=&nbsp;geteminor(bp->b_edev)&amp;1;
+&nbsp;&nbsp;&nbsp;&nbsp;register&nbsp;struct&nbsp;gbd_info&nbsp;*inf&nbsp;=&nbsp;&amp;gbd_globals[unit];
+&nbsp;&nbsp;&nbsp;&nbsp;register&nbsp;gbd_regs&nbsp;*regs&nbsp;=&nbsp;inf->gbd_device;
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;lk;
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;Get&nbsp;the&nbsp;kernel&nbsp;virtual&nbsp;address&nbsp;of&nbsp;the&nbsp;data;&nbsp;note
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;b_dmaaddr&nbsp;may&nbsp;be&nbsp;NULL&nbsp;if&nbsp;the&nbsp;&nbsp;BP_ISMAPPED(bp)&nbsp;macro
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;indicates&nbsp;false;&nbsp;in&nbsp;that&nbsp;case,&nbsp;the&nbsp;field&nbsp;bp->b_pages
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;is&nbsp;a&nbsp;pointer&nbsp;to&nbsp;a&nbsp;linked&nbsp;list&nbsp;of&nbsp;pfdat&nbsp;structure
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;pointers;&nbsp;that&nbsp;saves&nbsp;creating&nbsp;a&nbsp;virtual&nbsp;mapping&nbsp;and
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;then&nbsp;decoding&nbsp;that&nbsp;mapping&nbsp;back&nbsp;to&nbsp;physical&nbsp;addresses.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;BP_ISMAPPED&nbsp;will&nbsp;never&nbsp;be&nbsp;false&nbsp;for&nbsp;character&nbsp;devices,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;only&nbsp;block&nbsp;devices.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if(!BP_ISMAPPED(bp))&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;cmn_err(CE_WARN,&nbsp;&ldquo;gbd&nbsp;driver&nbsp;can't&nbsp;handle&nbsp;unmapped&nbsp;buffers&rdquo;);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;bp->b_flags&nbsp;|=&nbsp;B_ERROR;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;iodone(bp);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return;
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;Get&nbsp;exclusive&nbsp;upper-half&nbsp;use&nbsp;of&nbsp;device.&nbsp;The&nbsp;sema&nbsp;is&nbsp;released
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;wherever&nbsp;iodone()&nbsp;is&nbsp;called,&nbsp;here&nbsp;or&nbsp;in&nbsp;the&nbsp;int&nbsp;handler.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;psema(&amp;inf->use_lock,PZERO)
+&nbsp;&nbsp;&nbsp;&nbsp;inf->curbp&nbsp;=&nbsp;bp;
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;Initialize&nbsp;the&nbsp;current&nbsp;transfer&nbsp;address&nbsp;and&nbsp;count.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;The&nbsp;first&nbsp;transfer&nbsp;should&nbsp;finish&nbsp;the&nbsp;rest&nbsp;of&nbsp;the
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;page,&nbsp;but&nbsp;do&nbsp;no&nbsp;more&nbsp;than&nbsp;the&nbsp;total&nbsp;byte&nbsp;count.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;inf->curaddr&nbsp;=&nbsp;bp->b_dmaaddr;
+&nbsp;&nbsp;&nbsp;&nbsp;inf->totcount&nbsp;=&nbsp;bp->b_bcount;
+&nbsp;&nbsp;&nbsp;&nbsp;inf->curcount&nbsp;=&nbsp;IO_NBPP&nbsp;-&nbsp;io_poff(inf->curaddr);
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(bp->b_bcount&nbsp;&lt;&nbsp;inf->curcount)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;inf->curcount&nbsp;=&nbsp;bp->b_bcount;
+&nbsp;&nbsp;&nbsp;&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;Get&nbsp;exclusive&nbsp;use&nbsp;of&nbsp;the&nbsp;device&nbsp;regs&nbsp;and&nbsp;start&nbsp;the&nbsp;transfer
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;of&nbsp;the&nbsp;first/only&nbsp;segment&nbsp;of&nbsp;data.&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;lk&nbsp;=&nbsp;mutex_spinlock(&amp;inf->reg_lock);
+&nbsp;&nbsp;&nbsp;&nbsp;regs->startaddr&nbsp;=&nbsp;kvtophys(inf->curaddr);
+&nbsp;&nbsp;&nbsp;&nbsp;regs->count&nbsp;=&nbsp;inf->curcount;
+&nbsp;&nbsp;&nbsp;&nbsp;regs->direction&nbsp;=&nbsp;(bp->b_flags&nbsp;&amp;&nbsp;B_READ)&nbsp;?&nbsp;GBD_READ&nbsp;:&nbsp;GBD_WRITE;
+&nbsp;&nbsp;&nbsp;&nbsp;regs->command&nbsp;=&nbsp;GBD_GO;&nbsp;/*&nbsp;start&nbsp;DMA&nbsp;*/
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;release&nbsp;use&nbsp;of&nbsp;the&nbsp;device&nbsp;regs&nbsp;to&nbsp;the&nbsp;interrupt&nbsp;handler&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;mutex_spinunlock(inf->reg_lock,lk);
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;and&nbsp;return;&nbsp;upper&nbsp;layers&nbsp;of&nbsp;kernel&nbsp;wait&nbsp;for&nbsp;iodone(bp)&nbsp;*/
+}
+&nbsp;
+/*&nbsp;INTERRUPT:&nbsp;for&nbsp;software&nbsp;scatter/gather.&nbsp;This&nbsp;version&nbsp;is&nbsp;more&nbsp;typical
+&nbsp;*&nbsp;of&nbsp;boards&nbsp;that&nbsp;do&nbsp;have&nbsp;DMA,&nbsp;and&nbsp;more&nbsp;typical&nbsp;of&nbsp;devices&nbsp;that&nbsp;support
+&nbsp;*&nbsp;block&nbsp;i/o,&nbsp;as&nbsp;opposed&nbsp;to&nbsp;character&nbsp;i/o.
+&nbsp;*/
+/*&nbsp;ARGSUSED1&nbsp;*/
+void
+gbdintr(int&nbsp;unit,&nbsp;struct&nbsp;eframe_s&nbsp;*ef)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;register&nbsp;struct&nbsp;gbd_info&nbsp;*inf&nbsp;=&nbsp;&amp;gbd_globals[unit];
+&nbsp;&nbsp;&nbsp;&nbsp;register&nbsp;gbd_regs&nbsp;*regs&nbsp;=&nbsp;inf->gbd_device;
+&nbsp;&nbsp;&nbsp;&nbsp;register&nbsp;buf_t&nbsp;*bp&nbsp;=&nbsp;inf->curbp;
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;error&nbsp;=&nbsp;0;
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;lk;
+&nbsp;
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;get&nbsp;exclusive&nbsp;use&nbsp;if&nbsp;device&nbsp;regs&nbsp;from&nbsp;upper-half&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;lk&nbsp;=&nbsp;mutex_spinlock(&amp;inf->reg_lock);
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;If&nbsp;interrupt&nbsp;was&nbsp;not&nbsp;from&nbsp;this&nbsp;device,&nbsp;exit&nbsp;quick&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!&nbsp;(regs->status&nbsp;&amp;&nbsp;GBD_INTR_PEND)&nbsp;)&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;mutex_spinunlock(&amp;inf->reg_lock,lk);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return;
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;MISSING:&nbsp;read&nbsp;board&nbsp;registers,&nbsp;clear&nbsp;interrupt,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;and&nbsp;note&nbsp;any&nbsp;errors&nbsp;in&nbsp;the&nbsp;&ldquo;error&rdquo;&nbsp;variable.&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;if(error)&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;bp->b_resid&nbsp;=&nbsp;inf->totcount;&nbsp;/*&nbsp;show&nbsp;bytes&nbsp;undone&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;bp->b_flags&nbsp;|=&nbsp;B_ERROR;&nbsp;/*&nbsp;flag&nbsp;error&nbsp;in&nbsp;transfer&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;iodone(bp);&nbsp;/*&nbsp;we&nbsp;are&nbsp;done,&nbsp;tell&nbsp;upper&nbsp;layers&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;vsema(&amp;inf->use_lock);&nbsp;/*&nbsp;make&nbsp;device&nbsp;available&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;else&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;Note&nbsp;the&nbsp;successful&nbsp;transfer&nbsp;of&nbsp;one&nbsp;segment.&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;inf->curaddr&nbsp;+=&nbsp;inf->curcount;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;inf->totcount&nbsp;-=&nbsp;inf->curcount;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if(inf->totcount&nbsp;&lt;=&nbsp;0)&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;iodone(bp);&nbsp;/*&nbsp;we&nbsp;are&nbsp;done,&nbsp;tell&nbsp;upper&nbsp;layers&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;vsema(&amp;inf->use_lock);&nbsp;/*&nbsp;make&nbsp;device&nbsp;available&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;else&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;More&nbsp;data&nbsp;to&nbsp;transfer.&nbsp;Reprogram&nbsp;the&nbsp;board&nbsp;for
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;the&nbsp;next&nbsp;segment&nbsp;and&nbsp;start&nbsp;the&nbsp;next&nbsp;DMA.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;inf->curcount&nbsp;=&nbsp;(inf->totcount&nbsp;&lt;&nbsp;IO_NBPP)&nbsp;?&nbsp;inf->totcount&nbsp;:&nbsp;IO_NBPP;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;regs->startaddr&nbsp;=&nbsp;kvtophys(inf->curaddr);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;regs->count&nbsp;=&nbsp;inf->curcount;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;regs->direction&nbsp;=&nbsp;(bp->b_flags&nbsp;&amp;&nbsp;B_READ)&nbsp;?&nbsp;GBD_READ&nbsp;:&nbsp;GBD_WRITE;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;regs->command&nbsp;=&nbsp;GBD_GO;&nbsp;/*&nbsp;start&nbsp;next&nbsp;DMA&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;release&nbsp;lock&nbsp;on&nbsp;exclusive&nbsp;use&nbsp;of&nbsp;device&nbsp;regs&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;mutex_spinunlock(&amp;inf->reg_lock,lk);
+}
+#endif&nbsp;/*&nbsp;&nbsp;GBD_NUM_DMA_PGS&nbsp;*/
+#endif /* GBD_NODMA */
+</CODE>
+<PARAGRAPH></PARAGRAPH>
+<PARAGRAPH></PARAGRAPH>
+</SECTION1>
+</CHAPTER>

@@ -1,0 +1,148 @@
+#!/sbin/sh
+#ident	"$Revision: 1.7 $"
+
+PROG=`basename $0`
+USAGE="Usage: $PROG [-abidir DIR -liblist LIBRARY_LIST -required -abi] file"
+CHECKER_ABIDIR=${CHECKER_ABIDIR:-/usr/lib/abi/data}
+TMPDIR=${TMPDIR:-/var/tmp}
+ENTRYNAMES=$TMPDIR/entrynames.$$
+PUBLICNAMES=$TMPDIR/publicnames.$$
+CHECKFILE=$TMPDIR/check.$$
+ABINAMES=$TMPDIR/abinames.$$
+REQNAMES=$TMPDIR/reqnames.$$
+TMPOUTPUT=$TMPDIR/tmpoutput.$$
+LIBLIST_GIVEN=0
+REQUIRED=1
+ABI=1
+ELFDUMP=elfdump
+
+trap "rm -f $ENTRYNAMES $PUBLICNAMES $CHECKFILE $ABINAMES $REQNAMES $TMPOUTPUT; exit 1" 1 2 13 15
+
+while [ $# -gt 1 ]
+do
+	case "$1" in
+	-abidir)
+		shift;
+		if [ $# -gt 1 ]
+		then
+			CHECKER_ABIDIR=$1; shift
+		else
+			echo $USAGE >&2 ;
+			exit 1;
+		fi;;
+	-liblist)
+		LIBLIST_GIVEN=1; shift
+		if [ $# -gt 1 ]
+		then
+			LIBLIST=$1; shift
+		else
+			echo $USAGE >&2 ;
+			exit 1;
+		fi;;
+	-required)
+		REQUIRED=1;
+		ABI=0;
+		shift;;
+	-abi)
+		REQUIRED=0;
+		ABI=1;
+		shift;;
+	*)
+		echo $USAGE >&2 ;
+		exit 1;;
+	esac
+done
+
+if [ $# -ne 1 ]
+then
+	echo $USAGE >&2
+	exit 1
+fi
+
+if [ -f $1 ]
+then
+	file $1 2>&1 | grep 'not stripped' > /dev/null 2>&1
+	if [ $? -ne 0 ] ; then
+		echo "$PROG: Cannot process stripped binary $1" >&2
+		exit 1
+	fi
+else
+	echo "$PROG: cannot access file $1" >&2
+	exit 1
+fi
+
+if [ $REQUIRED -eq 1 ]
+then
+	nm -B -p $1 | sed -e "s/^[0-9A-Za-z]* //p" -e "s/^[ 	]*//p" | awk '\
+	BEGIN { prev = 1 } \
+	NF == 0 { prev = 0 } \
+	NF > 0 { \
+		if (prev != 0) { \
+			print $0 \
+		} else { \
+			prev = 1 \
+		} \
+	}' | awk ' \
+		{ \
+			if (($1 == "T") || \
+				($1 == "D") || \
+				($1 == "B") || \
+				($1 == "A") || \
+				($1 == "G") || \
+				($1 == "S") || \
+				($1 == "R") || \
+				($1 == "C") || \
+				($1 == "E")) { \
+				print $2 \
+			} \
+		}' | sort -u | egrep -v "^\.bss$|^\.data$|^\.rdata$|^\.sbss$|^\.sdata$|^\.text$" > $PUBLICNAMES
+fi
+
+if [ $ABI -eq 1 ]
+then
+	nm -B -pu $1 | awk '{print $3}' | sort -u | egrep -v "^_fdata$" | sed '/^$/d' > $ENTRYNAMES
+
+	rm -rf $CHECKFILE
+	touch $CHECKFILE
+	if [ $LIBLIST_GIVEN -eq 0 ]
+	then
+		LIBLIST=`$ELFDUMP -ll $1 | awk '{ print $1 }'`
+	fi
+
+	for LIBRARY in $LIBLIST
+	do
+		egrep -v "^#" $CHECKER_ABIDIR/`basename $LIBRARY`.names >> $CHECKFILE
+	done
+
+	sort -u $CHECKFILE > $ABINAMES
+fi
+
+if [ $REQUIRED -eq 1 ]
+then
+	egrep -v "^#" $CHECKER_ABIDIR/required.names > $REQNAMES
+	comm -23 $REQNAMES $PUBLICNAMES > $TMPOUTPUT
+	if [ `wc -l < $TMPOUTPUT` -ne 0 ]
+	then
+		if [ $ABI -eq 1 ]
+		then
+			echo "The following symbols required by the ABI are missing:"
+		fi
+		cat $TMPOUTPUT
+	fi
+fi
+
+if [ $ABI -eq 1 ]
+then
+	comm -23 $ENTRYNAMES $ABINAMES > $TMPOUTPUT
+	if [ `wc -l < $TMPOUTPUT` -ne 0 ]
+	then
+		if [ $REQUIRED -eq 1 ]
+		then
+			echo "\nThe following external references are not defined by the ABI:"
+		fi
+		cat $TMPOUTPUT
+	fi
+fi
+
+
+rm -f $ENTRYNAMES $PUBLICNAMES $CHECKFILE $ABINAMES $REQNAMES $TMPOUTPUT

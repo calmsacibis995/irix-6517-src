@@ -1,0 +1,307 @@
+'\"macro stdmacro
+.TH MT 1
+.SH NAME
+mt \- magnetic tape manipulating program
+.SH SYNOPSIS
+.B mt
+[
+.B \-f
+.BR tapename
+]
+command
+[ count ]
+.br
+.B mt
+[
+.B \-t
+.BR tapename
+]
+command
+[ count ]
+.SH DESCRIPTION
+.I mt
+is used to give commands to the magnetic tape drives.
+By default,
+.I mt
+performs the requested operation using
+.IR /dev/nrtape .
+Normally the operations are performed once.
+Some operations may be performed multiple times by specifying
+.IR count .
+For all others,
+.IR count
+is ignored.
+.I count
+is parsed with the
+.IR strtol (3)
+library routine, which means that values with leading 0's are taken
+as octal, those with leading 0x or 0x are taken to be hex, and other's
+are taken to be decimal.
+.PP
+To use an alternate device, one of the options
+.B \-f
+.BR tapename
+or
+.B \-t
+.BR tapename
+may be specified.
+If one of these options is not used, then
+.I mt
+will check for an environment variable
+.B TAPE
+and use that, if set.  Otherwise the default device,
+.I /dev/nrtape
+is used.
+.PP
+The
+.BR tapename
+field can also reference a remote tape device. A remote
+tape device name has the form:
+.sp
+.ti +0.5i
+.IR [user @ ] system:/dev/???
+.sp
+Where
+.I system
+is the remote system,
+.I /dev/???
+is the particular drive on the remote system (raw,
+rewinding, non-rewinding, etc.),
+and the optional
+.I user
+is the login name to be used
+on the remote system (the default is the current login name).
+The interface requires that the device portion of the name start with 
+.I /dev
+in order to be considered as a potential remote device.
+.PP
+Note that when using a remote tape device, many commands may not
+be supported by machines not running IRIX, and the meaning of some
+of the status and position bits for the
+.B status
+command may differ.
+.PP
+If the rewind device is used, some commands are (long)
+null operations.  In particular, the 
+.B feom
+and
+.B fsf
+commands will result in the tape being positioned at BOT when the rewind
+device is used, rather than the requested position.
+.PP
+The available commands are listed below.  Only as many
+characters as are required to uniquely identify a command
+need be specified.  Note that not all commands are implemented
+for all devices.  For most of the commands that accept a count,
+the default is 1, if not specified.  Not all commands are
+implemented by all devices or device drivers.  Some may return
+an error, others may return with no error, but not do anything
+(such as attempting to retension a tape on a DAT drive).
+.PP
+For those cases where the description seems unclear, it may
+be helpful to refer to the comments in
+.BR /usr/include/sys/mtio.h .
+.PP
+.I mt
+returns a 0 exit status when the operation was successful,
+a 1 if a command was unrecognized,
+and a 2 if a operation failed.
+.I mt
+without any arguments defaults to
+.BR help .
+.sp
+.TP
+.B weof
+Write 
+.I count
+end-of-file marks at the current position on the tape.
+.TP
+.B wsetmk
+Write 
+.I count
+setmarks at the current position on the tape; currently
+only supported for DAT, setmarks are intended for
+grouping tape files into sets.
+.TP
+.B fsf
+Forward space
+.I count
+tape files.  The resulting position is on the EOT side of the filemark.
+.TP
+.B fsr
+Forward space 
+.I count
+records (blocks).
+.TP
+.B bsf
+Backspace
+.I count
+tape files.  The resulting position is on the BOT side of the filemark.
+.TP
+.B bsr
+Backspace 
+.I count
+records (blocks).
+.TP
+.B spsetmk
+space 
+.I count
+setmarks.  The count is negative to space towards BOT, and
+positive to space towards EOT.
+.TP
+.B rewind
+Rewind the tape to BOT, or in the case of partitioned tapes, to the
+beginning of the current partition (it does NOT change partitions).
+.TP
+.B sppart
+Space to the given partition.  Currently only supported for DAT tape.
+The resulting position is the beginning of the partition, if it exists.
+Only partitions 0 and 1 are supported for DDS format DAT tapes.
+Partition 1 is the one closest to BOT.  Once within a partition,
+all other commands (except sppart or mkpart) apply to that partition
+only, including rewind, erase, and feom.
+.TP
+.B mkpart
+Create a partitioned tape.  Currently only supported for DAT tape.
+The argument specifies the size in megabytes of the partition closest
+to BOT, which is known as partition 1.  That part of the tape is written
+and checked for errors.  This is intended primarily so that tape directories
+may be written at the beginning of the tape with no possibility of overwriting
+the primary data on the tape.  An argument of 0 creates a single partition
+tape again.
+.TP
+.B feom
+Forward space to end of recorded data.
+This allows appending new tape files to a tape that already
+contains data.  For partitioned tapes, positions to the end of
+recorded data in the current partition.
+.TP
+.B offline
+Rewind and unload the tape from the drives heads, allowing removal
+of the tape.  The tape is not ejected for most drive types.  Use the
+.B unload
+option to force ejection (for drives that support ejection or
+similar behavior; not all drives do).
+.TP
+.B unload
+Inform  the drive it is OK for the tape to be removed.  This is
+meaningful only for drives such as the 8mm drive that enable and disable
+the eject button under software control.  Some drives will otherwise
+not allow tape removal if the tape hasn't been previously rewound.
+If the drive supports it, the tape is ejected.
+.TP
+.B erase
+Erase from current position to EOT.  This can be very slow for some
+tape drives (up to 2 hours for 8mm tape drives with 2.3Gb capacity).
+Note that for QIC drives,
+.B all
+tracks are erased simultaneously (QIC writes in serpentine fashion,
+with anywhere from 9-30 tracks, currently).  This means that one should
+not expect to be able to erase just the "tail end" of a QIC tape, without
+losing most, if not all, of the data on the tape.  The erase function
+is not supported on DAT drives when they are in audio mode. The erase 
+function is not supported on Ampex DST drives.
+.TP
+.B exist
+Exit with status 0 if the drive exists, otherwise non-zero; this is
+primarily for use in scripts.
+.TP
+.B recerron
+Enable soft error reporting for drives that are very verbose about
+them, such as Cipher 540S; this persists until explicitly turned off.
+The default is
+.BR recerroff .
+.TP
+.B recerroff
+Disable soft error reporting for drives that are very verbose about
+them, such as Cipher 540S.  This is the default behavior.
+.TP
+.B sili
+Suppress illegal length indicator (this occurs on tapes like the
+8mm tape drive when a request is made to read fewer bytes than
+a block was written with, when in variable block mode).
+The default is to return a short count, when set, no short count
+will be returned, and the rest of the data in the block will be
+skipped.  This is off by default.  This persists until explicitly
+turned off or the tape is changed.
+.TP
+.B eili
+Reverses the effect of
+.B sili
+(returns to default).
+.TP
+.B audio
+Set the tape device to be in audio mode if the argument is non-zero,
+or in data mode (the default) if it is zero.  This is currently supported
+only for DAT tapes, and allows the transfer of digital audio music
+to and from the drive over the SCSI bus.  In this mode, many of the
+data commands, such as weof are not allowed.  The variable blocksize
+tape device should always be used when doing i/o in audio mode.
+The other tape parameters, such as recording frequency, program number,
+etc. must be transferred to the drive as part of the data stream.  In
+addition, rewinds and seeks return immediately in audio mode, and further
+opens will block until they are complete.  See the
+.IR tps (7m)
+manual page for more information.
+.TP
+.B seek
+Seek to the block given as the argument.  For multiple partition tapes,
+this is relative to start of partition, otherwise to BOT.  When in audio
+mode, this specifies the program number (0 - 799) rather than a block
+number. The argument block number should be provided as a SCSI logical
+block number for SCSI tape drives, except for the STK drives, for which 
+the argument is the block number in vendor unique format.
+.TP
+.B status
+Print status information about the tape unit. It is not necessary to have
+media physically loaded to obtain status.
+The position information from the
+.I mt_dposn
+field of the structure returned by the
+.B MTIOCGET
+is printed for all drive types.
+For
+.B tps
+(SCSI) drives, status information from the
+.I mt_erreg
+is also printed, which gives addition information about tape status.
+The current block position provided is the SCSI logical block address 
+in all cases, except for the STK drives, which report the position 
+in vendor unique block number format.
+The numeric field "Status" contains the mt_dposn bits in the low
+16 bits, and the mt_erreg values in the upper 16 bits.
+These bits are defined in
+.IR /usr/include/sys/tpsc.h .
+.sp 1
+The meaning of the bits that are driver specific may vary from release
+to release, and are primarily useful when reporting tape problems
+to the customer support organization. 
+.TP
+.B blksize
+Print the recommended block size for io, which is used by tar, cpio,
+bru, etc.  A tape cartridge need
+not be physically loaded to obtain default block size, except that
+current block sizes will not be accurate in this case.
+The maximum, minimum, and current blocksizes are also reported; they may
+all be the same if the drive does not support variable block sizes.
+.TP
+.B setblksz
+Sets the block size to be used when in fixed blocksize mode.  Most drives
+that support variable sized blocks also support use of different sized
+blocks in the fixed block mode.  For example, this could be used to
+read 8 mm tapes written with a fixed block size of 512 bytes, rather than
+1024, while still reading more than 512 bytes per system call.  If this
+wasn't done, tape errors would occur.  This size remains set until the next tape
+change, or until the drive is used in variable block mode.
+.TP
+.B retension
+Retension the tape in the drive.  This may be a null operation on
+some drives, such as DAT.
+.TP
+.B help
+Print a summary of the available options.
+.SH FILES
+.br
+/dev/nrtape	default (no rewind) tape device
+.SH "SEE ALSO"
+mtio(7), rmt(1M), rmtops(3), tps(7m)

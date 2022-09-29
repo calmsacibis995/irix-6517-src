@@ -1,0 +1,1502 @@
+#!/bin/sh 
+# $Revision: 1.1 $
+# $Date: 1996/04/15 21:39:58 $
+#
+#****************************************************************
+# File:	    sinead.engr:/usr/people/guest/acceptance 
+# 	    tao.engr:/usr/tmp/acceptance 
+# Author:   Sue Liu
+#           Jerry Wei
+# function: This script file is used as the basic acceptance test
+#           for sherwood alpha release, this script file
+#           must be run successfully in order to announce the
+#	    alpha to engineer.
+# Note:     1. To run this file, you must login the system as root
+#	    2. To run it just do ./acceptance or sh acceptance or
+#	       sh -x acceptance
+#	    3. The result log is in /usr/tmp/accept.log, the error log
+#	       is in /usr/tmp/accept_err.log
+#	    4. When the program ask you to confirm restart tellwm
+#	       if you have InteractivePlacement set to F already
+#	       you can enter cancel selection.
+#	    5. If you have a tape in the tape drive, and you need
+#	       the content of the tape, replace it with other tape
+#	       that you can abuse.
+#	    6. If you run this file and feel it's not enough, please
+#	       add more tests and mail me the information. I will
+#	       incorporate them into.
+#	    7. /usr/tmp/alpha is a program which extract the
+#	       software installation alpha number
+#	    8. You can turn on gtst by uncomment rungtst line
+#	    9. You can turn on netls by uncomment testnetls line
+#           10. If you interrupt this program during its run, program
+#	       will automaticlly catch the signal and do system enviroment
+#  	       restore, but try not aviod this anyway.
+#	    11. If you also copyed loadres, then the test summary of the
+#	       test result will be sent to database.  (Be sure either edit
+#	       loadres to change the OWNER variable to your login name or
+#	       set environment variable OWNER, so that we know who did the
+#	       test.)
+#	    12. Acceptance was modified by using exectest to run each test,
+#	       so it will be easier to add test.
+#*****************************************************************
+#
+HOST=`hostname`
+N=1
+FN=0
+ACCLOG=/usr/tmp/accept.log
+ERRLOG=/usr/tmp/accept_err.log
+EXT_MACH=sinead.engr
+CYP_PATH=$EXT_MACH:/TS/testsuites/sanity/sherwood/tests
+EXT_FILE_PATH=$EXT_MACH:/TS/testsuites/sanity/sherwood/tests/accept_files
+JUNK1=/usr/tmp/junk1
+JUNK2=/usr/tmp/junk2
+JUNKD=/usr/tmp/junkdiff
+MAILDEST=${MAILDEST:=jgrisham@engr.sgi.com}
+COREDUMP=0
+STDACCEPT=/TS/testsuites/sanity/sherwood/tests/acceptance
+#
+
+# function to move the core file, if it exists
+#
+movecore () {
+	if [ -f /usr/tmp/core ]
+  	then
+        core_id=`file core | sed "s/.* \'//" | sed "s/\'//g" `
+       	mv /usr/tmp/core core.$core_id
+	FAIL="T"
+	COREDUMP=`expr $COREDUMP + 1`
+	echo "test $N : $core_id got core dump" >> $ERRLOG
+    	fi
+}
+
+restore_env() {
+	if [ -f /.Xresources.old ]; then
+	    mv /.Xresources.old /.Xresources 2> /dev/null
+	    /usr/bin/X11/xrdb -load /.Xresources 2> /dev/null
+	else
+	    rm -f /.Xresources
+	fi
+#	mv /usr/lib/aliases.old /usr/lib/aliases 2> /dev/null
+	umount /usr/tmp/testlocal 2> /dev/null
+	rmdir /usr/tmp/testlocal 2> /dev/null
+	rm -f /usr/lib/libc.so.1.pixie
+	rm -f /usr/tmp/dumpOK
+	echo done !!!
+}
+
+# function to reset local variables before each test
+resetallvar() {
+    TNAME=
+    TCMD=
+    TCMD2=
+    RET="0"
+    RET2="0"
+    FAIL=
+    SLEEP=
+    CLEANCMD=
+    PREREQ=
+    GRAPHICS=
+    N64=
+    KILL=
+    CHKWIN=
+    WINSTR=
+    ERRWIN=
+    LOOP=1
+    NEEDTAPE=
+    COMP1=
+    COMP2=
+    DISKREQ=
+}
+
+# function to execute each test
+exectest() {
+    if [ -z "$TNAME" -o -z "$TCMD" ] ; then return; fi
+    if [ "$PREREQ" ] ; then
+	preq=`echo $PREREQ | cut -f1 -d' '`
+	while [ "$preq" ] ; do
+	    if [ ! -s $preq ] ; then
+		echo "***** $preq did not exit, no $TNAME test"
+		return
+	    fi
+	    PREREQ=`echo "$PREREQ " | cut -f2- -d' '`
+	    preq=`echo $PREREQ | cut -f1 -d' '`
+	done
+    fi
+    if [ "$GRAPHICS" -a -z "$gfx" ] ; then return; fi
+    if [ "$N64" -a -z "$n64" ] ; then return; fi
+    if [ "$NEEDTAPE" -a ! "$tapeon" ] ; then return; fi
+    if [ "$DISKREQ" ] ; then
+	diskavail=`df -k /usr/tmp | fgrep /dev | awk '{print $5}'`
+	if [ "$diskavail" = "" -o "$diskavail" -lt $DISKREQ ] ; then
+	    echo "***** /usr/tmp with $diskavail KB need $DISKREQ KB for $TNAME test"
+	    return
+	fi
+    fi
+
+    echo "***** $N $TNAME"
+
+# if loop more then once
+    CNT=0
+    while [ "$CNT" -lt "$LOOP" ] ; do
+
+    if [ "$CHKWIN" ] ; then
+	/usr/bin/X11/xlswins > $JUNK1
+    fi
+# execute the test command
+    eval $TCMD
+
+    ret=$?
+    if [ $ret != $RET ] ; then 
+	echo "\ttest $N : $TNAME return failed got $ret should be $RET" >> $ERRLOG
+	FAIL="T" 
+    fi
+    movecore
+    if [ "$SLEEP" ] ; then sleep $SLEEP ; fi
+
+    if [ "$CHKWIN" ] ; then
+        /usr/bin/X11/xlswins > $JUNK2
+	 diff $JUNK1 $JUNK2 > $JUNKD
+	if [ ! -s $JUNKD ] ; then 
+	    echo "\ttest $N : $TNAME didn't create new window" >> $ERRLOG
+	    FAIL="T" 
+	elif [ -n "$WINSTR" ] ; then
+	    grep "$WINSTR" $JUNKD > /dev/null
+	    if [ $? -ne 0 ] ; then
+		echo "\ttest $N : $TNAME didn't create destined window" >> $ERRLOG
+		FAIL="T"
+	    elif [ -n "$ERRWIN" ] ; then
+		grep "$ERRWIN" $JUNKD > /dev/null
+		if [ $? -eq 0 ] ; then
+		    echo "\ttest $N : $TNAME got error notice window" >> $ERRLOG
+		    FAIL="T"
+		fi
+	    fi
+	fi
+	rm -f $JUNK1 $JUNK2 $JUNK2
+    fi
+
+    if [ "$TCMD2" ] ; then
+	eval $TCMD2
+    fi
+    ret=$?
+    if [ $ret != ${RET2} ] ; then 
+	echo "\ttest $N : $TNAME commend2 return failed got $ret should be $RET2" >> $ERRLOG
+	FAIL="T" 
+    fi
+    movecore
+
+    if [ -n "$KILL" ] ; then
+	sleep 20
+	kill_proc=`ps -ef | grep "$KILL" | grep -v grep`
+	if [ -n "$kill_proc" ] ; then
+	    kill_id=`echo $kill_proc | tail -1 | awk '{print $2}'`
+	fi
+        if [ -n "$kill_id" ] ; then ( kill -9 $kill_id > /dev/null 2>&1 ); fi
+    fi
+
+# if there is need to diff files
+    if [ "$COMP1" -a "$COMP2" ] ; then
+	diff $COMP1 $COMP2
+	if [ $? -ne 0 ] ; then 
+	    echo "\ttest $N : $TNAME diff files got difference" >> $ERRLOG
+	    FAIL="T" 
+	fi
+    fi
+
+    CNT=`expr $CNT + 1`
+    done
+# end of loop
+
+    if [ "$FAIL" ] ; then
+	FN=`expr $FN + 1`
+	echo FAILED: $TNAME >> $ERRLOG
+    fi
+    N=`expr $N + 1`
+    if [ "$CLEANCMD" ] ; then eval $CLEANCMD ; fi;
+}
+
+Usage()
+{
+    echo "usage: acceptance [-vnr]"
+    echo "   -v: show version of this acceptance test"
+    echo "   -n: use this acceptance without updating to newer version"
+    echo "   -r: don't set DISPLAY to localhost, use current DISPLAY"
+    exit
+}
+
+# make sure this script is executed by root only
+#
+ID=`id | sed 's/).*$//' | sed 's/^.*(//'`
+# first moved existing core file to saved.core
+if [ -f /usr/tmp/core ]; then
+    mv /usr/tmp/core /usr/tmp/saved.core
+fi
+
+# get version number
+Version="$Revision: 1.1 $"
+Version=`echo $Version | cut -f2 -d' '`
+
+rmtdisplay="no"
+while getopts "vnr" flag
+do
+    case $flag in
+	v) version="yes";;
+	n) noupdate="yes";;
+	r) rmtdisplay="yes";;
+	*) Usage;
+    esac
+done
+
+if [ "$version" = "yes" ] ; then
+    echo "$Version"
+    exit
+fi
+if [ "$rmtdisplay" != "yes" ] ; then
+    DISPLAY="localhost:0"
+    export DISPLAY
+fi
+
+if [ "$ID" != "root" ]
+then
+        echo "Accpetance test has to be run as root"
+        exit
+fi
+
+# check whether this is the latest version
+stdvers=`rsh guest@$EXT_MACH $STDACCEPT -v`
+if [ "$stdvers" != "" -a "$stdvers" != "$Version" ] ; then
+    if [ "$noupdate" = "yes" ] ; then
+	echo "version of $0 was $Version, which was not latest $stdvers"
+    else
+	mv $0 $0.O
+	rcp guest@$EXT_MACH:$STDACCEPT $0
+	echo "$0 is updated to version $stdvers, original one was saved as $0.O"
+	exec $0
+	exit
+    fi
+fi
+
+#
+# If system has tape installed, make sure user is aware of it 
+# warn the user for tape content
+#
+tapeon=
+z=`/bin/mt status 2>&1 | grep Media | sed 's/	//g' |sed 's/ //g' |cut -c1-11`
+#echo $z
+if test -n "$z"
+then
+        if [ "$z" = "Media:READY" ]
+        then
+		echo !!! Tape is in Tape Drive,data will be destroyed 
+		echo 'Do you want to replace the tape for testing <y or n> ,default y: \c'
+		read answer
+		if [ "$answer" = "n" ]
+		then
+			sleep 80
+		else
+			echo 'Please replace the tape now and rerun this test'
+			exit
+		fi
+		tapeon="T"
+	fi
+fi
+
+#
+xhost + 1> /dev/null 2> /dev/null
+#
+gfx=`hinv -c graphics`
+#
+
+#
+# Setup Mail stuff
+#if [ ! -f /usr/sbin/GETmail ]
+#then
+#        rcp guest@whizzer:/usr/lib/4Dmail/GETmail /usr/sbin
+#fi
+
+# Modify system network 4Dwm and mail environment
+#
+#cp /usr/lib/aliases /usr/lib/aliases.old
+
+# Check 4Dwm is up or not
+fromps=`ps -ef | fgrep Xsgi | grep -v grep`
+rmautologin=0
+if [ -z "$fromps" ]; then
+    echo "Xsgi is not up on machine with $gfx"
+    echo "acceptance run as no graphics"
+    gfx=""
+else
+    fromps=`ps -ef | fgrep 4Dwm | grep -v grep`
+    if [ -z "$fromps" ]; then
+	echo "4Dwm not running, run autologin"
+	if [ ! -f /etc/autologin ]; then
+	    echo "guest" > /etc/autologin
+	    rmautologin=1
+	fi
+	touch /etc/autologin.on
+	/etc/killall Xsgi
+	sleep 10
+    fi
+    if [ -f /.Xresources ]; then
+	cp /.Xresources /.Xresources.old
+	echo '4DWm*interactivePlacement: F' > /.Xresources
+    else
+	echo '4DWm*interactivePlacement: F' > /.Xresources
+    fi
+fi
+
+if [ -n "$gfx" -a -f /usr/bin/X11/tellwm ] ; then
+	/usr/bin/X11/tellwm auto_place; movecore;
+fi
+
+# check 64 bit capable
+cpub=`uname -m`
+case $cpub in 
+    IP19 | IP21 | IP26 )	n64="T" ;;
+    *)	n64="" ;;
+esac
+
+trap "restore_env; exit 1" 0 1 2 3 15
+
+#
+#
+# chech whether versions command exist, (bug of 5.3 alpha sep04 and sep11)
+if [ ! -x "/usr/sbin/versions" ]; then
+    echo "versions command missing, get one from sinead"
+    rcp guest@$EXT_MACH:/usr/sbin/versions /usr/sbin
+fi
+#
+if [ -f /var/inst/eoe ]; then
+ALPHA_NUM=`versions -n eoe | fgrep eoe.sw.unix | awk '{print $3}'`
+else
+ALPHA_NUM=`versions -n eoe1 | fgrep eoe1.sw.unix | awk '{print $3}'`
+fi
+
+# redirect all the standard output to a log file
+#
+exec > $ACCLOG 2>&1
+echo $Revison$ $Date: 1996/04/15 21:39:58 $ 
+echo ' '$HOST' - Sherwood '$ALPHA_NUM' Acceptance Test Error Log ' > $ERRLOG
+echo 'Program deteced error during acceptance are: ' >> $ERRLOG
+#
+echo ' '$HOST' - Sherwood '$ALPHA_NUM' Acceptance Test Result ' 
+echo ' ******************************************************\n '
+
+cd /usr/tmp
+
+# check disk space for dump test
+#
+rm -f dumpOK
+dumpreq=`df / | fgrep /dev/root | awk '{print $3}'`
+if [ "$dumpreq" != "" ]; then
+    dumpreq=`expr $dumpreq + 10000`
+    dumpavail=`df /usr | fgrep /dev/usr | awk '{print $5}'`
+    if [ "$dumpavail" != "" -a "$dumpavail" -gt $dumpreq ] ; then
+        touch dumpOK
+    fi
+fi
+
+resetallvar
+TNAME="uname -a"
+TCMD="uname -a"
+exectest
+
+resetallvar
+TNAME="date"
+TCMD="date"
+exectest
+
+resetallvar
+TNAME="hinv"
+TCMD="hinv"
+exectest
+
+resetallvar
+TNAME="sysinfo"
+TCMD="/etc/sysinfo"
+exectest
+
+resetallvar
+TNAME="versions -bn"
+TCMD="versions -bn"
+exectest
+
+resetallvar
+TNAME="chkconfig"
+TCMD="/etc/chkconfig -f yp on ; /etc/chkconfig -f automount on ; /etc/chkconfig"
+COMPOUND="T"
+exectest
+
+#resetallvar
+#TNAME="GETmail"
+#TCMD="/usr/sbin/GETmail"
+#SLEEP=20
+#PREREQ="/usr/sbin/GETmail"
+#exectest
+
+# Test mail and Mail function
+#
+resetallvar
+TNAME="/bin/mail"
+TCMD="/bin/mail $MAILDEST < mailfile"
+CLEANCMD="rm -f mailfile"
+PREREQ="/usr/sbin/GETmail"
+echo 'test /bin/mail from '$HOST':/usr/tmp/acceptance' > mailfile
+exectest
+
+resetallvar
+TNAME="/usr/sbin/Mail"
+TCMD="/usr/sbin/Mail -s 'Mail test - ignore it' $MAILDEST < mailfile"
+CLEANCMD="rm -f mailfile"
+PREREQ="/usr/sbin/GETmail"
+echo 'test /usr/sbin/Mail from '$HOST':/usr/tmp/acceptance' > mailfile
+exectest
+
+#
+# Test C Compiler and Make
+#
+cat > ctest.c <<foo
+#include <stdio.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <sys/lock.h>
+#include <time.h>
+#include <sys/time.h>
+main()
+{
+        char *message;
+        struct timeval tp;
+        time_t t;
+
+        if (gettimeofday(&tp, 0) < 0)
+        {
+                printf("gettimeofday() failed.\n");
+                exit(1);
+        }
+
+        t = time(0);
+        printf("gettimeofday() returns: %d = %s\n",
+                tp.tv_sec, ctime(&tp.tv_sec));
+        printf("time() returns: %d = %s\n", t, ctime(&t));
+    	plock(PROCLOCK);
+    	exit(0);
+}
+foo
+
+#
+resetallvar
+TNAME="C compiler make"
+TCMD="/bin/make /usr/tmp/ctest"
+TCMD2="./ctest"
+PREREQ="/bin/make /bin/cc"
+exectest
+
+resetallvar
+TNAME="strip"
+TCMD="/usr/bin/strip /usr/tmp/ctest"
+PREREQ="/usr/tmp/ctest"
+CLEANCMD="rm -f /usr/tmp/ctest"
+exectest
+
+# test -n32 compilation
+TNAME="C compiler -n32"
+TCMD="cc -n32 -mips3 -o ctest /usr/tmp/ctest.c"
+TCMD2="./ctest"
+PREREQ="/bin/cc"
+CLEANCMD="rm -f /usr/tmp/ctest"
+exectest
+
+# test -64 compilation
+TNAME="C compiler -64"
+TCMD="cc -64 -mips3 -o ctest /usr/tmp/ctest.c"
+TCMD2="./ctest"
+N64="T"
+PREREQ="/bin/cc"
+CLEANCMD="rm -f /usr/tmp/ctest"
+exectest
+
+# test C program with curse lib
+cat > curse.c << foo
+#include <curses.h>
+#include <stdio.h>
+main()
+{
+        initscr();
+        move (LINES/2 -1 , COLS/4 -4);
+        addstr("Cursor in the middle - ");
+        refresh();
+        printf("hello world in C program test ok\n");
+        endwin();
+        exit(0);
+}
+foo
+
+resetallvar
+TNAME="curses lib"
+TCMD="/bin/cc curse.c -lcurses -o curse"
+TCMD2="./curse"
+PREREQ="/bin/cc /usr/lib/libcurses.a"
+CLEANCMD="rm -f /usr/tmp/curse.c"
+exectest
+
+
+#
+cat > ctest.c++ <<foo
+#include <CC/iostream.h>
+
+main()
+{
+ cout << "C++ program hello world test ok\n";
+ return 0;
+}
+foo
+
+resetallvar
+TNAME="C++"
+TCMD="/usr/bin/CC ctest.c++"
+TCMD2="./a.out"
+PREREQ="/usr/bin/CC"
+CLEANCMD="rm -f /usr/tmp/ctest.c++"
+exectest
+
+#
+# test pixie
+
+resetallvar
+TNAME="pixie prof"
+TCMD='PATH=$PATH:/hosts/geneva.mti/comp60/cmplrs.work/BIN RUN_PIXIE_PROF -m wei'
+PREREQ="/bin/pixie /hosts/geneva.mti/comp60/cmplrs.work/BIN"
+DISKREQ=10000
+exectest
+
+resetallvar
+TNAME="check .so"
+TCMD='PATH=$PATH:/hosts/geneva.mti/comp60/cmplrs.work/BIN RUN_CHECK_SO -m wei'
+PREREQ="/bin/pixie /hosts/geneva.mti/comp60/cmplrs.work/BIN"
+DISKREQ=140000
+exectest
+
+#
+# The following program only test when Graphics exist
+#
+
+resetallvar
+TNAME="mailbox"
+TCMD='env GLRES="*geometry: 70x70+250+0" /usr/sbin/mailbox'
+GRAPHICS="T"
+KILL="/usr/sbin/mailbox"
+PREREQ="/usr/sbin/mailbox"
+exectest
+
+#
+# Test Window Stuff
+resetallvar
+TNAME="xterm"
+TCMD='( env GLRES="*geometry: 180x100+400+50" /usr/bin/X11/xterm & )'
+GRAPHICS="T"
+KILL="/usr/bin/X11/xterm"
+PREREQ="/usr/bin/X11/xterm"
+SLEEP="40"
+CHKWIN="T"
+exectest
+
+#
+# Test Graphics Ideas demo program
+resetallvar
+TNAME="ideas demo"
+TCMD='( env GLRES="*geometry: 180x100+400+250" /usr/demos/bin/ideas & )'
+GRAPHICS="T"
+KILL="/usr/demos/bin/ideas"
+PREREQ="/usr/demos/bin/ideas"
+exectest
+
+#
+# Test the gr_top program
+resetallvar
+TNAME="gr_top"
+TCMD='env GLRES="*geometry: 180x100+400+50" /usr/sbin/gr_top'
+GRAPHICS="T"
+KILL="/usr/sbin/gr_top"
+PREREQ="/usr/sbin/gr_top"
+exectest
+
+#
+# Test gr_osview program
+resetallvar
+TNAME="gr_osview"
+TCMD='/usr/sbin/gr_osview -a'
+GRAPHICS="T"
+KILL="/usr/sbin/gr_osview"
+PREREQ="/usr/sbin/gr_osview"
+exectest
+
+#
+# Test workspace program
+#resetallvar
+#TNAME="workspace"
+#TCMD='/usr/sbin/workspace'
+#GRAPHICS="T"
+#KILL="/usr/sbin/workspace"
+#PREREQ="/usr/sbin/workspace"
+#SLEEP="20"
+#exectest
+
+#
+# Test searchbook
+resetallvar
+TNAME="searchbook"
+TCMD='/usr/sbin/searchbook /usr/lib/desktop/searchbook/syspages/Files &'
+GRAPHICS="T"
+KILL="/usr/sbin/searchbook"
+PREREQ="/usr/sbin/searchbook"
+SLEEP="20"
+CHKWIN="T"
+exectest
+
+#
+# Test vadmin program
+resetallvar
+TNAME="vadmin"
+TCMD='( /usr/sbin/vadmin & )'
+GRAPHICS="T"
+KILL="usr/sbin/vadmin"
+PREREQ="usr/sbin/vadmin"
+SLEEP="40"
+CHKWIN="T"
+exectest
+
+#
+# Test swmgr program
+resetallvar
+TNAME="swmgr"
+TCMD='( /usr/sbin/swmgr & )'
+GRAPHICS="T"
+KILL="usr/sbin/swmgr"
+PREREQ="usr/sbin/swmgr"
+SLEEP="40"
+CHKWIN="T"
+exectest
+
+# Test sysadmdesktop commands
+#
+# Test chost
+resetallvar
+TNAME="chost"
+TCMD='/usr/Cadmin/bin/chost &'
+GRAPHICS="T"
+KILL="/usr/Cadmin/bin/chost"
+PREREQ="/usr/Cadmin/bin/chost"
+SLEEP="20"
+CHKWIN="T"
+exectest
+
+#
+# Test cfile
+resetallvar
+TNAME="cfile"
+TCMD='/usr/Cadmin/bin/cfile &'
+GRAPHICS="T"
+KILL="/usr/Cadmin/bin/cfile"
+PREREQ="/usr/Cadmin/bin/cfile"
+SLEEP="20"
+CHKWIN="T"
+exectest
+
+#
+# Test cports
+resetallvar
+TNAME="cports"
+TCMD='/usr/Cadmin/bin/cports &'
+GRAPHICS="T"
+KILL="/usr/Cadmin/bin/cports"
+PREREQ="/usr/Cadmin/bin/cports"
+SLEEP="20"
+CHKWIN="T"
+exectest
+
+#
+# Test cprint
+resetallvar
+TNAME="cprint"
+TCMD='/usr/Cadmin/bin/cprint &'
+GRAPHICS="T"
+KILL="/usr/Cadmin/bin/cprint"
+PREREQ="/usr/Cadmin/bin/cprint"
+SLEEP="20"
+CHKWIN="T"
+exectest
+
+#
+# Test cpeople
+resetallvar
+TNAME="cpeople"
+TCMD='/usr/Cadmin/bin/cpeople &'
+GRAPHICS="T"
+KILL="/usr/Cadmin/bin/cpeople"
+PREREQ="/usr/Cadmin/bin/cpeople"
+SLEEP="20"
+CHKWIN="T"
+exectest
+
+#
+# Test cimport
+resetallvar
+TNAME="cimport"
+TCMD='/usr/Cadmin/bin/cimport &'
+GRAPHICS="T"
+KILL="/usr/Cadmin/bin/cimport"
+PREREQ="/usr/Cadmin/bin/cimport"
+SLEEP="20"
+CHKWIN="T"
+exectest
+
+#
+# Test cswap
+resetallvar
+TNAME="cswap"
+TCMD='/usr/Cadmin/bin/cswap &'
+GRAPHICS="T"
+KILL="/usr/Cadmin/bin/cswap"
+PREREQ="/usr/Cadmin/bin/cswap"
+SLEEP="20"
+CHKWIN="T"
+exectest
+
+#
+# Test netscape
+resetallvar
+TNAME="netscape"
+TCMD='/usr/bin/X11/netscape &'
+GRAPHICS="T"
+KILL="/usr/bin/X11/netscape"
+PREREQ="/usr/bin/X11/netscape"
+SLEEP="30"
+CHKWIN="T"
+exectest
+
+#
+# Test insight
+resetallvar
+TNAME="insight"
+TCMD='/usr/sbin/insight &'
+GRAPHICS="T"
+KILL="/usr/sbin/insight"
+PREREQ="/usr/sbin/insight"
+SLEEP="30"
+CHKWIN="T"
+exectest
+
+#
+# Test pv
+resetallvar
+TNAME="pv"
+TCMD='/usr/local/bin/pv &'
+GRAPHICS="T"
+KILL="/usr/local/bin/pv"
+PREREQ="/usr/local/bin/pv"
+SLEEP="30"
+CHKWIN="T"
+exectest
+
+#
+# Test showcase program
+resetallvar
+TNAME="showcase"
+TCMD='/usr/sbin/showcase'
+GRAPHICS="T"
+KILL="/usr/sbin/showcase"
+PREREQ="/usr/sbin/showcase"
+SLEEP="80"
+CHKWIN="T"
+exectest
+
+#
+# Test xclock program
+resetallvar
+TNAME="xclock"
+TCMD='( /usr/bin/X11/xclock -geometry 90x90+300+0 & )'
+GRAPHICS="T"
+KILL="/usr/bin/X11/xclock -ge"
+PREREQ="/usr/bin/X11/xclock"
+SLEEP="20"
+CHKWIN="T"
+exectest
+
+#
+# Test xwininfo program
+resetallvar
+TNAME="xwininfo"
+TCMD='/usr/bin/X11/xwininfo -root'
+GRAPHICS="T"
+PREREQ="/usr/bin/X11/xwininfo"
+exectest
+
+#
+# Test wsh program
+resetallvar
+TNAME="wsh"
+TCMD='( /bin/wsh -Z4 )'
+GRAPHICS="T"
+KILL="/usr/sbin/xwsh -nopgrp"
+PREREQ="/usr/sbin/xwsh"
+exectest
+
+#
+# Test xdiff program
+resetallvar
+TNAME="xdiff"
+TCMD="( /usr/sbin/xdiff $ACCLOG $0 & )"
+GRAPHICS="T"
+KILL="/usr/sbin/xdiff"
+PREREQ="/usr/sbin/xdiff"
+SLEEP="40"
+CHKWIN="T"
+PREREQ="/usr/sbin/xdiff"
+exectest
+
+#
+#Test xman function
+resetallvar
+TNAME="xman"
+TCMD='( /usr/bin/X11/xman & )'
+GRAPHICS="T"
+KILL="/usr/bin/X11/xman"
+PREREQ="/usr/bin/X11/xman"
+SLEEP="40"
+exectest
+
+#
+# Test Network Commands
+resetallvar
+TNAME="ping"
+TCMD="/usr/etc/ping -q -c 100 $EXT_MACH"
+exectest
+
+#
+resetallvar
+TNAME="netsnoop"
+TCMD='/usr/sbin/netsnoop -c 100 > /dev/null'
+PREREQ="/usr/sbin/netsnoop"
+exectest
+
+#
+resetallvar
+TNAME="rsh $EXT_MACH"
+TCMD="rsh guest@$EXT_MACH echo testing rsh ok"
+exectest
+
+#
+resetallvar
+TNAME="netstat"
+TCMD='/usr/etc/netstat -in'
+exectest
+
+#
+resetallvar
+TNAME="nfsstat"
+TCMD='/usr/etc/nfsstat'
+PREREQ="/usr/etc/nfsstat"
+exectest
+
+#
+resetallvar
+TNAME="rcp guest@$EXT_MACH 10 times"
+TCMD='rcp guest@$EXT_FILE_PATH/{xv,ncar-cvis-92113016.gif} .; rm xv ncar-cvis-92113016.gif'
+LOOP=10
+exectest
+
+#
+resetallvar
+TNAME="mount /usr/tmp/testlocal"
+TCMD="/etc/mount -t nfs $EXT_MACH:/usr/local /usr/tmp/testlocal"
+if [ ! -d /usr/tmp/testlocal ] ; then mkdir /usr/tmp/testlocal ; fi
+exectest
+
+#
+# Test various utilities
+# Test pvquery
+#resetallvar
+#TNAME="pvquery"
+#TCMD='/usr/tmp/testlocal/bin/pvquery -O pd -P sherwood -s open -p 1 -F'
+#PREREQ="/usr/tmp/testlocal/bin/pvquery"
+#SLEEP="40"
+#exectest
+
+#
+# Test gtst
+#resetallvar
+#TNAME="gtst"
+#TCMD='cd /usr/tmp/testlocal/gtst; ./rungtst; cd /usr/tmp;'
+#PREREQ="/usr/tmp/testlocal/gtst"
+#exectest
+
+#
+# Test rrn
+#resetallvar
+#TNAME="rrn"
+#TCMD='env NNTPSERVER="fido.asd.sgi.com" /usr/tmp/testlocal/bin/rrn -q <<!\
+#q\
+#q\
+#!\
+#'
+#PREREQ="/usr/tmp/testlocal/bin/rrn"
+#exectest
+
+#
+# Test rn
+resetallvar
+TNAME="rn"
+TCMD='echo q | /usr/local/bin/rn'
+PREREQ="/usr/local/bin/rn"
+exectest
+
+#
+#Test zmail
+#resetallvar
+#TNAME="zmail"
+#TCMD='echo q | /usr/bin/X11/zmail'
+#PREREQ="/usr/bin/X11/zmail"
+#KILL="/usr/bin/X11/zmail"
+#SLEEP="10"
+#exectest
+
+#
+# Test Some Basic Commands
+resetallvar
+TNAME="ps -el"
+TCMD='/sbin/ps -elf > /dev/null'
+exectest
+
+#
+resetallvar
+TNAME="df -k"
+TCMD='/bin/df -k'
+exectest
+
+#
+resetallvar
+TNAME="mpadmin -s"
+TCMD='/usr/sbin/mpadmin -s'
+RET=`/usr/sbin/mpadmin -n | wc -l`
+exectest
+
+#
+resetallvar
+TNAME="/usr/sbin/ipcs"
+TCMD='/usr/sbin/ipcs'
+exectest
+
+#
+resetallvar
+TNAME="rfind"
+TCMD='/usr/sbin/rfind dist.engr:/ unix'
+exectest
+
+#
+resetallvar
+TNAME="dircmp"
+TCMD='/usr/bin/dircmp -d /usr/tmp/dir1 /usr/tmp/dir2'
+mkdir /usr/tmp/dir1; mkdir /usr/tmp/dir2
+(cat /usr/tmp/acceptance | head -10) > /usr/tmp/dir1/file1
+(cat /usr/tmp/acceptance | head -20) > /usr/tmp/dir2/file1
+exectest
+rm -rf /usr/tmp/dir1; rm -rf /usr/tmp/dir2
+
+#
+resetallvar
+TNAME="runon"
+TCMD='/usr/sbin/runon 0 ls > /dev/null'
+exectest
+
+#
+resetallvar
+TNAME="size"
+TCMD='/usr/bin/size /usr/bin/man > /dev/null'
+PREREQ="/usr/bin/size"
+exectest
+
+#
+resetallvar
+TNAME="nm"
+TCMD='/usr/bin/nm -p /usr/tmp/tstshm > /dev/null'
+PREREQ="/usr/bin/nm"
+rcp guest@$EXT_FILE_PATH/tstshm /usr/tmp/tstshm
+exectest
+rm -f /usr/tmp/tstshm
+
+#
+resetallvar
+TNAME="bloatview"
+TCMD='/usr/tmp/bloatview &'
+KILL="/usr/tmp/bloatview"
+PREREQ="/usr/tmp/bloatview"
+GRAPHICS="T"
+SLEEP="20"
+CHKWIN="T"
+rcp guest@$EXT_FILE_PATH/bloatview /usr/tmp/bloatview
+exectest
+rm -f /usr/tmp/bloatview
+
+#
+resetallvar
+TNAME="time"
+TCMD='/usr/bin/time sh -c "ls -lR /dev | fgrep root > /dev/null"'
+exectest
+
+#
+resetallvar
+TNAME="timex"
+TCMD='/usr/bin/timex find /bin -name \*bin\* -print > /dev/null'
+PREREQ="/usr/bin/timex"
+exectest
+
+#
+resetallvar
+TNAME="pixie"
+TCMD='/usr/bin/pixie /bin/echo > /dev/null 2>&1'
+RET="1"
+PREREQ="/usr/bin/pixie"
+CLEANCMD="rm -f /usr/tmp/libc.so.1.pixie"
+exectest
+
+#
+resetallvar
+TNAME="ls -l /unix"
+TCMD='/bin/ls -l /unix'
+exectest
+
+#
+resetallvar
+TNAME="chmod"
+TCMD='chmod 0777 /usr/tmp'
+exectest
+
+#
+resetallvar
+TNAME="chown"
+TCMD='/bin/chown sys.sys /usr/tmp'
+exectest
+
+#
+resetallvar
+TNAME="file"
+TCMD='/usr/bin/file /usr/lib/libc.so.1 > /dev/null 2>&1'
+exectest
+
+#
+resetallvar
+TNAME="more"
+TCMD='(/usr/bin/more /etc/passwd | head > /dev/null 2>&1)'
+exectest
+
+#
+resetallvar
+TNAME="man"
+TCMD='man -c man > /dev/null 2>&1'
+exectest
+
+#
+resetallvar
+TNAME="id, whoami, sort"
+TCMD='(/usr/bin/id; /usr/bin/whoami | /bin/sort > /dev/null 2>&1)'
+exectest
+
+#
+resetallvar
+TNAME="find"
+TCMD='/bin/find . -name acceptance -print'
+exectest
+
+#
+resetallvar
+TNAME="gamma"
+TCMD='/usr/sbin/gamma'
+GRAPHICS="T"
+PREREQ="/usr/sbin/gamma"
+exectest
+
+#
+resetallvar
+TNAME="tail"
+TCMD='/bin/tail -20 /usr/adm/SYSLOG > /dev/null 2>&1'
+exectest
+
+#
+resetallvar
+TNAME="domainname"
+TCMD='/usr/bin/domainname'
+exectest
+
+#
+resetallvar
+TNAME="rup"
+TCMD='(/usr/bin/rup -h | head > /dev/null 2>&1)'
+exectest
+
+#
+resetallvar
+TNAME="pwck"
+TCMD='pwck > /dev/null 2>&1'
+RET="1"
+exectest
+
+#
+# Test sar command
+resetallvar
+TNAME="sar"
+TCMD='chkconfig sar on; su sys -c "/usr/lib/sa/sadc /usr/adm/sa/sa`date +%d`" > /dev/null 2>&1'
+PREREQ="/usr/lib/sa/sadc"
+exectest
+
+#
+resetallvar
+TNAME="sar"
+TCMD='/usr/bin/sar -A > /dev/null 2>&1'
+CLEANCMD="chkconfig sar off"
+exectest
+
+#
+# Test dbx
+resetallvar
+TNAME="dbx"
+TCMD='dbx a.out <<!  > /dev/null 2>&1\
+list\
+run\
+quit\
+y\
+!\
+'
+PREREQ="/usr/bin/dbx a.out"
+exectest
+
+#
+# Test shared memory program
+resetallvar
+TNAME="tstshm"
+TCMD='/usr/tmp/tstshm'
+PREREQ="/usr/tmp/tstshm"
+exectest
+
+#
+# Test Backup,Restore,tar,cpio,dd,dump,bru etc Utilities
+
+# Test Backup/Rrestore
+resetallvar
+TNAME="Backup"
+TCMD='cp /usr/bin/id /usr/tmp/tmp_id; mt rew; Backup /usr/tmp/tmp_id'
+PREREQ="/usr/sbin/Backup"
+CLEANCMD="rm -f /usr/tmp/tmp_id"
+NEEDTAPE="T"
+exectest
+
+resetallvar
+TNAME="Rrestore"
+TCMD='Restore /usr/tmp/tmp_id'
+PREREQ="/usr/sbin/Restore"
+COMP1="/usr/bin/id"
+COMP2="/usr/tmp/tmp_id"
+CLEANCMD="rm -f /usr/tmp/tmp_id"
+NEEDTAPE="T"
+exectest
+
+# Test tar
+resetallvar
+TNAME="tar"
+TCMD='cp /sbin/date /usr/tmp/tmp_date; mt rew; tar cv /usr/tmp/tmp_date'
+TCMD2='rm /usr/tmp/tmp_date; tar xv /usr/tmp/tmp_date'
+COMP1="/sbin/date"
+COMP2="/usr/tmp/tmp_date"
+CLEANCMD="rm -f /usr/tmp/tmp_date"
+NEEDTAPE="T"
+exectest
+
+# Test cpio
+resetallvar
+TNAME="cpio"
+TCMD='cp /sbin/hinv /usr/tmp/tmp_hinv; mt rew; ls /usr/tmp/tmp_hinv | cpio -ocB > /dev/tape'
+TCMD2='rm /usr/tmp/tmp_hinv; cpio -icBdmuv < /dev/tape'
+COMP1="/sbin/hinv"
+COMP2="/usr/tmp/tmp_hinv"
+CLEANCMD="rm -f /usr/tmp/tmp_hinv"
+NEEDTAPE="T"
+exectest
+
+# Test dd
+resetallvar
+TNAME="dd"
+TCMD='mt rew ;dd if=/sbin/sh of=/dev/tape conv=sync'
+NEEDTAPE="T"
+exectest
+
+# Test dump
+resetallvar
+TNAME="dump"
+TCMD='mt rew; dump / 2> /dev/tty'
+NEEDTAPE="T"
+exectest
+#cat /etc/dumpdates
+
+# Test bru
+resetallvar
+TNAME="bru"
+TCMD='cp /sbin/who /usr/tmp/tmp_who; mt rew; bru -c -f /dev/tape /usr/tmp/tmp_who'
+TCMD2='rm /usr/tmp/tmp_who; bru -x -f /dev/tape /usr/tmp/tmp_who'
+COMP1="/sbin/who"
+COMP2="/usr/tmp/tmp_who"
+CLEANCMD="rm -f /usr/tmp/tmp_who"
+NEEDTAPE="T"
+exectest
+
+# When tape drive in not availble for tape is not inserted
+# Test tar
+resetallvar
+TNAME="tar"
+TCMD='cp /sbin/date /usr/tmp/tmp_date; tar cvf /usr/tmp/tar_date /usr/tmp/tmp_date > /dev/null 2>&1'
+TCMD2='rm /usr/tmp/tmp_date; tar xvf /usr/tmp/tar_date > /dev/null 2>&1'
+COMP1="/sbin/date"
+COMP2="/usr/tmp/tmp_date"
+CLEANCMD="rm -f /usr/tmp/tmp_date /usr/tmp/tar_date"
+exectest
+
+# Test cpio
+resetallvar
+TNAME="cpio"
+TCMD='cp /sbin/hinv /usr/tmp/tmp_hinv; /bin/ls /usr/tmp/tmp_hinv | cpio -ocB > /usr/tmp/cpio_hinv 2> /dev/null'
+TCMD2='file /usr/tmp/cpio_hinv; rm /usr/tmp/tmp_hinv; cpio -icBdmuv < /usr/tmp/cpio_hinv > /dev/null 2>&1'
+COMP1="/sbin/hinv"
+COMP2="/usr/tmp/tmp_hinv"
+CLEANCMD="rm -f /usr/tmp/tmp_hinv /usr/tmp/cpio_hinv"
+exectest
+
+# Test dd
+resetallvar
+TNAME="dd"
+TCMD='cp /sbin/sh /usr/tmp/tmp_sh; dd if=/usr/tmp/tmp_sh of=/usr/tmp/dd_sh > /dev/null 2>&1'
+TCMD2='rm /usr/tmp/tmp_sh; dd if=/usr/tmp/dd_sh of=/usr/tmp/tmp_sh > /dev/null 2>&1'
+COMP1="/sbin/sh"
+COMP2="/usr/tmp/tmp_sh"
+CLEANCMD="rm -f /usr/tmp/tmp_sh /usr/tmp/dd_sh"
+exectest
+
+# Test dump
+resetallvar
+TNAME="dump"
+TCMD='dump f /usr/tmp/tmp_root_dump / 2> /dev/tty'
+CLEANCMD="rm -f /usr/tmp/tmp_root_dump"
+PREREQ="/usr/tmp/dumpOK"
+exectest
+
+# Test bru
+resetallvar
+TNAME="bru"
+TCMD='cp /sbin/who /usr/tmp/tmp_who; bru -c -f /usr/tmp/bru_who /usr/tmp/tmp_who > /dev/null 2>&1'
+TCMD2='rm /usr/tmp/tmp_who; bru -x -f /usr/tmp/bru_who /usr/tmp/tmp_who > /dev/null 2>&1'
+PREREQ="/usr/sbin/bru"
+COMP1="/sbin/who"
+COMP2="/usr/tmp/tmp_who"
+CLEANCMD="rm -f /usr/tmp/tmp_who /usr/tmp/bru_who"
+exectest
+
+# Run graphics test, allrout is from bam
+resetallvar
+TNAME="allrout Graphics test"
+TCMD='/usr/tmp/allrout > /dev/null 2>&1'
+PREREQ="/usr/tmp/allrout"
+GRAPHICS="T"
+rcp guest@$EXT_FILE_PATH/allrout.c .
+cc allrout.c -lgl -o allrout
+exectest
+
+# Run xpsview
+resetallvar
+TNAME="xpsview test"
+TCMD='/usr/bin/X11/xpsview /usr/tmp/testlocal/test.ps &'
+PREREQ="/usr/bin/X11/xpsview"
+GRAPHICS="T"
+KILL="/usr/bin/X11/xpsview"
+SLEEP="20"
+CHKWIN="T"
+WINSTR="Adobe ShowPS"
+ERRWIN="Error"
+exectest
+
+# Run imgtools test
+# 
+# Run imginfo
+resetallvar
+TNAME="imginfo test"
+TCMD='/usr/sbin/imginfo /usr/tmp/testlocal/bali.gif'
+PREREQ="/usr/sbin/imginfo"
+RET=9
+exectest
+
+# Run imgview
+resetallvar
+TNAME="imgview test"
+TCMD='/usr/sbin/imgview /usr/tmp/testlocal/bali.gif'
+PREREQ="/usr/sbin/imgview"
+GRAPHICS="T"
+KILL="/usr/sbin/imgview"
+SLEEP="20"
+CHKWIN="T"
+exectest
+
+# Run imgworks
+resetallvar
+TNAME="imgworks test"
+TCMD='/usr/sbin/imgworks /usr/tmp/testlocal/bali.gif'
+PREREQ="/usr/sbin/imgworks"
+GRAPHICS="T"
+KILL="/usr/sbin/imgworks"
+SLEEP="20"
+CHKWIN="T"
+exectest
+
+#
+###############################
+# perform Cypress Static Library compatibility test
+# The following static shared libary from Cypress are
+# tested. /usr/lib/libgl_s, /usr/lib/libX11_s, /lib/libc_s,
+# /usr/lib/libfm_s,/usr/lib/libXm_s_ca,/usr/lib/libXt_s
+# CYP_HOSTress command are tested on sherwood
+# Copy over the cmd from CYP_HOSTress machine
+###############################
+#
+
+#Mailbox Test for /usr/lib/libgl_s, /usr/lib/libX11_s, /lib/libc_s
+#resetallvar
+#TNAME="check Cypress static shared libary on mailbox"
+#TCMD="cp /usr/sbin/mailbox /usr/sbin/mailbox.old; rcp guest@$CYP_PATH/mailbox /usr/sbin/mailbox; /usr/bin/odump -L /usr/sbin/mailbox; /usr/sbin/mailbox"
+#KILL="/usr/sbin/mailbox"
+#CLEANCMD="cp /usr/sbin/mailbox.old /usr/sbin/mailbox; rm -f /usr/sbin/mailbox.old"
+#GRAPHICS="T"
+#PREREQ="/usr/bin/odump /usr/sbin/mailbox"
+#exectest
+
+#
+#gr_top Test for /usr/lib/libfm_s,/usr/lib/libgl_s,/usr/lib/libX11_s,/lib/libc_sresetallvar
+#TNAME="check Cypress static shared libary on gr_top"
+#TCMD="cp /usr/sbin/gr_top /usr/sbin/gr_top.old;\
+#rcp guest@$CYP_PATH/gr_top /usr/sbin/gr_top;\
+#/usr/bin/odump -L /usr/sbin/gr_top;\
+#/usr/sbin/gr_top"
+#KILL="/usr/sbin/gr_top"
+#GRAPHICS="T"
+#PREREQ="/usr/bin/odump /usr/sbin/gr_top"
+#CLEANCMD="cp /usr/sbin/gr_top.old /usr/sbin/gr_top;\
+#rm -f /usr/sbin/gr_top.old"
+#exectest
+
+#
+#pv test for /usr/lib/libXm_s_ca,/usr/lib/libXt_s,/usr/lib/libX11_s
+#resetallvar
+#TNAME="check Cypress static shared libary on pv"
+#TCMD="/usr/bin/odump -L /usr/tmp/testlocal/bin/pv; /usr/tmp/testlocal/bin/pv"
+#SLEEP="50"
+#KILL="/usr/tmp/testlocal/bin/pv"
+#GRAPHICS="T"
+#PREREQ="/usr/tmp/testlocal/bin/pv /usr/bin/odump"
+#exectest
+
+#
+###############################
+# perform RISCOS binary compatiablity test
+# user should see a satellite image on screen
+###############################
+#
+#resetallvar
+#TNAME="RISCOS binary compatibility test"
+#TCMD="elfdump -L /usr/tmp/xv;\
+#( env DISPLAY=`hostname`:0.0 /usr/tmp/xv /usr/tmp/ncar-cvis-92113016.gif & )"
+#SLEEP="50"
+#KILL="/usr/tmp/xv"
+#GRAPHICS="T"
+#PREREQ="/usr/tmp/xv"
+#CHKWIN="T"
+#rcp guest@$EXT_FILE_PATH/{xv,ncar-cvis-92113016.gif} .
+#exectest
+#rm xv ncar-cvis-92113016.gif
+
+#
+###############################
+# perform peripheral device tests
+###############################
+#
+#resetallvar
+#TNAME="systest - peripheral test"
+#TCMD="/usr/tmp/systest"
+#PREREQ="/usr/tmp/systest"
+#rcp guest@$EXT_FILE_PATH/{systest,bash,transfertest} .
+#exectest
+#rm -f systest bash transfertest
+
+#
+resetallvar
+TNAME="umount /usr/tmp/testlocal"
+TCMD="/etc/umount /usr/tmp/testlocal"
+exectest
+
+echo ' '
+echo '**************************************************'
+echo '  All Automated Acceptance Tests Completed '
+echo '  Important!! For FAILURE REPORT please check accept_err.log'
+echo '  Now, The Acceptance Test Operator, please manually'
+echo '  check the following operations:'
+echo '  autoconfig'
+echo '  reboot'
+echo '  /etc/halt'
+echo '  /etc/init.d/network stop '
+echo '  /etc/init.d/network start '
+echo '  fsck certain file system '
+echo '  test vi or emacs '
+echo '**************************************************'
+echo ' '
+echo end time `date`
+if [ $COREDUMP -gt 1 ] ; then
+echo "There were $COREDUMP core dumps happened during acceptance test" >> $ERRLOG
+echo 'Core dumps detected during acceptance are:' >> $ERRLOG
+elif [ $COREDUMP -eq 1 ] ; then
+echo "There was one core dump happened during acceptance test" >> $ERRLOG
+echo 'Core dump detected during acceptance is:' >> $ERRLOG
+ls -l /usr/tmp/*core* >> $ERRLOG
+else
+echo "There was no core dump happened during acceptance test" >> $ERRLOG
+fi
+
+N=`expr $N - 1`
+echo "  Total tested cases $N" >> $ERRLOG
+echo "  Total FAILED cases $FN" >> $ERRLOG
+if [ $rmautologin -eq 1 ]; then
+    rm -f /etc/autologin
+fi
+
+# Send test result
+TESTM=/usr/tmp/loadres
+if [ ! -f $TESTM ]; then 
+    rcp guest@$CYP_PATH/loadres /usr/tmp
+fi
+
+TESTNAME=acceptance
+TESTCASE=all
+PROD=os
+PRODVERS=os
+TESTPASS=`expr $N - $FN`
+TESTTOTAL=$N
+
+echo "$TESTNAME,$TESTCASE,$PROD,$PRODVERS,$TESTPASS,\c" > /tmp/tmp-load.$$
+echo "$TESTTOTAL,$TESTJOBS,$TESTREAL,$TESTUSR,$TESTSYS,\c" >> /tmp/tmp-load.$$
+echo "$TESTCPU,$TESTMFLOP,$TESTSPEC,\c" >> /tmp/tmp-load.$$
+echo "TESTRESULTS: pass/$TESTPASS total/$TESTTOTAL val/"
+
+$TESTM /tmp/tmp-load.$$ $TESTNAME 
+rm -f /tmp/tmp-load.$$
+
+# if reportdes exist use it to update adhoc database
+if [ -f /usr/tmp/reportdes ] ; then
+    /usr/tmp/reportdes
+else
+    rcp guest@$CYP_PATH/reportdes /usr/tmp
+    /usr/tmp/reportdes
+    rm -f /usr/tmp/reportdes
+fi

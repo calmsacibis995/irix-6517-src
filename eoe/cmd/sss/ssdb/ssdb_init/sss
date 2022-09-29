@@ -1,0 +1,124 @@
+#!/sbin/sh 
+#
+# Start esp
+#
+# $Revision: 1.20 $
+#
+
+IS_ON=/sbin/chkconfig
+BASEDIR=/usr/etc
+INITFILESDIR=/var/esp/init/datafiles
+INITDIR=/etc/init.d
+DAEMONDIR=/usr/etc
+DATADIR=/var/esp/ssdb/data
+LOGDIR=$DATADIR
+ADMINUSER=root
+DAEMONUSER=root
+PIDFILE=$LOGDIR/`uname -n`.pid
+LOGFILE=$LOGDIR/`uname -n`.log
+
+hostname=`uname -n`
+
+DAEMONOPTS="--skip-networking --basedir=$BASEDIR --datadir=$DATADIR"
+
+if $IS_ON verbose || test -t 1 ; then
+    ECHO=echo
+    QUIET=""
+else
+    ECHO=:
+    QUIET='>/dev/null 2>&1'
+fi
+	ID=`id | sed 's/).*$//' | sed 's/^.*(//'`;
+	if [ "$ID" != "root" ]; then
+	    echo "Must be logged in as root to execute this"
+	    exit 1
+	fi
+	case "$1" in
+  'start')
+	counter=0
+        if test -x $DAEMONDIR/espdbd ; then
+        
+            killall -9 esphttpd
+            killall -9 espdbd	    
+            /usr/etc/eventmond -y off
+            
+	    rm -f /tmp/espdb.sock $PIDFILE
+
+	    if [ ! -f "$DATADIR/ssdb/system.ISD" ] ; then
+	        $DAEMONDIR/espdbd -Sg $DAEMONOPTS >>$LOGFILE 2>&1 &
+		while [ "$counter" -lt 5 ]
+		do
+			/usr/sbin/espadmin ver > /dev/null 2>&1
+			if test $? -eq 0 ; then 
+				break
+			fi
+			sleep 2                     # This must be enough
+			counter=`expr $counter + 1`
+		done
+		
+		rm -f $DATADIR/mysql/*.ISD
+		rm -f $DATADIR/mysql/*.ISM
+		rm -f $DATADIR/mysql/*.frm
+		cp -p $INITFILESDIR/*.frm $DATADIR/mysql
+		sync
+		# Sleep only here at the first time of databae creation
+	        sleep 5
+		/usr/sbin/espdbinit -d mysql -s "delete from db" > /dev/null 2>&1
+		/usr/sbin/espdbinit -d mysql -s "delete from host" > /dev/null 2>&1
+		/usr/sbin/espdbinit -d mysql -s "delete from user" > /dev/null 2>&1
+		/usr/sbin/espdbinit -d mysql -s "delete from func" > /dev/null 2>&1
+		/usr/sbin/espdbinit -d mysql -s "insert into host values ('localhost','ssdb','Y','Y','Y','Y','Y','Y')" > /dev/null 2>&1
+		/usr/sbin/espdbinit -d mysql -s "insert into user values ('localhost','root','','Y','Y','Y','Y','Y','Y','Y','Y','Y','Y')" > /dev/null 2>&1
+		/usr/sbin/espdbinit -d mysql -s "insert into db values ('localhost','ssdb','root','Y','Y','Y','Y','Y','Y')" > /dev/null 2>&1
+		/usr/sbin/espadmin reload
+		sync
+		/usr/sbin/espdbinit -d mysql -s "create database ssdb" > /dev/null 2>&1
+		/usr/sbin/espdbinit -f $INITFILESDIR/espschema > /dev/null 2>&1
+		if [ $? -ne 0 ] ; then
+		   /usr/bsd/logger "Cannot initalize Embedded Support Partner Database. Shutting down DB Server.."
+		   /usr/sbin/espadmin -u $ADMINUSER shutdown >> $LOGFILE 2>&1
+		   exit 1
+		fi
+		/usr/sbin/espadmin -u $ADMINUSER shutdown >> $LOGFILE 2>&1
+		sleep 5
+	    fi		
+	    $DAEMONDIR/espdbd $DAEMONOPTS >>$LOGFILE 2>&1 &
+	    counter=0
+	    while [ "$counter" -lt 5 ]
+                do      
+                        /usr/sbin/espadmin ver > /dev/null 2>&1
+                        if test $? -eq 0 ; then 
+                                break
+                        fi
+                        sleep 2                     # This must be enough
+                        counter=`expr $counter + 1`
+                done
+	    # Initialize/Update event list in sss.
+	    /usr/sbin/espevents  > /dev/null 2>&1
+
+            #
+            # Start up the espemd functionality of eventmond daemon and refresh eventmon at this time
+            #
+	    /usr/etc/eventmond -y on -r 
+      fi
+      ;;
+
+  'stop')
+      
+
+      # must call turn off espemd functionality of eventmond here
+      /usr/etc/eventmond -y off
+
+      # shutdown database             
+      /usr/sbin/espadmin -u $ADMINUSER shutdown >> $LOGFILE 2>&1
+
+      # killall server daemons             
+      killall -9 esphttpd
+
+      sleep 2
+      ;;
+
+  *)
+      echo "usage: $0 {start|stop}"
+      ;;
+esac

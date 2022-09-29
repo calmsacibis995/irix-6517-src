@@ -1,0 +1,77 @@
+#!/sbin/sh
+#
+# Archive of the database
+#
+# 	"$Revision: 1.1 $"
+#
+INITDIR=/etc/init.d
+BINDIR=/usr/local/bin
+BIN=/usr/bin
+DATADIR=/var/sss/ssdb/data
+# On IRIX hostname is in /usr/bsd so add this to the path
+HOSTNAME=`hostname`
+lenght=`expr $HOSTNAME | wc -c`
+lenght=`expr $lenght`
+arch_date=`date '+%H%M%S%m%d%Y'`
+datearchived=`date '+%m/%d/%Y'`
+NEXTARCHIVE=$HOSTNAME$arch_date
+
+# user must have root permissions to perform archiving 
+
+ID=`id | sed 's/).*$//' | sed 's/^.*(//'`;
+if [ "$ID" != "root" ]; then
+	echo "Backup operation is not allowed for this user on $hostname"
+	exit $INVALID_USER_EXIT
+fi
+
+#
+# Create the next archive directory and update the archive list. This list
+# is for the System Support Console to use.
+#
+
+mkdir $DATADIR/$HOSTNAME$nextarchive
+
+#
+# Log an event here to SEM to stop processing anything and sleep for 5 secs.
+#
+
+sleep 5
+
+# Lock all the tables at this time and replicate the database.
+
+tables=`$BIN/dbquery -t -s "show tables" sss | cut -d "|" -f2`
+for table in $tables
+do
+	$INITDIR/ssdbinit -d sss -s "lock table $table write"
+	cp $DATADIR/ssdb/$table.ISD $DATADIR/$HOSTNAME$nextarchive
+	cp $DATADIR/ssdb/$table.ISM $DATADIR/$HOSTNAME$nextarchive
+	cp $DATADIR/ssdb/$table.frm $DATADIR/$HOSTNAME$nextarchive
+	sync
+done
+
+# Clear all data tables in the active database and unlock tables
+
+$INITDIR/ssdbinit -d sss -s "delete from event"
+$INITDIR/ssdbinit -d sss -s "delete from actions_taken"
+$INITDIR/ssdbinit -d sss -s "delete from availdata"
+$INITDIR/ssdbinit -d sss -s "delete from system_data"
+$INITDIR/ssdbinit -d sss -s "delete from test_data"
+
+# Create an entry into the privilege tables for the archive and reload
+
+$INITDIR/ssdbinit -d mysql -s "insert into archive_list values ('$NEXTARCHIVE','$datearchived')"
+$INITDIR/ssdbinit -d mysql -s "insert into host values ('localhost','$HOSTNAME$nextarchive','Y','Y','Y','Y','Y','Y')"
+$INITDIR/ssdbinit -d mysql -s "insert into host values ('$HOSTNAME','$HOSTNAME$nextarchive','Y','Y','Y','Y','Y','Y')"
+$INITDIR/ssdbinit -d mysql -s "insert into db values ('localhost','$HOSTNAME$nextarchive','root','Y','Y','Y','Y','Y','Y')"
+$BINDIR/ssdbadmin reload
+
+# Now unlock all tables for SEM to restart send event to SEM to resume event processing
+
+$INITDIR/ssdbinit -d sss -s "unlock tables"
+
+# Now go ahead and compress the database archive
+
+for table in $tables
+do
+	$BINDIR/pack_isam -s $DATADIR/$HOSTNAME$nextarchive/$table
+done 

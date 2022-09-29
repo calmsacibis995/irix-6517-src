@@ -1,0 +1,403 @@
+'\"macro stdmacro
+.TH USINIT 3P
+.SH NAME
+\f4usinit\fP, \f4usdetach\fP, \f4usadd\fP, \f4_utrace\fP, \f4_uerror\fP \- shared arena initialization
+.Op c p a
+.SH C SYNOPSIS
+.B #include <ulocks.h>
+.PP
+\f4usptr_t \(**usinit (const char \(**\f2filename\f4);\f1
+.PP
+\f4int usadd (usptr_t \(**\f2u\f4);\f1
+.PP
+\f4void usdetach (usptr_t \(**\f2u\f4);\f1
+.PP
+\f4extern int _uerror;\fP
+.PP
+\f4extern int _utrace;\fP
+.Op
+.Op f
+.SH FORTRAN SYNOPSIS
+.B #include <ulocks.h>
+.PP
+.B TYPE function usinit (filename)
+.br
+.B character\(**(\(**) filename
+.PP
+.B "subroutine usdetach (u);"
+.br
+.B "TYPE u"
+.br
+.PP
+.in +1i
+where
+.B TYPE
+is
+.B "integer*4"
+in 32 bit mode, and is
+.B "integer*8"
+in 64 bit mode.
+.in -1i
+.PP
+.B subroutine ussettrace ()
+.PP
+.B subroutine usclrtrace ()
+.PP
+.B subroutine usseterror ()
+.PP
+.B subroutine usclrerror ()
+.Op
+.SH DESCRIPTION
+\f4usinit\fP
+is used to initialize a shared arena from which related or unrelated
+processes may allocate and share semaphores, locks and memory.
+Locks, semaphores and memory can then be allocated using the
+.I usptr_t
+returned by \f4usinit\fP.
+More than one call can be made to \f4usinit \fP
+to create separate
+.I arenas
+of locks and semaphores.
+In fact, calls to \f4usinit\fP
+may be made on behalf of a process: when
+\f4sproc\fP(2)
+is called, an arena containing the locks and semaphores for libc
+is created; when
+\f4m_fork\fP(3P)
+is called, an arena is set up to control the spawned tasks.
+\f4usinit\fP uses a file in the file system to name the arena.
+This name can then be used by unrelated processes to access the arena.
+.PP
+\f4usinit\fP creates a file, \f4filename\fP,
+and maps it into the caller's space via
+\f4mmap\fP(2).
+The file is mapped using the
+.SM
+.B MAP_AUTOGROW
+option to \f4mmap\fP(2) (see \f4usconfig\fP(3P)
+for ways to alter this behavior).
+By default the file is not removed when the last process using it is finished.
+This behavior can be modified somewhat via \f4usconfig\fP(3P).
+File locks (see \f4fcntl\fP(2))
+are used to prevent conflicting accesses to this area during the
+\f4usinit\fP call.
+There is no way to tell the id of the process that actually created the arena.
+The file name given to
+\f4usinit\fP
+may be an NFS mounted file, however it is important to understand that
+NFS does not guarantee write synchronization across multiple machines - thus
+if all users of an arena are running on a single machine and using
+an NFS mounted file as the arena, then all will work fine. If
+multiple users running on different machines all access the same
+arena file, the arena will be corrupted.
+.PP
+Gaining access to a particular arena for the purpose of
+sharing locks, semaphores, and memory is dependent on how the
+processes are related and how the arena was initialized.
+If the arena was initialized (which is the default) without the
+.SM
+.B US_SHAREDONLY
+option to
+\f4usconfig\fP(3P)
+then any process with the appropriate permissions can join the
+arena at any time by calling \f4usinit\fP with \f2filename\fP.
+These processes may be unrelated, related via \f4fork\fP, related via
+\f4sproc\fP sharing file descriptors, or related via \f4sproc\fP
+not sharing file descriptors.
+.PP
+If the arena was initialized with the
+.SM
+.B US_SHAREDONLY
+option to
+\f4usconfig\fP(3P)
+then the file specified by
+.I filename
+is unlinked.
+This means that the only processes that can join the arena must
+somehow already have a handle for that arena (i.e. the arena
+must already be mapped into their address space).
+Unrelated processes,
+processes spawned via \f4fork\fP
+before the arena was initialized,
+and process spawned via \f4sproc\fP
+and not sharing file descriptors,
+can never get the appropriate handle.
+If a process with the above characteristics calls
+\f4usinit\fP with
+.I filename
+a NEW arena will be created that has no relation to any other process's
+arena.
+Processes that have the correct handle 
+are automatically made 'members' of the arena
+the first time they use a lock or semaphore.
+They may choose to call \f4usadd\fP
+explicitly so that any potential errors are detected at initialization time,
+rather than the first time a lock or semaphore is used.
+Previous versions of this manual page suggested calling \f4usinit\fP
+rather than \f4usadd\fP.
+This still works for any arena except one using \f4/dev/zero\fP.
+\f4usadd\fP will work for any arena.
+.PP
+Certain attributes of the newly created arena may be set prior to
+the call to \f4usinit\fP by \f4usconfig\fP(3P).
+These include the maximum number of users that can simultaneously
+access the arena, the maximum size the arena can grow to, the
+access permissions on the arena, the type of debugging enabled, and
+where in the caller's address space the arena will be attached.
+The overall size will limit how many locks and semaphores may be allocated and
+how much space in the arena is left over for the user to allocate via
+\f4usmalloc\fP(3P).
+In addition to the arena header, basic lock, and semaphore data structures,
+all history, metering and debug structures are also
+allocated via
+\f4usmalloc\fP(3P)
+from the arena.
+The default size is 64K, and the default number of users is 8.
+.PP
+When called, \f4usinit\fP
+attempts to determine whether the arena described by
+.I filename
+is active (i.e. whether any other
+processes are currently using it).
+This determination is made by checking whether any file locks are
+currently active on the file.
+If so, the caller registers its file lock and merely 'joins' the
+collection of processes using that arena.
+If there are no file locks, the caller re-initializes the entire
+arena.
+Problems can result if a process that did not call \f4usinit\fP
+is still accessing the arena (namely a child of a \f4sproc\fP
+whose parent has died)
+when a new process attempts to join.
+The new process will find no file locks and re-initialize the arena, thus
+destroying any state the first process had.
+This problem can be solved by having all processes register with the
+arena by calling \f4usadd\fP.
+Previous versions of this manual page suggested calling \f4usinit\fP
+rather than \f4usadd\fP.
+This still works for any arena except one using \f4/dev/zero\fP.
+\f4usadd\fP will work for any arena.
+.PP
+As a special case, \f4/dev/zero\fP can be passed as the value for \f2filename\fP.
+Since \f4/dev/zero\fP by definition is private to the process that opens it,
+this is useful only for share group members that are sharing file descriptors.
+The space for \f4/dev/zero\fP comes from the logical swap pool (see \f4swap\fP(1M)) rather than from the file system.
+Depending on the system configuration there may be more space in the logical
+swap pool than on a file system.
+The logical swap pool is also a limited resource and \f4usinit\fP may fail
+due to lack of logical swap.
+It is possible to delay allocation of logical swap (much like the \f4MAP_AUTOGROW\fP
+option delays growth of files) by using the \f4CONF_AUTORESV\fP option of
+\f4usconfig\fP(3P).
+.PP
+\f4usinit\fP
+and the other lock and semaphore routines normally perform their functions
+in silence.
+For a verbose 'trace' of what is being done,
+.Op c p a
+the global
+flag
+.B _utrace
+may be set to non-zero.
+.Op
+.Op f
+the routine \f4ussettrace\fP can be called. \f4usclrtrace\fP can be
+called to turn off tracing.
+.Op
+In addition, if the environment variable
+.SM
+.B USTRACE
+is set, \f4usinit\fP will automatically set
+.Op c p a
+.BR _utrace .
+.Op
+.Op f
+tracing.
+.Op
+The tracing information consists of two types of messages - trace and error.
+Error type messages can be enabled independently from tracing
+messages by
+.Op c p a
+setting the global flag
+.BR _uerror .
+.Op
+.Op f
+calling the routine \f4usseterror\fP.  \f4usclrerror\fP
+can be called to turn off
+error tracing.
+.Op
+In addition, if the environment variable
+.SM
+.B USERROR
+is set, \f4usinit\fP will automatically set
+.Op c p a
+.BR _uerror .
+.Op
+.Op f
+error tracing.
+.Op
+All messages are printed on
+\f4stderr\fP.
+This may aid in debugging the various error returns.
+.PP
+An arena, once established, must reside at the same virtual address in each
+process that attaches to it.
+This implies that if more than one process is creating an arena, the creating
+processes must impose the appropriate ordering.
+The following scenario will lead to such an ordering problem:
+process A creates arena A_arena, and process B creates arena B_arena.
+Then process A attempts to attach (via \f4usinit\fP) to B_arena.
+\f4usinit\fP
+will most probably fail in this case since the virtual address for both
+arenas will probably be identical.
+One way around this ordering problem is to use
+\f4usconfig\fP(3P)
+to manually set the address where the arena should be attached.
+It is then only important that all arena creating processes agree
+on the addresses for each of the arenas.
+Another easy way around this problem is to have all arenas created by
+one process.
+.PP
+A process may detach an arena by calling
+\f4usdetach\fP.
+This call will unmap and close all the relevant file descriptors.
+It does not check for any outstanding locks, allocated memory, etc.
+\f4usdetach\fP
+will not close any pollable semaphores, this must be done before
+calling \f4usdetach\fP.
+For \f4sproc\fP processes sharing file descriptors, if one member calls
+\f4usdetach\fP
+then the arena is detached for the entire share group.
+There is no protection for multiple members of a share group
+simultaneously calling
+\f4usdetach\fP,
+this should not be done.
+.PP
+If \f4usinit\fP
+fails, it is a good idea to
+.op c p a
+set the tracing variable
+.B _utrace
+to 1 or 
+.Op
+set the environment variable
+.SM
+.BR USTRACE ).
+This will provide more descriptive error messages.
+.PP
+\f4usinit\fP or \f4usadd\fP  will fail if one or more of the following are true:
+.TP 10
+\f4EACCES\fP
+The
+.I filename
+argument could not be opened or created for read/write.
+.TP
+\f4ENOSPC\fP
+The file specified by
+.I filename
+could not be grown to the specified size.
+.TP
+\f4ENOMEM\fP
+There is not enough space in the arena to allocate the initial
+set of required locks and semaphores.
+The size of the arena may be manipulated with
+\f4usconfig\fP(3P).
+.TP
+\f4EBUSY\fP
+The caller already has mapped virtual
+space at the address requested with the \f4CONF_ATTACHADDR\fP option of
+\f4usconfig\fP.
+.TP
+\f4EBUSY\fP
+The caller already has mapped virtual
+space at the address required by the arena when attempting to join the arena.
+.TP
+\f4ENXIO\fP
+One or both of the two semaphore device files,
+.B /dev/usema
+and
+.BR /dev/usemaclone ,
+do not exist, or the device is not configured into the system.
+.TP
+\f4EINVAL\fP
+This error is returned if the version the currently attaching process
+was compiled with is incompatible with the version compiled into the creator
+of the arena.
+.TP
+\f4ENOLCK\fP
+There are no more file locks available because the system maximum
+{\f4FLOCK_MAX\fP} [see \f4intro\fP(2)], has been exceeded.
+.TP
+\f4ENOLCK\fP
+\f2filename\fP is in an NFS-mounted directory,
+and either the NFS lock daemon,
+\f4lockd\fP(1M)
+is not running (either on the server or client)
+or the maximum number of file locks that
+\f4lockd\fP
+can handle has been exceeded.
+.TP
+\f4EAGAIN\fP
+\f2filename\fP was set to \f4/dev/zero\fP and there isn't enough logical
+swap space to map the requested size arena.
+.PP
+Errors may also be the result of a \f4mmap\fP(2) or a \f4fcntl\fP(2)
+system call.
+.SH SEE ALSO
+\f4fcntl\fP(2),
+\f4mmap\fP(2),
+\f4sproc\fP(2),
+\f4acquire_lock\fP(3),
+\f4barrier\fP(3P),
+\f4oserror\fP(3C),
+\f4uscasinfo\fP(3P),
+\f4usconfig\fP(3P),
+\f4usgetinfo\fP(3P),
+\f4usmalloc\fP(3P),
+\f4usnewlock\fP(3P),
+\f4usnewsema\fP(3P).
+.SH "DIAGNOSTICS"
+Upon successful completion, \f4usinit\fP returns a pointer to a
+.I usptr_t
+structure. Otherwise, a
+value of
+.SM
+NULL
+is returned and \f4errno\fP
+is set to indicate the error.
+.PP
+Upon successful completion, \f4usadd\fP returns zero.  Otherwise a value
+of negative one is returned and \f4errno\fP
+is set to indicate the error.
+.SH "BUGS"
+\f4usinit\fP string compares \f2filename\fP with the names of existing
+arenas in the calling process.
+If it finds a match, it assumes that the arena already exists and that
+the caller has already (due to already having called \f4usinit\fP with
+the same \f2filename\fP or due to being related to the process that created
+the arena) mapped in the arena.
+This can cause unexpected results if the application has code along the following lines:
+.nf
+
+       filename = strdup(template);
+       mktemp(filename);
+       arena = usinit(filename);
+       (fork, exec, communicate file name to other process,
+	   it attaches to arena)
+       unlink(filename);
+
+.fi
+The second time this is done, \f4mktemp\fP could come up with the exact
+same name file as before (since the first one was unlinked).
+When \f4usinit\fP compares the name to the names of already existing and
+mapped arenas, it will find a match and NOT create a new arena.
+Certainly, in this case, not the desired result.
+.PP
+.SH "WARNINGS"
+Currently, it is not possible to create a shared arena that can be used
+by programs of differing ABIs. This means that o32, N32, and N64 programs
+cannot share an arena.
+For primitives
+that can be shared between 32-bit and 64-bit processes see
+\f4abilock\fP(3P) and \f4test_and_set\fP(3P).
+

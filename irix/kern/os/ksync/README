@@ -1,0 +1,776 @@
+
+Locks and Synchronization
+=========================
+
+A few terms:
+
+The terms "locks" and "mutual exclusion" are used pretty
+interchangeable in this document.  A mutual exclusion lock is used to
+protect data -- to provide a "lock" on or provide exclusive right to
+some data.  A routine which has acquired a mutual exclusion lock "owns"
+it or "holds" the lock.
+
+The term "synchronization" here usually refers to the act of waiting
+for an event (state change), not to mutual exclusion.  The thread of
+execution that uses a synchronizing object to wait for an event does
+not "own" or "hold" that object, though it may be queued on the object.
+
+The term "thread of execution" means a register set and program counter.
+The thread could represent a user process, a system daemon, anonymous
+system services or an interrupt handler.
+
+
+
+Attribution, blame and kudos:
+
+A lot of these routines have mutated over the years, often for the
+better, mostly for the bigger.
+
+Engineers with special need have sometimes added clever new locking
+primitives, especially (lately) in the atomic_ops category.  Most of
+these are very useful, but some are redundant or not always generalized
+as well as they might be (I have sinned thus, too), or unambiguous
+w.r.t. return values.
+
+Please at least check with the Lock Police (Mike Thompson, a.k.a.
+yohn@engr) before adding new locking interfaces.  Maybe what you
+want to do can be done already.
+
+We're available to answer questions or take suggestions about this
+document.  Note that Bob English has made some major changes to the
+mutex, sync-variable and semaphore code in ficus, primarily dealing
+with priority inheritance and scheduling decisions -- he is a good
+contact for questions in these areas.
+
+
+
+-mike
+
+
+Locks and Synchronization Packages
+==================================
+
+There are debugging versions of most the lock and synchronization
+primitives which provide sanity checking and metering.  They are split
+into two packages, one of which implements the sleeping locks and
+synchronization routines, and one of which implements the spinning
+locks.
+
+When the metered packages are installed, one can get information about
+specific lock and synchronization objects through the idbg(1M) utility,
+or with the kernel debugger.
+
+The metered spinning locks package is "dhardlocks", the non-metered
+version is "hardlocks".  Choose one of them in your system.gen file
+(but note that neither of these exist for single-processor systems,
+for reasons that should become apparent).
+
+The metered sleeping locks/synchronizers package is "ksync_metered";
+the non-metered version is "ksync".  Include one, exclude the other.
+
+
+Spinning and Sleeping Locks
+===========================
+
+There are a variety of lock types and primitives supported in the IRIX
+kernel, with varying semantics, but they can be divided into two basic
+classes: locks which can sleep, and those which are guaranteed not to
+sleep.
+
+Sleeping locks, as the name implies, will put the calling thread of
+execution to sleep if the lock isn't immediately available; spinning
+locks will spin in the processor until the lock is available.
+
+How do you choose which type of lock to use?
+
+First, if the lock is to be (or might be) acquired by an interrupt
+handler, there is (currently) no choice:  the lock must be a spinlock
+-- interrupts currently execute without the necessary context which is
+needed to be put to sleep.  (N.B. This rule may change in a future
+release.)
+
+If the lock can only be acquired only by "top-level" kernel routines
+(never by interrupt handlers), a sleeping lock is usually the correct
+choice.  The exception is when the lock is only and always held for a
+very short duration, such as to bump a counter and set a couple of flag
+bits.
+
+Note that (some) interrupts are disabled as a side-effect of holding a
+spinlock, for the following reason:
+
+Say a "top-level" kernel routine wants to use a spinlock to coordinate
+with an interrupt service routine.  If top-level routine successfully
+acquired the spinlock without also disabling the interrupt with which
+it is coordinating, it would be possible for that interrupt to happen
+on the same CPU.  The interrupt routine could also try to acquire the
+spinlock -- and it would spin forever since it has preempted and pinned
+down the top-level routine which currently holds the lock.  You can
+construct a similar scenario with two interrupt handlers at the same
+interrupt level, if one of the handlers does not raise spl to block out
+the other.
+
+
+Spinning Locks
+==============
+
+There are, basically, two varieties of mutual-exclusion spinlocks,
+generic spinlocks and bitlocks.  The generic spinlock uses the lock_t
+data type, while bitlocks are built on unsigned integers or longs.
+
+Spinlocks and bitlocks have similar interfaces, but while the lock_t
+must be considered an "opaque" data type, the bitlock routines use only
+the lock bit, specified in the lock and unlocks calls, to acquire and
+release the bitlock -- the other bits in the lock-word are available to
+be used by the client.
+
+	void	spinlock_init(lock_t *lp, , char *name);
+	void	init_spinlock(lock_t *lp, , char *name, long sequence);
+	void	init_bitlock(uint_t *lp, uint_t lockbit,
+			     char *name, long sequence);
+	void	init_64bitlock(__uint64_t *lp, __uint64_t lockbit,
+			       char *name, long sequence);
+
+	void	spinlock_destroy(lock_t *lp);
+	void	destroy_bitlock(uint *lp);
+	void	destroy_64bitlock(__uint64_t *lp);
+
+The 'name' and 'sequence' arguments above are only used when debugging
+spinlocks are installed.  The name is stored in the lock debug structure;
+the 'sequence', if not METER_NO_SEQ, is used to construct a numeric,
+ascii suffix:
+
+	init_spinlock(&lock, "MyLock", 12);
+	
+will generate a null-terminated ascii debug tag of "MyLock00012"
+(number of in-filled 0's subject to change);
+
+	init_spinlock(&lock, "MyLock", METER_NO_SEQ);
+
+will tag the lock with "MyLock".
+
+	int s = mutex_spinlock(lock_t *lp);
+	int s = mutex_bitlock(uint_t *lp, uint_t bit);
+	int s = mutex_64bitlock(__uint64_t *lp, __uint64_t bit);
+
+	int s = mutex_spintrylock(lock_t *lp);
+	int s = mutex_bittrylock(uint_t *lp, uint_t bit);
+	int s = mutex_64bittrylock(__uint64_t *lp, __uint64_t bit);
+
+	void mutex_spinunlock(lock_t *lp, int s);
+	void mutex_bitunlock(uint_t *lp, uint_t bit, int s);
+	void mutex_64bitunlock(__uint64_t *lp, __uint64_t bit, int s);
+
+The lock routines return a "cookie" indicating the interrupt level
+before the locking operation took place.  This cookie should be
+passed to the corresponding unlock routine, which restores that
+interrupt level.
+
+Note that the the interrupt priority level is set to splhi when the
+spin locks are acquired; if a priority other than splhi is required,
+alternate interfaces exist:
+
+	int s = mutex_spinlock_spl(lock_t *lp, splfunc_t func);
+	int s = mutex_bitlock_spl(uint_t *lp, uint_t bit, splfunc_t func);
+
+If a priority less than splhi is required, but the spinlock is to be
+held for a very short duration, it is suggested that the non-_spl lock
+routines (those that default to splhi) be used anyway -- the acquire
+routines are faster, and blocking out higher interrupts for a very
+short time is probably more ``cost effective'', in that there's less
+chance that the caller will get interrupted while holding the lock.
+
+
+Debugger Hooks
+==============
+
+From idbg(), all these locks can be examined as "lock ADDR" where
+ADDR is the address of the lock.  The debugger knows the type of
+lock based on its address and the information stored in its debug
+structure when the lock was initialized.  (It is mostly for this
+reason that the destroy functions should be called if a spinning
+lock is being discarded -- the spinlocks metering code needs to
+deallocate its metering information.)
+
+
+Nested Spinlocks
+================
+
+There are two actions taken by the standard spinning lock primitives:
+
+1) They raise the interrupt level on the current processor so that an
+interrupt handler which might want to acquire the same spinning lock
+isn't allowed to trigger on that cpu (remember that this could cause
+a deadlock).
+
+2) They "acquire" the lock by setting bits in memory -- after possibly
+waiting for the bits to clear (using load-link/store-conditional
+assembler instructions).
+
+Note that on single-processor systems only the first task needs to be
+(and is) performed.  This is true because not only does raising the
+interrupt level stop interrupt handlers from running, but the system
+scheduler won't reschedule another "top-level" routine on that
+processor while the interrupt level is raised.
+
+Note also that in the case of nested spinlock calls, the first action
+is gratuitous -- if the interrupt level is already sufficiently high
+because a spinlock is already being held, there is no reason to raise
+it again.
+
+For this reason, "nested bitlock" routines are available which perform
+only action 2) above (and, as one might suspect, do nothing on single-
+processor systems).  They may only be called when another spinlock is
+already held, either at the default IPL level (splhi), or above.
+
+	extern void	nested_spinlock(lock_t *lp);
+	extern int	nested_spintrylock(lock_t *lp);
+	extern void	nested_spinunlock(lock_t *lp);
+
+	extern void	nested_bitlock(uint_t *lp, uint_t lockbit);
+	extern int	nested_bittrylock(uint_t *lp, uint_t lockbit);
+	extern void	nested_bitunlock(uint_t *lp, uint_t lockbit);
+
+	extern void	nested_64bitlock(__uint64_t *lp, __uint64_t lockbit);
+	extern int	nested_64bittrylock(__uint64_t *lp, __uint64_t lockbit);
+	extern void	nested_64bitunlock(__uint64_t *lp, __uint64_t lockbit);
+
+As one might suspect, these routines do nothing on single-processor systems
+(and are actually null macros on these systems -- see "sys/sema.h").
+
+The return values for the *trylock functions return a non-zero value if
+the lock was acquired, 0 otherwise (and always success on
+single-processor systems).
+
+
+A Few Spinlock Rules
+====================
+
+A thread of execution that holds a spinlock may not go to sleep.
+
+The system ensures that a spinlock holder doesn't get preempted while a
+spinlock is held.  (A sufficiently high interrupt _may_ trigger while a
+thread of execution holds a spinlock, and the interrupt handler run "on
+top of" the thread, but the original thread continues to execute after
+the interrupt handler has finished.)
+
+And the owner of the spinlock cannot voluntarily go to sleep or switch
+to a different processor.  The metered spinlock package will
+assert-botch if a thread unlocks a spinlock while running on a
+different processor than the one on which it acquired the lock.
+
+
+If more than one spinlock are to be acquired at once, the locks must
+always be acquired in the same order -- but there is no programming
+or runtime assistance available to tell the programmer that she has
+violated this rule, except that the system could get caught in a
+spinning (AB/BA) deadlock).
+
+If the second-in-order lock has already been acquired, one could use a
+conditional-lock routine to try and acquire the first-in-order lock --
+but if the conditional lock attempt fails, there's no choice but to
+unlock the second-in-order, relock both locks in the correct order, and
+recheck relevant state.
+
+Also, while it is not important that spinlocks must be released in any
+particular order when more than one has been acquired, it is very
+important that the cookies returned by the lock routines be passed to
+the unlock routines in reverse (LIFO) order.  If nested spinlocks are
+used and only one cookie is received, the cookie must be passed back on
+the last unlock call.
+
+Let me repeat this in another way: the cookies are really independent
+of the individual spinlocks -- the spinlocks can be unlocked in any
+order as long as: 1) the cookies are returned in last-in-first-out
+order; and 2) the first cookie received is returned with the last
+unlock call (or, possibly with an splx() call after releasing the last
+lock).
+
+
+Single-Processor Spin-Locking Strategies
+========================================
+
+In general, locking is necessary any time data needs to be protected
+against other threads of execution.
+
+On systems prior to ficus/kudzu (that is, through 6.2 and bonzai), the
+system provided certain non-preemption guarantees so that knowledgeable
+programmers could avoid having to take locks in certain circumstances.
+
+Two of these involve only single-processor systems.
+
+The first is when only top-level routines manipulate the particular
+data.  On a single-processor system (RUNNING PRE-FICUS SYSTEMS ONLY!!!)
+there's no need to hold a lock when only top-level routines manipulate
+the data -- because pre-ficus system would not preempt low-priority
+threads of execution with higher-priority threads.
+
+All of the "nested_*" spinlock routines named above are also available
+in pre-ficus system in the form of "mp_*" routines (e.g.: mp_spinlock,
+mp_spintrylock, mp_spinlock).  These routines function exactly as the
+nested versions, except that the metering (debug) package doesn't
+assert (demand) that the interrupt priority level is at least splhi at
+the time of the lock calls -- as it _does_ for the "nested_" routines.
+
+The second case is similar -- when only interrupt routines manipulate
+the data, and on single-processor systems there's no need to protect
+anything (the interrupt handler runs with interrupts at that level
+disabled).
+
+Note Well: the "mp_" routines have been removed in the ficus/kudzu
+trees -- these systems don't guarantee non-preemption of either
+top-level or interrupt-level threads of execution.
+
+
+
+Sleeping Mutual Exclusion Locks
+===============================
+
+There are (currently) three varieties of sleeping mutual-exclusion
+locks.  By "sleeping lock", we mean that the lock routines might queue
+the caller and switch contexts to another thread of execution if the
+lock was not available at the time of the acquisition request.
+
+
+Mutex Sleep Locks
+=================
+
+Strict mutual exclusion locks are provided with mutex_t objects.
+The only operations allowed are lock, trylock, and unlock:
+
+	void	mutex_lock(mutex_t *mp, int flags);
+	int	mutex_trylock(mutex_t *mp);
+	void	mutex_unlock(mutex_t *mp);
+
+
+These locks can only be used if they are unlocked by the same thread
+of execution that locked them.  None of these routines can be called
+from interrupt handlers: mutex_lock cannot be called because it could
+sleep and there is no context in which to sleep; mutex_trylock cannot
+be called because this package needs to assign an "owner" context to
+an aquired lock, and the interrupt routine has no context; and
+mutex_unlock cannot be called because these locks can only be unlocked
+by the same "owner" that locked them, and the interrupt routine
+cannot be the "owner."
+
+Mutexes are not breakable by signals.  They also implement priority
+inheritance:  if the caller must sleep waiting for the mutex, and the
+current mutex owner has a less favorable priority than the caller, the
+mutex owner will inherit the caller's priority until the owner releases
+the lock.
+
+Routines which can't follow the mutex_lock/mutex_unlock rules can use
+the semaphore or mrlock interfaces (explained later).
+
+There are various initialization and debugging routines associated with
+mutexes:
+
+	void	mutex_init(mutex_t *mp, int type, char *name);
+	void	init_mutex(mutex_t *mp, int type, char *name, long sequence);
+	void	mutex_destroy(mutex_t *mp);
+	mutex_t	*mutex_alloc(int type, int flags, char *name);
+	mutex_t	*mutex_dealloc(mutex_t *mp);
+
+Currently, only mutex type "MUTEX_DEFAULT" is supported.
+
+The init routines initialize already-allocated mutexes; the alloc
+routine allocates and initializes a mutex -- the only interesting flag
+value is KM_NOSLEEP (sys/kmem.h).  The name field can be null for any
+of the init/alloc routines -- they is only used by the metering (debug)
+package.
+
+The destroy routine should be called if the mutex is decommissioned so
+that the metering package can deallocate related debugging data
+structures.
+
+The following routines return non-zero if a) any thread currently holds
+the mutex, or b) the calling thread owns the mutex:
+
+	int	mutex_owned(mutex_t *mp)		(a)
+	int	mutex_mine(mutex_t *mp)			(b)
+
+
+Debugger Hooks
+==============
+
+From idbg(): "mutex ADDR"
+
+
+Semaphore Sleep Locks
+=====================
+
+If a sleeping mutual exclusion lock is needed, but the strict mutex_t
+rules cannot be followed, semaphores can be used as simple (sleeping)
+mutual exclusion locks.  Semaphores can be locked by one thread of
+execution and unlocked by another.  Interrupt handlers can
+conditionally-acquire locks and, of course, unlock them (as long as the
+interrupt handler isn't running at splprof!).
+
+Semaphores don't implement priority inheritance, and can be broken,
+depending on arguments passed in the lock call.
+
+	void	initnsema_mutex(sema_t *sp, char *name);
+	int	psema(sema_t *sp, int flags);
+	int	cpsema(sema_t *sp);
+	int	vsema(sema_t *sp);
+	void	freesema(sema_t *sp);
+
+The init routine initializes the counting semaphore to be used as a
+mutual exclusion lock (other uses discussed below, under
+"Synchronication").  The free routines returns any kernel resources
+associated with the semaphore.
+
+The psema routine acquires the semaphore; cpsema conditionally acquires
+it; vsema releases the semaphore.
+
+The bits in the flags word that correspond to PMASK (sys/param.h)
+determine whether the psema call is breakable by a signal.
+
+If those bits are greater than PZERO, the lock attempt will fail if
+there is a signal pending at the time of the lock call; and if the
+caller must sleep waiting to acqire the semaphore, and a signal
+arrives, the signal will prematurely wake the caller.
+
+If the PLTWAIT bit is set (ficus and beyond), the SLTWAIT bit in the
+process structure will be set and the process wil not be considered for
+purposes of load average computation -- PLTWAIT indicates that the
+process is entering a long term wait.
+
+In releases prior to ficus, the PMASK bits determines the priority that
+the caller will run after it wakes _if_ it has to sleep waiting for the
+semaphore; as of ficus, the scheduler uses only the thread's native
+priority (and whatever scheduler earnings it has acquired) to
+determine scheduling order.
+
+Also in released prior to ficus, if the semaphore operation is broken
+and PCATCH is _not_ set, the psema call will longjmp instead of
+return to the caller.
+
+
+Important Note:
+
+It is really bad programming practise to call psema at a breakable
+priority when the semaphore is being used as a mutual exclusion lock
+(as opposed to a synchronizing object); the caller would have to check
+the return value and, on error, retry the semaphore operation.
+
+
+So: when using a semaphore for mutual exclusion, always use:
+
+	(void) psema(&sema, PZERO);
+	...
+	(void) vsema(&sema);
+
+
+Note that semaphores are stateful, so if vsema is called before psema,
+the psema will return immediately.  This is useful when semaphores
+are being used as synchronization objects (discussed later), but care
+must be taken when using them as mutual exclusion objects: either have
+only the psema caller "release" the lock (via vsema) or be very careful
+that there is only one vsema for (and after) each psema.
+
+An example of semaphores used as mutual exclusion locks: file system
+buffers are acquired by the read or write caller (or by a system
+daemon), but if a request is asyncronous (or a read-ahead call), the
+buffer is marked ASYNC, and the interrupt handler releases the
+semaphore after it has finished the disk transaction.
+
+Debugger Hooks
+==============
+
+From idbg(): "sema ADDR"
+
+
+Multi-Access/Single-Update Sleeping Locks
+=========================================
+
+Irix supports a version of multi-access/single-update sleeping locks
+(also known as multi-reader locks):
+
+	void	mrlock(mrlock_t *mrp, int type, int flags);
+	int	cmrlock(mrlock_t *mrp, int type);
+	void	mrunlock(mrlock_t *mrp);
+	int	mrtrypromote(mrlock_t *mrp);
+	void	mrdemote(mrlock_t *mrp);
+
+
+The type is either MR_ACCESS or MR_UPDATE, and flags are those that
+would be passed to psema.  As one might imagine, mrlock allows multiple
+simultaneous accessers or one updater to hold a lock; callers will
+sleep until the lock can be acquired in the desired mode.
+
+A thread of execution which already holds a lock for access mode can
+acquire the lock again (double-trip) in access mode; but an attempt to
+acquire access mode when the caller already holds update mode, or to
+acquire update mode when the caller alreads holds any mode, will hang.
+
+As of ficus, there are also fast-path versions:
+
+	void	mraccess(mrlock_t *mrp, int flags);
+	void	mrupdate(mrlock_t *mrp, int flags);
+	int	mrtryaccess(mrlock_t *mrp);
+	int	mrtryupdate(mrlock_t *mrp);
+	void	mraccunlock(mrlock_t *mrp);
+
+
+The mrlocks don't provide priority inheritance and aren't interruptible
+(breakable) by a signal.
+
+Debugger Hooks
+==============
+
+From idbg(): "mrlock ADDR"
+
+
+SYNCHRONIZATION
+===============
+
+Syncronization Variables
+========================
+
+Synchronization variables (sync variables) are used to wait for a
+condition or event.
+
+To initialize or destroy a sync variable:
+
+	void	sv_init(sv_t *svp, int type, int name);
+	void	init_sv(sv_t *svp, int type, int name, long sequence);
+	sv_t	*sv_alloc(int type, int vmflags, char *name);
+	void	sv_destroy(sv_t *svp);
+	void	sv_dealloc(sv_t *svp);
+
+By default (type SV_DEFAULT or SV_FIFO) callers are woken in first-in/
+first-out order; SV_LIFO forces last-in/first-out.  The name and
+sequence arguments are used only as debug/metering tags.
+
+To wait for an event to occur, a thread can use one of several routines:
+
+	int	sv_wait_sig(sv_t *svp, int flags, void *lockp, int rv);
+	void	sv_wait(sv_t *svp, int flags, void *lockp, int rv);
+
+	int	sv_sema_wait_sig(sv_t *svp, int flags, sema_t *sp);
+	void	sv_sema_wait(sv_t *svp, int flags, sema_t *sp);
+
+	int	sv_mrlock_wait_sig(sv_t *svp, int flags, mrlock_t *mrp);
+	void	sv_mrlock_wait(sv_t *svp, int flags, mrlock_t *mrp);
+
+	int	sv_bitlock_wait_sig(sv_t *svp, int flags,
+			uint_t *lock, uint_t bit, int rv);
+	void	sv_bitlock_wait(sv_t *svp, int flags,
+			uint_t *lock, uint_t bit, int rv);
+
+Sync-variables (a.k.a. condition-variables) carry no state, so the
+caller must use locks to protect the state bits that are involved in
+the decision to wait.
+
+The first two arguments to the wait routines are always the address of
+the sync variable and flags (explained later).
+
+The remaining arguments refer to the mutual exclusion locks the callers
+are using to protect the state or event data.  The address of a locked
+mutual exclusion object is always passed, along with lock-dependent
+"cookies".
+
+For sv_wait and sv_wait_sig, either a spinning lock or sleeping mutex
+lock address can be passed; if it is a spinning lock, the cookie
+returned by the lock call must be passed; if it is a mutex (sleep)
+lock, 0 must be passed.
+
+The "_sig" routines can be broken (the caller awakened early) by signals,
+just as with semaphore operations.
+
+For all the wait calls, the caller is placed on the sync variable sleep
+queue and the lock (whose address is passed as an argument) is
+released; it is the caller's responsibility to reacquire the lock upon
+return from the wait call.
+
+
+The following routines wake up a) at most one, or b) all threads
+waiting on the sync variable, and return the number of threads woken:
+
+	int sv_signal(sv_t *svp);	(a)
+	int sv_broadcast(sv_t *svp);	(b)
+
+
+An example:
+
+	rv = mutex_spinlock(&obj->o_lock);
+	while (!(obj->o_flags & READY)) {
+		obj->o_flags |= WAITING;
+		sv_wait(&obj->o_wait, PZERO, &obj->o_lock, rv);
+		mutex_spinlock(&obj->o_lock);
+	}
+	mutex_spinunlock(&obj->o_lock, rv);
+
+	[] [] [] [] []
+
+	rv = mutex_spinlock(&obj->o_lock);
+	obj->o_flags |= READY;
+	if (obj->o_flags & WAITING) {
+		obj->o_flags &= ~WAITING;
+		sv_broadcast(&obj->o_wait);
+		/*
+		 * ... or sv_signal(&obj->o_wait) if only one
+		 * other thread of execution could sleep on this.
+		 */
+	}
+	mutex_spinunlock(&obj->o_lock, rv);
+
+In the above example, the caller of sv_wait will only return after
+another thread calls sv_signal or sv_broadcast on the same sync
+variable.
+
+
+
+There are only two flags fields of any interest.  One is PNOSTOP,
+which, for breakable calls, directs the sync-wait routine to return
+early if a signal is pending, but not to actually field the signal.
+This bit is also recognized by the semaphore waiting code.
+
+The other bits indicate which kernel timer to use to account for the
+caller's sleep.  A non-default timer is specified thusly:
+
+	flags |= TIMER_SHIFT(AS_PHYSIO_WAIT);
+
+where AS_PHYSIO_WAIT is a timer defined in sys/timers.h.  The timers
+are used only for statistics gathering and don't affect any scheduling
+decisions (these bits are also recognized by psema).
+
+
+Debugger Hooks
+==============
+
+From idbg(): "sv ADDR"
+
+
+
+Semaphores as Synchronizers
+===========================
+
+A semaphore can be used as a simple sync variable.  It should be
+initialized as a syncronizer, not a mutual exclusion semaphore:
+
+	void	initnsema_synch(sema_t *sp, char *name);
+or,	void	initnsema(sema_t *sp, 0, name);
+or,	void	initsema(sema_t *sp, 0);
+
+	int	psema(sema_t *sp, int flags);
+	int	cpsema(sema_t *sp);
+	int	vsema(sema_t *sp);
+
+As discussed earlier (in the Mutual Exclusion section), the flags
+argument to psema determines whether the call can be broken by a
+signal.  If the PMASK bits are > PZERO, the psema call will return
+early if the caller gets a signal -- AND IN THIS CASE WILL LONGJMP if
+not passed PCATCH!!! -- pre-ficus systems only).
+
+Further, semaphores are stateful, so if vsema is called before the
+psema call, the psema will return immediately.
+
+
+
+Atomic Operators
+================
+
+There are a number of simple routines available which can be used to
+manipulate data, without acquiring mutual exclusion locks, in such a
+way the the data is always consistent.
+
+The routines all use the load-link/store-conditional or
+load-link-double/store-conditional-double machine instructions, and
+as such can only operate on 32-bit or 64-bit words.
+
+To understand why an atomic operator is needed to, say, increment an
+integer counter, we need to understand what happens in a simple
+memory operation.  To effect:
+
+	extern int prince;
+	prince++;
+
+The compiler must generate a load instruction to put the value of (the
+memory location referenced by) "prince" in a register, add one to the
+register, then store it in (the memory location still known as) "prince".
+
+But what if an interrupt occurred between the load and the store, and
+the interrupt handler also incremented "prince", or if another thread
+of execution was running the same code, incrementing "prince" at the
+same time?  One of the increments would be lost.
+
+The same is true of bit operations, such as:
+
+	extern int zoobie;
+
+	zoobie |= ZOOBIE_DONE;
+	zoobie &= ~ZOOBIE_WAIT;
+
+Most of the atomic operators are defined in "sys/atomic_ops.h" and
+implemented in "ml/atomic_ops.h".
+
+And note that some of these operations are in-line functions in the
+Mongoose compiler!
+
+
+Atomic Increment / Decrement
+============================
+
+	extern int atomicAddInt(int *, int);
+	extern uint atomicAddUint(uint *, uint);
+	extern long atomicAddLong(long *, long);
+	extern unsigned long atomicAddUlong(unsigned long *, unsigned long);
+	extern int64_t atomicAddInt64(int64_t *, int64_t);
+	extern uint64_t atomicAddUint64(uint64_t *, uint64_t);
+
+Each of the add routines take a pointer to the word and the value
+to be added (the values to be 'added' can be negative, of course,
+for the signed-type routines).
+
+
+Setting / Clearing Bits
+=======================
+
+The set- or clear-bit are similar:  the first argument is the address
+of the word, and the second is the bits in the word to set or clear.
+
+	extern long atomicSetLong(long *, long);
+	extern long atomicClearLong(long *, long);
+	extern int atomicSetInt(int *, int);
+	extern int atomicClearInt(int *, int);
+	extern uint atomicSetUint(uint *, uint);
+	extern uint atomicClearUint(uint *, uint);
+	extern unsigned long atomicSetUlong(unsigned long *, unsigned long);
+	extern unsigned long atomicClearUlong(unsigned long *, unsigned long);
+
+
+There are also bit-set and bit-clear operations that interoperate with
+the mutex_bitlock routines.  Say you are using a mutex_bitlock to
+protect, among other things, the bits in the word in which the bitlock
+resides.  If in some cases you only wanted to set or clear some of the
+bits in that word, you would _always_ have to use the atomicSet/atomicClear
+routines, or, you could use mutex_bitlock routines for some of them and
+mutex_bitlock-compatible bit set/clear routines otherwise:
+
+	extern uint_t	bitlock_clr(uint_t bits*, uint_t lockbit, uint_t clr);
+	extern uint_t	bitlock_set(uint_t bits*, uint_t lockbit, uint_t set);
+
+The arguments to the bitlock_{clr,set} routines are: the address of the
+memory word containing the bits; the lock bit used by mutex_bitlock;
+and the bits to clear or set.  These routines work much as the
+atomic{Set,Clear} routines, except that they won't update the target
+word while the lockbit is set.
+
+
+Test_and_Set / Compare_and_Swap
+===============================
+
+To arbitrarily set the value of a word, and return the previous value:
+
+	extern int	test_and_set_int(int * loc, int new);
+	extern long	test_and_set_long(long * loc, long new);
+	extern void *	test_and_set_long(long * loc, long new);
+
+To set the value of a word, but only if it matches the passed value:
+
+	extern int	compare_and_swap_int(int *, int old, int new);
+	extern int	compare_and_swap_long(long *, long old, long new);
+	extern int	compare_and_swap_ptr(void **, void *old, void *new);
+
+

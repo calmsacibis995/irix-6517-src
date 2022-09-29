@@ -1,0 +1,53 @@
+# Makefile libsk/graphics
+#
+# This is the top level makefile for graphics drivers.
+# Files in this directory are machine independent.
+#
+# $Revision: 1.50 $
+
+SKDEPTH= ..
+include $(SKDEPTH)/libskdefs
+
+OBJECTDIR=$(TARGETDIR)
+LIBPATH=$(LIBNAME)
+
+IP19_X=\#
+IP20_X=\#
+IP21_X=\#
+IP25_X=\#
+IP22_X=\#
+IP26_X=\#
+IP27_X=\#
+IP27XXL_X=\#
+IP28_X=\#
+IP30_X=\#
+IP32_X=\#
+$(CPUBOARD)_X=
+
+$(IP19_X)SUBDIRS=KONA VENICE EXPRESS CURSOR
+$(IP20_X)SUBDIRS=LIGHT EXPRESS CURSOR
+$(IP21_X)SUBDIRS=KONA VENICE EXPRESS CURSOR
+$(IP25_X)SUBDIRS=KONA VENICE EXPRESS CURSOR
+$(IP22_X)SUBDIRS=MGRAS EXPRESS NEWPORT CURSOR
+$(IP26_X)SUBDIRS=EXPRESS CURSOR
+$(IP27_X)SUBDIRS=KONA MGRAS CURSOR RAD1
+$(IP27XXL_X)SUBDIRS=KONA MGRAS CURSOR
+$(IP28_X)SUBDIRS=MGRAS EXPRESS CURSOR
+$(IP30_X)SUBDIRS=MGRAS ODYSSEY CURSOR
+$(IP32_X)SUBDIRS=CRIME CURSOR
+
+CFILES=	gfx.c gfxgui.c htport.c
+LLCDEFS= -D$(CPUBOARD)
+
+COMMONPREF= graphics
+
+default lint ${COMMONTARGS}: ${COMMONPREF}$$@ 
+	@for i in ${SUBDIRS}; do \
+		if [ "$(SUBDIRS)" = none ] ; \
+		  then exit 0; fi; \
+		echo "=======\tcd $$i; ${MAKE} $@"; \
+		cd $$i; ${MAKE} $@; cd ..; \
+	done
+
+include $(LIBSKRULES)
+MKDEPRULE= $(EVERYPRODUCT_MKDEPRULE)

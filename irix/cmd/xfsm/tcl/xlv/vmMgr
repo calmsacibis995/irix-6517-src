@@ -1,0 +1,713 @@
+#!/usr/sgitcl/bin/moat
+#Tag 0x00FFD001
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	vmMgr
+# Version:	$Revision: 1.12 $
+# Synopsis:	The main script for the XFSM xlv volume manager.
+# Functions:	vm:initialize
+#		vm:createApplication
+#		vm:createMenu
+#		vm:createContents
+#		vm:createIconPanelPopup
+#		vm:searchCompleted
+#		vm:openIconCb
+#		vm:viewCb
+#		vm:selectedCb
+#		vm:_remove
+#		vm:_doRemove
+#		vm:_save
+#		vm:_exit
+#%COMMENT_END
+
+global	_GD_vmm _GW_vmmMenu G_data
+
+#########################################
+#	Widget Creation Procedures	#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vm:initialize
+# Synopsis:	Initializes variables in preparation for starting the app.
+#		This includes defining the menu structures for the pulldown
+#		and popup menus and setting traces on variables.
+# Arguments:	None
+#%COMMENT_END
+proc vm:initialize {} \
+{
+	global	_GD_vmm _GD_vmmCfrm G_data env
+
+	set _GD_vmm(class)	VOL
+	set _GD_vmm(style)	Icon
+	set _GD_vmm(tmplDir)	/var/xfs/templates
+	set _GD_vmm(commands)	{template attach detach remove
+				 vol plex ve info quit}
+
+	set _GD_vmm(template,sel)	{ false true false }
+	set _GD_vmm(attach,sel)		{ false true false }
+	set _GD_vmm(detach,sel)		{ false true false }
+	set _GD_vmm(remove,sel)		{ false true true  }
+	set _GD_vmm(vol,sel)		{ true  true true  }
+	set _GD_vmm(plex,sel)		{ true  true true  }
+	set _GD_vmm(ve,sel)		{ true  true true  }
+	set _GD_vmm(info,sel)		{ false true true  }
+	set _GD_vmm(quit,sel)		{ true  true true  }
+
+	lappend _GD_vmm(menus) {selected xmCascadeButton {
+			{new	  xmCascadeButton {
+				{vol	xmPushButton}
+				{plex	xmPushButton}
+				{ve	xmPushButton} }
+			}
+			{attach	xmPushButton}
+			{sep1     xmSeparator}
+			{detach	  xmPushButton}
+			{remove	  xmPushButton}
+			{sep2     xmSeparator}
+			{template xmPushButton}
+			{info	xmPushButton}
+			{sep3     xmSeparator}
+			{quit	  xmPushButton}
+			}
+		}
+	lappend _GD_vmm(menus) {view xmCascadeButton {
+			{search	  xmPushButton}
+			{sep1     xmSeparator}
+			{asIcon	  xmToggleButton}
+			{asList	  xmToggleButton}
+			{asColumn xmToggleButton}
+			{sep2     xmSeparator}
+			{shelf	  xmToggleButton}
+			}
+		}
+
+
+	set _GD_vmmCfrm(delete,opts) ""
+
+	set _GD_vmmCfrm(delete,answer)	false
+	trace variable _GD_vmmCfrm(delete,answer) w vm:_doRemove
+
+        set _GD_vmm(quit,answer) false
+        trace variable _GD_vmm(quit,answer) w vm:_exit
+
+        if {[info exists env(XFSTCL_XLVSRC_DIR)]} {
+                set G_data(sourcedir) $env(XFSTCL_XLVSRC_DIR)
+        } else {
+                set G_data(sourcedir) /usr/xfsm/xlv
+        }
+}
+
+#%COMMENT_BEGIN
+# Function:	vm:createApplication
+# Synopsis:	The entry point for creating the widgets for the application.
+# Arguments:	None
+#%COMMENT_END
+proc vm:createApplication {} \
+{
+	global	_GW_vmm _GW_vmmMenu _GW_vmmPoMenu _GD_vmm
+
+	vm:initialize
+
+	xmMainWindow .main managed
+	xmPanedWindow .main.pane
+
+	set menu [vm:createMenu .main]
+	set form [vm:createContents .main.pane]
+	$menu.selected cascadingCallback \
+			"mu:ipSelectCb $_GW_vmm(panel) _GD_vmm _GW_vmmMenu"
+
+	foreach item {Icon List Column} {
+		ip:registerMVC vm $item $_GW_vmmMenu(as$item)
+	}
+	ip:registerMVC vm Shelf $_GW_vmmMenu(shelf)
+
+	set item search
+	$_GW_vmmMenu($item) activateCallback "vm:viewCb $_GW_vmm(panel) $item"
+
+        ####    Set initial state for the "selected" menu items
+        mu:ipSelectCb $_GW_vmm(panel) _GD_vmm {_GW_vmmMenu _GW_vmmPoMenu}
+
+	$menu manageChild
+	$form manageChild
+	.main.pane manageChild
+}
+
+#%COMMENT_BEGIN
+# Function:	vm:createMenu
+# Synopsis:	Creates the menu bar at the top of the main window and
+#		defines callbacks for the items in the "Selected" menu.
+# Arguments:	- parent	The widget id for the parent of the menu bar.
+#%COMMENT_END
+proc vm:createMenu { parent } \
+{
+	global	_GW_vmmMenu _GD_vmm
+
+	set mbar [xmMenuBar $parent.menuBar]
+	foreach item $_GD_vmm(menus) {
+		xfs:createMenu $parent $mbar $item _GW_vmmMenu
+	}
+	sgiHelpMenu $mbar
+
+	foreach item $_GD_vmm(commands) {
+		$_GW_vmmMenu($item) activateCallback "vm:selectedCb $item"
+	}
+
+	return $mbar
+}
+
+#%COMMENT_BEGIN
+# Function:	vm:createContents
+# Synopsis:	Creates the icon panel and associated widgets.
+# Arguments:	- parent	The parent for the icon panel.
+#%COMMENT_END
+proc vm:createContents { parent } \
+{
+	global	_GW_vmm _GD_vmm
+
+	set form [xmForm $parent.form managed]
+
+	set po_panel menu_selected
+	set po_tmpl ""
+	set _GW_vmm(panel) [ip:create vm $form $_GD_vmm(style) po_panel po_tmpl]
+	set _GW_vmm(tpanel) [ip:getTemplateWid vm]
+	$_GW_vmm(panel) activateCallback Open "vm:openIconCb $_GW_vmm(panel)"
+	$_GW_vmm(panel) activateCallback Drop "return 1"
+#
+#	"Select" does not get called when "Shift-Select" occurs.  Set the
+#	sensitivity of menu items when the menu is popped up (mapCallback
+#	for the popup menu and cascadingCallback for the pulldown menu).
+#
+#	$_GW_vmm(panel) postCallback Select "mu:ipSelectCb \
+#			$_GW_vmm(panel) _GD_vmm {_GW_vmmMenu _GW_vmmPoMenu}"
+	$_GW_vmm(tpanel) postCallback Drop \
+			"tu:drop $_GD_vmm(class) $_GW_vmm(tpanel)"
+
+	vm:createIconPanelPopup $po_panel
+
+	return $form
+}
+
+#%COMMENT_BEGIN
+# Function:	vm:createIconPanelPopup
+# Synopsis:	Creates a popup menu on the icon panel.
+# Arguments:	- po		The widget id for the popup menu.
+#%COMMENT_END
+proc vm:createIconPanelPopup { po } \
+{
+	global	_GW_vmm _GW_vmmPoMenu _GD_vmm
+
+	xmPopupMenu $po
+	xfs:createMenuItems $po $po \
+		[lindex [lindex $_GD_vmm(menus) 0] 2] _GW_vmmPoMenu
+	foreach item $_GD_vmm(commands) {
+		$_GW_vmmPoMenu($item) activateCallback "vm:selectedCb $item"
+	}
+
+	$po mapCallback "mu:ipSelectCb $_GW_vmm(panel) _GD_vmm _GW_vmmPoMenu"
+}
+
+#########################################
+#		Utilities		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vm:searchCompleted
+# Synopsis:	Resets the "Selected" menu items to their initial state.  When
+#		a search is completed, the icons are replaced.  After a search
+#		is done, all icons are unselected.  This ensures that the menu
+#		items reflect that.
+# Arguments:	None
+#%COMMENT_END
+proc vm:searchCompleted { } \
+{
+	global	_GW_vmm _GW_vmmMenu _GW_vmmPoMenu _GD_vmm
+
+        ####    Reset initial state for the "selected" menu items
+        mu:ipSelectCb $_GW_vmm(panel) _GD_vmm {_GW_vmmMenu _GW_vmmPoMenu}
+}
+
+#########################################
+#		Callbacks		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vm:openIconCb
+# Synopsis:	The function that is defined for the "Open" action on the
+#		icon panel.
+# Arguments:	- panel		The widget id for the icon panel.
+#%COMMENT_END
+proc vm:openIconCb { panel } \
+{
+	vm:selectedCb info
+
+	#	Returning 1 here prevents the default "open"
+	#	action from being invoked
+	return 1
+}
+
+#%COMMENT_BEGIN
+# Function:	vm:viewCb
+# Synopsis:	This is called when the user selects an item from the "View"
+#		pulldown menu.  This function ignores any items other than
+#		"search", since the other items have special callbacks to
+#		ensure consistency with the view toggle buttons to the left
+#		of the icon panel.
+# Arguments:	- w		The widget id for the icon panel.
+#		- op		Indicates which item was selected from the menu.
+#%COMMENT_END
+proc vm:viewCb { w op } \
+{
+	global  _GW_vmm
+
+	if {$op == "search"} {
+		vmSrch:realize vm "" $_GW_vmm(panel)
+		vmSrch:manage vm
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	vm:selected
+# Synopsis:	This is called when the user selects an item from the "Selected"
+#		pulldown menu or the icon panel popup menu.  It creates a list
+#		of object signatures representing each item that was selected
+#		in the icon panel when the action was invoked.  It then
+#		performs the appropriate action.
+#		The procedure mu:ipSelectCb() ensures that a valid number
+#		of icons are selected in the icon panel before this procedure
+#		is called.
+# Arguments:	- op		Indicates which item was selected from the menu.
+#%COMMENT_END
+proc vm:selectedCb { op } \
+{
+	global	_GW_vmm _GD_vmm G_data _GD_resources
+
+	set chosen [$_GW_vmm(panel) selection -encode]
+	if {! [ip:encodeToObject $chosen selected]} {
+		####	TODO
+	}
+
+	. defineCursor watch
+
+	switch $op {
+	    template {
+		if {[llength $selected] == 1} {
+			svTmpl:realize vm ""
+			svTmpl:fill vm VOL vm:_save vm
+			svTmpl:manage vm
+			set _GD_vmm(vm,obj) [lindex $selected 0]
+		} else {
+			em:simpleMsg dk information \
+			    "Please select one icon from which to make a template."
+		}
+	    }
+	    vol {
+		if {! [info exists G_data(source,vmMkVolDlg)]} {
+			source $G_data(sourcedir)/vmMkVolDlg
+			set G_data(source,vmMkVolDlg) true
+		}
+		vmMkVol:realize newvol "" create
+		vmMkVol:clear newvol
+		vmMkVol:setHost newvol [vmSrch:getHost vm]
+		vmMkVol:manage newvol
+	    }
+	    plex {
+		if {! [info exists G_data(source,vmMkPlxDlg)]} {
+			source $G_data(sourcedir)/vmMkPlxDlg
+			set G_data(source,vmMkPlxDlg) true
+		}
+		vmMkPlx:realize newplx "" create
+		vmMkPlx:clear newplx
+		vmMkPlx:setHost newplx [vmSrch:getHost vm]
+		vmMkPlx:manage newplx
+	    }
+	    ve {
+		if {! [info exists G_data(source,vmMkVeDlg)]} {
+			source $G_data(sourcedir)/vmMkVeDlg
+			set G_data(source,vmMkVeDlg) true
+		}
+		vmMkVe:realize newve ""
+		vmMkVe:clear newve
+		vmMkVe:setHost newve [vmSrch:getHost vm]
+		vmMkVe:manage newve
+	    }
+	    detach {
+		if {! [info exists G_data(source,vmDetDlg)]} {
+			source $G_data(sourcedir)/vmDetDlg
+			set G_data(source,vmDetDlg) true
+			vmDet:realize vmDet ""
+		}
+		if {[vmDet:fill vmDet $selected]} {
+			vmDet:manage vmDet
+		}
+	    }
+	    attach {
+		if {! [info exists G_data(source,vmAttDlg)]} {
+			source $G_data(sourcedir)/vmAttDlg
+			set G_data(source,vmAttDlg) true
+			vmAtt:realize vmAtt ""
+		}
+		if {[vmAtt:fill vmAtt $selected]} {
+			vmAtt:manage vmAtt
+		}
+	    }
+	    remove {
+			vm:_remove $selected
+	    }
+	    info {
+		if {! [info exists G_data(source,vmInfoDlg)]} {
+			source $G_data(sourcedir)/vmInfoDlg
+			set G_data(source,vmInfoDlg) true
+		}
+		vmInfo:fill vmInfo "" replace $selected
+	    }
+	    quit {
+		if {! [info exists _GW_vmm(quit,dialog)]} {
+			set _GW_vmm(quit,dialog) [xmQuestionDialog .quitDlg \
+				-messageString $_GD_resources(msg,quit) \
+				-noResize true]
+			$_GW_vmm(quit,dialog).Help unmanageChild
+			$_GW_vmm(quit,dialog) okCallback \
+				"set _GD_vmm(quit,answer) true"
+		}
+		$_GW_vmm(quit,dialog) manageChild
+	    }
+	}
+
+	. defineCursor ""
+}
+
+#########################################
+#	Callback Utilities		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vm:_remove
+# Synopsis:	This is called from vm:selectedCb() when the operation is
+#		"Remove".  It creates a confirmation dialog (if one does not
+#		already exist), fills the dialog, and stores the list of
+#		objects for use after the user has confirmed the action.
+# Arguments:	- objects	The list of objects for the operation.
+#%COMMENT_END
+proc vm:_remove { objects } \
+{
+	global	_GW_vmm _GD_vmmCfrm
+
+	if {[llength $objects] == 0} {
+		return
+	} elseif {[llength $objects] == 1} {
+		set q $_GD_vmmCfrm(delete,msg,single)
+	} else {
+		set q $_GD_vmmCfrm(delete,msg,multiple)
+	}
+	set _GD_vmmCfrm(delete,objects) $objects
+	set cfrmDlg [cfrm:getDialog vmDelete]
+	if {$cfrmDlg == ""} {
+		cfrm:realize vmDelete ""
+		set cfrmDlg [cfrm:getDialog vmDelete]
+		$cfrmDlg okCallback "set _GD_vmmCfrm(delete,answer) true"
+		$cfrmDlg cancelCallback "set _GD_vmmCfrm(delete,answer) false"
+		$cfrmDlg helpCallback "sgiHelpMsg $cfrmDlg"
+
+		set wa [cfrm:getWorkArea vmDelete]
+		set rc [xmRowColumn $wa.rc managed]
+		foreach item $_GD_vmmCfrm(delete,opts) {
+			set _GW_vmm(delete,$item) \
+					[xmToggleButton $rc.$item managed]
+		}
+		cfrm:attachSubSection vmDelete $rc
+	}
+	cfrm:fill vmDelete $q $objects
+	cfrm:manage vmDelete
+}
+
+#%COMMENT_BEGIN
+# Function:	vm:_doRemove
+# Synopsis:	This is called when the user confirms the remove action.  It
+#		is called by setting a trace on a variable which is updated
+#		when the user presses a dialog button in the confirmation
+#		dialog.  If the user accepts the action, the selected objects
+#		are removed.  The icons representing successfully removed
+#		objects are then removed from the icon panel.
+# Arguments:	- vname		The name of the traced variable.
+#		- element	The variables element name if it is an array
+#				element, otherwise an empty string.
+#		-op		"r" for read, "w" for write, "u" for unset.
+#%COMMENT_END
+proc vm:_doRemove { vname element op } \
+{
+	global          _GW_vmm _GD_vmmCfrm
+
+	if {$element != ""} {
+	    set vname ${vname}($element)
+	}
+	upvar $vname x
+
+	if {$x} {
+	    set cfrmDlg [cfrm:getDialog vmDelete]
+	    . defineCursor watch
+	    $cfrmDlg defineCursor watch
+
+	    foreach item $_GD_vmmCfrm(delete,objects) {
+		obj:parse $item o_class o_host o_nm o_type
+		set got_parts [xlv:objPartList $item parts]
+		if {[catch {set ec [xlvCmd delete $item]} error]} {
+		    regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		    em:setMessageString vm \
+			"An error occured while removing the xlv object(s)."
+		    em:storeMsg vm error "Unable to remove $o_nm:\n\t$nerror"
+		} else {
+		    if {$got_parts} {
+			ptSrch:markRawPartsAvail vm $o_host $parts
+		    } else {
+			em:setMessageString vm \
+			 "An error occured while removing the xlv object(s)."
+			em:storeMsg vm warning \
+			 "Unable to mark partitions used by $o_nm as available."
+		    }
+
+		    ####	Add to the list of objects removed
+		    lappend remove_queue $item
+		}
+	    }
+
+	    if {[info exists remove_queue]} {
+		####	Remove the object from the icon panel
+		vmSrch:delObjects vm $remove_queue
+	    }
+
+	    $cfrmDlg defineCursor ""
+	    . defineCursor ""
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	vm:_save
+# Synopsis:	This is called when the user presses the "Make Template" item
+#		in the "Selected" menu.  It gets the data from the selected
+#		object, creates an object signature and writes out the
+#		information to the given file name in the template directory.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- nm		The file name chosen by the user in which
+#				to store the template.
+#		- unique	Whether or not this template already exists
+#				in the template directory.
+#
+#%COMMENT_END
+proc vm:_save { handle nm unique } \
+{
+	global	_GD_vmm
+
+	obj:parse $_GD_vmm(vm,obj) o_class o_host o_nm o_type
+
+	if {[catch {set data [xlvCmd objInfo $_GD_vmm(vm,obj)]} error]} {
+		regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		em:storeMsg $handle warning \
+			"Could not get data for $o_nm.\n\t$nerror"
+		return 0
+	}
+
+	set obj [list [list _TEMPLATE_ VOL $nm $o_type]]
+	if {[tu:write VOL $nm $obj $data]} {
+		if {$unique} {
+			ip:fillPanel vm $obj
+		}
+		return 1
+	}
+
+	return 0
+}
+
+#%COMMENT_BEGIN
+# Function:	vm:_exit
+# Synopsis:	This is called when the user confirms the exit action.  It
+#		is called by setting a trace on a variable which is updated
+#		when the user presses a dialog button in the confirmation
+#		dialog.  If the user accepts the action, the application exits.
+# Arguments:	- vname		The name of the traced variable.
+#		- element	The variables element name if it is an array
+#				element, otherwise an empty string.
+#		-op		"r" for read, "w" for write, "u" for unset.
+#%COMMENT_END
+proc vm:_exit { vname element op } \
+{
+	if {$element != ""} {
+		set vname ${vname}($element)
+	}
+	upvar $vname x
+
+	if {$x} {
+		exit 0
+	}
+}
+
+#########################################
+#		Initialization		#
+#########################################
+xtAppInitialize -class Xlvm
+. getAppResources { 
+	{ hostName \
+	  HostName \
+	  "" \
+	  _GD_resources(hostName) }
+	{ hostsFile \
+	  HostsFile \
+	  /etc/hosts \
+	  _GD_resources(hostsFile) }
+	{ defaultVeType \
+	  DefaultVeType \
+	  "S" \
+	  _GD_resources(default,ve_type) }
+
+	{ logSvString \
+	  LogSvString \
+	  "Log" \
+	  _GD_resources(log,string) }
+	{ dataSvString \
+	  DataSvString \
+	  "Data" \
+	  _GD_resources(data,string) }
+	{ rtSvString \
+	  RtSvString \
+	  "RT" \
+	  _GD_resources(rt,string) }
+	{ plexSvString \
+	  PlexSvString \
+	  "Plex" \
+	  _GD_resources(plex,string) }
+
+	{ cfrmQuit \
+	  CfrmQuit \
+	  "Do you really want to quit?" \
+	  _GD_resources(msg,quit) }
+	{ cfrmMkVol \
+	  CfrmMkVol \
+	  "Create volume on %s?" \
+	  _GD_vmmCfrm(vmMkVol,msg) }
+	{ cfrmMkPlx \
+	  CfrmMkPlx \
+	  "Create plex on %s?" \
+	  _GD_vmmCfrm(vmMkPlx,msg) }
+	{ cfrmMkVe \
+	  CfrmMkVe \
+	  "Create ve on %s?" \
+	  _GD_vmmCfrm(vmMkVe,msg) }
+
+	{ cfrmDeleteS \
+	  CfrmDeleteS \
+	  "Remove this xlv object?" \
+	  _GD_vmmCfrm(delete,msg,single) }
+	{ cfrmDeleteM \
+	  CfrmDeleteM \
+	  "Remove these xlv objects?" \
+	  _GD_vmmCfrm(delete,msg,multiple) }
+
+	{ cfrmVolAttachP \
+	  CfrmVolAttachP \
+	  "Host: %s @n Volume: %s @n Subvolume: %s @n @n \
+		Attach plex %s?" \
+	  _GD_vmmCfrm(vattach,msg,plex) }
+	{ cfrmVolAttachV \
+	  CfrmVolAttachV \
+	  "Host: %s @n Volume: %s @n Subvolume: %s @n @n \
+		Attach ve %s to plex %d?" \
+	  _GD_vmmCfrm(vattach,msg,ve) }
+
+	{ cfrmPlxAttachV \
+	  CfrmPlxAttachV \
+	  "Host: %s @n Plex: %s @n @n \
+		Attach ve %s?" \
+	  _GD_vmmCfrm(pattach,msg,ve) }
+
+	{ cfrmVolDetachP \
+	  CfrmVolDetachP \
+	  "Host: %s @n Volume: %s @n Subvolume: %s @n @n \
+		Detach plex %d and name it %s?" \
+	  _GD_vmmCfrm(vdetach,msg,plex) }
+	{ cfrmVolDetachV \
+	  CfrmVolDetachV \
+	  "Host: %s @n Volume: %s @n Subvolume: %s @n @n \
+		Detach ve %d (plex %d) and name it %s?" \
+	  _GD_vmmCfrm(vdetach,msg,ve) }
+
+	{ cfrmVolRemoveP \
+	  CfrmVolRemoveP \
+	  "Host: %s @n Volume: %s @n Subvolume: %s @n @n \
+		Remove plex %d and discard it?" \
+	  _GD_vmmCfrm(vremove,msg,plex) }
+	{ cfrmVolRemoveV \
+	  CfrmVolRemoveV \
+	  "Host: %s @n Volume: %s @n Subvolume: %s @n @n \
+		Remove ve %d (plex %d) and discard it?" \
+	  _GD_vmmCfrm(vremove,msg,ve) }
+
+	{ cfrmPlxDetachP \
+	  CfrmPlxDetachP \
+	  "Host: %s @n Plex: %s @n @n \
+		Detach ve %d and name it %s?" \
+	  _GD_vmmCfrm(pdetach,msg,ve) }
+	{ cfrmPlxRemoveP \
+	  CfrmPlxRemoveP \
+	  "Host: %s @n Plex: %s @n @n \
+		Remove ve %d and discard it?" \
+	  _GD_vmmCfrm(premove,msg,ve) }
+    }
+
+set defVeTypeCh [string toupper [cindex $_GD_resources(default,ve_type) 0]]
+if {[cequal $defVeTypeCh "S"] || [cequal $defVeTypeCh "C"]} {
+	set _GD_resources(default,ve_type) $defVeTypeCh
+} else {
+	set _GD_resources(default,ve_type) S
+}
+
+####	Set the path for autoloading
+if {[info exists env(XFSTCL_TLIB)]} {
+        set xsh_tlib $env(XFSTCL_TLIB)
+} else {
+        set xsh_tlib /usr/xfsm/lib/tlib
+}
+set auto_path [linsert $auto_path 0 $xsh_tlib]
+
+####	Load the dso
+if {! [xfs:openDSO reason]} {
+	exit 1
+}
+
+####    Parse any command line arguments - ignore any we don't understand
+if {$argc != 0} {
+	set hostname ""; set hostfile ""
+	xfs:parseArgs hostname hostfile
+	if {[clength $hostname]} { set _GD_resources(hostName) $hostname }
+	if {[clength $hostfile]} { set _GD_resources(hostsFile) $hostfile }
+}
+if {! [clength $_GD_resources(hostName)]} {
+	set _GD_resources(hostName) [exec /sbin/uname -n]
+}
+
+####    Make widgets
+vm:createApplication
+. realizeWidget
+
+####	Set the view for the icon panel(s)
+ip:viewCb vm true Icon
+
+####	Must do this after ". realizeWidget"
+source $G_data(sourcedir)/vmSrchDlg
+source $G_data(sourcedir)/vmSrchPtDlg
+vmSrch:realize vm "" $_GW_vmm(panel)
+vmSrch:fill vm $_GD_resources(hostName)
+vmSrch:_accept vm
+
+####	Get all the existing templates
+set templates [tu:getTemplates $_GD_vmm(class)]
+
+####	Add the icons to the template shelf
+ip:fillPanel vm $templates
+
+. mainLoop

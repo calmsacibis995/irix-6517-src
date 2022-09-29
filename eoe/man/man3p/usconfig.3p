@@ -1,0 +1,758 @@
+'\"macro stdmacro
+.TH USCONFIG 3P
+.SH NAME
+\f4usconfig\fP \- semaphore and lock arena configuration operations
+.Op c p a
+.SH C SYNOPSIS
+.B #include <ulocks.h>
+.PP
+\f4ptrdiff_t usconfig (int\f2 cmd\f4, ...);\fR
+.Op
+.Op f
+.SH FORTRAN SYNOPSIS
+.B #include <ulocks.h>
+.PP
+.\" second arg not optional for FORTRAN
+.br
+For 32 bit:
+.br
+.B "integer*4 function usconfig (cmd, arg0 [, arg1 ])"
+.br
+.B integer*4 cmd, arg0
+.br
+.B integer*4 arg1(8)
+.sp
+For 64 bit:
+.br
+.B "integer*8 function usconfig (cmd, arg0 [, arg1 ])"
+.br
+.B integer*4 cmd
+.br
+.B "TYPE arg0  (TYPE varies with cmd, described below)"
+.br
+.B "TYPE arg1  (TYPE varies with cmd, described below)"
+.Op
+.SH DESCRIPTION
+\f4usconfig\fP
+is used to configure the use of semaphores and locks.
+Some of these options set configurable parameters to be used on the next
+\f4usinit\fP(3P),
+others give back information about a particular arena.
+.Op f
+The second argument
+.I arg0
+is never optional, if a particular
+.I cmd
+does not require additional information, 0 should be passed.
+.Op
+In the discussion below, arguments to
+\f4usconfig\fP
+are numbered starting from 1, thus the first argument refers to
+.IR cmd .
+Many of the options require an arena pointer which
+is the value returned by a successful call to \f4usinit\fP and is
+always interpreted as
+.Op c p a
+a \f4usptr_t \(**\fP.
+.Op
+.Op f
+an \f4integer *r\fP (\f4integer *8\fP in 64 bit mode).
+.Op
+.P
+The following
+.IR cmd s
+are available:
+.TP 8
+.SM
+.B CONF_INITSIZE
+Sets the shared segment size (in bytes)
+for semaphores, locks, and the
+\f4usmalloc\fP(3P)
+arena to the value given by the second argument interpreted as an
+.Op c p a
+.BR "unsigned int" .
+.Op
+.Op f
+.BR "integer *4" .
+.Op
+The initial value is 65536 bytes.
+This only has effect if called before a
+\f4usinit\fP(3P).
+It returns the previously set value.
+.TP
+.SM
+.B CONF_INITUSERS
+Sets the maximum number of users
+for a given group of semaphores and locks to the value given by
+the second argument interpreted as an
+.Op c p a
+.BR "unsigned int" .
+.Op
+.Op f
+.BR "integer *4" .
+.Op
+The maximum allowable is 10000 users, and the initial value is 8.
+This only has effect if called before
+\f4usinit\fP(3P).
+Each process that calls
+\f4usinit\fP(3P)
+is considered a user, as is each shared address process that uses a spinlock or
+semaphore without calling
+\f4usinit\fP(3P).
+It returns the previously set value.
+.TP
+.SM
+.B CONF_GETSIZE
+Returns the arena size (in bytes) 
+for the arena specified by
+the second argument interpreted as an
+.Op c p a
+.BR "usptr_t \(**" .
+.Op
+.Op f
+\f4integer*4\fP (\f4integer *8\fP in 64 bit mode).
+.Op
+(as returned by
+.IR usinit (3P)).
+.TP
+.SM
+.B CONF_GETUSERS
+Returns the maximum number of users
+for the arena specified by
+the second argument interpreted as an
+.Op c p a
+.BR "usptr_t \(**" .
+.Op
+.Op f
+\f4integer*4\fP (\f4integer *8\fP in 64 bit mode).
+.Op
+(as returned by
+.IR usinit (3P)).
+.TP
+.SM
+.B CONF_LOCKTYPE
+The second argument interpreted as an
+.Op c p a
+.BR "unsigned int" .
+.Op
+.Op f
+.BR "integer *4" .
+.Op
+defines which of
+.SM
+.BR US_NODEBUG ,
+.SM
+.BR US_DEBUG ,
+or
+.SM
+.B US_DEBUGPLUS
+locks are to be used in the arena
+set up by the next call to
+\f4usinit\fP(3P).
+The
+.SM
+.B US_NODEBUG
+option is the fastest, and no debugging or metering information
+is available.
+.SM
+.B US_DEBUG
+locks provide metering and debugging information about each lock transaction.
+The metering information gathered consists of -
+the number of times the lock is requested
+.RI ( lm_tries );
+the number of times the lock is acquired
+.RI ( lm_hits );
+and the number of times the lock was found locked
+.RI ( lm_spins ).
+The metering is stored in a 
+.I lockmeter_t
+structure and is retrievable via
+\f4usctllock\fP(3P).
+The debugging information maintained consists of 
+the process id of the owner of the lock
+.RI ( ld_owner_pid ).
+The pid is set to \-1 if no one owns the lock.
+The debug info is stored in a 
+.I lockdebug_t
+structure and is retrievable via
+\f4usctllock\fP(3P).
+The
+.SM
+.B US_DEBUGPLUS
+option provides the same debugging and metering information
+and in addition, if either an unset lock is unlocked, a set lock is unlocked
+by other than the setter, or a lock is locked twice by the same caller,
+a message is printed to
+.IR stderr .
+.TP
+.SM
+.B CONF_ARENATYPE
+By default, arenas are configured so that unrelated processes may join
+the arena by specifying the appropriate file name when calling
+\f4usinit\fP(3P).
+This means that the file must continue to exist for the duration of the
+time the arena is in use.
+If the file is a temporary file, it may be difficult for an application program
+to guarantee the file gets removed at the appropriate time.
+If the second argument interpreted as an
+.Op c p a
+.BR "unsigned int" .
+.Op
+.Op f
+.BR "integer *4" .
+.Op
+is set to
+.SM
+.B US_SHAREDONLY
+then
+\f4usinit\fP(3P)
+will unlink the file after it has opened it.
+This of course means that unrelated processes may NEVER join the arena.
+This also implies that all users of the arena must be sharing
+file descriptors, either by using the
+.SM
+.B PR_SFDS
+option to
+\f4sproc\fP(2)),
+or being related via
+\f4fork\fP(2).
+Note however that processes related via
+\f4fork\fP
+share file descriptors only at
+\f4fork\fP
+time, thus the arena must be set up by the parent process before any
+children are spawned.
+Note that if a child is spawned before an arena is set up, and the
+arena type is set to
+.SM
+.B US_SHAREDONLY
+and both the parent and child call
+\f4usinit\fP
+on the same filename,
+they will get separate arenas - probably not the desired result.
+.TP
+.SM
+.B CONF_CHMOD
+Sets the access permissions on the arena and lock files.
+When \f4usinit\fP(3P)
+creates an arena, the user and group ids are set to the callers
+effective user and group id, and the access permissions are set to 0600.
+This makes the arena available only to processes running with
+the same effective user id.
+To allow other user or group ids access to the arena, the mode on the
+various files and locks may be changed by using the
+.SM
+.B CONF_CHMOD
+option.
+The second argument, interpreted as an
+.Op c p a
+.BR "usptr_t \(**" .
+.Op
+.Op f
+\f4integer*4\fP (\f4integer *8\fP in 64 bit mode).
+.Op
+specifies which arena, and
+the third argument, interpreted as an
+.Op c p a
+.B "mode_t"
+.Op
+.Op f
+.B "integer *4" .
+.Op
+specifies the new mode (see
+.IR chmod (2)).
+Access to pollable semaphores is governed on a per semaphore basis and
+is set when first opening the semaphore via
+\f4usopenpollsema\fP(3P).
+.TP
+.SM
+.B CONF_ATTACHADDR
+Sets the virtual address where the arena and locks are attached in the
+calling process to the value specified by
+the second argument, taken as a
+.Op c p a
+.BR "void \(**" .
+.Op
+.Op f
+\f4integer*4\fP (\f4integer *8\fP in 64 bit mode).
+.Op
+It must be a multiple of the underlying page size (see \f4getpagesize\fP(2)).
+Normally, when
+\f4usinit\fP(3P)
+is called, the arena and lock area are attached (via
+\f4mmap\fP(2))
+using the option that lets the system pick an appropriate attach address.
+This may not be appropriate if the original creator of the arena is a small
+process (small code space) and a very large code space unrelated process
+attempts to attach to the arena.
+This option allows the creator to fix an address that is acceptable to
+all processes wishing to join the arena.
+Note that it is important after calling
+\f4usinit\fP(3P)
+to reset the attach address to the initial value (\f4(void \(**) ~0\fP) before another
+\f4usinit\fP(3P)
+is called.
+Otherwise the second call will fail.
+When
+\f4sproc\fP(2)
+is called, an arena used to protect standard I/O is set up automatically.
+By specifying a new attach address before first calling
+\f4sproc\fP(2)
+the location of the I/O arena may be fixed.
+This only has effect if called before a
+\f4usinit\fP(3P).
+It returns the previously set value.
+.TP
+.SM
+.B CONF_AUTOGROW
+If the second argument, interpreted as an
+.Op c p a
+.BR "unsigned int" ,
+.Op
+.Op f
+.BR "integer *4" ,
+.Op
+is zero then the underlying file of a newly created
+arena will be grown to its maximum size (as specified by
+.SM
+.BR CONF_INITSIZE )
+before the arena is mapped in.
+The arena will be mapped without the \f4MAP_AUTOGROW\fP
+option to
+\f4mmap\fP(2).
+If the second argument is non-zero the file will be mapped with the
+\f4MAP_AUTOGROW\fP option.
+This can cause some unexpected failures if the underlying file system
+fills up.
+The default is to map all files with the \f4MAP_AUTOGROW\fP option.
+This only has effect if called before a
+\f4usinit\fP(3P).
+It returns the previously set value.
+.TP
+.SM
+.B CONF_AUTORESV
+If the second argument, interpreted as an
+.Op c p a
+.BR "unsigned int" ,
+.Op
+.Op f
+.BR "integer *4" ,
+.Op
+is non-zero then the arena file will be mapped in with the \f4MAP_AUTORESRV\fP
+option to \f4mmap\fP(2).
+This option is only effective when auto-growing the arena
+(see \f4CONF_AUTOGROW\fP above) and the arena file is the special
+device \f4/dev/zero\fP.
+These two options together permit declaring arenas that are very large
+on systems with limited resources, and only encountering errors if
+in fact the application actually uses too much memory.
+This only has effect if called before a
+\f4usinit\fP(3P).
+It returns the previously set value.
+.TP
+.SM
+.B CONF_HISTON
+Enable semaphore history logging for the arena given by
+the second argument interpreted as an
+.Op c p a
+.BR "usptr_t \(**" .
+.Op
+.Op f
+\f4integer*4\fP (\f4integer *8\fP in 64 bit mode).
+.Op
+The history mechanism may then be enabled for previously allocated
+semaphores using
+\f4usctlsema\fP(3P).
+All subsequent semaphores allocated via
+\f4usnewsema\fP(3P)
+are set to log their history.
+This 
+.I cmd
+serves as a global flag on the history mechanism in conjunction with
+.SM
+.B CONF_HISTOFF 
+to allow for quick enabling and disabling of history.
+The history mechanism logs
+the operation, the semaphore for which the operation was done,
+the pid of the process performing the operation, and the address
+from which the operation was called.
+No history is maintained for locks, since the number of transactions on locks is
+typically large.
+.TP
+.SM
+.B CONF_HISTSIZE
+Set the maximum number of history records kept for the arena specified by
+the second argument interpreted as an
+.Op c p a
+.BR "usptr_t \(**" .
+.Op
+.Op f
+\f4integer*4\fP (\f4integer *8\fP in 64 bit mode).
+.Op
+to the value of the third argument, interpreted as an
+.Op c p a
+.BR "unsigned int" .
+.Op
+.Op f
+.BR "integer *4" .
+.Op
+If set to 0 (the initial value) then new history records are allocated until
+there is no more room in the arena.
+.TP
+.SM
+.B CONF_HISTFETCH
+Fills in a history structure for the arena specified by
+the second argument interpreted as an
+.Op c p a
+.BR "usptr_t \(**" .
+.Op
+.Op f
+\f4integer*4\fP (\f4integer *8\fP in 64 bit mode).
+.Op
+The third argument, interpreted as a
+.Op c p a
+.BR "histptr_t \(**" ,
+.Op
+.Op f
+\f4integer *4 arg1(8)\fP (\f4integer *8 arg2(6)\fP in 64 bit mode)" .
+.Op
+should point to storage where the history data can be copied to.
+This structure contains -
+the number of entries in the history list (
+.IR hp_entries );
+a pointer to the most recent history structure (
+.IR hp_current );
+and the number of non-logged entries due to either lack of space or
+exceeding the maximum number of entries specified by
+.SM
+.BR CONF_HISTSIZE \^(
+.IR hp_errors ).
+The history list is a doubly linked and
+.SM
+.B NULL
+terminated list so that the
+user can then traverse the list as they see fit.
+Traversing the list from
+.I hp_current
+through
+.I h_last
+will access the list from most recent semaphore event to least recent.
+If no more space is available in the arena, the oldest history event
+is re-used.
+The
+.B hist_t
+structure (defined in \f4<ulocks.h>\fP)
+is described below.
+.TP
+.SM
+.B CONF_HISTOFF
+Disable the history mechanism for all semaphores in the arena specified by
+the second argument interpreted as an
+.Op c p a
+.BR "usptr_t \(**" .
+.Op
+.Op f
+\f4integer*4\fP (\f4integer *8\fP in 64 bit mode).
+.Op
+Note that this simply turns off a global history flag for the given arena -
+the individual semaphores' history state is unaffected.
+.TP
+.SM
+.B CONF_HISTRESET
+Reinitializes the history chain for the arena specified by
+the second argument interpreted as an
+.Op c p a
+.BR "usptr_t \(**" .
+.Op
+.Op f
+\f4integer*4\fP (\f4integer *8\fP in 64 bit mode).
+.Op
+to contain no entries. 
+This frees all previously allocated history records.
+.TP
+.SM
+.B CONF_STHREADIOOFF
+By default, the \f2stdio\f1(3) routines available with
+.I libc.a
+are single threaded.
+Multiple shared address space processes may
+attempt to execute them simultaneously and the system guarantees 
+that they will work as expected.
+This requires that the \f2stdio\f1(3) data structures be locked on each access,
+thereby adding overhead which may be unnecessary in certain applications.
+This command turns off any single threading of the following routines:
+.ft 2
+getc, putc, fgetc, fputc, ungetc, getw, putw, gets, fgets, puts, fputs,
+fopen, fdopen, freopen, ftell, rewind, feof, clearerr, ferror,
+setbuf, setlinebuf, setbuffer, setvbuf, fclose, fflush, fread, fwrite, fseek,
+fgetpos, fsetpos, flockfile, funlockfile,
+tempnam, tmpnam, tmpfile, mktemp, mkstemp,
+popen, pclose, atexit,
+printf, fprintf, vprintf, vfprintf, scanf, fscanf,
+.ft 1
+The previous state of \f2stdio\f1(3) single threading is returned.
+.sp
+Note: for FORTRAN the default is different, see \f4CONF_STHREADIOON\fP below.
+.TP
+.SM
+.B CONF_STHREADIOON
+This option enables single threading of the \f2stdio\f1(3) routines.
+The previous state of \f2stdio\f1(3) single threading is returned.
+.sp
+Note: The FORTRAN I/O library is not safe for multi-processing, even if
+the \f2stdio\f1(3) routines are single threaded.  For this reason,
+FORTRAN programs have \f4CONF_STHREADIOOFF\fP configured by default, to avoid
+the extra overhead.  If a FORTRAN program wishes to use
+the \f2stdio\f1(3) routines to get parallel I/O, you must set
+\f4CONF_STHREADIOON\fP to re-enable the single threading.
+.TP
+.SM
+.B CONF_STHREADMISCOFF
+Some routines besides \f2stdio\f1(3) routines are also single threaded
+by default.
+This option disables this for the following routines:
+.ft 2
+opendir, readdir, scandir, seekdir, closedir, telldir,
+dup2, srand, rand,
+addsev, addseverity, fmtmsg, setcat, gettxt, lfmt, localeconv, nl_langinfo,
+pfmt, setlabel, setlocale, strftime, strxfrm, strcoll, vlfmt, vpfmt
+.ft 1
+The previous state of single threading is returned.
+.TP
+.SM
+.B CONF_STHREADMISCON
+This option enables single threading of the miscellaneous routines mentioned
+above.
+This command is the inverse of
+.SM
+.BR CONF_STHREADMISCOFF .
+The previous state of single threading of the miscellaneous
+routines is returned.
+.TP
+.SM
+.B CONF_STHREADMALLOCOFF
+The \f2malloc\f1(3) routines are single threaded by default.
+This option disables single threading for the following routines:
+.ft 2
+malloc, free, realloc, calloc, mallopt, mallinfo.
+.ft 1
+The previous state of their single threading is returned.
+.TP
+.SM
+.B CONF_STHREADMALLOCON
+This option enables single threading of the \f2malloc\f1(3) routines.
+The previous state of single threading is returned.
+.PP
+The
+.SM
+.BR CONF_INITSIZE ,
+.SM
+.BR CONF_ARENATYPE ,
+.SM
+.BR CONF_AUTOGROW ,
+.SM
+.BR CONF_AUTORESV ,
+.SM
+.BR CONF_ATTACHADDR ,
+.SM
+.BR CONF_LOCKTYPE ,
+and
+.SM
+.B CONF_INITUSERS
+only take effect if the caller is the process that first sets up the
+arena.
+If the process is just joining an existing arena, the settings of these
+parameters is ignored.
+.PP
+The structure declaration of 
+.B hist_t
+is:
+.PP
+.RS .3i
+.nf
+.ta \w'\ \ \ \ 'u +\w'struct usema_s *h_sema;\ \ \ 'u
+typedef struct	{
+	struct usema_s *h_sem;	/\(** the semaphore \(**/
+	int h_op;		/\(** the operation \(**/
+	pid_t h_pid;		/\(** the thread process id \(**/
+	int h_scnt;		/\(** the value of the semaphore \(**/
+	pid_t h_wpid;		/\(** the waking process id \(**/
+	char *h_cpc;		/\(** the calling PC \(**/
+	struct hist_s *h_next;	/\(** the next hist_t in the chain \(**/
+	struct hist_s *h_last;	/\(** the previous hist_t in the chain \(**/
+} hist_t;
+.fi
+.RE
+.Op f
+.PP
+In Fortran, an array is returned with the same structure as hist_t.  The
+mapping is as follows.
+.br
+.PP
+.RS .3i
+.nf
+.ta \w'\ \ \ \ 'u +\w'struct usema_s *h_sema;\ \ \ 'u
+In 32 bit mode:
+	h_sem = arg1(1)
+	h_op = arg1(2)
+	h_pid = arg1(3)
+	h_scnt = arg1(4)
+	h_wpid = arg1(5)
+	h_cpc = arg1(6)
+	h_next = arg1(7)
+	h_last = arg1(8)
+.sp
+In 64 bit mode:
+C	4294967295 is (2**32)-1
+	h_sem = arg1(1)
+	h_op = rshift(arg1(2),32_8)
+	h_pid = and(arg1(2),4294967295_8)
+	h_scnt = rshift(arg1(3),32_8)
+	h_wpid = and(arg1(3),4294967295_8)
+	h_cpc = arg1(4)
+	h_next = arg1(5)
+	h_last = arg1(6)
+.fi
+.RE
+.Op
+.PP
+.I h_sem
+is the address of the semaphore.
+.I h_next
+and
+.I h_last
+are the linkages that chain all the history records together.
+.I h_op
+defines what operation was performed on the semaphore.
+Valid operation types are defined in
+.IR <ulocks.h> .
+.I h_pid
+is the process id of the caller making the semaphore call.
+.I h_scnt
+is the semaphore count at the end of the operation.
+For the
+.SM
+.B HOP_PWOKE
+operation type, the count is the current semaphore count at the time
+the process ran after being woken.
+Pollable semaphores will never record a
+.SM
+.B HOP_PWOKE
+event.
+.I h_wpid
+is the process id of the process to next receive the semaphore.
+It is only valid for the
+.SM
+.B HOP_VWAKE
+operation.
+.I h_cpc
+is the address in the callers code that the semaphore operation was called from.
+.PP
+The structure declaration of 
+.B histptr_t
+is:
+.PP
+.RS .3i
+.nf
+.ta \w'\ \ \ \  'u +\w'hist_t *hp_current;\ \ \ 'u
+typedef struct histptr_s	{
+	hist_t *hp_current;	/\(** pointer to the last hist_t \(**/
+	int hp_entries;		/\(** count of hist_t structs \(**/
+	int hp_errors;		/\(** # of errors due to lack of space \(**/
+} histptr_t;
+.fi
+.RE
+.PP
+\f4usconfig\fP
+will fail if one or more of the following are true:
+.TP 10
+\f4EINVAL\fP
+.I cmd\^
+is not a valid command.
+.TP
+\f4EINVAL\fP
+.I cmd 
+is equal to
+.SM
+.B CONF_INITSIZE
+and the second argument
+is less than the system-imposed minimum (4096 bytes)
+or greater than the system-imposed maximum size for a mapped memory segment.
+.TP
+\f4EINVAL\fP
+.I cmd 
+is equal to
+.SM
+.B CONF_INITUSERS
+and the second argument
+is greater than the system-imposed maximum (10000).
+.TP
+\f4EINVAL\fP
+.I cmd 
+is equal to
+.SM
+.B CONF_ARENATYPE
+and the second argument
+is not equal to either
+.SM
+.B US_SHAREDONLY
+or
+.SM
+.BR US_GENERAL .
+.TP
+\f4EINVAL\fP
+.I cmd 
+is equal to
+.SM
+.B CONF_HISTFETCH
+and
+history is not currently enabled.
+.SH SEE ALSO
+\f4chmod\fP(2),
+\f4usctllock\fP(3P),
+\f4usctlsema\fP(3P),
+\f4usinit\fP(3P),
+\f4usinitlock\fP(3P),
+\f4usinitsema\fP(3P),
+\f4usmalloc\fP(3P),
+\f4usnewlock\fP(3P),
+\f4usnewsema\fP(3P),
+\f4usnewpollsema\fP(3P).
+.SH DIAGNOSTICS
+Upon successful completion, the return value is dependent on the
+particular command.
+.SM
+.BR CONF_AUTORESV ,
+.SM
+.BR CONF_AUTOGROW ,
+.SM
+.BR CONF_ATTACHADDR ,
+.SM
+.BR CONF_STHREADMALLOCOFF ,
+.SM
+.BR CONF_STHREADMALLOCON ,
+.SM
+.BR CONF_STHREADMISCOFF ,
+.SM
+.BR CONF_STHREADMISCON ,
+.SM
+.BR CONF_STHREADSTDIOOFF ,
+.SM
+.BR CONF_STHREADSTDIOON ,
+.SM
+.BR CONF_HISTRESET ,
+.SM
+.BR CONF_HISTSIZE ,
+.SM
+.BR CONF_HISTON ,
+.SM
+.BR CONF_HISTOFF ,
+.SM
+.BR CONF_GETSIZE ,
+and
+.SM
+.B CONF_GETUSERS
+never return an error.
+Otherwise, a
+value of \-1 is returned and \f4errno\fP
+is set to indicate the error.

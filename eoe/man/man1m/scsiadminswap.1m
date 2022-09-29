@@ -1,0 +1,183 @@
+.TH scsiadminswap 1M
+.SH NAME
+scsiadminswap \- perform a live plug or unplug of a scsi device
+.SH SYNOPSIS
+.nf
+\f3scsiadminswap\f1 [ options ]
+.sp .8v
+.fi
+.SH DESCRIPTION
+
+\f2scsiadminswap\f1 allows a user to live plug or unplug a scsi device
+assuming it is not a primary resource (such as the system disk).  There
+are three required options.  These indicate whether to perform a plug or an
+unplug and provide a bus and device number.  An additional argument can be
+used to change the default timeout value.  To execute \f2scsiadminswap\f1,
+a user must have root status.  
+
+There are many different ways that a disk may be accessed.  While this man
+page outlines and gives examples of the more common ones, if there is any
+question the user should check the man pages for umount, mount, or the
+Insight book "SGI Admin: IRIX Admin: Disks and Filesystems."  If the disk
+is being used as part of an xlv volume more information can be found via
+man on xlv_mgr, xlv_make, xlv_assemble, xlv_shutdown, or chapter 4 of the
+above Insight book.
+
+.B Unplugging a disk:
+
+Before executing the \f2scsiadminswap\f1 unplug, all the file systems of the
+disk in question must be unmounted (see \f2umount(1M)\f1), detached (if a
+mirrored xlv volume) see xlv_mgr(1M).  To do so it may be necessary to use
+\f2fuser(1M)\f1 to kill any processes using the file systems.  If a file
+system on the disk is an unmirrored xlv volume it is also necessary to
+execute an \f2xlv_shutdown(1M)\f1 after the umount.  For each file system
+on the disk one of the following steps should be taken.  After one of the
+below cases (or other as needed) has been performed for all file systems on
+the disk then run scsiadminswap -u -b # -d #.
+
+.nf
+.ta
+Case 1: the file system is not an xlv volume
+1) Unmount the file system
+  a) Hint: fuser finds and kills processes using a file system.
+
+Case 2: the file system is an unmirrored xlv volume:
+1) Unmount the file system
+  a) Hint: fuser finds and kills processes using a file system.
+2) Perform an xlv_shutdown. 
+
+Case 3: the file system is a mirrored xlv volume:
+1) Run xlv_mgr and perform a detach of the plex using the disk.
+.fi
+
+.B Plugging in a disk:
+
+First run scsiadminswap -p -b # -d #.  Now the file system may need to be
+mounted (see \f2mount(1M)\f1) or made part of an xlv volume.  If the disk
+is going to be part of a mirrored volume and already has vlx header
+information, an xlv_assemble(1M) should be performed.  If the disk is going
+to be part of a mirrored volume but does not have xlv header information an
+xlv_make(1M) should be performed before the xlv_assemble(1M).  If the disk
+had old (from a different volume) xlv information then perform a delete
+using xlv_mgr(1M) before either of the above steps).  Depending on what
+needs to be done one of the following cases may apply.
+
+.nf
+.ta
+Case 1: the file system is not an xlv volume
+1) Mount the file system
+
+Case 2: the file system contains no prior xlv information
+        and will be an unmirrored xlv volume:
+1) Perform an xlv_make
+2) Run xlv_mgr and perform an attach.
+3) Mount the file system
+
+Case 3: the file system is on a disk without prior xlv 
+	information and will be a mirrored xlv volume:
+1) Mount the file system
+2) Perform an xlv_assemble.
+
+Case 4 & 5: As 2 & 3, except the disk has old xlv_info:
+1) Run xlv_mgr and perform a delete of the xlv label information
+2) Go to Case 2 or 3
+.fi
+
+The above cases for plug and unplug only cover the common xlv situations.
+More information regarding xlv volumes can be found in the "SGI Admin: IRIX
+Admin: Disks and Filesystems" Insight Book.  Also see the .B Examples
+section at the end of the man page for a sample session.
+
+.PP
+The required options are:
+.PP
+.TP 13
+.B \-u or \-p
+Indicates whether operation is an (u)nplug or a (p)lug.  If both are
+specified, it will be report as an error.
+.TP 13
+.B \-b bus
+Specifies the scsi bus for the device.
+.TP 13
+.B \-d device number
+Specifies the slot number for the drive to be removed or inserted.
+.TP 13
+Additional options:
+.TP 13
+.B \-t secs
+Specifies the number of seconds the command will wait while the drive is
+inserted or removed.  This default value is 300 (5 minutes).  This is the
+amount of time the command will wait before automatically continuing with
+the sequence.  In general the command continues when the user hits enter
+after having inserted or removed the drive.
+.TP 13
+.B \-f
+Force the command to occur even if it discovers there are still mounted
+file systems, or file systems in use.  This is very dangerous.
+
+.SH Examples
+
+The following sequence of commands could be used to swap a disk in slot 2
+with partition 7 mounted as /x
+
+.nf
+.ta
+umount /x
+scsiadminswap -u -b 0 -d 2
+scsiadminswap -p -b 0 -d 2
+mount -t xfs /dev/dsk/dks0d2s7 /x
+.fi
+
+The following sequence of commands could be used to swap a disk containing
+old xlv information into slot 2 with partition 7 mounted as a unmirrored
+xlv volume named /lv1.
+
+.nf
+.ta
+umount /lv1
+xlv_shutdown -n sample_vol
+scsiadminswap -p -u -b 0 -d 2
+xlv_mgr -xc "delete label /dev/rdsk/dks0d2vh" (delete old label information)
+xlv_make (see xlv_make man page for examples)
+xlv_mgr (perform attach)
+mount -t xfs /dev/dsk/dks0d2s7 /lv1
+.fi
+
+.SH SEE ALSO
+fuser(1M), mount(1M), umount(1M), xlv_assemble(1M), xlv_make(1M),
+xlv_mgr(1M), xlv_shutdown(1M), fstab(4), mtab(4), scsiha(7M).
+
+.SH WARNINGS
+
+Care should be take when using the \f2scsiadminswap\f1 command.  There are
+periods when the scsi bus is in a sensitive state.  The command should
+always be allowed to continue to completion.  Keep the amount of time it
+takes to remove or insert the drive to a minimum.  The most sensitive time
+occurs during the unplug operation while the command is waiting for the
+drive to be removed.  During this period no other data can be written to
+any device on the bus from which the drive is being removed.  If the drive
+can not be removed or inserted in the requested time do NOT kill the
+command half way through, let it finish and re-try again later.  Killing
+the command during execution will leave the scsi bus in a bad state.  Also
+to help ensure command success and prevent the system from failing, any
+file systems on the disk to be removed should not currently be in use.
+
+.SH NOTE
+
+The Performance Co-Pilot (see
+.I PCP(1))
+may be used to monitor SCSI devices, however 
+configuration changes by
+.I scsiadminswap
+may not be asynchronously detected.
+If SCSI devices are being monitored,
+.I libirixpmda(5)
+may be notified and forced to reset using the command:
+
+.in 1.5i
+.ft CW
+.nf
+> pmstore irix.xbow.switch 1
+.fi
+.ft R
+.in

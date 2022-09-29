@@ -1,0 +1,125 @@
+'\"macro stdmacro
+.\" Copyright (c) 1983 Regents of the University of California.
+.\" All rights reserved.  The Berkeley software License Agreement
+.\" specifies the terms and conditions for redistribution.
+.\"
+.\"	@(#)arp.4p	6.2 (Berkeley) 5/15/86
+.\"
+.TH ARP 7P 
+.SH NAME
+arp \- Address Resolution Protocol
+.SH DESCRIPTION
+ARP is a protocol that provides a dynamic mapping from an IP address
+to the corresponding physical network address. The 32-bit IP addresses
+only make sense to the TCP/IP protocol suite. A physical network such as an
+Ethernet or a token ring has it own addressing scheme (often 48-bit 
+addresses) to which any network layer using the physical network must conform.
+Two machines on a given physical network can communicate only if they
+know each other's physical network address. ARP provides a mapping between
+the two different forms of addresses.
+.PP
+ARP caches IP-physical address mappings.  When an interface
+requests a mapping for an address not in the cache, ARP queues the
+message which requires the mapping and broadcasts
+a message on the associated network requesting the address mapping.
+If a response is provided, the new mapping is cached and any pending
+message is transmitted.
+Each address mapping has a timer associated with it and completed
+address mappings are aged after 20 minutes.
+The timer is reset each time the address mapping is updated
+by a SIOCSARP
+.IR ioctl
+call or by sending a packet to the IP address to which the
+mapping belongs. This timer value is not configurable.
+ARP will queue
+at most one packet while waiting for a mapping request to be responded to;
+only the most recently ``transmitted'' packet is kept.
+.PP
+To facilitate communications with systems which do not use ARP,
+.IR ioctl \^s
+are provided to enter and delete entries in the IP-to-physical address tables.
+Usage:
+.LP
+.nf
+	#include <sys/ioctl.h>
+	#include <sys/socket.h>
+	#include <net/if.h>
+	struct arpreq arpreq;
+
+	ioctl(s, SIOCSARP, (caddr_t)&arpreq);
+	ioctl(s, SIOCGARP, (caddr_t)&arpreq);
+	ioctl(s, SIOCDARP, (caddr_t)&arpreq);
+.fi
+.sp
+Each ioctl takes the same structure as an argument.
+SIOCSARP sets an ARP entry, SIOCGARP gets an ARP entry, and SIOCDARP
+deletes an ARP entry.  These ioctls may be applied to any socket descriptor
+.I s,
+but only by the super-user.
+The
+.I arpreq
+structure contains:
+.LP
+.nf
+/* ARP ioctl request */
+struct arpreq {
+	struct sockaddr	arp_pa;		\s-1/* protocol address */\s+1
+	struct sockaddr	arp_ha;		\s-1/* hardware address */\s+1
+	int		arp_flags;	\s-1/* flags */\s+1
+};
+/*  arp_flags field values */
+#define	ATF_COM		0x02	\s-1/* completed entry (arp_ha valid) */\s+1
+#define	ATF_PERM		0x04	\s-1/* permanent entry */\s+1
+#define	ATF_PUBL		0x08	\s-1/* publish (respond for other host) */\s+1
+#define	ATF_USETRAILERS	0x10	\s-1/* send trailer packets to host */\s+1
+.fi
+.LP
+The address family for the
+.I arp_pa
+sockaddr must be AF_INET; for the 
+.I arp_ha
+sockaddr it must be AF_UNSPEC.
+The only flag bits which may be written are ATF_PERM, ATF_PUBL
+and ATF_USETRAILERS.
+ATF_PERM causes the entry to be permanent if the ioctl call succeeds.
+The peculiar nature of the ARP tables may cause the ioctl to fail if more
+than 8 (permanent) Internet host addresses hash to the same slot.
+ATF_PUBL specifies that the ARP code should respond to ARP requests for the
+indicated host coming from other machines.  This allows a host to act as an
+``ARP server,'' which may be useful in convincing an ARP-only machine to talk
+to a non-ARP machine.
+.PP
+ARP is also used to negotiate the use of trailer IP encapsulations;
+trailers are an alternate encapsulation used to allow efficient packet
+alignment for large packets despite variable-sized headers.
+Hosts which wish to receive trailer encapsulations so indicate
+by sending gratuitous ARP translation replies along with replies
+to IP requests; they are also sent in reply to IP translation replies.
+The negotiation is thus fully symmetrical, in that either or both hosts
+may request trailers.
+The ATF_USETRAILERS flag is used to record the receipt of such a reply,
+and enables the transmission of trailer packets to that host.
+.PP
+ARP watches passively for hosts impersonating the local host (i.e. a host
+which responds to an ARP mapping request for the local host's address).
+.SH DIAGNOSTICS
+The following messages can appear on the console:
+.br
+.B "\s-1arp: host with ether address %x:%x:%x:%x:%x:%x is using my IP address x.x.x.x\s+1"
+.br
+ARP has discovered another host on the local network which responds to
+mapping requests for its own Internet address.
+.br
+.B "\s-1arp: ether address is broadcast for IP address x.x.x.x\s+1"
+.br
+ARP has discovered another host on the local network which maps that host's
+IP address onto the ethernet broadcast address.
+.SH SEE ALSO
+inet(7F), arp(1M), ifconfig(1M), intro(3)
+.br
+``An Ethernet Address Resolution Protocol,'' RFC826, Dave Plummer,
+Network Information Center, SRI.
+.br
+``Trailer Encapsulations,'' RFC893, S.J. Leffler and M.J. Karels,
+Network Information Center, SRI.
+'\".so /pubs/tools/origin.bsd

@@ -1,0 +1,153 @@
+#!/bin/csh
+#
+# fsrstress dir [#passes]
+#
+# Run reorganizer on a file system under heavy file system use.
+#
+# Repeatedly and randomly create, append, truncate, verify, remove files.
+# Each phase consists of a random number of processes running in parallel.
+# Each file block contains a known unique pattern (inode number, block offset).
+# Computes a maximum file size such that this test will fill the file system.
+#
+# uses the following unshipped programs:
+#
+#	fop
+#	random
+#
+
+# 
+set lo=5				# range on number of simultaneous ops
+set hi=20				#
+set numf=100				# number of files to create
+set npass=10				# number of passes
+
+if ( $#argv < 1 ) then
+        echo usage: $0 dir '[#passes]'
+        exit 1
+endif
+
+set dirrw=$1/rw
+if ( $#argv == 2 ) set npass=$2
+
+#set fsr=/usr/etc/fsr
+set fsr=../fsr/fsr
+set fop=./fop
+set random=./random
+
+
+rm -rf $dirrw
+mkdir -p $dirrw
+
+
+# compute # free blocks in fs
+set freebb=`df -b $dirrw | tail -1 | awk '{print $5}'`
+if ($freebb > 125000) set freebb=125000
+
+# compute a maximum file size based on free blocks and number of files
+set maxbb=`expr $freebb / $numf \* 50`
+set minbb=`expr $maxbb / 10`
+if ( $minbb == 0 ) set minbb=1
+set firstf=0
+@ lastf = $numf - 1
+
+
+onintr killfsr
+
+# fire up the reorganizer
+set fsrout=/usr/tmp/fsr.out.$$
+./dofsr $fsr $dirrw $fsrout &
+echo ==== fsr -i -v stdout/stderr to $fsrout
+
+# fire up the hard link maker
+set fsrlout=/usr/tmp/fsrlink.out.$$
+(echo while '(1)' '\n' ./fsrlinks $dirrw $npass '>>&' $fsrlout '\n' end | csh &)>&/dev/null
+
+# fire up the reorganizer killer
+./killfsr &
+
+# fire up memory hog
+set rammb=`hinv|grep memory|awk '{print $4}'`
+@ hogpg = $rammb * 256
+@ hogpg -= 2000
+./hogpg $hogpg &
+
+echo ==== freebb=$freebb maxbb=$maxbb minbb=$minbb
+set pass=0
+while (! -e /usr/tmp/core && ! -e core && $pass < $npass)
+	echo ==== pass=$pass `date +%H:%M:%S`
+	@ pass += 1
+#
+# create files
+#
+	set np=`$random $lo $hi`
+	echo ==== make x $np
+	set nblocks=`$random $minbb $maxbb $np`
+	set names=`$random $firstf $lastf $np`
+	while ( $np > 0 )
+		echo ==== '[creat/write]' $nblocks[$np] $dirrw/f$names[$np]
+		$fop -o m -f -b $nblocks[$np] $dirrw/f$names[$np]
+		@ np -= 1
+	end
+	sleep 1
+	killall fop
+
+#
+# truncate files
+#
+	set np=`$random $lo $hi`
+	echo ==== truncate x $np
+	set nblocks=`$random 3 100 $np`
+	set names=`$random $firstf $lastf $np`
+	while ( $np > 0 )
+		echo ==== '[truncate]' $nblocks[$np] $dirrw/f$names[$np]
+		$fop -o t -f -b $nblocks[$np] $dirrw/f$names[$np]
+		@ np -= 1
+	end
+	sleep 1
+	killall fop
+
+#
+# append to files
+#
+	set np=`$random $lo $hi`
+	echo ==== append x $np
+	set nblocks=`$random $minbb $maxbb $np`
+	set names=`$random $firstf $lastf $np`
+	while ( $np > 0 )
+		echo ==== '[append]' $nblocks[$np] $dirrw/f$names[$np]
+		$fop -o a -f -b $nblocks[$np] $dirrw/f$names[$np]
+		@ np -= 1
+	end
+	sleep 1
+	killall fop
+
+#
+# verify files
+#
+	echo ==== verifying....
+	foreach f ($dirrw/f*)
+		$fop -o v $f
+		if ( $status == 2 ) then
+			echo ==== VERIFY $f FAILED
+			echo ==== killall fsr
+			goto killfsr
+		endif
+	end
+
+#
+# remove files
+#
+	set np=`$random $lo $hi`
+	echo ==== rm $np files
+	set names=`$random $firstf $lastf $np`
+	while ( $np > 0 )
+		echo ==== rm -f $dirrw/f$names[$np]
+		rm -f $dirrw/f$names[$np]
+		@ np -= 1
+	end
+end
+
+killfsr:
+echo ==== killpg
+#rm $fsrout
+kill -HUP -$$

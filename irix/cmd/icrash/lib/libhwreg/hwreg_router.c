@@ -1,0 +1,331 @@
+#ident "$Header: "
+#include <sys/types.h>
+#include <klib/hwreg.h>
+
+char hwreg_router_stab[] =
+	"x\000"
+	"RR_STATUS_REV_ID\000"
+	"IN_PORT\000"
+	"P6_8BIT_MODE\000"
+	"P6_LINK_WORKING\000"
+	"P6_RESET_FAILED\000"
+	"P5_8BIT_MODE\000"
+	"P5_LINK_WORKING\000"
+	"P5_RESET_FAILED\000"
+	"P4_8BIT_MODE\000"
+	"P4_LINK_WORKING\000"
+	"P4_RESET_FAILED\000"
+	"P3_8BIT_MODE\000"
+	"P3_LINK_WORKING\000"
+	"P3_RESET_FAILED\000"
+	"P2_8BIT_MODE\000"
+	"P2_LINK_WORKING\000"
+	"P2_RESET_FAILED\000"
+	"P1_8BIT_MODE\000"
+	"P1_LINK_WORKING\000"
+	"P1_RESET_FAILED\000"
+	"LOCAL_SIDEBAND_ERROR\000"
+	"LOCAL_STUCK_ERROR\000"
+	"LOCAL_BAD_DIRECTION\000"
+	"LOCAL_TAIL_ERROR\000"
+	"UNUSED\000"
+	"SW_LEDS<05:00>\000"
+	"CHIP_OUTPUTS\000"
+	"CHIP_INPUTS\000"
+	"CHIP_REV\000"
+	"CHIP_ID\000"
+	"RR_PORT_RESET\000"
+	"PORT_WARM_RESET\000"
+	"P6_RESET\000"
+	"P5_RESET\000"
+	"P4_RESET\000"
+	"P3_RESET\000"
+	"P2_RESET\000"
+	"P1_RESET\000"
+	"LOCAL_BLOCK_RESET\000"
+	"RR_PROTECTION_CONFIG\000"
+	"PARTITION_ID\000"
+	"FORCE_LOCAL_LUT\000"
+	"META_ID_VALID\000"
+	"META_ID\000"
+	"P6_RESET_OK\000"
+	"P5_RESET_OK\000"
+	"P4_RESET_OK\000"
+	"P3_RESET_OK\000"
+	"P2_RESET_OK\000"
+	"P1_RESET_OK\000"
+	"RR_GLOBAL_PARMS\000"
+	"LOCAL_GRANT_TIMEOUT\000"
+	"MAX_RETRY\000"
+	"TAIL_TO_WRAP\000"
+	"AGE_WRAP\000"
+	"URGENT_WRAP\000"
+	"DEADLOCK_TO_VAL\000"
+	"AGE_URGENT_VAL\000"
+	"LOCAL_URGENT_TO\000"
+	"TAIL_TO_VAL\000"
+	"GLOBAL_CLOCK_SEL\000"
+	"BYPASS_ENABLE\000"
+	"RR_SCRATCH_REG0\000"
+	"SCRATCH\000"
+	"RR_SCRATCH_REG1\000"
+	"RR_DIAG_PARMS\000"
+	"ABSOLUTE_HIST_MODE\000"
+	"PORT_RESET_ON_DEADLOCK\000"
+	"SET_LLP_8BIT_MODE\000"
+	"PORT_DISABLE\000"
+	"SEND_DATA_ERROR\000"
+	"RR_NIC_ULAN\000"
+	"CLKDIV_PHI1\000"
+	"CLKDIV_PHI0\000"
+	"PULSE\000"
+	"SAMPLE\000"
+	"DONE\000"
+	"RD_DATA\000"
+	"RR_BIST_DATA\000"
+	"READ_WRITE_DATA\000"
+	"RR_BIST_READY\000"
+	"RDY\000"
+	"RR_BIST_COUNT_TARGET\000"
+	"TARGET_DATA\000"
+	"COUNT_DATA\000"
+	"RR_BIST_SHIFT_LOAD\000"
+	"X\000"
+	"RR_BIST_SHIFT_UNLOAD\000"
+	"RR_BIST_ENTER_RUN\000"
+	"RR_PORT_PARMS1\000"
+	"HIST_SEL\000"
+	"DAMQ_HIST_VC_SEL\000"
+	"NULL_TIMEOUT\000"
+	"MAX_BURST\000"
+	"RR_PORT_PARMS2\000"
+	"RR_PORT_PARMS3\000"
+	"RR_PORT_PARMS4\000"
+	"RR_PORT_PARMS5\000"
+	"RR_PORT_PARMS6\000"
+	"RR_STATUS_ERROR1\000"
+	"FIFO_OVERFLOW\000"
+	"ILLEGAL_PORT\000"
+	"DEADLOCK_TIMEOUT\000"
+	"RECEIVER_TAIL_TIMEOUT\000"
+	"RETRY_COUNT\000"
+	"CB_ERROR_COUNT\000"
+	"SN_ERROR_COUNT\000"
+	"RR_STATUS_ERROR2\000"
+	"RR_STATUS_ERROR3\000"
+	"RR_STATUS_ERROR4\000"
+	"RR_STATUS_ERROR5\000"
+	"RR_STATUS_ERROR6\000"
+	"RR_HISTOGRAM1\000"
+	"BUCKET3\000"
+	"BUCKET2\000"
+	"BUCKET1\000"
+	"BUCKET0\000"
+	"RR_HISTOGRAM2\000"
+	"RR_HISTOGRAM3\000"
+	"RR_HISTOGRAM4\000"
+	"RR_HISTOGRAM5\000"
+	"RR_HISTOGRAM6\000"
+	"RR_RESET_MASK1\000"
+	"RR_RESET_MASK2\000"
+	"RR_RESET_MASK3\000"
+	"RR_RESET_MASK4\000"
+	"RR_RESET_MASK5\000"
+	"RR_RESET_MASK6\000"
+	"RR_ERROR_CLEAR1\000"
+	"RR_ERROR_CLEAR2\000"
+	"Clears on read\000"
+	"RR_ERROR_CLEAR3\000"
+	"RR_ERROR_CLEAR4\000"
+	"RR_ERROR_CLEAR5\000"
+	"RR_ERROR_CLEAR6\000"
+	"RR_META_TABLE<00>\000"
+	"P6_NEXT_PORT\000"
+	"P5_NEXT_PORT\000"
+	"P4_NEXT_PORT\000"
+	"P3_NEXT_PORT\000"
+	"P2_NEXT_PORT\000"
+	"P1_NEXT_PORT\000"
+	"For META_TABLE entries 01 though 31, add entry * 8.\000"
+	"RR_LOCAL_TABLE<00>\000"
+	"For LOCAL_TABLE entries 01 though 15, add entry * 8.\000"
+;
+
+hwreg_field_t hwreg_router_fields[] = {
+	{ 19, 48, 46, 0, 1, 0x0LL },
+	{ 27, 45, 45, 0, 1, 0x0LL },
+	{ 40, 44, 44, 0, 1, 0x0LL },
+	{ 56, 43, 43, 0, 1, 0x0LL },
+	{ 72, 42, 42, 0, 1, 0x0LL },
+	{ 85, 41, 41, 0, 1, 0x0LL },
+	{ 101, 40, 40, 0, 1, 0x0LL },
+	{ 117, 39, 39, 0, 1, 0x0LL },
+	{ 130, 38, 38, 0, 1, 0x0LL },
+	{ 146, 37, 37, 0, 1, 0x0LL },
+	{ 162, 36, 36, 0, 1, 0x0LL },
+	{ 175, 35, 35, 0, 1, 0x0LL },
+	{ 191, 34, 34, 0, 1, 0x0LL },
+	{ 207, 33, 33, 0, 1, 0x0LL },
+	{ 220, 32, 32, 0, 1, 0x0LL },
+	{ 236, 31, 31, 0, 1, 0x0LL },
+	{ 252, 30, 30, 0, 1, 0x0LL },
+	{ 265, 29, 29, 0, 1, 0x0LL },
+	{ 281, 28, 28, 0, 1, 0x0LL },
+	{ 297, 27, 27, 7, 1, 0x0LL },
+	{ 318, 26, 26, 7, 1, 0x0LL },
+	{ 336, 25, 25, 7, 1, 0x0LL },
+	{ 356, 24, 24, 7, 1, 0x0LL },
+	{ 373, 23, 22, 6, 1, 0x0LL },
+	{ 380, 21, 16, 0, 1, 0x0LL },
+	{ 395, 15, 12, 6, 1, 0x1LL },
+	{ 408, 11, 8, 0, 1, 0x1LL },
+	{ 420, 7, 4, 0, 1, 0x1LL },
+	{ 429, 3, 0, 0, 1, 0x1LL },
+	{ 451, 7, 7, 5, 1, 0x0LL },
+	{ 467, 6, 6, 5, 1, 0x0LL },
+	{ 476, 5, 5, 5, 1, 0x0LL },
+	{ 485, 4, 4, 5, 1, 0x0LL },
+	{ 494, 3, 3, 5, 1, 0x0LL },
+	{ 503, 2, 2, 5, 1, 0x0LL },
+	{ 512, 1, 1, 5, 1, 0x0LL },
+	{ 521, 0, 0, 5, 1, 0x0LL },
+	{ 560, 20, 13, 6, 1, 0x0LL },
+	{ 573, 12, 12, 6, 1, 0x0LL },
+	{ 589, 11, 11, 6, 1, 0x0LL },
+	{ 603, 10, 6, 6, 1, 0x0LL },
+	{ 611, 5, 5, 6, 1, 0x1LL },
+	{ 623, 4, 4, 6, 1, 0x1LL },
+	{ 635, 3, 3, 6, 1, 0x1LL },
+	{ 647, 2, 2, 6, 1, 0x1LL },
+	{ 659, 1, 1, 6, 1, 0x1LL },
+	{ 671, 0, 0, 6, 1, 0x1LL },
+	{ 699, 63, 58, 6, 1, 0xfLL },
+	{ 719, 57, 48, 6, 1, 0x3ffLL },
+	{ 729, 47, 36, 6, 1, 0xffeLL },
+	{ 742, 35, 28, 6, 1, 0xaLL },
+	{ 751, 27, 20, 6, 1, 0x1LL },
+	{ 763, 19, 16, 6, 1, 0xfLL },
+	{ 779, 15, 12, 6, 1, 0xfLL },
+	{ 373, 11, 10, 0, 1, 0x3LL },
+	{ 794, 9, 8, 6, 1, 0x3LL },
+	{ 810, 7, 4, 6, 1, 0xfLL },
+	{ 822, 3, 1, 6, 1, 0x0LL },
+	{ 839, 0, 0, 6, 1, 0x1LL },
+	{ 869, 63, 0, 6, 1, 0x0LL },
+	{ 869, 15, 0, 6, 1, 0x0LL },
+	{ 907, 19, 19, 6, 1, 0x0LL },
+	{ 926, 18, 18, 6, 1, 0x0LL },
+	{ 949, 17, 12, 6, 1, 0x0LL },
+	{ 967, 11, 6, 6, 1, 0x0LL },
+	{ 980, 5, 0, 6, 1, 0x0LL },
+	{ 1008, 33, 27, 6, 1, 0x31LL },
+	{ 1020, 26, 20, 6, 1, 0x31LL },
+	{ 1032, 19, 10, 3, 1, 0x0LL },
+	{ 1038, 9, 2, 3, 1, 0x0LL },
+	{ 1045, 1, 1, 0, 1, 0x1LL },
+	{ 1050, 0, 0, 0, 1, 0x0LL },
+	{ 1071, 63, 0, 6, 1, 0x0LL },
+	{ 1101, 0, 0, 0, 1, 0x0LL },
+	{ 1126, 7, 6, 3, 1, 0x0LL },
+	{ 1138, 5, 0, 3, 1, 0x0LL },
+	{ 1168, 63, 0, 4, 1, 0x0LL },
+	{ 1168, 63, 0, 4, 1, 0x0LL },
+	{ 1168, 63, 0, 4, 1, 0x0LL },
+	{ 1224, 19, 18, 6, 1, 0x0LL },
+	{ 1233, 17, 16, 6, 1, 0x0LL },
+	{ 1250, 15, 10, 6, 1, 0x6LL },
+	{ 1263, 9, 0, 6, 1, 0x3f0LL },
+	{ 1365, 33, 33, 7, 1, 0x0LL },
+	{ 1379, 32, 32, 7, 1, 0x0LL },
+	{ 1392, 31, 28, 7, 1, 0x0LL },
+	{ 1409, 27, 24, 7, 1, 0x0LL },
+	{ 1431, 23, 16, 7, 1, 0x0LL },
+	{ 1443, 15, 8, 7, 1, 0x0LL },
+	{ 1458, 7, 0, 7, 1, 0x0LL },
+	{ 1572, 63, 48, 7, 1, 0x0LL },
+	{ 1580, 47, 32, 7, 1, 0x0LL },
+	{ 1588, 31, 16, 7, 1, 0x0LL },
+	{ 1596, 15, 0, 7, 1, 0x0LL },
+	{ 611, 5, 5, 6, 1, 0x1LL },
+	{ 623, 4, 4, 6, 1, 0x1LL },
+	{ 635, 3, 3, 6, 1, 0x1LL },
+	{ 647, 2, 2, 6, 1, 0x1LL },
+	{ 659, 1, 1, 6, 1, 0x1LL },
+	{ 671, 0, 0, 6, 1, 0x1LL },
+	{ 1365, 33, 33, 1, 1, 0x0LL },
+	{ 1379, 32, 32, 1, 1, 0x0LL },
+	{ 1392, 31, 28, 1, 1, 0x0LL },
+	{ 1409, 27, 24, 1, 1, 0x0LL },
+	{ 1431, 23, 16, 1, 1, 0x0LL },
+	{ 1443, 15, 8, 1, 1, 0x0LL },
+	{ 1458, 7, 0, 1, 1, 0x0LL },
+	{ 1893, 23, 20, 6, 0, 0x0LL },
+	{ 1906, 19, 16, 6, 0, 0x0LL },
+	{ 1919, 15, 12, 6, 0, 0x0LL },
+	{ 1932, 11, 8, 6, 0, 0x0LL },
+	{ 1945, 7, 4, 6, 0, 0x0LL },
+	{ 1958, 3, 0, 6, 0, 0x0LL },
+	{ 1893, 23, 20, 6, 0, 0x0LL },
+	{ 1906, 19, 16, 6, 0, 0x0LL },
+	{ 1919, 15, 12, 6, 0, 0x0LL },
+	{ 1932, 11, 8, 6, 0, 0x0LL },
+	{ 1945, 7, 4, 6, 0, 0x0LL },
+	{ 1958, 3, 0, 6, 0, 0x0LL },
+};
+
+hwreg_t hwreg_router_regs[] = {
+	{ 2, 0, 0x0LL, 0, 29 },
+	{ 437, 0, 0x8LL, 29, 8 },
+	{ 539, 0, 0x10LL, 37, 10 },
+	{ 683, 0, 0x18LL, 47, 12 },
+	{ 853, 0, 0x20LL, 59, 1 },
+	{ 877, 0, 0x28LL, 60, 1 },
+	{ 893, 0, 0x30LL, 61, 5 },
+	{ 996, 0, 0x38LL, 66, 6 },
+	{ 1058, 0, 0x50LL, 72, 1 },
+	{ 1087, 0, 0x58LL, 73, 1 },
+	{ 1105, 0, 0x60LL, 74, 2 },
+	{ 1149, 0, 0x68LL, 76, 1 },
+	{ 1170, 0, 0x70LL, 77, 1 },
+	{ 1191, 0, 0x78LL, 78, 1 },
+	{ 1209, 0, 0x10000LL, 79, 4 },
+	{ 1273, 0, 0x20000LL, 79, 4 },
+	{ 1288, 0, 0x30000LL, 79, 4 },
+	{ 1303, 0, 0x40000LL, 79, 4 },
+	{ 1318, 0, 0x50000LL, 79, 4 },
+	{ 1333, 0, 0x60000LL, 79, 4 },
+	{ 1348, 0, 0x10008LL, 83, 7 },
+	{ 1473, 0, 0x20008LL, 83, 7 },
+	{ 1490, 0, 0x30008LL, 83, 7 },
+	{ 1507, 0, 0x40008LL, 83, 7 },
+	{ 1524, 0, 0x50008LL, 83, 7 },
+	{ 1541, 0, 0x60008LL, 83, 7 },
+	{ 1558, 0, 0x10010LL, 90, 4 },
+	{ 1604, 0, 0x20010LL, 90, 4 },
+	{ 1618, 0, 0x30010LL, 90, 4 },
+	{ 1632, 0, 0x40010LL, 90, 4 },
+	{ 1646, 0, 0x50010LL, 90, 4 },
+	{ 1660, 0, 0x60010LL, 90, 4 },
+	{ 1674, 0, 0x10018LL, 94, 6 },
+	{ 1689, 0, 0x20018LL, 94, 6 },
+	{ 1704, 0, 0x30018LL, 94, 6 },
+	{ 1719, 0, 0x40018LL, 94, 6 },
+	{ 1734, 0, 0x50018LL, 94, 6 },
+	{ 1749, 0, 0x60018LL, 94, 6 },
+	{ 1764, 0, 0x10088LL, 100, 7 },
+	{ 1780, 1796, 0x20088LL, 100, 7 },
+	{ 1811, 1796, 0x30088LL, 100, 7 },
+	{ 1827, 1796, 0x40088LL, 100, 7 },
+	{ 1843, 1796, 0x50088LL, 100, 7 },
+	{ 1859, 1796, 0x60088LL, 100, 7 },
+	{ 1875, 1971, 0x70000LL, 107, 6 },
+	{ 2023, 2042, 0x70100LL, 113, 6 },
+	{ 0, 0, 0, 0 }
+};
+
+hwreg_set_t hwreg_router = {
+	hwreg_router_regs,
+	hwreg_router_fields,
+	hwreg_router_stab,
+	46,
+};

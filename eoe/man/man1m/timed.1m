@@ -1,0 +1,285 @@
+'\"macro stdmacro
+.\" Copyright (c) 1980 Regents of the University of California.
+.\" All rights reserved.  The Berkeley software License Agreement
+.\" specifies the terms and conditions for redistribution.
+.\"
+.\"	@(#)timed.2	6.1 (Berkeley) 5/28/86
+.\"
+.TH TIMED 1M "May 28, 1986"
+.UC 6
+.ad
+.SH NAME
+timed \- time server daemon
+.SH SYNOPSIS
+.B /usr/etc/timed
+[
+.B \-tdM
+] [
+.B \-G
+netgroup] [
+.B \-F
+host1 host2 ...]
+.br
+    [
+.B \-n
+network ] [
+.B \-i
+network ] [
+.B \-P
+param-file ]
+.SH DESCRIPTION
+.I Timed
+is a time server daemon and is normally invoked
+at boot time from the /etc/init.d/network file.
+It synchronizes the host's time with the time of other
+machines in a local area network running
+.IR timed .
+These time servers will slow down the clocks of some machines
+and speed up the clocks of others to bring them to the average network time.
+The average network time is computed from measurements of clock differences
+using the ICMP timestamp request message.
+.PP
+.I Timed
+communicates with the
+.IR date (1)
+command in order to set the date globally.
+Adjustments made by the \f1date\fP command are accumulated by
+the time daemon with all other adjustments.
+This means that \f1timed\fP can automatically adjust the system clock
+on an isolated machine, not connected to a network.
+The adjustments from the date command change the
+.I timetrim
+parameter described below.
+.PP
+The service provided by
+.I timed
+is based  on a master-slave scheme.  When
+.I timed
+is started on a machine, it asks the master for the network time
+and sets the host's clock to that time.
+After that, it accepts synchronization messages periodically sent by
+the master and calls
+.IR adjtime (2)
+to perform the needed corrections on the host's clock.
+The master adjusts its own clock by averaging the clocks of all
+trusted machines (see below) with its own clock.
+If the machine running the master crashes, then the slaves elect
+a new master from among slaves running with the
+.B \-M
+flag.
+A
+.IR timed
+running without the
+.BR \-M ,
+.BR \-F ,
+or
+.B -G
+flags will remain a slave.
+.PP
+Note that "master-slave" suggests things to many people that are not true.
+A better word than "master" is "moderator."
+Unless the clock of the so called master is extremely bad,
+the time it distributes to the so called slaves is the median of
+all of the slaves.
+As long as the so called master can keep time for the few seconds
+from when it starts to measure the current time of all of the slaves
+until it sends the difference between each slave's clock and the median,
+the master's clock is fine.
+Bad clocks are treated the same whether they are on the master or a
+slave.  Times that are very different from the median are discarded,
+and then the median of the remaining times is computed and used.
+For that reason, it is practically always wrong to run
+.IR timed
+without the
+.BR \-M
+flag.
+.PP
+.I Timed
+logs accumulated corrections in the system log (see
+.IR syslogd (1M))
+to ease adjusting the local clock.
+The clock can be adjusted by changing the
+.I timetrim
+parameter
+using systune(1M) or with the
+.IR syssgi (2)
+system call.
+This parameter is used by the operating system to compensate for
+variations among machines.  It can be used to improve
+the accuracy of the local clock.
+.B \-P param-file
+specifies a file in which to save a computed value of the
+.I timetrim
+parameter.
+The active value in the operating system is set to the value found in
+the file when the daemon started.
+An error message is displayed when the daemon is first started
+if the file contains nonsense.
+However, a corrected value will be placed in
+the file during its normal updates.
+A good choice for the file name is \f2/var/adm/timetrim\f1.
+.PP
+The
+.B \-F
+flag means only the local machine and the machines
+.I host1, host2,
+etc., are trusted to have good hardware clocks and to be securely
+administered.  Any attempts to change the clocks by other, untrusted
+machines are ignored, except to log them in the system log.
+The clocks of untrusted machines are not averaged by the master if
+the master is the only trusted machine.  Untrusted clocks that are close
+to the clock of the master are used
+if there is more than one trusted master active.
+A master which has been told it is trustworthy will tell untrustworthy
+machines which try to be elected master to be quiet, to "squash" them.
+.PP
+A machine without the
+.B \-G
+or
+.B \-F
+flags trusts all other machines as much as it trusts itself.
+.PP
+The clock of a daemon started with
+.B \-F localhost
+and without
+.B \-G
+"free runs." In other words, if the machine does not trust
+any other machines, it does not try to adjust its own clock.
+.PP
+The
+.B \-G
+flag is used to specify a netgroup (see
+.IR netgroup (4))
+of trusted machines.
+This flag allows central administration of the list of trusted
+machines.
+Making gateways trusted ties the clocks
+in an internet together, because after a network partition is healed,
+the trusted gateways will suppress the upstart local master elected
+during the partition.
+.PP
+.I Timed
+requests synchronization service from the first master server
+located.
+If permitted by the
+.B \-M
+flag, it will provide synchronization service on any attached networks
+on which no current master server was detected.
+Such a server propagates the time computed by the top-level master.
+The
+.B \-n
+flag, followed by the name of a network which the host is connected to
+(see
+.IR networks (4)),
+overrides the default choice of the
+network addresses made by the program.
+Each time the
+.B \-n
+flag appears, that network name is added to a list of valid networks.
+All other networks are ignored.
+The
+.B \-i
+flag, followed by the name of a network to which the host is connected
+(see
+.IR networks (4)),
+overrides the default choice of the network addresses made by the program.
+Each time the
+.B \-i
+flag appears, that network name is added to a list of networks to ignore.
+All other networks are used by the time daemon.
+The
+.B \-n
+and
+.B \-i
+flags are meaningless if used together.
+.PP
+The
+.B \-t
+flag causes
+.I timed
+to trace the messages it receives in the file /var/adm/timed.log.
+Tracing can be turned on or off by the program
+.IR timedc (1M).
+Beware that the log file grows very quickly in a large network.
+.PP
+The
+.B \-d
+flag is for debugging the daemon.
+It causes the program to not put itself into the background.
+.PP
+.I Timed
+checks for a master time server on each network to which
+it is connected, except as modified by the
+.B \-n
+and
+.B \-i
+options described above.
+If it finds masters on more than one network, it chooses one network
+on which to be a "slave," and then periodically checks the other
+networks to see if the masters there have disappeared.
+.PP
+The
+.IR timeslave (1M)
+daemon can be used to inexpensively synchronize the clock on a machine
+to the clock on a remote machine.  It does not require any daemons
+or special programs on the remote machine.
+.PP
+One way to synchronize a group of IRIS's is to use timeslave to
+synchronize the clock of one machine to a distant standard or a radio
+receiver and
+.B \-F hostname
+to tell its timed daemon to trust only itself.
+.PP
+Messages printed by the kernel on the system console occur with
+interrupts disabled.
+This means that the clock stops while they are printing.
+A machine with many disk or network hardware problems and consequent
+messages cannot keep good time by itself.  Each message typically causes
+the clock to lose a dozen milliseconds.  A time daemon can
+correct the result, but will compute a bogus timetrim value.
+.PP
+Messages in the system log about machines that failed to respond
+usually indicate machines that crashed or were turned off.
+Complaints about machines that failed to respond to initial time
+settings are often associated with "multi-homed" machines
+that looked for time masters on more than one network and eventually
+chose to become a slave on the other network.
+.SH WARNING
+If two or more time daemons, whether
+.IR timed ,
+.IR timeslave ,
+or NTP, try to adjust the same clock, temporal chaos will result.
+If both
+.I timed
+and
+.I timeslave
+are run on the same machine, ensure that the
+.B \-G
+flag is not used but that the
+.B \-F
+flag is used, so that
+.I timed
+never attempts to adjust the local clock.
+.PP
+The protocol is based on UDP/IP broadcasts.  All machines within
+the range of a broadcast that are using the TSP protocol must cooperate.
+There cannot be more than a single administrative domain using the
+.B \-F
+or
+.B \-G
+flags among all machines reached by a broadcast packet.
+Failure to follow this rule is usually indicated by complaints concerning
+"untrusted" machines in the system log.
+.SH FILES
+.nf
+.ta \w'/etc/config/timed.options    'u
+/var/adm/timed.log		tracing file for timed
+/var/adm/SYSLOG	system log
+/etc/init.d/network		start-up script
+/etc/config/timed.options	optional flags, by default
+	"-G\ timelords -P\ /var/adm/timetrim"
+/var/adm/timetrim		default file for timetrim accumulation
+.fi
+.SH "SEE ALSO"
+chkconfig(1M), date(1), adjtime(2), gettimeofday(2), icmp(4P), timedc(1M),
+timeslave(1M), systune(1M)

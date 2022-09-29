@@ -1,0 +1,344 @@
+.nr H1 5
+.H 1 "Documentation Errors"
+.\"
+.\"List of errors in the product's user's/programmer's guides.
+.\"
+.\"
+The following are some additional information about using the 
+Disk Plexing Option.
+.H 2 "Creating a plexed root volume"
+You can put your root filesystem on a plexed volume for greater
+reliability.  A plexed root volume allows your system to continue
+running even if one of the root disks fail.
+.P
+A root volume can contain only a data subvolume. This subvolume can
+be plexed. However, each plex can contain only a single disk.
+The root filesystem can be either an EFS filesystem or an XFS
+filesystem with an internal log.
+.P
+The following is the procedure for creating a plexed root volume:
+.AL
+.LI
+We assume that we are starting with a system disk that already has
+a filesystem and the right software installed.
+If not, prepare the system disk by running
+.I mkfs
+and installing all the necessary software.
+.LI
+Make the root disk into an XLV volume. For this example, assume
+that
+.I /dev/dsk/dks0d1s0
+is the root disk.
+.P
+.Ex
+\f7xfs4 5# \f8xlv_make\f7
+xlv_make> \f8vol xlv_root\f7
+xlv_root
+xlv_make> \f8data\f7
+xlv_root.data
+xlv_make> \f8ve -force /dev/dsk/dks0d1s0\f7
+xlv_root.data.0.0
+xlv_make> \f8end\f7
+Object specification completed
+xlv_make> exit
+Newly created objects will be written to disk.
+Is this what you want?(yes)  \f8yes\f7
+Invoking xlv_assemble
+
+xfs4 6# 
+
+.Ee
+.P
+The result is that we have an XLV volume named
+.I xlv_root
+that contains
+the root disk. Since XLV preserves the data in the user partitions,
+the contents of the root disk are preserved.
+Note that we used the
+.I -force
+option in
+.IR xlv_make (1m)
+because we are making a mounted disk partition into an XLV volume. 
+.LI
+Prepare the second plex. This involves creating the plex in XLV and 
+also copying
+.I sash
+into the volume header in that plex. (We need to have a copy of
+.I sash
+on the alternate plex so we can boot off the alternate plex should
+the primary plex fail.)
+
+.Ex
+\f7xfs4 7# \f8xlv_make\f7
+xlv_make> \f8show\f7
+
+        Completed Objects
+(1)  vol xlv_root
+ve xlv_root.data.0.0 [active]
+        start=0, end=1992629, (cat)grp_size=1
+        /dev/dsk/dks0d1s0 (1992630 blks)
+
+xlv_make> \f8plex plex1\f7
+plex1
+xlv_make> \f8ve /dev/dsk/dks0d2s0\f7
+plex1.0
+xlv_make> \f8end\f7
+Object specification completed
+xlv_make> \f8exit\f7
+Newly created objects will be written to disk.
+Is this what you want?(yes)  \f8yes\f7
+Invoking xlv_assemble
+
+
+.Ee
+.P
+Now we update the volume header of the second plex with
+.IR sash .
+Since
+.I sash
+is normally installed in the volume header of the root disk,
+we can use
+.IR dvhtool (1m)
+to do so.
+.Ex
+\f7xfs4 3# \f8dvhtool -v get sash /tmp/sash /dev/rdsk/dks0d1vh\f7
+xfs4 4# \f8dvhtool -v add /tmp/sash sash /dev/rdsk/dks0d2vh\f7
+xfs4 5# 
+.Ee
+.P
+If they exist in the volume header of the root disk, you may also wish to
+copy over
+.I symmon
+and
+.I ide
+into the volume header of the second plex using the same procedure.
+.LI
+At this point, you have a root volume that consists of a single
+plex and a standalone plex of the same size. You can now attach the
+plex to the volume using
+.IR xlv_mgr (1m).
+.Ex
+\f7xfs4 9# \f8xlv_mgr\f7
+xlv_mgr> \f8attach plex plex1 xlv_root.data\f7
+xlv_mgr>
+.Ee
+.LI
+You can make sure that the disk labels are updated correctly
+by running
+.I xlv_assemble
+.IR -n .
+The
+.I -n
+option tells
+.IR xlv_assemble (1m)
+to just read the disk labels but not make the volume active.
+.Ex
+
+\f7xfs4 10# \f8xlv_assemble -n\f7
+VOL xlv_root    flags=0x1, [complete]
+DATA    flags=0x0()     open_flag=0x0() device=(192, 4)
+PLEX    flags=0x0
+VE      [active]
+        start=0, end=1992629, (cat)grp_size=1
+        /dev/dsk/dks0d1s0 (1992630 blks)
+PLEX    flags=0x0
+VE      [empty]
+        start=0, end=1992629, (cat)grp_size=1
+        /dev/dsk/dks0d2s0 (1992630 blks)
+.Ee
+Note how the root volume
+.I xlv_root
+now has two plexes. At this point,
+you should see disk activity because XLV will start a plex revive
+operation which will copy the contents of the original plex to the newly added plex.
+.LI
+At this point, we've created our plexed root volume. However,
+the system is still running directly off the original boot disk,
+.IR /dev/dsk/dks0d1s0 .
+We now need to reboot the system so that it will
+run on the XLV volume instead.  Note that you do not need for the plex
+revive to finish because revive will be restarted when the system 
+comes back up.
+.P
+.IR Warning ,
+you should not mount the root volume at this time. This is because the 
+one of the underlying physical disks 
+.I /dev/dsk/dks0d1s0
+is still
+mounted as the root filesystem. Mounting the same set of disks at two
+different mount points simultaneously can corrupt your filesystem.
+.Ex
+
+
+\f7xfs4 12# \f8init 6\f7
+xfs4 13#
+INIT: New run level: 6
+The system is shutting down.
+Please wait.
+Unmounting cache file systems:
+Removing swap areas.
+Unmounting filesystems:
+
+
+                           Starting up the system...
+
+IRIX Release 5.3-xfs IP22 Version 11221102 System V
+Copyright 1987-1994 Silicon Graphics, Inc.
+All Rights Reserved.
+
+WD95A SCSI controller 4 - differential external, rev 0, min xfer period 100ns
+WD95A SCSI controller 5 - differential external, rev 0, min xfer period 100ns
+xpi0: missing from slot 1
+xpi0: missing from slot 0
+xpi0: not an FDDI board in slot 2
+gtr0: missing
+gtr0: missing
+
+The system is coming up.
+rootfs=/dev/dsk/xlv_root
+Starting XLV:
+XLV Volume "xlv_root" [complete]
+The system is coming up.
+Mounting filesystems:
+
+Configuring ec0 as xfs4
+  ...
+Mounting cache file systems:
+The system is ready.
+
+
+
+xfs4 login: \f8root\f7
+IRIX Release 5.3-xfs IP22 xfs4
+Copyright 1987-1994 Silicon Graphics, Inc. All Rights Reserved.
+Last login: Wed Nov 23 12:16:13 PST 1994 on ttyd1
+Welcome to xfs4
+TERM = (iris-ansi)
+
+.Ee
+.P
+At this point, we are running off the
+.I xlv_root
+volume. You can verify this by looking at
+.IR /dev/root .
+Note how its device number
+.I (192,0)
+matches that displayed by
+.IR  xlv_assemble (1m):
+.Ex
+
+\f7xfs4 1# \f8ls -l\f7
+brw-------    2 root     sys      192,  0 Oct 31 17:58 /dev/root
+xfs4 2# \f8xlv_assemble -n\f7
+VOL xlv_root    flags=0x1, [complete]
+DATA    flags=0x0()     open_flag=0x0() device=(192, 0)
+PLEX    flags=0x0
+VE      [active]
+        start=0, end=1992629, (cat)grp_size=1
+        /dev/dsk/dks0d1s0 (1992630 blks)
+PLEX    flags=0x0
+VE      [stale]
+        start=0, end=1992629, (cat)grp_size=1
+        /dev/dsk/dks0d2s0 (1992630 blks)
+.Ee
+
+.LI
+At this point, we are running off both plexes. However, XLV
+is still copying the data from the original plex to the newly
+created plex.  You can tell that a plex copy is in progress by typing:
+.Ex
+\f7xfs4 3# \f8ls -ef | grep xlv_plexd\f7
+
+root   881    27  0 14:06:58 ?        0:00 xlv_plexd -v 2 -n root_vol.data -d 50331648 -b 128 -w 0 0 1992629 
+.Ee
+
+The command line arguments to the xlv_plexd shows the volume being
+revived. The revive is done when that daemon exits.
+
+
+.H 2 "Booting off an alternate plex"
+Once you have a plexed XLV root volume, you can boot off a secondary
+plex if the primary plex became unavailable. Note that you should
+do this only after the secondary plex has become active. (You can
+see its state by running
+.I xlv_mgr
+or by running
+.I xlv_assemble
+.IR -n .)
+.P
+Since the boot prom does not understand logical volumes, you need
+manually reconfigure the system to use an alternate disk.  In this
+case, you need to specify the disk that makes up the alternate plex
+that you want to boot off.
+This is how you do it for a Challenge S system:
+.Ex
+
+System Maintenance Menu
+
+1) Start System
+2) Install System Software
+3) Run Diagnostics
+4) Recover System
+5) Enter Command Monitor
+
+\f7Option? \f85\f7
+Command Monitor.  Type "exit" to return to the menu.
+
+>> \f8printenv\f7
+SystemPartition=dksc(0,1,8)
+OSLoadPartition=dksc(0,1,0)
+OSLoader=sash
+OSLoadFilename=/unix
+AutoLoad=No
+rbaud=9600
+TimeZone=PST8PDT
+console=d
+
+  ...
+
+ConsoleIn=serial(0)
+cpufreq=150
+>> \f8setenv SystemPartition dksc(0,2,8)\f7
+>> \f8setenv OSLoadPartition dksc(0,2,0)\f7
+>> \f8boot\f7
+84032+11488+3024+331696+26176d+4088+6240 entry: 0x89f97610
+Standalone Shell SGI Version 5.3 ARCS   Nov 18, 1994 (BE)
+sash: boot
+2922736+845584+212992 entry: 0x88062950
+
+IRIX Release 5.3-xfs IP22 Version 11221102 System V
+Copyright 1987-1994 Silicon Graphics, Inc.
+All Rights Reserved.
+
+WD95A SCSI controller 4 - differential external, rev 0, min xfer period 100ns
+WD95A SCSI controller 5 - differential external, rev 0, min xfer period 100ns
+xpi0: missing from slot 1
+xpi0: missing from slot 0
+xpi0: not an FDDI board in slot 2
+gtr0: missing
+gtr0: missing
+
+rootfs=/dev/dsk/xlv_root
+Starting XLV:
+XLV Volume "xlv_root" [complete]
+The system is coming up.
+Mounting filesystems:
+
+Configuring ec0 as xfs4
+
+   ...
+
+Mounting cache file systems:
+The system is ready.
+
+
+
+xfs4 login: \f8root\f7
+IRIX Release 5.3-xfs IP22 xfs4
+Copyright 1987-1994 Silicon Graphics, Inc. All Rights Reserved.
+Last login: Sat Nov 26 07:40:05 PST 1994 on ttyd1
+Welcome to xfs4 -- XFS group's test system
+        17-Nov-94  -- Running 5.3+xfs, bitbucket:/e/dist/XFS.oct17h
+TERM = (iris-ansi)
+
+.Ee

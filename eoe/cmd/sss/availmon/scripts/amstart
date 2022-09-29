@@ -1,0 +1,540 @@
+#! /sbin/sh 
+##################################################################
+# This script should not be executed after boot becaue it
+# may report system reboot and cause confusion.
+#
+# availmon always collects data irrespective of whether
+# the data is sent outside or not.
+#
+# availmon's data is always logged into system support
+# database.  Please refer to the man page of ESP
+# for more information.
+# 
+# This script identifies any Controlled shutdowns,
+# panics or other unscheduled shutdowns.
+##################################################################
+
+
+COMMAND=$0
+AMRVERSIONNUM=2.1
+AVAILDIR=/var/adm/avail
+SAVEDIR=$AVAILDIR/.save
+USRETCDIR=/usr/etc
+PLATFORM=`uname -m`
+NOSTR="NULL"
+DBQUERY="/usr/sbin/espquery"
+SQLSTMT="select option_default from tool  where tool_name='AVAILMON'"
+SSDB=ssdb
+FLAG=0
+SSLOGGER=/usr/sbin/esplogger
+AMCONVERT=/usr/etc/amconvert
+
+##################################################################
+# Binaries and their location
+##################################################################
+
+AMTIME1970=$USRETCDIR/amtime1970
+AMSYSLOG=$USRETCDIR/amsyslog
+AMTICKERD=$USRETCDIR/eventmond
+TICKFILE=$SAVEDIR/lasttick
+
+##################################################################
+# Get crash directory
+##################################################################
+
+CRASHDIR=""
+OPTIONS=`cat /etc/config/savecore.options 2>/dev/null`
+if [ "$OPTIONS" != "" ] ; then
+    for DIR in $OPTIONS ; do
+	if [ -d "$DIR" ] ; then
+	    CRASHDIR=$DIR
+	fi
+    done
+fi
+
+if [ "$CRASHDIR" = "" ] ; then
+    CRASHDIR=/var/adm/crash
+fi
+
+################################################################
+# For old systems with old savecore script that creates crashlog
+# instead of analysis.N files.
+################################################################
+
+CRASHLOGFILE=$CRASHDIR/crashlog
+
+##################################################################
+# Get the SYSLOG file and related variables
+##################################################################
+
+# First, get the configfile.
+
+SYSLOGDCONF=""
+SYSLOGDOPTS="df:m:p:"
+OPTIONS=`cat /etc/config/syslogd.options 2>/dev/null`
+if [ "$OPTIONS" != "" ] ; then
+    while getopts $SYSLOGDOPTS OPTNAME $OPTIONS 2>/dev/null
+    do
+	if [ "$OPTNAME" = "f" ] ; then
+	    if [ -f "$OPTARG" ] ; then
+		SYSLOGDCONF="$OPTARG"
+		break
+	    fi
+        fi
+    done
+fi
+
+if [ "$SYSLOGDCONF" = "" ] ; then
+    SYSLOGDCONF=/etc/syslog.conf
+fi
+
+if [ -f "$SYSLOGDCONF"  ] ; then
+    SYSLOGFILE=`cat $SYSLOGDCONF | grep -v "^#" | grep "\*.crit" | awk '{print $NF}' | sort -u | head -1 2>/dev/null`
+    if [ "z$SYSLOGFILE" = "z" -o ! -f "$SYSLOGFILE" ] ; then
+        SYSLOGFILE=/var/adm/SYSLOG
+    fi
+else
+    SYSLOGFILE=/var/adm/SYSLOG
+fi
+
+# Use SYSLOGFILE to generate its rotated version
+
+OSYSLOGFILE=`dirname $SYSLOGFILE`/o`basename $SYSLOGFILE`
+LASTSYSLOG=$SAVEDIR/lastsyslog
+AMSYSLOGFILE=$CRASHDIR/syslog
+
+##################################################################
+# Other variables/files
+##################################################################
+
+BOUND=-1
+PREVSTARTFILE=$SAVEDIR/prevstart
+SCRATCHFILE=$AVAILDIR/init.scratch
+EVENTFILE=$SAVEDIR/event
+SUEVENTFILE=$SAVEDIR/suevent
+EXTRASUEVENT=0
+TMPSUREPORT=$CRASHDIR/suavailreport.$$
+TMPREPORT=$CRASHDIR/availreport.$$
+CONFIGCHANGEFILE=$SAVEDIR/configchange
+CM_STATUS=0
+HWCHANGED=0
+SWCHANGED=0
+
+##################################################################
+# Checks for HINV / VERSIONS Changes on the machine
+##################################################################
+
+checkconfigchange()
+{
+
+    # Check the exit status of configmon. If it failed, there is no 
+    # need to check for configuration changes...
+
+    if [ $CM_STATUS -gt 0 ] ; then
+	return 0
+    fi
+
+    if [ -f "$DBQUERY" ] ; then
+	LASTCONFIGCHANGE=`$DBQUERY -t -s "select cm_event.time,cm_event.type from system_info,cm_event where cm_event.sys_id=system_info.sys_id and system_info.local=1 and system_info.active=1 order by cm_event.time" $SSDB 2>/dev/null | tail -1 2>/dev/null`
+	LASTCONFIGCHANGE=${LASTCONFIGCHANGE:='|0|0|'}
+	LASTCHANGEDATE=`echo $LASTCONFIGCHANGE | cut -d'|' -f2`
+	LASTCHANGETYPE=`echo $LASTCONFIGCHANGE | cut -d'|' -f3`
+    else
+	return 0
+    fi
+
+    if [ -f "$CONFIGCHANGEFILE" ] ; then
+	PREVCHANGEDATE=`cat $CONFIGCHANGEFILE`
+	if [ "$PREVCHANGEDATE" != "$LASTCHANGEDATE" ] ; then
+	    TMPTYPE=128
+	    TMPHINVCOUNT=1
+	    while [ "$LASTCHANGETYPE" -gt 0 ] 
+	    do
+		if [ "$LASTCHANGETYPE" -ge "$TMPTYPE" ] ; then
+		    LASTCHANGETYPE=`expr $LASTCHANGETYPE - $TMPTYPE`
+		    case $TMPHINVCOUNT in
+		      3 | 4)
+			  SWCHANGED=1
+			  ;;
+                      5 | 6)
+			  HWCHANGED=1
+			  ;;
+		    esac
+		fi
+		TMPTYPE=`expr $TMPTYPE / 2`
+		TMPHINVCOUNT=`expr $TMPHINVCOUNT + 1`
+	    done
+	fi
+    fi
+
+    echo "$LASTCHANGEDATE" > $CONFIGCHANGEFILE
+
+}
+
+##################################################################
+# Runs Configuration Monitor to collect Configuration data
+##################################################################
+
+run_configmon()
+{
+    CONFIGNUM=0
+    CONFIGMAXLOOPS=5
+
+    if chkconfig windowsystem ; then
+	while true; do
+	    sleep 3
+            if [ `ps -eo "comm" | grep Xsgi | wc -l` -eq 1 ] ; then
+		break
+	    fi
+	    if test $CONFIGNUM -eq $CONFIGMAXLOOPS ; then
+		break;
+	    else
+		CONFIGNUM=`expr $CONFIGNUM + 1`
+            fi
+	done
+    fi
+	#
+	# It's hard to get complete config information so close to system 
+	# start-up. We'll sleep for one minute, just to try to make the odds
+	# better
+	#
+    sleep 60
+    /usr/sbin/configmon -u > /dev/null
+    CM_STATUS=$?
+    if [ $CM_STATUS -gt 0 ] ; then
+	/usr/sbin/esplogger -s 0x00200107 -p syslog.warning \
+	    -m "ConfigMon UPDATE FAILED" ;
+    fi
+}
+
+##################################################################
+# Checks for a single-user shutdown
+##################################################################
+
+checksingleuser()
+{
+
+    EXTRASUEVENT=0
+    if [ -f $SUEVENTFILE ] ; then
+	#
+	# Check boot-time.  If boot-time is > single-user event
+	# time, then there is another event that we need to
+	# capture.
+	#
+	BOOTTIME=`$AMTIME1970 -i | cut -f2 -d'|'`
+	SUEVENTTIME=`cat $SUEVENTFILE | cut -f2 -d'|'`
+
+	if [ $BOOTTIME -ge $SUEVENTTIME ] ; then
+	    EXTRASUEVENT=1
+	    SUEVENTCODE=`cat $SUEVENTFILE | cut -f1 -d'|'`
+        fi
+    fi
+}
+
+
+##################################################################
+# Start main function
+##################################################################
+
+#
+# Startup Configuration Monitor to gather configuration information
+#
+
+run_configmon
+
+#
+# Initialization
+#    Check for proper installation and presence of all required
+#    files.
+#    
+
+
+if [ ! -d $AVAILDIR ] ; then
+    echo "\n$COMMAND: Error: Cannot find directory $AVAILDIR"
+    echo "Please try re-installing OS\n"
+    logger -t availmon -p err -i cannot find $AVAILDIR
+    exit
+elif [ ! -x $AMTICKERD -o ! -x $AMSYSLOG -o ! -x $AMTIME1970 -o ! -x "$DBQUERY" ] ; then
+    echo "\n$COMMAND: Error: Not all required executable files are present"
+    echo "Please try re-installing OS\n"
+    logger -t availmon -p err -i Executable files missing
+    exit
+else
+    # Startup-code
+    FIRSTSTART=0
+
+    SINCE1970=`$AMTIME1970`
+
+    # we dont need install.sh script anymore    
+    if  [ -f $AVAILDIR/install.sh ] ; then
+       rm -f $AVAILDIR/install.sh
+    fi   
+
+    if [ ! -d $SAVEDIR ] ; then
+    #
+    # We will consider this case as the first time start of availmon 
+    # after "clean" installation
+    #
+    
+    #  Create .save directory if first time install
+    #
+       FIRSTSTART=1
+       mkdir $SAVEDIR
+       if [ $? -ne 0 ] ; then
+           echo "$COMMAND: Error: unable to create $SAVEDIR directory"
+	   exit 1
+       fi
+    fi
+
+    #
+    # Set PREVSTART first.  All availmon tools need it
+    #
+    
+    if [ -f "$PREVSTARTFILE" ] ; then
+       PREVSTART=`cat $PREVSTARTFILE | cut -d'|' -f2`
+    else
+       if [ -f "$AVAILDIR/availlog" ] ; then 
+          PREVSTART=`cat $AVAILDIR/availlog | tail -1 | cut -d'|' -f2`
+       else
+	  PREVSTART=-1
+       fi	  
+       echo "$PREVSTART" > $PREVSTARTFILE
+    fi
+    
+    # we dont need availlog anymore
+    rm -f $AVAILDIR/availlog
+
+
+    #
+    # get the lasttick value
+    #
+
+    if [ -f "$TICKFILE" ] ; then
+        LASTTICK=`cat $TICKFILE 2>/dev/null`
+    else
+        if [ -f "$AVAILDIR/lasttick" ] ; then
+          LASTTICK=`cat $AVAILDIR/lasttick 2>/dev/null`
+          rm -f $AVAILDIR/lasttick
+        else
+	  LASTTICK=-1
+	fi
+	echo "$LASTTICK" > $TICKFILE
+    fi
+
+    #
+    # Check Bounds
+    #
+
+    if [ -f $CRASHDIR/bounds ] ; then
+	if [ -f $SAVEDIR/bounds ] ; then
+	    diff $SAVEDIR/bounds $CRASHDIR/bounds > /dev/null
+	    if [ $? -ne 0 ] ; then
+		BOUND=`cat $SAVEDIR/bounds`
+		cp $CRASHDIR/bounds $SAVEDIR/bounds
+		SUMMARYFILE=$CRASHDIR/summary.$BOUND
+		FRUFILE=$CRASHDIR/fru.$BOUND
+		AMSYSLOGFILE=$CRASHDIR/syslog.$BOUND
+	    fi
+	else
+	    cp $CRASHDIR/bounds $SAVEDIR/bounds
+        fi
+    else
+	echo "0" > $SAVEDIR/bounds
+    fi
+
+    
+    ##################################################################
+    # Get the configuration parameters from SSDB and convert if needed
+    ##################################################################
+    
+    SSDBCONFIGURED=`$DBQUERY -t -s "select count(*) from tool where tool_name='AVAILMON'" $SSDB 2>/dev/null | cut -d'|' -f2 2>/dev/null`
+
+    if [ "$SSDBCONFIGURED" -eq "0" ] ; then
+     # There is no availmon configuration in the esp database
+       if [ -d $AVAILDIR/config ] ; then
+       # But there is a config directory 
+       # so we assume that it contain valid availmon configuration 
+       # we will try to import configuration from this directory  
+          $AMCONVERT 2>/dev/null
+          
+          if [ "$?" -eq "0" ] ; then
+            # we successfully "configured" availmon 
+            # let's remove old config directory
+            rm -rf $AVAILDIR/config
+            rm -rf $SAVEDIR/autoemail
+            rm -rf $SAVEDIR/autoemail.list
+          else
+            # amconvert failed
+            echo "\n$COMMAND: Error: amconvert failed. You might need to execute amconfig to setup availmon configuration"
+            logger -t availmon -p err -i amconvert failed. You might need to execute amconfig to setup availmon configuration
+          fi
+      else
+         # there is no config directory either
+         echo "\n$COMMAND: Error: No availmon configuration has been found. You might need to execute amconfig to setup availmon configuration"
+         logger -t availmon -p err -i "No availmon configuration has been found. You might need to execute amconfig to setup availmon configuration"
+      fi   
+    else 
+     # esp database already contains configuration 
+     # we are not going to change it 
+     # we need to remove "config directory" if any
+       rm -rf $AVAILDIR/config
+       rm -rf $SAVEDIR/autoemail
+       rm -rf $SAVEDIR/autoemail.list
+    fi  
+    
+    STATUSINTERVAL=`$DBQUERY -t -s "$SQLSTMT and tool_option='statusinterval'" $SSDB 2>/dev/null | cut -d'|' -f2 2>/dev/null`
+    TICKERD=`$DBQUERY -t -s "$SQLSTMT and tool_option='tickerd'" $SSDB 2>/dev/null | cut -d'|' -f2 2>/dev/null`
+    TICKDURATION=`$DBQUERY -t -s "$SQLSTMT and tool_option='tickduration'" $SSDB 2>/dev/null | cut -d'|' -f2 2>/dev/null`
+    SHUTDOWNRSN=`$DBQUERY -t -s "$SQLSTMT and tool_option='shutdownreason'" $SSDB 2>/dev/null | cut -d'|' -f2 2>/dev/null`
+
+    STATUSINTERVAL=${STATUSINTERVAL:=0}
+    STATUSINTERVALHRS=`expr $STATUSINTERVAL \* 24`
+    TICKERD=${TICKERD:=0}
+    SHUTDOWNRSN=${SHUTDOWNRSN:=0}
+    TICKDURATION=${TICKDURATION:=300}
+    LASTTICK=${LASTTICK:=-1}
+
+    #
+    # start ticker if needed 
+    #
+
+    if [ "$TICKERD" -eq 1 ] ; then
+	$AMTICKERD -a on -j $TICKDURATION -e $STATUSINTERVALHRS >/dev/null 2>&1
+    else
+        rm -f $TICKFILE
+    fi
+
+    #
+    #  Set shutdown reason
+    #
+
+    echo "$SHUTDOWNRSN" > $SAVEDIR/shutdownreason
+
+    if [ $FIRSTSTART -eq 0 ] ; then
+
+	    #
+	    # Identify EVENT
+	    #
+
+	    checksingleuser
+
+	    SUMMARYLINE="";
+	    if [ $BOUND -ge 0 ] ; then
+		if [ -f $SUMMARYFILE ] ; then
+		    if grep 'PANIC STRING' $SUMMARYFILE | grep NMI > /dev/null ; then
+			EVENTCODE=2097156
+		    elif [ -f $FRUFILE ] ; then
+			cat $FRUFILE >> $SUMMARYFILE
+			if grep -i 'FRU ANALY' $FRUFILE > /dev/null ; then
+			    if grep 'FRU ANALYZER' $FRUFILE | grep -i 'No error' > /dev/null ; then
+				EVENTCODE=2097157
+			    elif grep -i 'SOFTWARE' $FRUFILE > /dev/null ; then
+				EVENTCODE=2097157
+                	    elif grep 'Inconclusive hardware error state' $FRUFILE > /dev/null ; then
+				EVENTCODE=2097168
+                	    else
+				EVENTCODE=2097167
+                	    fi
+			else
+			    EVENTCODE=2097168
+                	fi
+		    else
+			EVENTCODE=2097168
+        	    fi
+		    EVENTTIME=`awk '/CRASH TIME/ {print $3}' $SUMMARYFILE`
+		    SUMMARYLINE=`grep 'PANIC STRING' $SUMMARYFILE`
+		    if [ $EVENTCODE -eq 2097167 ] ; then
+	        	SUMMARYLINE="`tail +2 $SUMMARYFILE`"
+		    fi
+		    DIAGFILE=""
+		    if [ -f $CRASHDIR/analysis.$BOUND ] ; then
+	        	DIAGFILE=$CRASHDIR/analysis.$BOUND
+			DIAGTYPE="ICRASH"
+		    fi
+
+		    NOCHARS=`echo $SUMMARYLINE | wc -c`
+		    if [ "$NOCHARS" -gt 250 ] ; then
+			echo "$SUMMARYLINE" > $CRASHDIR/availsummary.$BOUND
+			SUMMARYLINE="$CRASHDIR/availsummary.$BOUND"
+			FLAG=1;
+		    fi
+
+		elif [ -f $CRASHLOGFILE.$BOUND ] ; then
+		    EVENTDATE=`awk '/crash time/ {print $3, $4, $5, $6, $7}' $CRASHLOGFILE.$BOUND`
+		    EVENTTIME=`$AMTIME1970 -t $EVENTDATE`
+		    EVENTCODE=2097168
+		    DIAGTYPE=ICRASH
+		    DIAGFILE=$CRASHLOGFILE.$BOUND
+		else
+		    EVENTTIME=`expr $SINCE1970 - 60`
+		    EVENTCODE=2097168
+		    DIAGFILE="$NOSTR"
+		    DIAGTYPE="$NOSTR"
+		fi
+
+		if [ ! -f $AMSYSLOGFILE ] ; then
+		    $AMSYSLOG -S $SYSLOGFILE -O $OSYSLOGFILE >> $AMSYSLOGFILE
+		fi
+
+	    elif [ -f $EVENTFILE ] ; then
+		EVENTCODE=`cat $EVENTFILE | cut -d'|' -f1`
+		EVENTTIME=`cat $EVENTFILE | cut -d'|' -f2`
+		AMSYSLOGFILE=""
+	    else
+		DIAGTYPE="$NOSTR"
+		DIAGFILE="$NOSTR"
+        	SUMMARYLINE="$NOSTR"
+		$AMSYSLOG -S $SYSLOGFILE -O $OSYSLOGFILE > $AMSYSLOGFILE
+        	EVENTCODE=2097166
+        	EVENTTIME=-1
+	    fi
+
+	    #
+	    # At this point, we have determined all possible events.
+	    #
+	    # LASTTICK will point to the last time eventmond wrote to file
+	    # SUEVENTCODE & SUEVENTTIME will point to single user event
+	    # EVENTCODE & EVENTTIME will point to multi-user event
+	    #
+	    # Now is the time to log the event to SSDB 
+	    # 
+
+	    if [ "$EXTRASUEVENT" -eq 1 ] ; then
+		echo -n "$SUEVENTTIME,$LASTTICK,$PREVSTART" >> $TMPSUREPORT
+		LASTTICK=-1
+		if [ "$EVENTTIME" -eq -1 ] ; then
+		    SUSTARTTIME=`expr $SINCE1970 - 60`
+        	else
+		    SUSTARTTIME=$EVENTTIME
+		fi
+		PREVSTART=$SUSTARTTIME
+
+		echo -n ",$SUSTARTTIME,$STATUSINTERVAL,$BOUND,$NOSTR,$NOSTR" >> $TMPSUREPORT
+		TMPFLAG=`expr $FLAG + 2`
+		FLAG=`expr $FLAG + 4`
+		echo -n ",$NOSTR,$NOSTR,$NOSTR,1,$TMPFLAG,$NOSTR,$NOSTR" >> $TMPSUREPORT
+		$SSLOGGER -s $SUEVENTCODE -f $TMPSUREPORT 2>/dev/null
+		RETCODE=$?
+		if [ $RETCODE != 0 ] ; then
+		    logger -t availmon -p err -i "Unable to log availmon event ($SUEVENTCODE) to ESP ($RETCODE)"
+		fi
+	    fi
+
+	    checkconfigchange
+
+	    echo -n "$EVENTTIME,$LASTTICK,$PREVSTART">> $TMPREPORT
+	    echo -n ",$SINCE1970,$STATUSINTERVAL,$BOUND," >> $TMPREPORT
+	    echo -n "'$DIAGTYPE','$DIAGFILE','$AMSYSLOGFILE'," >> $TMPREPORT
+	    echo -n "$HWCHANGED,$SWCHANGED,1,$FLAG,$NOSTR," >> $TMPREPORT
+	    echo $SUMMARYLINE | sed -e "s/%/%%/g" -e "s/\\\\/\\\\\\\\/g" -e "s/\'/\\\'/g" -e 's/\"/\\\"/g' -e "s/^/\'/" -e "s/$/\'/" >> $TMPREPORT
+	    $SSLOGGER -s $EVENTCODE -f $TMPREPORT 2>/dev/null
+	    RETCODE=$?
+	    if [ $RETCODE != 0 ] ; then
+        	logger -t availmon -p err -i "Unable to log availmon event ($EVENTCODE) to ESP ($RETCODE)"
+	    fi
+    fi
+
+    tail -1 $SYSLOGFILE > $LASTSYSLOG
+    echo $SINCE1970 > $PREVSTARTFILE
+    rm -f $SCRATCHFILE $TMPREPORT $TMPSUREPORT $SUMMARYFILE $EVENTFILE $SUEVENTFILE
+fi

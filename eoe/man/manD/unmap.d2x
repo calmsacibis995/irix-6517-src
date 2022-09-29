@@ -1,0 +1,53 @@
+.TH unmap D2X
+.SH NAME
+\f4unmap\f1 \- support virtual unmapping for memory-mapped device
+.SH SYNOPSIS
+.nf
+\f4#include <sys/types.h>
+#include <sys/mman.h>
+#include <sys/ddi.h>
+#include <ksys/ddmap.h>
+.sp
+int \f1\f2prefix\f1\f4unmap(dev_t \f1\f2dev\f1\f4, vhandl_t *\f1\f2vt\f1\f4);\f1
+.fi
+.SS Arguments
+.TP
+\f2dev\f1
+Device whose memory is to be mapped.
+.TP
+\f2vt\f1
+Handle to caller's virtual address space
+.SH DESCRIPTION
+To unmap a device, the user program calls \f4munmap\f1(2) system call.
+After performing device-independent unmapping in the user's space,
+the \f4munmap\f1 system call calls the driver's \f2pre\f1\f4fixunmap\f1
+to remove the mapping.
+.SS "Return Values"
+On success, 0 is returned. An error number is returned on failure.
+.SH USAGE
+If a driver provides a \f4map\f1(D2X) routine but does not provide an unmapping
+routine, the \f4munmap\f1 system call returns the \f2ENODEV\f1 error condition
+to the user.
+Therefore, it is a good idea for all drivers to provide a dummy unmapping
+routine even if your driver does not need to perform any action to unmap the device.
+.SS "Synchronization Constraints"
+The \f4unmap\f1 routine has user context and can sleep.
+.P
+There are significant restrictions imposed on \f2unmap\fP routines that affect
+drivers that perform their own synchronization. When the \f2unmap\fP function is called,
+the address space for the process that is doing the call is locked. When an address
+space is locked, no other mapping or unmapping can take place and NO page faults
+can be serviced for the process. This can cause problems if the process is
+multi-threaded - one thread can be attempting to unmap the device and another
+thread can be accessing the driver through some other entry point (e.g. \f2ioctl\fP).
+If the thread that is accessing the driver via \f2ioctl\fP locks a driver
+specific lock, and then calls e.g. \f4copyin\fP, and if the data to be copied in
+causes a page fault, then the page fault code will attempt to lock the address
+space lock. If, at the same time, another thread is attempting to \f2unmap\fP
+the device, and the \f2unmap\fP routine grabs the driver lock, an AB-BA deadlock
+can occur which will require re-booting the system to clear.
+The safest way around this is to make sure that the driver never calls
+\f4copyin\fP or \f4copyout\fP while holding a driver lock and is used by the
+\f2unmap\fP routine.
+.SH REFERENCES
+\f4map\f1(D2X), \f4v_getaddr\f1(D3X), \f4v_getlen\f1(D3X), \f4v_gethandle\f1(D3X), \f4v_mapphys\f1(D3X)

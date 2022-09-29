@@ -1,0 +1,65 @@
+#!/bin/sh
+# NAME
+#	ypmake - NIS master script to update databases and to rotate logfiles
+# DESCRIPTION
+#	ypmake is run on NIS master servers by cron(1M) to ensure that their 
+#	NIS databases are up-to-date and pushed out to slave servers.
+#
+#	You can also use this script to push a map after updating its 
+#	data file. Any output from the make is printed on the standard output.
+#
+cd /var/yp
+
+LOG=ypmake.log
+OLDLOG=ypmake.log.old
+
+PATH=/var/yp:$PATH
+
+test -t 0
+interactive=$?
+
+# Keep the log file open during all actions for fuser test
+touch $LOG
+exec < $LOG
+if ! test -f $OLDLOG ; then
+	OLDLOG=""
+fi
+
+# Make sure another ypmake isn't running already.  Do an echo after fuser output
+# because sed doesn't always work correctly without a newline
+pids="`(/sbin/fuser -q $LOG $OLDLOG; echo '') < /dev/null`"
+pids="`echo $pids | sed -e s/$$,*//g -e 's/,*$//'`"
+
+if test -n "$pids"; then
+	err="already in use by processes $pids"
+	if  test $interactive = 0; then
+	    echo "ypmake: $err"
+	else
+	    logger -t ypmake -p daemon.warning "$err"	# log it in SYSLOG
+	fi
+	exit 1
+fi
+
+if test $interactive = 1; then		# not interactive
+	if /etc/chkconfig ypmaster; then :
+	else
+		exit 0
+	fi
+	PATH=$PATH:`dirname $0`
+	exec >> $LOG 2>&1
+
+	# Between 12:00am and 12:14am we roll the log.
+	if test `date +%H%M` -le 14; then
+		mv -f $LOG $OLDLOG
+		exec >> $LOG 2>&1
+		date
+	fi
+fi
+
+eval `cat /etc/config/ypmaster.options 2>/dev/null` mdbm_parse $*
+if test -x local.mdbm_parse ; then
+	eval `cat /etc/config/ypmaster.options 2>/dev/null` local.mdbm_parse $*
+fi
+if test -e make.script ; then
+	make -ksf make.script `cat /etc/config/ypmaster.options 2>/dev/null` $*
+fi

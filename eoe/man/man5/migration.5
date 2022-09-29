@@ -1,0 +1,545 @@
+'\"!tbl|mmdoc
+'\"macro stdmacro
+.TH migration 5
+.SH NAME
+migration \- dynamic memory migration
+.SH DESCRIPTION
+This document describes the dynamic memory migration system 
+available in Origin systems.
+
+.SS Introduction
+.PP
+Dynamic page migration is a mechanism that provides adaptive memory locality
+for applications running on a NUMA machine such as the Origin systems. The
+Origin hardware implements a competitive algorithm based on comparing remote
+memory access counters to a local memory access counter; when the difference
+between the numbers of remote and local accesses goes beyond a preset
+threshold, an interrupt is generated to inform the operating system that a
+physical memory page is currently experiencing excessive remote accesses.
+
+.PP
+Within the interrupt handler the operating system makes a final decision
+whether to migrate the page or not. If it decides to migrate the page, the
+migration is executed immediately. The system may decide not to execute the
+migration due to enforcement of a migration control policy or due to lack of
+resources.
+
+.PP
+Page migration can also be explicitely requested by users, and in addition,
+it is used to assist the memory coalescing algorithms for multiple page size
+support.
+
+.SS Migration Modules
+
+.PP
+The migration subsystem is composed of the following modules:
+.TP 2
+-
+\fBDetection Module.\fP This module monitors memory accesses issued by nodes in
+the system to each physical memory page. In Origin systems this module is mostly
+implemented in hardware. This detection module informs the \fIMigration Control
+Module\fP that a page is experiencing excessive remote accesses via an interrupt
+sent to the page's home node.
+.TP
+-
+\fBMigration Engine Module.\fP This module carries out data movement from a
+current physical memory page to a new page in the node issuing the remote
+accesses.
+.TP
+-
+\fBMigration Control Module.\fP This module decides whether the page should be
+migrated or not, based on migration control policies, defined by parameters
+such as \fImigration threshold\fP, \fIbounce detection and prevention\fP, 
+\fIdampening factor\fP, and others.
+.TP
+-
+\fBMigration Control Periodic Operations Module.\fP This module executes all
+periodic operations needed for the \fIMigration Control Module\fP.
+.TP
+-
+\fBMemory Management Control Interface Module (MMCI Module).\fP This module 
+provides an interface for users to tune the migration policy associated with
+an address space.
+
+.SS Migration Detection Module
+
+.PP
+The basic goal of memory migration is to minimize memory access latency. In a
+NUMA system where local memory access latency is smaller then remote memory
+access latency, we can achieve this latency minimization goal by moving the
+data to the node where most memory references are going to be issued from. 
+.PP
+It would be great to be able to move data to the node where it is going to
+be needed right before it is referenced. Unfortunately, we cannot predict
+the future. However, common programs usually have some amount of temporal
+and spatial locality, which allows us to heuristically predict future
+behavior based on recent past behavior.
+.PP
+The usual procedure used to predict future memory accesses to a page is to
+count the memory references to this page issued by each node in the system.
+If the accumulated number of remote references becomes considerably greater
+than the number of accumulated local references, then it may be beneficial
+to migrate the page to the remote node issuing the references, especially if
+this remote node will continue accessing this same page for a long time.
+.PP
+Origin systems have counters that continuously monitor all memory accesses
+issued by each node in the system to each physical memory page. In a 64-node
+Origin (128 processors), we have 64 memory access counters for every 4-KB
+low level physical page (4 KB is the size of a low level physical page size;
+software page sizes start at 16KB for Origin systems). For every memory access,
+the counter associated with the node issuing the reference is incremented; at
+the same time, this counter is compared to the counter that keeps track of
+local accesses, and if the remote counter exceeds the local counter by a
+threshold, an interrupt is generated advising the Operating System about the
+existence of a page with excessive remote accesses.
+.PP
+Upon reception of the interrupt, the \fIMigration Control Module\fP in the 
+Operating System decides whether to migrate the page or not.
+.PP
+The threshold that determines how large the difference between remote and
+local counters needs to be in order for the interrupt to be generated is
+stored in a per-node hardware register, which is initialized by the Migration
+Control Module. The \fIdefault system threshold\fP defined in
+/var/sysgen/mtune/numa by the tunable variables
+\fBnuma_migr_default_threshold\fP and \fBnuma_migr_threshold_reference\fP
+(see Migration Tunables below), and the threshold specified by users
+as a parameter of a migration policy (mmci(5)), are not directly stored
+into this register due to the fact that different pages on the same node may
+have different migration thresholds. These thresholds are used to initialize
+the reference counters when a page is initialized.
+
+.SS Migration Engine Module
+
+.PP
+This module transparently moves a page from one physical frame to another. 
+The migration engine first verifies the availability of all resources needed
+to realize the migration of a page. If all resources are not available, the
+operation is cancelled.
+.PP
+The data transfer operation may be done using a processor or a specialized
+Block Transfer Engine. Translation lookaside buffer (TLB) shootdowns may
+be done using inter-processor interrupts or special hardware known as 
+\fIpoison bits\fP, available only as an option on special Origin systems
+running IRIX 6.5 or later. TLB shootdowns are needed in order to avoid the use
+of stale translations that may be pointing to the physical memory page that
+contained the data before migration took place. Normally, a TLB shootdown
+operation is performed by sending interrupts to all processors in the system
+with a TLB that may have stale translation entries. On systems with
+\fIpoison bits\fP, this global TLB shootdown is not needed: along with the
+data transfer operation, hardware bits are automatically set to indicate
+that the page is now stale (poisonous); if a processor tries to access
+this stale page via a stale translation, the memory management hardware
+generates a special Bus Error which causes the TLB with the stale translation 
+to be updated. Effectively, poison bits allow for the implementation of a lazy
+TLB shootdown algorithm.
+
+The vehicle used for the data transfer operation may be selected by
+the system administrator via a tunable variable in /var/sysgen/mtune/numa:
+\fBnuma_migr_vehicle\fP. Poison bit based TLB shootdowns are enabled
+whenever the data transfer vehicle is the Block Transfer Engine and
+the hardware is equipped with the optional \fIpoison bits\fP.
+
+.SS Migration Control Module
+
+.PP
+This module decides whether a page should be migrated or not after receiving a
+notification (via an interrupt) from the \fIMigration Detection Module\fP
+alerting that a page is experiencing excessive remote accesses. This decision
+is based on applicable migration control policies and resource availability.
+
+The basic idea behind controlling migration is that it is not always a good
+idea to migrate a page when the memory reference counters are telling us that
+a page is experiencing excessive remote accesses; the page may be bouncing back
+and forth due to poor application behavior, the counters may have accumulated
+too much past knowledge, making them unfit to predict near future behavior,
+the destination node may have little free memory, or the path needed to do the
+migration may be too busy.
+
+The Migration Control Module applies a series of filters to a reference counter
+notification or \fImigration request\fP, as enumerated below. All tunables
+mentioned in this list are found in /var/sysgen/mtune/numa.
+
+.TP 28
+Node Distance Filter
+This filter rejects all migration requests where the distance between the
+source and the destination is less than \fBnuma_migr_min_distance\fP in 
+/var/sysgen/mtune/numa. All rejected requests result in the page being frozen 
+in order to prevent this request from being re-issued too soon.
+.TP
+Memory Pressure Filter
+This filter rejects migration requests to nodes where physical memory is low.
+The threshold for low memory is defined by the tunable
+\fBnuma_migr_memory_low_threshold\fP, which defines the minimum percentage of 
+physical memory that needs to be available in order for a page to be migrated 
+there. This filter can be enabled and disabled using the tunable 
+\fBnuma_migr_memory_low_enabled\fP.
+.TP
+Traffic Control Filter
+Experimental filter intended to throttle migration down when the Craylink
+Interconnect traffic reaches peak levels. Experiments have shown that this
+filter is unnecessary for Origin 2000 systems.
+.TP
+Bounce Control Filter
+Sometimes pages may start bouncing due to poor application behavior or simple
+page level false sharing. This filter detects and freezes bouncing pages. The
+detection is done by keeping a count of the number of migrations per page in a
+counter that is aged (periodically decremented by a system daemon). If the
+count ever goes above a threshold, it is considered to be bouncing and is then
+frozen. Frozen pages start melting immediately, so after a period of time, they
+are unfrozen and migratable again. Note the the melting procedure is gradual,
+not instantaneous. The bounce control filter relies on operations executed
+periodically by the \fIMigration Control Periodic Operations Module\fP
+described below, for a) aging of the migration counters and b) melting of
+frozen pages. The period of these bounce control periodic operations is defined
+by the tunable \fBnuma_migr_bounce_control_interval\fP. The default value for
+this tunable is 0, which translates into a period such that 4 physical pages
+are operated on per tick (10[ms] interval). Freezing can be enabled and
+disabled using the tunable \fBnuma_migr_freeze_enabled\fP, and the freezing
+threshold can be set using the tunable \fBnuma_migr_freeze_threshold\fP. This
+threshold is specified as a percentage of the maximum effective freezing
+threshold value, which is 7 for Origin 2000 systems. Melting can be enabled and
+disabled using the tunable \fBnuma_migr_melt_enabled\fP, and the melting
+threshold can be set using the tunable \fBnuma_migr_melt_threshold\fP. The
+melting threshold is expressed as a percentage of the maximum effective
+melting threshold value, which is 7 for Origin 2000 systems.
+.TP
+Migration Dampening Filter
+This filter minimizes the amount of migration due to quick temporary remote
+memory accesses, such as those that occur when caches are loaded from a cold
+state, or when they are reloaded with a new context. We implement this
+dampening flter using a per-page migration request counter that is incremented
+every time we receive a migration request interrupt, and aged (periodically
+decremented) by the \fIMigration Control Periodic Operations Module\fP. We
+migrate a page only if the counter reaches a value greater than some dampening
+threshold. This will happen only for applications that continuously generate
+remote accesses to the same page during some interval of time. If the
+application experiences just a short transitory sequence of remote accesses,
+it is very unlikely that the migration request counter will reach the threshold
+value. This filter can be enabled and disabled using the tunable
+\fBnuma_migr_dampening_enabled\fP, and the migration request count threshold
+can be set using the tunable \fBnuma_migr_dampening_factor\fP.
+
+.PP
+The memory reference counters are re-initialized to their startup values after
+every reference counter interrupt.
+
+.SS Migration Control Periodic Operations Module
+
+.PP
+The \fIMigration Control Module\fP relies on several periodic operations. 
+These operations are listed below:
+.TP 2
+-
+Bounce Control Operations. Age migration counter for freezing and melting.
+.TP
+_
+Unpegging. Reset memory reference counters that have reached a saturation level.
+.TP
+-
+Queue Control Operations. Age queued outstanding migration requests.
+Experimental, always disabled for production systems.
+.TP
+-
+Traffic Control Operations. Sample the state of the Craylink interconnect
+and correspondingly adjust the per-node migration threshold. Experimental,
+always disabled for production systems.
+.PP
+These operations are executed in a loop, triggered once every
+\fBmem_tick_base_period\fP, a tunable that defines the migration control
+periodic period in terms of system ticks (a system tick is equivalent to 10
+[ms] on Origin systems running IRIX 6.5). This loop of operations may be
+enabled and disabled using the tunable \fBmem_tick_enabled\fP. If migration
+is enabled or users are allowed to use migration, this loop must be enabled. 
+.PP
+In order to minimize interference with user processes, we limit the number
+of pages operated on in a loop to a few pages, trying to limit the time
+used to less than 20 [us]. Administrators can adjust the time dedicated
+to these periodic operations via the following tunables:
+.TP 2
++
+\fBmem_tick_base_period\fP
+.TP
++
+\fBnuma_migr_unpegging_control_interval\fP
+.TP
++
+\fBnuma_migr_traffic_control_interval\fP
+.TP
++
+\fBnuma_migr_bounce_control_interval\fP
+.PP
+
+.SS Description of Periodic Operations
+
+.PP
+The following list describes the \fIBounce Control Periodic Operations\fP
+in detail:
+.TP 28
+Aging Migration Counters
+In order to detect bouncing we keep track of the number of migrations per page
+using a counter that is periodically decremented (aged). When the counter goes 
+beyond a threshold, we consider the page to be bouncing and freeze it.
+.TP
+Aging Migration Request Counters
+In order to avoid excessive migration or bouncing due to short, transitory
+remote memry access sequences we have a migration dampening filter that needs
+to count several migration requests within a limited period of time before it
+actually lets a real page migration take place. The time factor is introduced
+in the filter by aging the migration request counters.
+.TP
+Melting Frozen Pages
+When a page is frozen we want to eventually unfreeze it so that it becomes
+migratable again. This behavior is desirable because the events that cause a
+page to be frozen are usually temporary. As part of the periodic operations, we
+increment a counter per page to keep track of how long the page has been
+frozen. When the counter goes above a threshold, meaning that the page has been
+frozen for a sufficient time, we unfreeze the page, thereby making it
+migratable again.
+.PP
+The \fIUnpegging Periodic Operation\fP consists of scanning all the memory
+reference counters looking for those counters that have pegged due to
+reaching their maximum count. When a pegged counter is found, all counters
+associated with that page are restarted.
+.PP
+The current implementation of the \fIMigration Control\fB module does not
+execute \fIQueue Control Periodic Operations\fP or \fITraffic Control Periodic
+Operations\fP. 
+.PP
+
+.SS Page Migration Tunables
+
+This is a list of all the memory migration tunables in /var/sysgen/mtune/numa
+that define the default memory migration policy used by the system.
+.TP 2
+*
+\fBnuma_migr_default_mode\fP.
+This tunable defines the default migration mode. It can take the following
+values:
+
+.Ex
+    0: MIGR_DEFMODE_DISABLED
+       Migration is completely disabled, users cannot use migration.
+
+    1: MIGR_DEFMODE_ENABLED 
+       Migration is always enabled, users cannot disable migration.
+
+    2: MIGR_DEFMODE_NORMOFF
+       Migration is normally off, users can enable migration for
+       an application.
+
+    3: MIGR_DEFMODE_NORMON 
+       Migration is normally on, users can disable migration for
+       an application.
+
+    4: MIGR_DEFMODE_LIMITED 
+       Migration is normally off for machine configurations with 
+       a maximum Craylink distance less than numa_migr_min_maxradius
+       (defined below). Migration is normally on otherwise. Users
+       can override this mode.
+.Ee
+
+.TP 
+*
+\fBnuma_migr_default_threshold\fP.
+This threshold defines the minimum difference between the local and any remote
+counter needed to generate a migration request interrupt.
+
+.Ex
+    if ((remote_counter - local_counter) >=
+        ((numa_migr_threshold_reference_value / 100) *
+         numa_migr_default_threshold)) {
+        send_migration_request_intr();
+    }
+.Ee
+
+.TP 
+*
+\fBnuma_migr_threshold_reference\fP.
+This parameter defines the pegging value for the memory reference counters.
+It is machine configuration dependent. For Origin 2000 systems, it can take
+the following values:
+
+.Ex
+   0: MIGR_THRESHREF_STANDARD = Threshold reference is 2048 (11 bit
+                                counters) Maximum threshold allowed
+                                for systems with STANDARD DIMMS. This
+                                is the default.
+   1: MIGR_THRESHREF_PREMIUM =  Threshold reference is 524288 (19-bit
+                                counters) Maximum threshold allowed
+                                for systems with *all* PREMIUM SIMMS. 
+.Ee
+
+.TP 
+*
+\fBnuma_migr_vehicle\fP.
+This tunable defines what device the system should use to migrate a page.
+The value 0 selects the Block Transfer Engine (BTE) and a value of 1 selects
+the processor. When the BTE is selected, and the system is equipped with
+the optional \fIpoison bits\fP, the system automatically uses \fILazy TLB
+Shootdown Algorithms\fP.
+.PP
+.TP
+*
+\fBnuma_migr_min_maxradius\fP.
+This tunable is used if \fBnuma_migr_default_mode\fP has been set to mode 4
+(MIGR_DEFMODE_LIMITED). For this mode, migration is normally off for machine
+configurations with a maximum Craylink distance less than
+\fBnuma_migr_min_maxradius\fP Migration is normally on otherwise.
+.TP
+*
+\fBnuma_migr_auto_migr_mech\fP.
+This tunable defines the migration execution mode for memory reference
+counter triggered migrations: 0 for immediate and 1 for delayed. Only the
+\fIImmediate Mode\fP (0) is currently available.
+.TP
+*
+\fBnuma_migr_user_migr_mech\fP.
+This tunables defines the migration execution mode for user requested
+migrations: 0 for immediate and 1 for delayed. Only the \fIImmediate Mode\fP
+(0) is currently available.
+.TP
+*
+\fBnuma_migr_coaldmigr_mech \fP.
+This tunables defines the migration execution mode for memory coalescing
+migrations: 0 for immediate and 1 for delayed. Only the \fIImmediate Mode\fP
+(0) is currently available.
+.TP
+*
+\fBnuma_refcnt_default_mode\fP.
+Extended counters are used in application profiling (see \fBrefcnt(5)\fP)
+and to control automatic memory migration. This tunable defines the default
+extended reference counter mode. It can take the following values:
+
+.Ex
+   0: REFCNT_DEFMODE_DISABLED
+      Extended reference counters are disabled, users cannot access
+      the extended reference counters (refcnt(5)). In this case
+      automatic memory migration will not be performed regardless of
+      any other settings.
+
+   1: REFCNT_DEFMODE_ENABLED
+      Extended reference counters are always enabled, users cannot
+      disable them.
+
+   2: REFCNT_DEFMODE_NORMOFF
+      Extended reference counters are normally disabled, users can
+      disable or enable the counters for an application.
+
+   3: REFCNT_DEFMODE_NORMON
+      Extended reference counters are normally enabled, users can
+      disable or enable the counters for an application.
+.Ee
+.TP
+*
+\fBnuma_refcnt_overflow_threshold\fP
+This tunable defines the count at which the hardware reference counters notify
+the operating system of a counter overflow in order for the count to be
+transfered into the (software) extended reference counters. It is expresses as
+a percentage of the threshold reference value defined by
+\fBnuma_migr_threshold_reference\fP.
+.TP
+*
+\fBnuma_migr_min_distance\fP
+Minimum distance required by the \fINode Distance Filter\fP in order to accept
+a migration request.
+.TP
+*
+\fBnuma_migr_memory_low_enabled\fP
+Enable or disable the \fIMemory Pressure Filter\fP.
+.TP
+*
+\fBnuma_migr_memory_low_threshold\fP
+Threshold at which the \fIMemory Pressure Filter\fP starts rejecting migration
+requests to a node. This threshold is expressed as a percentage of the total
+amount of physical memory in  a node.
+.TP
+*
+\fBnuma_migr_freeze_enabled\fP
+Enable or disable the freezing operation in the \fIBounce Control Filter\fP.
+.TP
+*
+\fBnuma_migr_freeze_threshold\fP
+Threshold at which a page is frozen. This tunable is expressed as a percent
+of the maximum count supported by the migration counters (7 for Origin 2000).
+.TP
+*
+\fBnuma_migr_melt_enabled\fP
+Enable or disable the melting operation in the \fIBounce Control Filter\fP.
+.TP
+*
+\fBnuma_migr_melt_threshold\fP
+When a migration counter goes below this threshold a page is unfrozen.
+This tunable is expressed as a percent of the maximum count supported by the
+migration counters (7 for Origin 2000).
+.TP
+*
+\fBnuma_migr_bounce_control_interval\fP
+This tunable defines the period for the loop that ages the migration counters
+and the dampening counters. It is expressed in terms of \fInumber of
+mem_ticks\fP. The mem_tick unit is defined by \fBmem_tick_base_period\fI below.
+If it is set to 0, we process 4 pages per mem_tick. In this case, the actual
+period depends on the amount of physical memory present in a node.
+.TP
+*
+\fBnuma_migr_dampening_enabled\fP
+Enable or disable migration dampening.
+.TP
+*
+\fBnuma_migr_dampening_factor\fP
+The number of migration requests needed for a page before migration is actually
+executed. It is expressed as a percentage of the maximum count supported by the
+migration-request counters (3 for Origin 2000).
+.TP
+*
+\fBmem_tick_enabled\fP
+Enable or disabled the loop that executes the \fIMigration Control Periodic
+Operation\fP.
+.TP
+*
+\fBmem_tick_base_period\fP
+Number of 10[ms] system ticks in one mem_tick.
+.TP
+*
+\fBnuma_migr_unpegging_control_enabled\fP
+Enable or disable the unpegging periodic operation
+.TP
+*
+\fBnuma_migr_unpegging_control_interval\fP
+This tunable defines the period for the loop that unpegs the hardware memory
+reference counters. It is expressed in terms of \fInumber of mem_ticks\fP.
+The mem_tick unit is defined by \fBmem_tick_base_period\fI above. If it is set
+to 0, we process 8 pages per mem_tick. In this case, the actual period depends
+on the amount of physical memory present in a node.
+.TP
+*
+\fBnuma_migr_unpegging_control_threshold\fP
+Hardware memory reference counter value at which we consider the counter to be
+pegged. It is expressed as a percent of the maximum count defined by
+numa_migr_threshold_reference.
+.TP
+*
+\fBnuma_migr_traffic_control_enabled\fP
+Enable or disable the \fITraffic Control Filter\fP. This is an experimental
+module, and therefore it should always be disabled.
+.TP
+*
+\fBnuma_migr_traffic_control_interval\fP
+Traffic control period. Experimental module.
+.TP
+*
+\fBnuma_migr_traffic_control_threshold\fP
+Traffic control threshold for kicking the batch migration of enqueued migration
+requests. Experimental module.
+
+.PP
+
+.SH FILES
+/var/sysgen/mtune/numa
+.SH SEE ALSO
+numa(5),
+replication(5),
+mtune(4),
+refcnt(5),
+mmci(5),
+nstats(1),
+sn(1).

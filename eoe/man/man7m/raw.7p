@@ -1,0 +1,119 @@
+'\"macro stdmacro
+.TH RAW 7F local "Silicon Graphics"
+.UC 5
+.SH NAME
+raw \- raw network protocol family 
+.SH SYNOPSIS
+.nf
+.ft 3
+#include <sys/types.h>
+#include <net/raw.h>
+.ft P
+.fi
+.SH DESCRIPTION
+The Raw protocol family is a collection of input decapsulation protocols
+layered atop the data link protocol of a network interface.
+The Raw family supports only the SOCK_RAW socket type.
+.SS Addressing
+.PP
+Sockets bound to the Raw protocol family use the following addressing
+structure, defined in
+.RI < net/raw.h >:
+.Ex 16
+struct sockaddr_raw {
+	u_short		sr_family;
+	union {
+	    struct {
+		u_short srl_port;
+		char	srl_ifname[RAW_IFNAMSIZ];
+	    } sru_local;
+	    struct {
+		char	srf_addr[RAW_MAXADDRLEN];
+	    } sru_foreign;
+	} sr_u;
+};
+
+#define	sr_port		sr_u.sru_local.srl_port
+#define	sr_ifname	sr_u.sru_local.srl_ifname
+#define	sr_addr		sr_u.sru_foreign.srf_addr
+.Ee
+.PP
+The address format differs between local and foreign usage.
+A local AF_RAW sockaddr contains a port, identifying the socket to which this
+address is bound, and the zero-padded name of a network interface.
+If the address to bind contains a zeroed interface name, the primary
+interface is used.
+Port numbering depends on the protocol of the socket being bound.
+A foreign AF_RAW sockaddr contains a link-layer destination address.
+.SS Protocols
+There are two protocols in the Raw family, Snoop and Drain.
+The Snoop protocol captures link-layer packets which match a bitfield
+filter and transports them to that filter's socket.
+Snoop prepends a header containing packet state, reception sequence number,
+and reception time.
+The Drain protocol receives packets having network-layer type codes or
+encapsulations not implemented by the kernel.
+.PP
+Both protocols transmit packets with a link-layer header fetched from
+the beginning of the user's
+.IR write (2)
+or
+.IR send (2)
+buffer.
+They ignore any destination address supplied to
+.IR sendto (2)
+or
+.IR connect (2).
+However, connecting restricts input to packets originating from the
+foreign (connected) address.
+.PP
+On input, a protocol-specific header, the link-layer header, and packet data
+are copied to the user's
+.IR read (2)
+or
+.IR recv (2)
+buffer.
+All raw domain protocols guarantee that the offset of packet
+data from the beginning of the user's buffer is congruent with
+.BR \s-1RAW_ALIGNGRAIN\s0 .
+.BI \s-1RAW_HDRPAD(\s0 hdrsize \s-1)\s0
+yields the byte-padding needed to align packet data,
+given the link-layer header's size in bytes.
+.PP
+To gather Raw protocol family statistics, call
+.IR ioctl (2)
+with a Snoop or Drain socket, the
+.B \s-1SIOCRAWSTATS\s0
+command, and the address of the following structure, defined in
+.RI < net/raw.h >:
+.Ex 11
+struct rawstats {
+	struct snoopstats {
+		u_long	ss_seq;
+		u_long	ss_ifdrops;
+		u_long	ss_sbdrops;
+	} rs_snoop;
+	struct drainstats {
+		u_long	ds_ifdrops;
+		u_long	ds_sbdrops;
+	} rs_drain;
+};
+.Ee
+.PP
+The
+.B \s-1ss_seq\s0
+structure member tells the current Snoop sequence number, which counts all
+packets received by the hardware, whether or not they can be decapsulated.
+The
+.B \s-1ifdrops\s0
+members tell how many packets were dropped by the network interface
+due to resource shortages or hardware errors.
+The
+.B \s-1sbdrops\s0
+members tell how many packets were decapsulated by the network interface
+but dropped due to socket buffer limits.
+See
+.IR getsockopt (2)
+for information on socket buffer sizes and how to change them.
+.SH "SEE ALSO"
+socket(2), snoop(7P), drain(7P)

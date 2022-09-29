@@ -1,0 +1,111 @@
+#!/bin/sh
+
+set -x
+
+# change this if you've installed the crash files into
+# a different directory
+
+XFSPATH=/xfsstress
+
+# import environment variable setup file
+
+#--------
+
+. $XFSPATH/SETUP
+
+if test -r /stop.now
+then
+	echo Stopping Now...
+	exit 0
+fi
+
+rm -f /repair.log.4
+rm -f /repair.log.4.n
+
+if test -r /repair.log.4.n
+then
+	echo Stopping Now...
+	echo Couldn't remove old log file /repair.log.4.n ...
+	exit 1
+fi
+
+if test -r /repair.log.4
+then
+	echo Stopping Now...
+	echo Couldn't remove old log file /repair.log.4 ...
+	exit 1
+fi
+
+mv /repair.log.3 /repair.log.4
+mv /repair.log.2 /repair.log.3
+mv /repair.log.1 /repair.log.2
+mv /repair.log.0 /repair.log.1
+
+mv /repair.log.3.n /repair.log.4.n
+mv /repair.log.2.n /repair.log.3.n
+mv /repair.log.1.n /repair.log.2.n
+mv /repair.log.0.n /repair.log.1.n
+
+
+echo "/usr/sbin/xfs_repair -n $RDSK"
+
+rm -f ./core
+
+/usr/sbin/xfs_repair -n -D $RDSK > /repair.log.0.n 2>&1
+
+if test -f ./core 
+then
+        banner no modify
+        banner repair -n dumped core
+        exit 3
+fi
+
+/usr/sbin/xfs_repair -D $RDSK 2>&1 | tee /repair.log.0
+
+if test $? != 0
+then
+	banner MODIFY
+	banner repair
+	banner failed
+
+	exit 3
+fi
+
+/usr/sbin/xfs_repair -n -D $RDSK > /repair.log.0.n 2>&1
+if test $? != 0
+then
+	banner no modify
+	banner repair
+	banner failed AFTER a repaired run
+
+	exit 3
+fi
+
+echo "xfs_check $RDSK"
+rm -f /check.log
+date
+xfs_check $RDSK > /check.log 2>&1
+
+if test $? != 0 -o -s /check.log
+then
+	banner File
+	banner System
+	banner Corrupted
+
+	exit 3
+else
+	banner File
+	banner System
+	banner OK
+
+	echo "mount $DSK $FS"
+	mount $DSK $FS
+
+        find $FS -exec attr -l {} \;
+
+	echo "rm -rf $FS/lost+found"
+	rm -rf $FS/lost+found
+	/etc/rc2.d/runall.sh $FS &
+	/etc/rc2.d/randsleep
+	uadmin 1 1
+fi

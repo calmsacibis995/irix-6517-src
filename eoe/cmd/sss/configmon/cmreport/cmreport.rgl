@@ -1,0 +1,1695 @@
+/* =====================================================================\
+ * This test program generates the software, hardware and the system    /
+ * reports. These include both the current configuration report and the \
+ * archive configuration report. These reports are printed to HTML.     /
+ * =====================================================================\
+ */
+
+  #include <stdio.h>
+  #include <stdlib.h>
+  #include <sys/types.h>
+  #include <string.h>
+  #include <sys/systeminfo.h>
+  #include <klib/klib.h>
+  #include <sss/configmon_api.h>
+  #include <sys/systeminfo.h>
+  #include <signal.h>
+  #include <time.h>
+
+/* Include all the header files */
+
+  #include "rgPluginAPI.h"
+  #include "sscHTMLGen.h"
+  #include "sscCommon.h"
+  #include "Dlist.h"
+
+/* --------------------------------------------------------------------------- */
+#ifdef __TIME__
+#ifdef __DATE__
+#define INCLUDE_TIME_DATE_STRINGS 1
+#endif
+#endif
+/* --------------------------------------------------------------------------- */
+#define MYVERSION_MAJOR    1 /* Report Generator PlugIn Major Version number */
+#define MYVERSION_MINOR    0 /* Report Generator PlugIn Minor Version number */
+/* --------------------------------------------------------------------------- */
+
+typedef struct cm_session {
+    unsigned long signature;            /* sizeof(cm_session_t) */
+    struct cm_session *next;       /* next pointer */
+    int textonly;                       /* text mode only flag */
+    
+    cm_value_t sys_id;
+    cm_hndl_t config;
+    cm_hndl_t first_hwcmp;
+    time_t    tree_id_0;
+    int tree_id_1;
+} cm_session_t;
+
+#define kl_alloc_block(SIZE,FLAG) calloc(SIZE,1)
+#define kl_free_block(PTR)        free(PTR)
+
+#define BEGINHWROW()       @row ALIGN="TOP"
+#define ENDHWROW()         @endrow
+
+#define CFG_BEGIN_RGSTRING "<A HREF=\"/$sss/RG/report~"
+#define CFG_END_RGSTRING   "\">"
+#define CFG_END_HREF       "</A>"
+
+#define HWDRILLDOWN_PLUS   11
+#define HWDRILLDOWN_MINUS  12
+
+static Dlist_t *Dlhead=NULL, *Dltail=NULL;
+static time_t stT;
+static char *strTime=NULL;
+static cm_hndl_t gConfig=NULL;
+static unsigned gSys_id=0;
+static cm_hndl_t gFirst_hwcmp=NULL;
+
+/* Include all the report generator header files */
+
+#define MAXLEN 20
+/* Flag to print out the SELECT statement */
+extern int database_debug = 1;         
+
+/* --------------------------------------------------------------------------- */
+static const char myLogo[]            = "SSS WEB Configuration Server (LVA:)";
+static const char szVersion[]         = "Version";
+static const char szTitle[]           = "Title";
+static const char szThreadSafe[]      = "ThreadSafe";
+static const char szUnloadable[]      = "Unloadable";
+static const char szUnloadTime[]      = "UnloadTime";
+static const char szAcceptRawCmdString[] = "AcceptRawCmdString";
+
+static char szServerNameErrorPrefix[] = "SSS WEB Config Server Error: %s";
+static char szVersionStr[16];
+
+static pthread_mutex_t seshFreeListmutex;
+static const char szUnloadTimeValue[] = "120"; /* Unload time for this plug in (sec.) */
+static const char szThreadSafeValue[] = "1";   /* "Thread Safe" flag value - this plugin is thread safe */
+static const char szUnloadableValue[] = "0";   /* "Unloadable" flag value - RG core might unload this plugin from memory */
+static const char szszAcceptRawCmdStringValue[] = "0"; /* Do not accept raw strings. */
+
+static int volatile mutex_inited      = 0;   /* seshFreeListmutex mutex inited flag */
+static cm_session_t *sesFreeList         = 0;   /* Session free list */
+
+/*
+ * Add after a node.
+ */
+static void DlistAddAfter(Dlist_t *tail,Dlist_t *elem)
+{
+  if(!tail)
+    {
+      elem->next=elem->before=NULL;
+
+      if(!Dltail)
+	  Dltail = elem;
+      if(!Dlhead)
+	  Dlhead = elem;
+
+      return;
+    }
+
+  if(Dltail == tail)
+      Dltail = elem;
+
+  elem->next=tail->next;
+  tail->next=elem;
+
+  elem->before=tail;
+}
+
+/*
+ * Remove node from doubly linked list.
+ */
+static void DlistRemove(Dlist_t *elem)
+{
+  if(!elem)			/* Silly check */
+    return;
+
+  if(Dltail && elem == Dltail)
+    Dltail = elem->before;
+
+  if(Dlhead && elem == Dlhead)
+    Dlhead = elem->next;
+
+  if(elem->before)
+    ((Dlist_t *)elem->before)->next=elem->next;
+
+  if(elem->next)
+    ((Dlist_t *)elem->next)->before=elem->before;
+
+  kl_free_block(elem);
+}
+
+
+static Dlist_t * DlistCreate_by_cm_hndl(cm_hndl_t cmp)
+{
+    Dlist_t *tmpDl=NULL;
+    
+    tmpDl=kl_alloc_block(sizeof(Dlist_t),B_TEMP);
+    tmpDl->cmp=cmp;
+    tmpDl->children_present_in_dlist=FALSE;
+
+    return tmpDl;
+}
+
+/*
+ * Find Dlist by cm_hndl_t
+ */
+static int DlistFind_by_cm_hndl(cm_hndl_t cmp,Dlist_t **Dl)
+{
+    Dlist_t *tmpDl=Dlhead;
+
+    while(tmpDl)
+    {
+	if(tmpDl->cmp == cmp)
+	{
+	    *Dl = tmpDl;
+	    return 0;
+	}
+	tmpDl = tmpDl->next;
+    }
+    return -1;
+}
+
+static int DlistDelete_by_cm_hndl(cm_hndl_t cmp)
+{
+    Dlist_t *tmpDl=NULL;
+    
+    if(DlistFind_by_cm_hndl(cmp,&tmpDl))
+	return -1;
+
+    if(tmpDl == Dlhead)
+	return -1;
+
+    DlistRemove(tmpDl);
+
+    return 0;
+}
+
+static int DlistNext_by_cm_hndl(cm_hndl_t cmp,cm_hndl_t *pCmp)
+{
+    Dlist_t *tmpDl=NULL;
+    
+    if(DlistFind_by_cm_hndl(cmp,&tmpDl))
+	return -1;
+    
+    tmpDl = tmpDl->next;
+
+    if(tmpDl)
+	*pCmp=tmpDl->cmp;
+    else
+	*pCmp=NULL;
+
+    return 0;
+}
+
+static int DlistInsert_by_cm_hndl(cm_hndl_t before_cmp,cm_hndl_t elem_cmp)
+{
+    Dlist_t *tmpDl0=NULL, *tmpDl1 = NULL;
+
+    /* 
+     * If this is not there then this is a problem.
+     */
+    if(DlistFind_by_cm_hndl(before_cmp,&tmpDl0))
+	        return -1;
+
+    /* 
+     * If this is already in there this is a problem.
+     */
+    if(!DlistFind_by_cm_hndl(elem_cmp,&tmpDl1))
+	        return -1;
+    
+    tmpDl1 = DlistCreate_by_cm_hndl(elem_cmp);
+    
+    if(!tmpDl1)
+	return -1;
+
+    DlistAddAfter(tmpDl0,tmpDl1);
+    
+    return 0;
+}
+
+static int DlistHasChildren_by_cm_hndl(cm_hndl_t cmp)
+{
+    Dlist_t *tmpDl=NULL;
+    
+    if(DlistFind_by_cm_hndl(cmp,&tmpDl))
+	return 0;
+
+    return tmpDl->children_present_in_dlist==TRUE;
+}
+
+static int DlistSetChildren(cm_hndl_t cmp,int trueorfalse)
+{
+    Dlist_t *tmpDl=NULL;
+    
+    if(DlistFind_by_cm_hndl(cmp,&tmpDl))
+	return -1;
+
+    tmpDl->children_present_in_dlist=trueorfalse;
+    
+    return 0;
+}
+
+static int DlistInit(cm_hndl_t cmp)
+{
+     Dlist_t *tmpDl=NULL;
+     
+     tmpDl = DlistCreate_by_cm_hndl(cmp);
+
+     if(!tmpDl)
+	 return -1;
+     
+     Dlhead=Dltail=tmpDl;
+
+     return 0;
+}
+
+
+/*-------------*/
+/*System Report*/
+/*-------------*/
+
+int sys_report(sscErrorHandle hError,cm_session_t *session,int flag)
+{
+    cm_hndl_t dbcmd;
+    cm_hndl_t icmp;
+    cm_hndl_t item;
+    char systype[6];
+    char *ip_address, *hostname, *sys_serial, *tbuf;
+    char buf[15];
+    cm_value_t sys_id;
+    cm_hndl_t config;
+    
+    if(!session)
+    {
+	return -1;
+    }
+    
+    if (!(config=session->config)) {
+	sscError(hError,szServerNameErrorPrefix,
+		 "Config not allocated in hw_report");
+	return(-1);
+    }
+    sys_id= session->sys_id;
+    
+    dbcmd = cm_alloc_dbcmd(config,SYSINFO_TYPE);
+    /* Allocate the structure for the SYSTEM table */
+    
+    cm_add_condition(dbcmd,SYS_SYS_ID,OP_EQUAL,(cm_value_t)sys_id);
+    /* Make the SELECT statement */
+    
+    @ <P>
+    @ <P>
+    @ <font color="#A00000" size=+1 face = "Arial,Helvetica">
+    @ <B>
+    @ SYSTEM CONFIGURATION REPORT
+    @ <P>
+    @ <P>
+   
+    switch (flag) 
+    {
+
+    case 1:
+	@ <font color="#24314C" size=0 face = "Arial,Helvetica">
+        @format "%s" "CURRENT CONFIGURATION"
+        @ <P>
+        @ <P>
+        if (!(icmp = cm_select_list(dbcmd,ACTIVE_FLG))) 
+	{
+	    sscError(hError,szServerNameErrorPrefix,
+		     "Could not select the list\n\n");
+	    cm_free_dbcmd(dbcmd);
+	    cm_free_config(config);
+	    return(1);
+	}
+	break;
+ 
+    case 2:
+	@ <font color="#24314C" size=0 face = "Arial,Helvetica">
+        @format "%s" "ARCHIVE CONFIGURATION"
+        @ <P>
+        @ <P>
+        if (!(icmp = cm_select_list(dbcmd,ARCHIVE_FLG))) 
+	{
+	    sscError(hError,szServerNameErrorPrefix,
+		     "Could not select the list\n\n");
+	    cm_free_dbcmd(dbcmd);
+	    cm_free_config(config);
+	    return(1);
+	}
+	break;
+    case 3:
+	@ <font color="#24314C" size=0 face = "Arial,Helvetica">
+        @format "%s" "ENTIRE CONFIGURATION"
+        @ <P>
+        @ <P>
+        if (!(icmp = cm_select_list(dbcmd,ALL_FLG))) 
+	{
+	    sscError(hError,szServerNameErrorPrefix,
+		     "Could not select the list\n\n");
+	    cm_free_dbcmd(dbcmd);
+	    cm_free_config(config);
+	    return(1);
+	}
+	break;
+   default:
+        break;
+    } 
+
+    /* Select the list */
+    
+    @table BORDER=4 CELLSPACING=1 CELLPADDING=6 COLS=5 WIDTH=60% NOSAVE
+         @row ALIGN="CENTER"
+          @cell width=10%
+                 @ <B>
+                 @ <font color="#24314C" face = "Arial,Helvetica">
+                 @ SYS_ID
+          @endcell
+          @cell width=10%
+                 @ <B>
+                 @ <font color="#24314C" face = "Arial,Helvetica">
+                 @ SYS_TYPE
+         @endcell
+         @cell width=10%
+                 @ <B>
+                 @ <font color="#24314C" face = "Arial,Helvetica">
+                 @ SYS_SERIAL
+         @endcell
+         @cell width=10%
+                 @ <B>
+                 @ <font color="#24314C" face = "Arial,Helvetica">
+                 @ HOSTNAME
+         @endcell
+         @cell width=10%
+                 @ <B>
+                 @ <font color="#24314C" face = "Arial,Helvetica">
+                 @ IP_ADDRESS
+         @endcell
+         @endrow
+
+/* Print the table headers */
+
+    item = cm_item(icmp,CM_FIRST);
+    while (item) 
+    {
+	sprintf(systype, "IP%d",
+                CM_SIGNED(cm_field(item, SYSINFO_TYPE, SYS_SYS_TYPE)));
+	ip_address = CM_STRING(cm_field(item, SYSINFO_TYPE, SYS_IP_ADDRESS));
+	hostname = CM_STRING(cm_field(item, SYSINFO_TYPE, SYS_HOSTNAME));
+	sys_serial = CM_STRING(cm_field(item, SYSINFO_TYPE, 
+					SYS_SERIAL_NUMBER));
+	
+        @row ALIGN="TOP"
+        @cell width=10%
+                 @ <B>
+                 @format "%12llu" sys_id
+        @endcell
+        @cell width=10%
+                 @ <B>
+                 @format "%8s" systype
+        @endcell
+        @cell width=10%
+                 @ <B>
+                 @format "%13s" sys_serial
+        @endcell
+        @cell width=10%
+                 @ <B>
+                 @format "%15s" hostname
+        @endcell
+        @cell width=10%
+                 @ <B>
+                 @format "%-15s" ip_address
+        @endcell
+        @endrow      
+
+        item = cm_item(icmp,CM_NEXT);
+    }
+
+    @endtable
+    @ <P>
+    @ <P>
+   
+/* Print the stuff from the table into HTML */
+    cm_free_dbcmd(dbcmd);
+    return(0);
+}
+
+/*---------------*/
+/*Software Report*/
+/*---------------*/
+
+int sw_report(sscErrorHandle hError,cm_session_t *session,int flag)
+{
+    cm_hndl_t iswcmp;
+    cm_hndl_t dbcmd;
+    cm_hndl_t item;
+    time_t time;
+    int rec_key = 0, version = 0,install_time = 0;
+    char *name, *description, *tbuf, *tbuf1;
+    cm_value_t sys_id;
+    cm_hndl_t config;
+    
+    if(!session)
+    {
+	return -1;
+    }
+    
+    if (!(config=session->config)) {
+	sscError(hError,szServerNameErrorPrefix,
+		 "Config not allocated in hw_report");
+	return(-1);
+    }
+    sys_id= session->sys_id;
+ 
+   dbcmd = cm_alloc_dbcmd(config,SWCOMPONENT_TYPE);
+   cm_add_condition(dbcmd,SW_SYS_ID,OP_EQUAL,(cm_value_t)sys_id);
+   cm_add_condition(dbcmd,SW_NAME,OP_ORDER_BY,(cm_value_t)0);
+
+   @ <P>
+   @ <P>
+   @ <font color="#A00000" size=+1 face = "Arial,Helvetica">
+   @ <B>
+   @ SOFTWARE CONFIGURATION REPORT
+   @ <P>
+   @ <P>
+
+   switch (flag) {
+
+          case 1: 
+                 @ <font color="#24314C" size=0 face = "Arial,Helvetica">
+                 @format "%s" "CURRENT CONFIGURATION"
+                 @ <P>
+                 @ <P>
+                 if (!(iswcmp = cm_select_list(dbcmd,ACTIVE_FLG))) {
+                    sscError(hError,szServerNameErrorPrefix,
+			     "Could not select the list\n\n");
+                    cm_free_dbcmd(dbcmd);
+                    cm_free_config(config);
+                    return(1);
+                  }
+                   break;
+
+           case 2:
+                  @ <font color="#24314C" size=0 face = "Arial,Helvetica">
+                  @format "%s" "ARCHIVE CONFIGURATION"
+                  @ <P>
+                  @ <P>
+                  if (!(iswcmp = cm_select_list(dbcmd,ARCHIVE_FLG))) {
+                    sscError(hError,szServerNameErrorPrefix,
+			     "Could not select the list\n\n");
+                    cm_free_dbcmd(dbcmd);
+                    cm_free_config(config);
+                    return(1);
+                  }
+                   break;
+
+            case 3:
+                   @ <font color="#24314C" size=0 face = "Arial,Helvetica">
+                   @format "%s" "ENTIRE CONFIGURATION"
+                   @ <P>
+                   @ <P>
+                   if (!(iswcmp = cm_select_list(dbcmd,ALL_FLG))) {
+                    sscError(hError,szServerNameErrorPrefix,
+			     "Could not select the list\n\n");
+                    cm_free_dbcmd(dbcmd);
+                    cm_free_config(config);
+                    return(1);
+                  }
+                   break;
+
+            default:
+                    break;
+        }
+    
+    @table BORDER=4 CELLSPACING=1 CELLPADDING=6 COLS=7 WIDTH=60% NOSAVE
+       @row ALIGN="CENTER"
+         @cell width=10%
+                 @ <B>
+                 @ <font color="#24314C" face = "Arial,Helvetica">
+                 @ REC_KEY
+         @endcell
+         @cell width=30%
+                 @ <B>
+                 @ <font color="#24314C" face = "Arial,Helvetica">
+                 @ SYS_ID
+         @endcell
+         @cell width=30%
+                 @ <B>
+                 @ <font color="#24314C" face = "Arial,Helvetica">
+                 @ NAME
+         @endcell
+         @cell width=10%
+                 @ <B>
+                 @ <font color="#24314C" face = "Arial,Helvetica">
+                 @ VERSION
+         @endcell
+         @cell width=10%
+                 @ <B>
+                 @ <font color="#24314C" face = "Arial,Helvetica">
+                 @ INSTALL_TIME
+         @endcell
+         @cell width=20%
+                 @ <B>
+                 @ <font color="#24314C" face = "Arial,Helvetica">
+                 @ DEINSTALL_TIME
+         @endcell
+         @cell width=30%
+                 @ <B>
+                 @ <font color="#24314C" face = "Arial,Helvetica">
+                 @ DESCRIPTION
+          @endcell
+         @endrow
+      
+    item = cm_item(iswcmp,CM_FIRST);
+    while (item) 
+    {
+	tbuf = (char *)kl_alloc_block(100, CM_TEMP);
+	time = CM_UNSIGNED(cm_field(item, SWCOMPONENT_TYPE, SW_INSTALL_TIME));
+	cftime(tbuf, "%m/%d/%Y", &time);
+	tbuf1 = (char *)kl_alloc_block(100, CM_TEMP);
+	time = CM_UNSIGNED(cm_field(item, SWCOMPONENT_TYPE, 
+				    SW_DEINSTALL_TIME));
+	cftime(tbuf1, "%m/%d/%Y", &time);
+	rec_key = CM_UNSIGNED(cm_field(item, SWCOMPONENT_TYPE, SW_REC_KEY));
+	name = CM_STRING(cm_field(item, SWCOMPONENT_TYPE, SW_NAME));
+	version = CM_UNSIGNED(cm_field(item, SWCOMPONENT_TYPE, SW_VERSION));
+	description = CM_STRING(cm_field(item, SWCOMPONENT_TYPE,
+					 SW_DESCRIPTION));
+	
+	@row ALIGN="TOP"
+	     @cell width=10%
+                 @ <B>
+                 @format "%d" rec_key
+	     @endcell
+	     @cell width=30%
+                 @ <B>
+                 @format "%12llu" sys_id
+	     @endcell
+	     @cell 
+                 @ <B>
+                 @format "%-16s" name
+	     @endcell
+	     @cell width=10%
+                 @ <B>
+                 @format "%u" version
+	     @endcell
+	     @cell width=10%
+                 @ <B>
+                 @format "%10s" tbuf
+	     @endcell
+	     if (flag == 1) 
+	     {
+		 @cell width=20%
+		      @ <B>
+		      @format "%10s" "0"
+		 @endcell
+	      }
+	     else 
+	     {
+		 @cell width=20%
+		      @ <B>
+		      @format "%10s" tbuf1
+		 @endcell
+	     }
+	     @cell width=30%
+                 @ <B>
+                 @format "%30s" description
+	     @endcell
+        @endrow
+
+	kl_free_block(tbuf);
+        kl_free_block(tbuf1);
+	item = cm_item(iswcmp,CM_NEXT);
+    }
+
+    @endtable
+    @ <P>
+    @ <P>
+
+    cm_free_dbcmd(dbcmd);
+
+    return(0);
+}            
+
+/*-----------------*/
+/*H/W stuff to html*/
+/*-----------------*/
+
+int display_hw_url(cm_hndl_t cmp)
+{
+    if(DlistHasChildren_by_cm_hndl(cmp))
+    {				/* Put the minus */
+	@cell width=10%
+	     @ <B>
+	     @format "%s%d~0x%x~%d %s-%s" CFG_BEGIN_RGSTRING HWDRILLDOWN_MINUS cmp stT CFG_END_RGSTRING CFG_END_HREF
+        @endcell
+    }
+    else if (cm_get_hwcmp(cmp,CM_LEVEL_DOWN))
+    {				/* Put the plus */
+	@cell width=10%
+	     @ <B>
+	     @format "%s%d~0x%x~%d %s+%s" CFG_BEGIN_RGSTRING HWDRILLDOWN_PLUS cmp stT CFG_END_RGSTRING CFG_END_HREF
+        @endcell
+    }
+    else
+    {
+	@cell width=10%
+	     @ <B>
+	     @ &nbsp;
+        @endcell
+    }
+
+    return 0;
+}
+
+int display_hw_html(cm_hndl_t item)
+{
+    char *hw_name, *part_number, *serial_number, *location, *revision;
+    int sequence = 0, level = 0;
+
+    hw_name = CM_STRING(cm_field(item,HWCOMPONENT_TYPE, HW_NAME));
+    location = CM_STRING(cm_field(item,HWCOMPONENT_TYPE, HW_LOCATION));
+    part_number = CM_STRING(cm_field(item,HWCOMPONENT_TYPE, HW_PART_NUMBER));
+    serial_number = CM_STRING(cm_field(item,HWCOMPONENT_TYPE, 
+				       HW_SERIAL_NUMBER));
+    revision = CM_STRING(cm_field(item,HWCOMPONENT_TYPE, HW_REVISION));
+    sequence = CM_SIGNED(cm_field(item,HWCOMPONENT_TYPE, HW_SEQ));
+    level = CM_SIGNED(cm_field(item,HWCOMPONENT_TYPE, HW_LEVEL));
+    
+    if (sequence == 0) 
+    {
+	return(-1);
+    }
+
+#if 0
+    @cell width=10%
+	 @ <B>
+	 @format "%5d" sequence 
+    @endcell
+    @cell width=10%
+         @ <B>
+         @format "%5d" level
+    @endcell
+#endif
+    @cell width=10% COLSPAN=13
+         @ <B>
+         @format "%14s" hw_name
+    @endcell
+    @cell width=10%
+         @ <B>
+         @format "%8s" location
+    @endcell
+    @cell width=10%
+         @ <B>
+         @format "%12s" part_number
+    @endcell
+    @cell width=30%
+         @ <B>
+         @format "%10s" serial_number
+    @endcell
+    @cell width=10%
+         @ <B>
+         @format "%8s" revision
+    @endcell
+    
+    return(1);
+ }
+ 
+/*---------------*/
+/*Hardware Report*/
+/*---------------*/
+
+void delete_children(cm_hndl_t cmp)
+{
+    cm_hndl_t cm_child;
+    Dlist_t *tmpCmp=NULL;
+
+    if(!cmp)
+	return;
+
+    if(DlistFind_by_cm_hndl(cmp,&tmpCmp))
+	return;
+
+    CHILDREN_INSERTED(cmp,FALSE);
+
+    cm_child=cm_get_hwcmp(cmp,CM_LEVEL_DOWN);
+
+    while(cm_child)
+    {
+	delete_children(cm_child);
+	DELETE_DLIST(cm_child);
+	cm_child=cm_get_hwcmp(cm_child,CM_NEXT_PEER);
+    }
+    return;
+}
+
+void insert_children(cm_hndl_t cmp)
+{
+    cm_hndl_t cm_next;
+    Dlist_t *tmpCmp=NULL;
+
+    if(!cmp)
+	return;
+
+    if(DlistFind_by_cm_hndl(cmp,&tmpCmp))
+	return;
+    
+    CHILDREN_INSERTED(cmp,TRUE);
+
+    cm_next = cm_get_hwcmp(cmp,CM_LEVEL_DOWN);
+
+    while(cm_next)
+    {
+	INSERT_DLIST(cmp,cm_next);
+	cmp=cm_next;
+	cm_next = cm_get_hwcmp(cmp,CM_NEXT_PEER);
+    }
+    return;
+}
+
+void display_hwcmp(cm_hndl_t cmp)
+{
+    BEGINHWROW();
+    display_hw_url(cmp);
+    display_hw_html(cmp);
+    ENDHWROW();
+}
+
+void display_hw(sscErrorHandle hError,cm_session_t *session)
+{
+    cm_hndl_t cmp;
+    
+    if(!session)
+	return;
+
+    cmp=session->first_hwcmp;
+
+    @table BORDER=4 CELLSPACING=1 CELLPADDING=6 COLS=20 WIDTH=60% NOSAVE
+       @row "ALIGN="CENTER"
+#if 0
+         @cell width=10%
+                 @ <B>
+                 @ <font color="#24314C" face = "Arial,Helvetica">      
+                 @format "SEQUENCE"
+         @endcell
+         @cell width=10%
+                 @ <B>
+                 @ <font color="#24314C" face = "Arial,Helvetica">      
+                 @format "LEVEL"
+         @endcell
+#endif
+         @cell width=10%
+                 @ &nbsp;
+	 @endcell
+         @cell width=10% COLSPAN=13
+                 @ <B>
+                 @ <font color="#24314C" face = "Arial,Helvetica">      
+                 @format "NAME"
+         @endcell
+         @cell width=10%
+                 @ <B>
+                 @ <font color="#24314C" face = "Arial,Helvetica">      
+                 @format "LOCATION"
+         @endcell
+         @cell width=10%
+                 @ <B>
+                 @ <font color="#24314C" face = "Arial,Helvetica">      
+                 @format "PART_NUMBER"
+         @endcell
+         @cell width=30%
+                 @ <B>
+                 @ <font color="#24314C" face = "Arial,Helvetica">      
+                 @format "SERIAL_NUMBER"
+         @endcell
+         @cell width=10%
+                 @ <B>
+                 @ <font color="#24314C" face = "Arial,Helvetica">      
+                 @format "REVISION"
+	 @endcell
+      @endrow
+
+    while(cmp)
+    {
+	display_hwcmp(cmp);
+	if(NEXT_DLIST(cmp,&cmp))
+	    break;
+    }
+
+
+    @endtable
+    @ <P>
+    @ <P>
+
+    return;
+}
+
+void select_plus(sscErrorHandle hError,cm_session_t *session,cm_hndl_t cmp)
+{
+    if(!session || !cmp)
+	return;
+
+    insert_children(cmp);
+
+    return;
+}
+
+void select_minus(sscErrorHandle hError,cm_session_t *session,cm_hndl_t cmp)
+{
+    if(!session || !cmp)
+	return;
+    
+    delete_children(cmp);
+    
+    return;
+}	
+
+int hw_report(sscErrorHandle hError,cm_session_t *session,int plusorminus,
+	      cm_hndl_t cmp)
+{
+    time_t tmpT;
+    Dlist_t *tmpCmp=NULL;
+
+    if(!session)
+	return -1;
+
+    if (!session->config) {
+	sscError(hError,szServerNameErrorPrefix,
+		 "Config not allocated in hw_report");
+	return(-1);
+    }
+    
+	
+    if (!gFirst_hwcmp)
+    {
+	if(strTime)
+	    tmpT = atol(strTime);
+	else
+	    tmpT = 0;
+
+	if(cm_get_sysconfig(gConfig,gSys_id,tmpT))
+	{
+	    sscError(hError,szServerNameErrorPrefix,
+		     "Could not get system configuration in "
+		 "rgpgInit()");
+	    cm_free_config(gConfig);
+	    return 0;
+	}
+	
+	gFirst_hwcmp = cm_first_hwcmp(gConfig);
+	gFirst_hwcmp = cm_get_hwcmp(gFirst_hwcmp,CM_NEXT);
+	DlistInit(gFirst_hwcmp);
+	
+#if 0
+	select_plus(hError,session,session->first_hwcmp);
+	select_plus(hError,session,cm_get_hwcmp(session->first_hwcmp,CM_NEXT));
+#endif
+    } else if (cmp)
+    {		
+	if(plusorminus == HWDRILLDOWN_PLUS)
+	{
+	    select_plus(hError,session,cmp);
+	}
+	else
+	{
+	    select_minus(hError,session,cmp);
+	}
+    }
+    
+
+    display_hw(hError,session);
+    return 0;
+}
+
+
+/*-------------*/
+/*Change Report*/
+/*-------------*/
+
+int change_report(sscErrorHandle hError,cm_session_t *session)
+{
+    cm_hndl_t dbcmd;
+    cm_hndl_t cm_history,cm_event;
+    cm_hndl_t change_item,icmp,item;
+    time_t change_time, type2;
+    int type = 0,item_type = 0,type1 = 0,count = 0;
+    char *tbuf, *tbuf1;
+    char *ip_address, *hostname, *sys_serial;
+    char systype[6];
+    time_t time;
+    int rec_key = 0, version = 0,install_time = 0;
+    char *name, *description;
+    char *hw_name, *part_number, *serial_number, *location, *revision;
+    cm_value_t sys_id;
+    cm_hndl_t config;
+    
+    if(!session)
+    {
+	return -1;
+    }
+    
+    if (!(config=session->config)) {
+	sscError(hError,szServerNameErrorPrefix,
+		 "Config not allocated in hw_report");
+	return(-1);
+    }
+    sys_id= session->sys_id;
+    
+    if (!(cm_history = cm_event_history(config,sys_id,0,0,ALL_CM_EVENTS))) {
+        sscError(hError,szServerNameErrorPrefix,"No history\n\n");
+        cm_free_config(config);
+        return(1);
+    }
+    
+    if (!(cm_event = cm_item(cm_history,CM_FIRST))) {
+	sscError(hError,szServerNameErrorPrefix,"No change event\n\n");
+	cm_free_list(config,cm_history);
+	cm_free_config(config);
+	return(1);
+    }
+    
+    @ <P>
+    @ <P>
+    @ <font color="#A00000" size=+1 face = "Arial,Helvetica">
+    @ <B>
+    @ CONFIGURATION CHANGES
+    @ <P>
+    @ <P> 
+
+    do {  
+	
+	change_time = CM_UNSIGNED(cm_field(cm_event,CM_EVENT_TYPE,CE_TIME));
+	
+	/* ConfigMon init time */
+	/* get the time value. This could either be change time or */
+	/* time when ConfigMon was initialized */
+	
+	if (CM_SIGNED(cm_field(cm_event,CM_EVENT_TYPE,CE_TYPE)) == 
+	    CONFIGMON_INIT) 
+	{
+	     @ <font color="#24314C" size=0 face = "Arial,Helvetica">
+             @format "%s" "CONFIGMON INIT TIME >> "
+             @ <P>
+             tbuf = (char *)kl_alloc_block(100, K_TEMP);
+             cftime(tbuf, "%m/%d/%Y:%H:%M:%S", &change_time);
+             @ <font color="#24314C" size=+1 face = "Arial,Helvetica">
+             @ <B>
+             @format "%10s" tbuf
+             @ <P>
+             kl_free_block(tbuf);
+             continue;
+	}
+	else 
+	{
+	    @ <font color="#24314C" size=0 face = "Arial,Helvetica">
+            @format "%s" "CONFIG CHANGE TIME >> "
+            @ <P>
+	    tbuf = (char *)kl_alloc_block(100, K_TEMP);
+            cftime(tbuf, "%m/%d/%Y:%H:%M:%S", &change_time); 
+            @ <font color="#24314C" size=+1 face = "Arial,Helvetica">
+            @ <B>             
+            @format "%10s" tbuf
+            @ <P>
+	    kl_free_block(tbuf);
+	}
+
+	icmp = cm_change_items(config,change_time);
+	if (!icmp) 
+	{
+	    sscError(hError,szServerNameErrorPrefix,
+		    "Error : hw_report() --> icmp struct not allocated\n\n");
+	    return(1);
+	}
+	
+	if (!(change_item = cm_item(icmp,CM_FIRST))) 
+	{
+	    cm_free_list(config,icmp);
+	    continue;
+	}
+
+/* Get the first changed item */
+   
+	do 
+	{
+	    if(type != 
+	       CM_SIGNED(cm_field(change_item,CHANGE_ITEM_TYPE,CI_TYPE))) 
+	    {
+		type = 
+		    CM_SIGNED(cm_field(change_item,CHANGE_ITEM_TYPE,CI_TYPE));
+		if (type != 0)
+		    @endtable
+                @ <P>
+                @ <P>
+                  
+/* Get the type of the changed item */
+
+		switch (type) 
+		{
+		case SYSINFO_CURRENT: 
+		case SYSINFO_OLD: 
+    
+		    if(type == SYSINFO_CURRENT)
+		    {
+			@format "%s" "CURRENT SYSTEM"  
+	            }
+		    else
+		    {
+			@format "%s" "OLD SYSTEM"
+		    }
+		    @ <P>   
+		    @table BORDER=4 CELLSPACING=1 CELLPADDING=6 COLS=5 WIDTH=60% NOSAVE
+		    @row ALIGN="CENTER"
+		    @cell width=10%
+			   @ <B>
+			   @ <font color="#24314C" face = "Arial,Helvetica">
+			   @ SYS_ID
+		    @endcell
+		    @cell width=10%
+			   @ <B>
+			   @ <font color="#24314C" face = "Arial,Helvetica">
+			   @ SYS_TYPE
+		    @endcell
+		    @cell width=10%
+			   @ <B>
+			   @ <font color="#24314C" face = "Arial,Helvetica">
+			   @ SYS_SERIAL
+		    @endcell
+		    @cell width=10%
+			   @ <B>
+			   @ <font color="#24314C" face = "Arial,Helvetica">
+			   @ HOSTNAME
+		    @endcell
+		    @cell width=10%
+			   @ <B>
+			   @ <font color="#24314C" face = "Arial,Helvetica">
+			   @ IP_ADDRESS
+		    @endcell
+		    @endrow            
+		break;
+                case HW_INSTALLED: 
+                case HW_DEINSTALLED: 
+		    if(type == HW_INSTALLED)
+		    {
+			@format "%s" "HARDWARE INSTALLED"
+		    }
+		    else
+		    {
+			@format "%s" "HARDWARE DEINSTALLED"
+		    }
+		    @ <P>
+		    @table BORDER=4 CELLSPACING=1 CELLPADDING=6 COLS=6 WIDTH=60% NOSAVE
+		    @row ALIGN="CENTER"
+		    @cell width=10%
+			   @ <B>
+			   @ <font color="#24314C" face = "Arial,Helvetica">
+			   @ SYS_ID
+		    @endcell
+		    @cell width=30%
+			   @ <B>
+			   @ <font color="#24314C" face = "Arial,Helvetica">
+			   @ NAME
+		    @endcell
+		    @cell width=30%
+			   @ <B>
+			   @ <font color="#24314C" face = "Arial,Helvetica">
+			   @ LOCATION
+		    @endcell
+		    @cell width=10%
+			   @ <B>
+			   @ <font color="#24314C" face = "Arial,Helvetica">
+			   @ PART_NUMBER
+		    @endcell
+		    @cell width=10%
+			   @ <B>
+			   @ <font color="#24314C" face = "Arial,Helvetica">
+			   @ SERIAL_NUMBER
+		    @endcell
+		    @cell width=30%
+			   @ <B>
+			   @ <font color="#24314C" face = "Arial,Helvetica">
+			   @ REVISION
+		    @endcell
+		    @endrow
+	        break;
+                case SW_INSTALLED: 
+		    if(type == SW_INSTALLED)
+		    {
+			@format "%s" "SOFTWARE INSTALLED"
+	            }
+		    else
+		    {
+			@format "%s" "SOFTWARE DEINSTALLED"
+		    }
+		    @ <P>
+		    @table BORDER=4 CELLSPACING=1 CELLPADDING=6 COLS=6 WIDTH=60% NOSAVE
+		    @row ALIGN="CENTER"
+		    @cell width=10%
+			   @ <B>
+			   @ <font color="#24314C" face = "Arial,Helvetica">
+			   @ REC_KEY
+		    @endcell
+		    @cell width=30%
+			   @ <B>
+			   @ <font color="#24314C" face = "Arial,Helvetica">
+			   @ SYS_ID
+		    @endcell
+		    @cell width=30%
+			   @ <B>
+			   @ <font color="#24314C" face = "Arial,Helvetica">
+			   @ NAME
+		    @endcell
+		    @cell width=10%
+			   @ <B>
+			   @ <font color="#24314C" face = "Arial,Helvetica">
+			   @ VERSION
+		    @endcell
+		    @cell width=10%
+			   @ <B>
+			   @ <font color="#24314C" face = "Arial,Helvetica">
+			   @ INSTALL_TIME
+		    @endcell
+		    @cell width=10%
+			   @ <B>
+			   @ <font color="#24314C" face = "Arial,Helvetica">
+			   @ DEINSTALL_TIME
+		    @endcell
+		    @cell width=30%
+			   @ <B>
+			   @ <font color="#24314C" face = "Arial,Helvetica">
+			   @ DESCRIPTION
+		    @endcell
+		    @endrow                                   
+		    break;
+                 }         
+	    }
+	    item = cm_get_change_item(config,change_item);
+	    item_type = cm_change_item_type(change_item);
+
+	    /* 
+	     * Component that is installed / de-installed depending upon the 
+	     * type 
+	     */
+
+             switch(item_type) {
+
+                  case SYSINFO_TYPE: 
+
+		      sprintf(systype, "IP%d",
+			      CM_SIGNED(cm_field(item, 
+						 SYSINFO_TYPE, SYS_SYS_TYPE)));
+		      ip_address = CM_STRING(cm_field(item, 
+						      SYSINFO_TYPE, 
+						      SYS_IP_ADDRESS));
+		      hostname = CM_STRING(cm_field(item, 
+						    SYSINFO_TYPE, 
+						    SYS_HOSTNAME));
+		      sys_serial = CM_STRING(cm_field(item, 
+						      SYSINFO_TYPE, 
+						      SYS_SERIAL_NUMBER));
+
+		      @row ALIGN="TOP"
+		      @cell width=10%
+			   @ <B>
+			   @format "%12llu" sys_id
+		      @endcell
+		      @cell width=10%
+			   @ <B>
+			   @format "%8s" systype
+		      @endcell
+		      @cell width=10%
+			   @ <B>
+			   @format "%13s" sys_serial
+		      @endcell
+		      @cell width=10%
+			   @ <B>
+			   @format "%15s" hostname
+		      @endcell
+		      @cell width=10%
+			   @ <B>
+			   @format "%-15s" ip_address
+		      @endcell
+		      @endrow
+		  break;
+
+                  case HWCOMPONENT_TYPE: 
+		      hw_name = CM_STRING(cm_field(item,HWCOMPONENT_TYPE, 
+						   HW_NAME));
+		      location = CM_STRING(cm_field(item,HWCOMPONENT_TYPE, 
+						    HW_LOCATION));
+		      part_number = CM_STRING(cm_field(item,HWCOMPONENT_TYPE,
+						       HW_PART_NUMBER));
+		      serial_number = CM_STRING(cm_field(item,HWCOMPONENT_TYPE,
+							 HW_SERIAL_NUMBER));
+		      revision = CM_STRING(cm_field(item,HWCOMPONENT_TYPE,
+						    HW_REVISION));
+
+		      @row ALIGN="TOP"
+		      @cell width=10%
+			   @ <B>
+			   @format "%12llu" sys_id
+		      @endcell
+		      @cell width=30%
+			   @ <B>
+			   @format "%14s" hw_name
+		      @endcell
+		      @cell width=30%
+			   @ <B>
+			   @format "%8s" location
+		      @endcell
+		      @cell width=30%
+			   @ <B>
+			   @format "%12s" part_number
+		      @endcell
+		      @cell width=30%
+			   @ <B>
+			   @format "%10s" serial_number
+		      @endcell
+		      @cell width=30%
+			   @ <B>
+			   @format "%8s" revision
+		      @endcell
+		      @endrow     
+		  break;
+                  case SWCOMPONENT_TYPE: 
+
+		      tbuf = (char *)kl_alloc_block(100, CM_TEMP);
+		      time = CM_UNSIGNED(cm_field(item, SWCOMPONENT_TYPE, 
+						  SW_INSTALL_TIME));
+		      cftime(tbuf, "%m/%d/%Y", &time);
+		      tbuf1 = (char *)kl_alloc_block(100, CM_TEMP);
+		      time = CM_UNSIGNED(cm_field(item, SWCOMPONENT_TYPE,
+						  SW_DEINSTALL_TIME));
+		      cftime(tbuf1, "%m/%d/%Y", &time);
+		      rec_key = CM_UNSIGNED(cm_field(item, SWCOMPONENT_TYPE,
+						     SW_REC_KEY));
+		      name = CM_STRING(cm_field(item, SWCOMPONENT_TYPE,
+						SW_NAME));
+		      version = CM_UNSIGNED(cm_field(item, SWCOMPONENT_TYPE, 
+						     SW_VERSION));
+		      description = CM_STRING(cm_field(item, SWCOMPONENT_TYPE,
+						       SW_DESCRIPTION));
+      
+		      @row ALIGN="TOP"
+		      @cell width=10%
+			   @ <B>
+			   @format "%d" rec_key
+		      @endcell
+		      @cell width=30%
+			   @ <B>
+			   @format "%12llu" sys_id
+		      @endcell
+		      @cell 
+			   @ <B>
+			   @format "%-16s" name
+		      @endcell
+		      @cell width=10%
+			   @ <B>
+			   @format "%u" version
+		      @endcell
+		      @cell width=10%
+			   @ <B>
+			   @format "%10s" tbuf
+		      @endcell
+		      if (type == SW_INSTALLED) 
+		      {
+			  @cell width=10%
+			       @ <B>
+			       @format "%s" "0"
+			  @endcell
+		      }
+		      else 
+		      {
+			  @cell width=10%
+			       @ <B>
+			       @format "%10s" tbuf1
+			  @endcell
+		      }
+		      @cell width=30%
+			   @ <B>
+			   @format "%30s" description
+		      @endcell
+		      @endrow
+		      kl_free_block(tbuf);
+		  break;
+             default: 
+                  break;                      
+	     }
+	} while(change_item = cm_item(icmp,CM_NEXT));
+	cm_free_list(config,icmp);
+
+     } while(cm_event = cm_item(cm_history,CM_NEXT));
+
+     @endtable
+     @ <P>
+     @ <P>
+
+     cm_free_list(config,cm_history);
+     return(0);
+}
+
+void RGPGAPI rgpgGenerateReport(sscErrorHandle hError, 
+                                rgpgSessionID session, 
+ 	                        int argc, 
+                                char* argv[], 	
+				char *rawCommandString,
+				streamHandle result)
+{  
+    int ret = 0, table_id = 0, flag = 0;
+    unsigned long id = 0;
+    char *dbname = "ssdb";
+    cm_session_t *pSession=session;
+   
+/* Declaration and Initialization of the variables */
+
+   if (argc == 0) {
+     sscError(hError,szServerNameErrorPrefix,
+	      "Error : No argument specified\n\n");
+     return;
+    }
+
+    table_id = atoi(argv[1]);
+    flag = atoi(argv[2]);
+
+    
+/* Create the HTML generator */
+
+    ret = createMyHTMLGenerator(result);
+    if (ret != 0) {
+      sscError(hError,szServerNameErrorPrefix,
+	       "Could not create the HTML generator\n\n");
+      return;
+     }
+
+
+  /* Allocate structure for the database */  
+
+    switch (table_id) {
+ 
+           case 1: 
+                   if (ret = (sys_report(hError,pSession,flag))
+		       != 0) {
+                        sscError(hError,szServerNameErrorPrefix,
+				 "Error : sys_report\n\n");
+                        return;
+                     }
+                    break;
+                    
+            case 2:
+                   if (ret = (sw_report(hError,pSession,flag)) 
+		       != 0) {
+                        sscError(hError,szServerNameErrorPrefix,
+				 "Error : sw_report\n\n");
+                        return;
+                     }
+                    break;
+
+            case 3:
+                   if (ret = (hw_report(hError,pSession,0,0)) != 0) {
+                        sscError(hError,szServerNameErrorPrefix,
+				 "Error : hw_report\n\n");
+                        return;
+                     }	
+		   break;
+
+            case 4: 
+                   if (ret = (change_report(hError,pSession)) 
+		       != 0) {
+                        sscError(hError,szServerNameErrorPrefix,
+				 "Error : change_report\n\n");
+                        return;
+                     }                    break;
+	    case HWDRILLDOWN_PLUS:
+	    case HWDRILLDOWN_MINUS:
+		if (ret = (hw_report(hError,pSession,table_id,
+				     (cm_hndl_t)strtol(argv[2],NULL,16))) 
+		    != 0) 
+		{
+		    sscError(hError,szServerNameErrorPrefix,
+			     "Error : hw_report\n\n");
+		    return;
+		}	
+		break;
+            default:
+                    break;
+        }
+               
+     ret = deleteMyHTMLGenerator();
+     if (ret != 0) {
+      sscError(hError,szServerNameErrorPrefix,
+	       "Could not delete the HTML generator\n\n");
+      return;
+     }
+}
+
+/*---------------------*/
+/*Report Generator Init*/
+/*---------------------*/
+
+/* --------------------------- rgpgInit ---------------------------------- */
+int RGPGAPI rgpgInit(sscErrorHandle hError)
+{
+    char *dbname = "ssdb";
+    char buf[15];
+    time_t tmpT;
+    
+    /* Try initialize "free list of cm_session_t" mutex */
+    if(pthread_mutex_init(&seshFreeListmutex,0))
+    { sscError(hError,szServerNameErrorPrefix,"Can't initialize mutex");
+    return 0; /* error */
+    }
+    mutex_inited++;
+#ifdef INCLUDE_TIME_DATE_STRINGS
+    sprintf(szVersionStr,"%d.%d %s %s",
+	    MYVERSION_MAJOR,MYVERSION_MINOR,__DATE__,__TIME__);
+#else
+    sprintf(szVersionStr,"%d.%d",MYVERSION_MAJOR,MYVERSION_MINOR);
+#endif
+  
+  
+    stT=time(NULL);
+    
+    cm_init();
+    gConfig=cm_alloc_config(dbname,1);
+    
+    /* Get the sys_id using the sysinfo system call */
+    if (sysinfo(SI_HW_SERIAL,buf,sizeof(buf)) == -1) {
+	sscError(hError,szServerNameErrorPrefix,"Could not read sys id in "
+		 "rgpgCreateSesion()");
+	return 0;
+    }
+    
+    
+    gSys_id = atol(buf);
+    gSys_id &= 0xFfFfFfFf;
+
+    if(strTime)
+	tmpT = atol(strTime);
+    else
+	tmpT = 0;
+    
+    if(cm_get_sysconfig(gConfig,gSys_id,tmpT))
+    {
+	sscError(hError,szServerNameErrorPrefix,
+		 "Could not get system configuration in "
+		 "rgpgInit()");
+	cm_free_config(gConfig);
+	return 0;
+    }
+    
+    gFirst_hwcmp = cm_first_hwcmp(gConfig);
+    gFirst_hwcmp = cm_get_hwcmp(gFirst_hwcmp,CM_NEXT);
+    DlistInit(gFirst_hwcmp);
+    
+#if 0
+	select_plus(hError,session,session->first_hwcmp);
+	select_plus(hError,session,cm_get_hwcmp(session->first_hwcmp,CM_NEXT));
+#endif
+  return 1; /* success */
+}
+/* ----------------------------- rgpgDone ------------------------------------ */
+int RGPGAPI rgpgDone(sscErrorHandle hError)
+{ 
+    cm_session_t *s;
+
+    if(mutex_inited)
+    { 
+	pthread_mutex_destroy(&seshFreeListmutex);
+	mutex_inited = 0;
+	while((s = sesFreeList) != 0)
+	{ 
+	    sesFreeList = s->next;
+	    free(s);
+	}
+	return 1; /* success */
+    }
+    return 0; /* error - not inited */
+}
+
+/*---------------------*/
+/*Create Session Module*/
+/*---------------------*/
+
+rgpgSessionID RGPGAPI rgpgCreateSesion(sscErrorHandle hError)
+{
+    cm_session_t *session=kl_alloc_block(sizeof(cm_session_t),B_TEMP);
+
+    pthread_mutex_lock(&seshFreeListmutex);
+    if((session = sesFreeList) != 0) sesFreeList = session->next;
+    pthread_mutex_unlock(&seshFreeListmutex);
+    if(!session) session = (cm_session_t *)calloc(sizeof(cm_session_t),1);
+    if(!session)
+    { 
+	sscError(hError,szServerNameErrorPrefix,
+		 "No memory to create session in rgpgCreateSession()");
+	return 0;
+    }
+    memset(session,0,sizeof(cm_session_t));
+    session->signature = sizeof(cm_session_t);
+			 
+    session->config = gConfig;
+    session->sys_id = gSys_id;
+    session->tree_id_0 = stT;
+
+    if(!session->config || !session->sys_id)
+    {
+	sscError(hError,szServerNameErrorPrefix,
+		 "Could not initialize configmon libraries in "
+		 "rgpgCreateSesion()");
+	fprintf(stderr,"sys_id = %lld\n",session->sys_id);
+	kl_free_block(session);
+	return 0;
+    }
+
+   session->first_hwcmp = gFirst_hwcmp;
+
+   return session;
+}
+
+/*---------------------*/
+/*Delete Session Module*/
+/*---------------------*/
+
+void RGPGAPI rgpgDeleteSesion(sscErrorHandle hError, 
+			      rgpgSessionID session)
+{
+    cm_session_t *pSession=session;
+
+    if(!pSession)
+	return;
+#if 0
+    cm_free_list(pSession->config,pSession->first_hwcmp);
+    cm_free_config(pSession->config);
+#endif
+    kl_free_block(pSession);
+}
+/*--------------------*/
+/*Get Attribute Module*/
+/*--------------------*/
+
+/* 
+ * ------------------------ rgpgGetAttribute ---------------------------------
+ */
+char *RGPGAPI rgpgGetAttribute(sscErrorHandle hError,rgpgSessionID session, const char *attributeID, const char *extraAttrSpec,int *typeattr)
+{  
+    char *s=NULL;
+
+    if(typeattr) *typeattr = RGATTRTYPE_STATIC;
+    if(!strcasecmp(attributeID,szVersion))         
+	s = (char*)szVersionStr;
+    else if(!strcasecmp(attributeID,szTitle))      
+	s = (char*)myLogo;
+    else if(!strcasecmp(attributeID,szUnloadTime)) 
+	s = (char*)szUnloadTimeValue;
+    else if(!strcasecmp(attributeID,szThreadSafe)) 
+	s = (char*)szThreadSafeValue;
+    else if(!strcasecmp(attributeID,szUnloadable)) 
+	s = (char*)szUnloadableValue;
+    else if(!strcasecmp(attributeID,szAcceptRawCmdString)) 
+	s = (char*)szszAcceptRawCmdStringValue;
+    else
+    { 
+	sscError(hError,szServerNameErrorPrefix,
+		 "%s No such attribute '%s' in rgpgGetAttribute()",
+		 szServerNameErrorPrefix,attributeID);
+	return 0;
+    }
+
+   if(!s) 
+       sscError(hError,szServerNameErrorPrefix,
+		szServerNameErrorPrefix,"No memory in rgpgGetAttribute()");
+   return s;
+}
+
+/* ------------------- rgpgFreeAttributeString ---------------------------- */
+void RGPGAPI rgpgFreeAttributeString(sscErrorHandle hError,
+				     rgpgSessionID session,
+				     const char *attributeID,
+				     const char *extraAttrSpec,
+				     char *attrString,int attrtype)
+{  
+    cm_session_t *sess = (cm_session_t *)session;
+    
+    if(!sess || sess->signature != sizeof(cm_session_t))
+    { 
+	sscError(hError,szServerNameErrorPrefix,
+		 "Incorrect session id in rgpgFreeAttributeString()");
+	return;
+    }
+    printf("Free Attribute String \"%s\"\n",attributeID);
+    if ((attrtype == RGATTRTYPE_SPECIALALLOC || 
+	 attrtype == RGATTRTYPE_MALLOCED) && attrString) free(attrString);
+}
+
+
+/* ------------------ rgpgSetAttribute------------------------------------- */
+
+void  RGPGAPI rgpgSetAttribute(sscErrorHandle hError, rgpgSessionID session, 
+			       const char *attributeID, 
+			       const char *extraAttrSpec, const char *value)
+{  
+    char buff[128]; 
+    cm_session_t *sess = session;
+
+   if(!strcasecmp(attributeID,szVersion)    || 
+      !strcasecmp(attributeID,szTitle)      ||
+      !strcasecmp(attributeID,szThreadSafe) || 
+      !strcasecmp(attributeID,szUnloadable) ||
+      !strcasecmp(attributeID,szUnloadTime) ||
+      !strcasecmp(attributeID,szAcceptRawCmdString))
+   { 
+       sscError(hError,szServerNameErrorPrefix,
+		"Attempt to set read only attribute in rgpgSetAttribute()");
+       return;
+   }
+
+   if(!strcasecmp(attributeID,"User-Agent") && value)
+   { 
+       sess->textonly = (strcasecmp(value,"Lynx") == 0) ? 1 : 0;
+       return;
+   }
+   
+   if(!strcasecmp(attributeID,"Config-Time") && value)
+   {
+       if(strTime)
+	   free(strTime);
+       strTime = strdup(value);
+   }
+
+   if(!sess || sess->signature != sizeof(cm_session_t))
+   { 
+       sscError(hError,szServerNameErrorPrefix,
+		"Incorrect session id in rgpgGetAttribute()");
+       return;
+   }
+}
+
+
+/*-----------------*/
+/*Done in a big way*/
+/*-----------------*/
+    
+
+    
+       

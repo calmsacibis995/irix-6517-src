@@ -1,0 +1,321 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	VmVeInfo
+# Version:	$Revision: 1.8 $
+# Synopsis:	Encapsulates the dialog that displays information about
+#		stand-alone ve's.
+# Functions:	vmVeInfo:realize
+#		vmVeInfo:manage
+#		vmVeInfo:fill
+#		vmVeInfo:_create
+#		vmVeInfo:_cookRawData
+#		vmVeInfo:_dialogCb
+#		vmVeInfo:_cancel
+#		vmVeInfo:_startDrop
+#		vmVeInfo:_doTransfer
+#		vmVeInfo:_computeNewColumnWidths
+#%COMMENT_END
+
+#########################################
+#		Public			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vmVeInfo:realize
+# Synopsis:	Initializes any class-wide data and creates an instance of
+#		the dialog. If an instance of this dialog already exists for
+#		the given handle, no action is taken.
+# Arguments:	- handle	An identifier that is used as a key for storing
+#				(and later retrieving) the created widgets and
+#				any instance specific data.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc vmVeInfo:realize { handle parent } \
+{
+	global		_GW_vmve _GD_vmve
+
+	if {! [info exists _GW_vmve(initiaized)]} {
+		set _GD_vmve(initialized) true
+
+		set _GD_vmve(buttons)	{close help}
+		set _GD_vmve(columns) \
+			{name ve_type ve_sunit ve_start ve_size nparts parts}
+	}
+
+	if {! [info exists _GW_vmve($handle,dialog)]} {
+
+		set _GD_vmve($handle,cwidths)	"4 4 6 8 8 5 14"
+
+		set _GW_vmve($handle,dialog) \
+				[vmVeInfo:_create $handle $parent]
+
+		####	This must happen after the dialog is realized
+		$_GW_vmve($handle,dialog) realizeWidget
+		$_GW_vmve($handle,buttons) getValues -height height
+		$_GW_vmve($handle,buttons) setValues \
+				-paneMinimum $height \
+				-paneMaximum $height
+		$_GW_vmve($handle,matrix) getValues -height height
+		$_GW_vmve($handle,matrix) setValues -paneMinimum $height 
+
+		$_GW_vmve($handle,dialog) dropSiteRegister -dropProc \
+			"vmVeInfo:_startDrop $handle %dragContext \
+					$_GW_vmve($handle,dialog)" \
+			-numImportTargets 1 \
+			-importTargets "COMPOUND_TEXT"
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	vmVeInfo:manage
+# Synopsis:	Manages an instance of the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vmVeInfo:manage { handle } \
+{
+	global		_GW_vmve
+
+	if {[info exists _GW_vmve($handle,dialog)]} {
+		$_GW_vmve($handle,dialog) manageChild
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	vmVeInfo:fill
+# Synopsis:	Given a list of object signatures, retrieve the data for those
+#		objects and fill in the matrix.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- mode		Reserved for future use.
+#		- lst		A list of object signatures for which to
+#				display information.
+#%COMMENT_END
+proc vmVeInfo:fill { handle mode lst } \
+{
+	global		_GW_vmve
+
+	if {! [llength $lst]} { return }
+
+	set rows 0
+	foreach obj $lst {
+		obj:parse $obj o_class o_host o_nm o_type
+
+		if {$o_class == "_TEMPLATE_"} {
+			continue
+		}
+		if {[catch {set synopsis [xlvCmd synopsis $obj]} error]} {
+			regsub -all -- "\n" [string trim $error] "\n\t" nerror
+			em:storeMsg $handle warning \
+				"Could not get data for $o_nm.\n\t$nerror"
+			continue
+		}
+		if {[catch {set objInfo [xlvCmd objInfo $obj]} error]} {
+			regsub -all -- "\n" [string trim $error] "\n\t" nerror
+			em:storeMsg $handle warning \
+				"Could not get data for $o_nm.\n\t$nerror"
+			continue
+		}
+
+		lappend data [vmVeInfo:_cookRawData $synopsis $objInfo]
+		incr rows
+	}
+
+	if {[info exists data]} {
+		if {$rows > 8} {
+			set desire_rows 8
+		} else {
+			set desire_rows $rows
+		}
+
+		set new_cwidths [vmVeInfo:_computeNewColumnWidths $handle $data]
+
+		$_GW_vmve($handle,matrix) setValues \
+				-rows $rows \
+				-columnWidths [join $new_cwidths ,] \
+				-visibleRows $desire_rows
+		$_GW_vmve($handle,matrix) setValues \
+				-cells $data
+		return 1
+	} else {
+		return 0
+	}
+}
+
+#########################################
+#		Private			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vmVeInfo:_create
+# Synopsis:	Creates an instance of the dialog.
+# Arguments:	- handle	The identifier for the new instance.
+#		- parent	The parent for the created panel.
+#%COMMENT_END
+proc vmVeInfo:_create { handle parent } \
+{
+	global		_GW_vmve _GD_vmve
+	set name	vmVeInfo
+
+	set dialog [xmFormDialog $parent.$name]
+	set pane [xmPanedWindow $dialog.$handle managed \
+			-sashWidth 1 \
+			-sashHeight 1 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form]
+
+	set _GW_vmve($handle,matrix) [iu:createMatrix $pane vematrix \
+			[llength $_GD_vmve(columns)] \
+			[join $_GD_vmve($handle,cwidths) ","]]
+	$_GW_vmve($handle,matrix) setValues -allowResize true 
+
+	set _GW_vmve($handle,buttons) \
+			[xfs:createDialogButtons $pane $_GD_vmve(buttons)]
+	foreach item $_GD_vmve(buttons) {
+		$_GW_vmve($handle,buttons).$item activateCallback \
+				"$name:_dialogCb $handle $item"
+	}
+
+	$_GW_vmve($handle,matrix) manageChild
+	$_GW_vmve($handle,buttons) manageChild
+
+	return $dialog
+}
+
+#%COMMENT_BEGIN
+# Function:	vmVeInfo:_cookRawData
+# Synopsis:	Takes the raw data and formats it so that it can be displayed
+#		in a matrix widget.
+# Arguments:	- synopsis	A list of lists that is used internally to
+#				represent an xlv object.
+#		- obj_info	A description of the object in the xlv file
+#				format.  It is used to display the number
+#				of parts in the plex.
+#%COMMENT_END
+proc vmVeInfo:_cookRawData { synopsis obj_info } \
+{
+	global		_GW_vmve
+
+	if {! [xlv:parseData object [split $obj_info \n] data_out]} {
+		return {}
+	}
+
+	lappend dt $data_out(name)
+	if {$data_out(ve,ve_type) == "S"} {
+		lappend dt "Stripe"
+	} else {
+		lappend dt "Concat"
+	}
+	lappend dt [lindex $data_out(ve,ve_sunit) 0]
+	lappend dt [lindex $data_out(ve,ve_start) 0]
+	set blocks [lindex [lindex [lindex $synopsis 0] 2] 1]
+	set bytes [cvt:unitsToBytes $blocks cvt_size cvt_unit b]
+	set mbstr [cvt:bytesToUnits {m} $bytes cvt_size cvt_unit mb]
+	lappend dt [lindex $mbstr 0]
+	lappend dt [lindex $data_out(ve,nparts) 0]
+	lappend dt [lindex $data_out(ve,parts) 0]
+
+	return $dt
+}
+
+#########################################
+#	Dialog Callbacks		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vmVeInfo:_dialogCb
+# Synopsis:	The callback function defined on the dialog buttons.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- op		Indicates which button the user selected.
+#%COMMENT_END
+proc vmVeInfo:_dialogCb { handle op } \
+{
+	global	_GW_vmve
+
+	switch $op {
+		close { vmVeInfo:_cancel $handle }
+		help  { sgiHelpMsg $_GW_vmve($handle,dialog) }
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	vmVeInfo:_cancel
+# Synopsis:	This is called when the user presses the "Cancel" dialog
+#		button.  It currently unmanages the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vmVeInfo:_cancel { handle } \
+{
+	global	_GW_vmve; $_GW_vmve($handle,dialog) unmanageChild
+}
+
+#########################################
+#	Drag and Drop			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vmVeInfo:_startDrop
+# Synopsis:	The function that is called when icons are dropped on
+#		the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- dragContext	The Motif drag context widget id.
+#		- w		The widget id for the matrix.
+#%COMMENT_END
+proc vmVeInfo:_startDrop { handle dragContext w } \
+{
+	$dragContext dropTransferStart \
+	    -dropTransfers [list [concat COMPOUND_TEXT $w]] \
+	    -numDropTransfers 1 \
+	    -transferProc "vmVeInfo:_doTransfer $handle %closure {%value}"
+}
+
+#%COMMENT_BEGIN
+# Function:	vmVeInfo:_doTransfer
+# Synopsis:	The function that is called when the drop transfer is completed
+#		It converts the information to the proper internal format and
+#		then calls fsInfo:fill() to fill the matrix.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- destination	Unused
+#		- value		The data for the dropped objects.
+#%COMMENT_END
+proc vmVeInfo:_doTransfer { handle destination value } \
+{
+	if {[ip:uniqueToObject $value objs]} {
+		####    TODO:	Only accept type objects
+		vmVeInfo:fill $handle replace $objs
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	vmVeInfo:_computeNewColumnWidths
+# Synopsis:	Determines the maximum width (in characters) of each column
+#		in the matrix.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- data		A list of lists where each sublist contains
+#				the information for a row in the matrix.
+#%COMMENT_END
+proc vmVeInfo:_computeNewColumnWidths { handle data } \
+{
+	global		_GW_vmve _GD_vmve
+
+	set ncolumns [llength $_GD_vmve($handle,cwidths)]
+	set new_widths $_GD_vmve($handle,cwidths)
+	foreach row $data {
+		loop i 0 $ncolumns 1 {
+			set l1 [string length [lindex $row $i]]
+			set l2 [lindex $new_widths $i]
+			if {$l1 > $l2} {
+				lvarpop new_widths $i $l1
+			}
+		}
+	}
+
+	return $new_widths
+}

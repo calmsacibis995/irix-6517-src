@@ -1,0 +1,341 @@
+#! /bin/sh
+# $Revision: 1.29 $
+
+# 'Fix' a Trailblazer TB+, T2000, T2500, T1600, T3000, or QBlazer.
+#    This script writes a configuration suitable operation with IRIX
+#    into the non-volatile memory in the modem.
+
+#	-i	for inbound use only
+#	-o	for outbound use only
+#	-io	for both
+#	-m model to specify the model number, as in "-m t2500"
+#	-v	for verbose debugging
+#	-c cmd	to add the string of Hayes-like commands, "cmd",
+#		    to the end of string of initializations.
+#	-s bps	to specify the DTE speed, either "19200" or "38400"
+
+# This script must be run by "root".
+
+# When this script is run, it sends the responses of the modem to
+#	standard out.  It ends by telling the modem to display all
+#	of its parameters.  If you do not see the right results,
+#	first check the cable to the modem.
+
+# This script uses 'ttyd*' device names, so that it is not stopped by a
+#	need for DCD.  Since there is often a getty(1M) running on
+#	a 'ttyf*', and since you cannot simultaneously open 'ttyf' and
+#	'ttyd', it is necessary to stop the getty in /etc/inittab
+#	before using this script.  If a uugetty(1M) is running on the
+#	port, it need not be turned off, because this script will
+#	temporarily disable it.
+
+# Older models should be reset with a paper clip first, so that we know
+#	at what speed to talk to the modem.
+
+# Additional local commands should be added to this file in the following
+#	line or provided with the -c option
+loc=""
+
+
+# With a Telebit Trailblazer Plus set with this script
+# use a line in /etc/inittab that runs /usr/lib/uucp/uugetty with arguments
+# such as the following:
+#	 -Nt60 -itelebitin,conn ttyf2 dx_19200
+#
+# If PEP is offered last (s92=1), then be sure to extend the time that
+#   uugetty ignores chatter from the modem:
+#	-Nt60 -itelebitin,conn ttyf2 dx_19200
+#
+# Use  the following with a T2500
+#	-Nt60 -it25in,conn ttyf2 dx_19200
+#
+# Use the following with a T1600
+#	 -Nt60 -it16in,conn ttyf2 dx_19200
+#
+# Use like the following with a T3000
+#	-Nt60 -it30in,conn ttyf2 dx_38400
+# See `man uugetty` and `man inittab`.
+
+
+USAGE="usage: `basename $0`: -i|-o|-io [-m model] [-v] [-c cmd] [-s 19200|38400] portno"
+
+
+if test $# -le 1 ; then
+    echo "$USAGE"
+    exit 1
+fi
+while getopts "viom:c:s:" c; do
+    case $c in
+    i) in=1;;
+    o) out=1;;
+    v) if test ! -z "$verbose"; then
+	    set -v
+	fi
+	set -x
+	verbose="-v"
+	;;
+    m) model=`echo "$OPTARG" | tr '[a-z]' '[A-Z]'`;;
+    c) loc="$loc $OPTARG";;
+    s) speed="$OPTARG";;
+    \?) echo "$USAGE"; exit 1;;
+    esac
+done
+shift `expr $OPTIND - 1`
+if test $# != 1 ; then
+    echo "$USAGE"
+    exit 1
+fi
+
+case $1 in
+    [dmf]*) port=`expr $1 : '.\(.*\)'`;;
+    *) port=$1;;
+esac
+dev=/dev/ttyd$port
+odevs="/dev/ttym$port /dev/ttyf$port"
+if test ! -c "$dev"; then
+    echo "bad port number: $1"
+    exit 1
+fi
+if test ! -d /var/spool/locks -a -d /usr/spool/locks; then
+    LOCKDIR=/usr/spool/locks
+else
+    LOCKDIR=/var/spool/locks
+fi
+LOCKD=$LOCKDIR/LCK..ttyd$port
+LOCKM=$LOCKDIR/LCK..ttym$port
+LOCKF=$LOCKDIR/LCK..ttyf$port
+# uucp wants a 10 byte string
+LOCKSTR=`expr "         $$" : '.*\(..........\)'`
+
+LOGFILE=/tmp/fix-modem$$
+
+
+# use factory defaults, except or including:
+#	Q4=say nothing about answering a phone call, Q2 for the T1600
+#		Q0 is fine for outgoing modems, or if you tell uugetty '-d16'
+#		or some other # of seconds long enough to cover answering
+#	Xxx, S59, Wx=fancy result codes
+#		T2500s do not like X14.
+#	S0=1 answer the phone on 1st ring, =0 do not answer the phone
+#	S38=1 to flush on hangup for the T1600
+#	S45=0 to turn off remote access
+#	S50=255 for PEP, 6 for V.32, 7 for V.32bis
+#	S51=5 talk between host & modem at 19.2Kb/sec, 6=38.4
+#	S52=2 to reset on DTR, &D3 on the T1600
+#	S53=1 for DSR on whem the modem is healthy;  DCD=carrier detect
+#		&C1 for the T1600
+#	S54=3 pass BREAK correctly, S61=0 and S63=0 for T1600
+#	S55=3 to disable +++ escape for "security", =0 to enable it.
+#		'+++' can be used to compromise a system.  It should
+#		be turned off if untrusted users can log into the system.
+#	   S2=128 for T1600
+#	S58=2 for RTS/CTS flow control
+#	S66=1 'lock interface speed,' and use flow control, s181=1 for T1600
+#	S68=2 for RCS/CTS flow control, S68=255 for T1600
+#	S92=0 for normal search sequence, 1=PEP last which is good for SLIP
+#	S110=0 to refuse to compress data.  When transmitting data that
+#		that has already been compressed by the hosts, it seems
+#		to be 20% faster to not allow the modem to compress.
+#		=255 to allow compression, but not force it.
+#	S111=30 for UUCP
+
+#   T2500
+#	S95=2 to allow MNP
+#	S96=0 to disable MNP compression, since it is used at 9600
+#		when one is likely to be doing SLIP and adds lots of latency
+#	S97=1 to enable V.42 LAP-M
+#	S98=3 allow V.42bis compression
+#	S106=1 allow V.42 detection
+
+#   T1600
+#	S59=15 for more connection info
+#	L1=less noise
+#	s181=1 to lock interface speed
+
+#   T3000
+#	S59=15 for more connection info
+#	L1=less noise
+
+#   QBlazer
+#	S59=15 for more connection info
+#	L1=less noise
+#	s181=1 to lock interface speed
+
+#   WorldBlazer
+#	S59=15 for more connection info
+#	L1=less noise
+#	S92=1 to offer PEP last
+#	S7=60 to allow enough time for PEP to be negotiated
+
+case "${model:=TB}" in
+    TB|TB+)
+	rstcmd='&F'
+	varcmd1='x3 S55=3 S52=2 S53=1 S54=3 S66=1 S110=1 S68=2'
+	varcmd2='S45=0 S111=30'
+	infocmd='I4 &N'
+	model="Trailblazer or Trailblazer Plus"
+	maxspeed=19200
+	;;
+
+    T2000|T2500|T25)
+	rstcmd='&F ~S63=1 &F'	    # try to force enhanced command mode
+	varcmd1='x3 S55=3 S52=2 S53=1 S54=3 S66=1 S110=1 S68=2'
+	varcmd2='S45=0 S95=2 S96=0 S97=1 S98=3 S106=1 S111=30'
+	infocmd='I4 &N'
+	model="T2000 or T2500"
+	maxspeed=19200
+	;;
+
+    T1000|T10)
+	rstcmd='&F ~S63=1 &F'
+	varcmd1='x13 w1 S52=2 S53=1 S54=3 S55=3 S66=1 S68=255'
+	varcmd2='S45=0 S95=2 S96=0 S111=30'
+	infocmd='I4 &N'
+	model="T1000"
+	maxspeed=19200
+	;;
+
+    T1600|T16)
+	rstcmd='&F'
+	varcmd1='x12 &C1 &D3 L1 S2=128 S38=1 S59=15 S61=0 S63=0 S68=255 S181=1'
+	varcmd2='S45=0 S111=30'
+	infocmd='&V'
+	model="T1600"
+	maxspeed=38400
+	;;
+
+    T3000|T30)
+	rstcmd='&F9 S254=255'
+	varcmd1='x12 &C1 &D3 L1 S2=128 S38=5 S59=15 S61=0 S63=0 S68=255'
+	varcmd2='S45=0 S111=30 S255=255'
+	infocmd='&V ~L'
+	model="T3000"
+	maxspeed=38400
+	;;
+
+    QB|QBLAZER)
+	rstcmd='&F'
+	varcmd1='x2 &C1 &D3 S2=128 S38=5 S59=15 S61=0 S63=0 S68=255 S181=1'
+	varcmd2=''
+	infocmd='&V ~L'
+	model="QBlazer"
+	maxspeed=38400
+	;;
+
+    WB|WORLDBLAZER)
+	rstcmd='&F9 S254=255'
+	varcmd1='x12 &C1 &D3 L1 S2=128 S38=5 S59=15 S61=0 S63=0 S68=255'
+	varcmd2='S45=0 S7=60 S92=1 S111=30 S255=255'
+	infocmd='&V ~L'
+	model="WorldBlazer"
+	maxspeed=38400
+	;;
+
+    *) echo "unknown model: $model"; exit 1;;
+esac
+
+if test "${speed:=19200}" -gt "$maxspeed"; then
+    echo
+    echo "The maximum DTE rate of the \"$model\" is $maxspeed"
+    speed=$maxspeed
+fi
+
+# Set S0=1 to answer the phone for pure input.
+#	Do not answer the phone (S0=0) for pure output.
+#	Do not answer the phone by default (S0=0) for combined
+#		input & output, because uugetty will answer it.
+if test "$out" = 1; then
+    modecmd="S0=0"
+elif test "$in" = 1; then
+    modecmd="S0=1"
+else
+    echo "$USAGE"		# complain if neither in nor out is set
+    exit 1
+fi
+case "$speed" in
+    38400) modecmd="$modecmd S51=6";;
+    19200) modecmd="$modecmd S51=5";;
+    *) echo "unknown speed: $speed"; exit 1;;
+esac
+
+if test ! -w /dev; then
+    echo "This does not work very well except for the superuser."
+    exit 1
+fi
+
+# fight the UUCP daemons and others for the port
+/etc/renice -20 $$ > /dev/null
+
+
+echo
+echo "  If this effort to program the Telebit \"$model\""
+echo "  connected to port $port works, you should see a series AT commands"
+echo "  and responses.  The response to each command should end with 'OK'."
+echo "  The last command should be followed by a list of all of the settings."
+echo
+
+# lock the device by all of its names
+rm -f $LOCKD $LOCKM $LOCKF
+echo "$LOCKSTR" > $LOCKD; ln $LOCKD $LOCKM; ln $LOCKD $LOCKF
+
+# zap any gettys or other users
+pids=`/etc/fuser -q $dev $odevs 2>/dev/null`
+if test ! -z "$pids"; then
+    echo "    Stopping processes currently using port $port\n"
+    if test ! -z "$verbose"; then
+	ps -lfp $pids
+    fi
+    kill -1 $pids
+    sleep 2
+fi
+pids="$pids `/etc/fuser -qk $dev $odevs 2>/dev/null`"
+# re-lock in case the other guy removed our rude lock files
+rm -f $LOCKD $LOCKM $LOCKF
+echo "$LOCKSTR" > $LOCKD; ln $LOCKD $LOCKM; ln $LOCKD $LOCKF
+
+trap "rm -f $LOCKD $LOCKM $LOCKF $LOGFILE; /etc/fuser -qk $dev $odevs 2>/dev/null; exit 1" 0 1 2 15
+
+# start listening to the modem, after waiting for previous users to
+# disappear and allow us to open the ttyd* device.
+# Also keep DTR low in the hope of resetting the modem.
+while test ! -z "$pids"; do
+    pids=`/etc/fuser -qk $dev $odevs 2>/dev/null`
+    sleep 2
+done
+
+rm -f $LOGFILE
+tee $LOGFILE <$dev &
+
+# Reset things, trying likely speeds at which the modem might be listening.
+#	Pause before the "AT" to allow the modem to do what Telebit
+#	optimistically calls "autobaud."
+#	Resetting switches to 9600.
+stty 38400 -echo -icrnl -ixon -ixoff -isig clocal < $dev
+echo "\r\c" > $dev; sleep 1
+echo "AT $rstcmd\r\c" > $dev; sleep 1
+
+stty 19200 -echo -icrnl -ixon -ixoff -isig clocal < $dev
+echo "\r\c" > $dev; sleep 1
+echo "AT $rstcmd\r\c" > $dev; sleep 1
+
+stty 9600 < $dev
+echo "\r\c" > $dev; sleep 1
+echo "AT $rstcmd\r\c" > $dev; sleep 1
+
+echo "AT Q0 $varcmd1\r\c" > $dev; sleep 1
+
+# the modems do not like very long lines
+if test "$varcmd2" != ""; then
+    echo "AT $varcmd2\r\c" > $dev; sleep 1
+fi
+
+# set the speed followed by any local overrides.
+echo "AT S58=2 $modecmd $loc\r\c" > $dev; sleep 1
+
+stty $speed < $dev
+echo "AT &W\r\c" > $dev; sleep 1
+
+echo "AT $infocmd\r\c" > $dev; sleep 1
+
+#prevent message about the death of the listener
+exec >/dev/null 2>&1

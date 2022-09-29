@@ -1,0 +1,125 @@
+
+
+	   The new selective/compressed crash dump format
+	   ----------------------------------------------
+
+Motivation
+----------
+
+With the advent of 2 Gigabyte machines, we had to do something to make
+panic dumps useful again, since few people are willing to devote an
+entire 2GB disk to a giant swap partition.  In the 5.0 release, Irix
+crash dumps can be in two formats.  If physical memory is smaller than
+the availble swap partition space, the dump is a standard physcial memory
+image.  If, however, physcial memory is larger than swap partition space,
+we do a new selective/compressed dump.  In 5.0.1, all platforms but
+IP20s and IP22s use the new dump format exclusively.
+
+Format Description
+------------------
+
+A new-style dump consists of a dump header that contains information about
+the dump file and the system it came from followed by a series of dump
+"dirctory entries" and compressed blocks.  We first dump all of the
+unmapped memory from "physaddr" (0 on most machines) to the "firstfree"
+page.  Next we dump all pages marked as kernel pages followed by pages
+marked "in use" and finally pages marked free.  Since we don't know how many
+pages we'll be dumping, there is no fixed-size directory at the beginning of
+the dump.  Such a directory might easily fill all available space if we
+were to leave sufficient space for all pages of physical memory.  The
+compromise is to precede each block with a small directory entry containing
+the page's PFN, compressed length, and some flags indicating what kind
+of page it is and what kind of compression was used.  The new code continues
+to write out blocks until all available space is filled or all of memory has
+been saved.
+
+A compressed dump file (vmcore.X.comp) looks like this:
+
+	+--------------------+
+        |    Dump Header     |
+        |                    |
+        +--------------------+
+        |  Directory Entry   |
+        +--------------------+
+        |  Compressed Block  |
+        |                    |
+        +--------------------+
+        |  Directory Entry   |
+        +--------------------+
+        |  Compressed Block  |
+        |                    |
+        |                    |
+        +--------------------+
+        |  Directory Entry   |
+        +--------------------+
+        |  Compressed Block  |
+        +--------------------+
+        |                    |
+		...
+	|                    |
+        +--------------------+
+        | End of File Marker |
+        +--------------------+
+  
+The "end of file marker" is a directory entry with the DUMP_END flag set
+in it.
+
+Dump Header
+-----------
+
+The dump header contains the following information (from sys/dump.h):
+
+	Dump magic number
+	Dump format version
+	Dump page size
+	Physcial memory size in megabytes
+	Crash time
+	Dump size in pages (written after the dump is complete)
+	Dump header size
+	Name of the running system
+	Panic string
+	Putbuf array
+	Putbuf index
+	Putbuf size
+
+Tools
+-----
+
+The new savecore(1M) copies the putbuf to syslog before saving the core so
+even if a vmcore.N.compr file can't be created, the putbuf is saved.
+
+The Unix file command can identify these compressed vmcore files, and
+it prints the name of the Unix that was dumped.
+
+Currently, the only way to debug a compressed core is to uncompress it
+using uncompvm(1M).  Unfortunately, the Makefile for 5.0 had a bug in it
+so the only way to run uncompvm is with the full path /usr/etc/uncompvm file.
+
+Uncompvm also takes a -h flag which causes it to print out the dump header in
+human-readable form.
+
+Source
+------
+
+Currently, the only two possible compression modes are "no compression" and
+"RLE" (run-length encoding, a fast, simple, yet not terribly efficient
+compression algorithm that works great on pages of zeroes).
+
+The new dump code, including a function to compress a block, is located in
+
+irix/kern/os/vmdump.c
+
+The code to expand files, including a function to expand a block, is located in 
+
+irix/cmd/savecore/uncompvm.c
+
+Bugs
+----
+
+uncompvm currently takes an inordinate amount of disk space for dumps from
+IP20s and IP22s since their physical memory doesn't start at zero.  In 5.0.1,
+new-style dumps are turned on for all architectures but IP20s and IP22s.
+
+New-style dumps can be turned off for other architectures with systune by
+setting the force_old_dump variable to 1.
+

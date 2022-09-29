@@ -1,0 +1,63 @@
+#!/bin/sh
+
+for file 
+do
+    echo
+    echo "+++ $file +++"
+    echo "       Event     Expected     Observed     Error"
+    echo "------------ ------------ ------------ ---------"
+    nawk <$file '
+BEGIN		{ op_seen["Cycles"] = 0 }
+/Processor$/	{ cycles = $1*$2*1000000 }
+/^Processor /	{ cycles += $3*1000000 }
+/^===/		{ sect++; print sect,"1",$0; ec_seen = 0
+		  for (i in op_seen) op_seen[i] = 0
+		}
+/per sec/	{ tag = $2 " " $2
+		  op_seen[tag]++
+		  if (op_seen[tag] == 2) print sect,"2",$0
+		}
+NF == 0 && last_ec == 1	{ ec_seen++ }
+		{ last_ec = 0 }
+/\]/		{ last_ec = 1
+		  if (ec_seen == 1) print sect,"3",$0
+		}
+END		{ print "1 2 ",cycles," Cycles per sec" }' \
+    | sort \
+    | ( sed -e 's/^[0-9][0-9]* [0-9][0-9]* //'; echo "===" ) \
+    | nawk '
+BEGIN	{ xpect["2D$ miss"] = -1; xpect["Cycles"] = -1; ec["Cycles"] = -1 }
+/^===/	{ first = 1
+	  for (i in xpect) {
+	    if (xpect[i] != -1 && ec[i] != -1) {
+		if (i == "1D$ miss" && xpect["2D$ miss"] != -1)
+		    xpect[i] += xpect["2D$ miss"]
+		printf "%12s %12d %12d %8.1f%%",i,xpect[i],ec[i],100*(ec[i]-xpect[i])/xpect[i]
+		if (first) {
+		    printf "  %s",title
+		    first = 0
+		}
+		print ""
+	    }
+	  }
+	  for (i in xpect) {
+	    if (i != "Cycles")
+		xpect[i] = -1
+	    ec[i] = -1
+	  }
+	  title = "==="
+	  for (i = 2; i <= NF-1; i++)
+	    title = title " " $i
+	}
+/Cycles per/	{ xpect["Cycles"] = $1; next }
+/\] Cycles/	{ ec["Cycles"] = $1; next }
+/FP ops per/	{ xpect["FP grad"] = $1; next }
+/\] Floating/	{ ec["FP grad"] = $1; next }
+/1 D-cache m/	{ xpect["1D$ miss"] = $1; next }
+/\] Pcache d/	{ ec["1D$ miss"] = $1; next }
+/re cond per/	{ xpect["Store cond"] = $1; next }
+/4\] Store con/	{ ec["Store cond"] = $1; next }
+/2 D-cache m/	{ xpect["2D$ miss"] = $1; next }
+/\] Scache d/	{ ec["2D$ miss"] = $1; next }'
+
+done

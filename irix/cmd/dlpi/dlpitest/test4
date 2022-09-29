@@ -1,0 +1,82 @@
+# Tests of LLC2 data transfer
+# Tested:
+#	1) Connection setup and simple LLC2 data transfer
+#	2) Error conditions:  sending data when stream not in correct state
+
+###### Test case #1 ######
+# Open listen stream
+open 1
+attach $1 43
+bind $1 48 2 2 0 1
+
+# Open connecting stream
+open 2
+attach $2 43
+bind $2 40 2 0 0 1
+
+connect $2 0:0:0:0:0:0,48 0
+
+# Should see an event on the listen stream (3)
+poll $1 $2 $1
+
+# Receive the incoming call
+connect_ind $1 1 -
+
+# Should see an event on the connecting stream (4)
+poll $1 $2 $2
+
+# Receive the connect confirmation
+connect_con $2
+
+poll $1 $2 0
+
+# Send data from fd $1 to fd $2
+send_data $1 '1 2 3 4 5'
+
+# Should see an event on the receiving stream
+poll $1 $2 $2
+recv_data $2 '1 2 3 4 5'
+
+poll $1 $2 0
+
+# Send data from fd $2 to fd $1
+send_data $2 'aa bb cc dd ee ff'
+
+# Should see an event on the receiving stream
+poll $1 $2 $1
+recv_data $1 'aa bb cc dd ee ff'
+
+close $1
+close $2
+
+###### Test case #2 ######
+open 1
+
+# Attempt to send data on a stream that has not yet been attached
+send_data $1 '1 2 3 4 5'
+
+# Should now be a POLLERR event on the stream.  (All subsequent syscalls
+# will fail.)
+pollerr $1 $1 $1
+
+close $1
+
+open 1
+attach $1 43
+
+# Attempt to send data on a stream that has not been bound
+send_data $1 '1 2 3 4 5' 
+
+pollerr $1 $1 $1
+
+close $1
+
+open 1
+attach $1 43
+bind $1 40 2 0 0 1
+
+# Attempt to send data on a stream that has been bound, but not connected.
+# This should not result in an error condition.
+send_data $1 '1 2 3 4 5'
+
+pollerr $1 $1 0

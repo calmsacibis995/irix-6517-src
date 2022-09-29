@@ -1,0 +1,1072 @@
+#include "ui.h"
+
+static const char szErrMsgEventMonDead [] = "Failed responce from event monitoring daemon\n";
+
+void sgm_event_view(sscErrorHandle hError, mySession *session,ssdb_Connection_Handle connection,
+        ssdb_Error_Handle error_handle,CMDPAIR *cmdp)
+{
+	int setup_select,key,common_int;
+	char sys_id[32],common_string[2];
+
+	if(!get_variable(hError,cmdp,INTTYPE,"setup_select",common_string,&setup_select,900))
+		return;
+	if (setup_select==1)
+		event_description_sgm_view(hError,session,connection,error_handle,cmdp);
+	else
+                event_description_sgm_class(hError,session,connection,error_handle,cmdp);
+}
+
+void event_description_sgm_view(sscErrorHandle hError, mySession *session,ssdb_Connection_Handle connection,
+	ssdb_Error_Handle error_handle,CMDPAIR *cmdp)
+{
+	ssdb_Request_Handle req_handle,req_handle1,req_handle2;
+        int i,j,number_of_records,number_of_records1,number_of_records2,rec_sequence,common_int,key,row_num,balance_rows,total_pages,pageno;
+	int firstpage,lastpage,bottom;
+	const char **vector,**vector1,**vector2;
+	char sys_id[32],common_string[2];
+	
+	if(!get_variable(hError,cmdp,INTTYPE,"row_num",common_string,&row_num,901))
+                return;
+
+	@ <HTML> <HEAD> <TITLE>SGI Embedded Support Partner - ver.1.0</TITLE>
+        @ </HEAD>
+        @ <body bgcolor="#ffffcc" vlink="#333300" link="#333300">
+        @ <form method=POST action="/$sss/rg/libsgmserver">
+        @table border=0 cellpadding=0 cellspacing=0 width=100%
+        @row
+                @cell bgcolor="#cccc99" width=15
+                        @ &nbsp;&nbsp;&nbsp;&nbsp;
+                @endcell
+                @cell bgcolor="#cccc99"
+                        @ SETUP &gt; Events  &gt; View Current Setup
+                @endcell
+        @endrow
+        @row
+                @cell colspan=2
+                        @ &nbsp;<p>&nbsp;
+                @endcell
+        @endrow
+        @row
+                @cell
+                        @ &nbsp;
+                @endcell
+                @cell
+
+		if (!(req_handle = ssdbSendRequest(error_handle,connection,SSDB_REQTYPE_SELECT,	
+		"select distinct event_class.class_desc,event_type.type_desc,event_type.type_id "
+		"from event_class,event_type where event_type.class_id = event_class.class_id "
+		"order by event_class.class_id")))
+		{
+			sscError(hError,"Database API Error: \"%s\"\n\n",ssdbGetLastErrorString(error_handle));
+			return;
+		}
+
+		if ((number_of_records = getnumrecords(hError,error_handle,req_handle)) == 0)
+		{
+			@endtable
+			@ <p><hr><p><b>There are no records for the specified time period.</b>
+			@endcell
+			@endrow
+			@endtable
+			@ </body></html>
+			ssdbFreeRequest(error_handle,req_handle);
+			return;
+		}
+		else
+		{
+                @table BORDER=0 CELLSPACING = 0 CELLPADDING=0
+                @row
+                        @cell align=right
+                        total_pages = number_of_records/10;
+                        if (number_of_records%10)
+                                total_pages++;
+                        pageno = row_num/10;
+                        pageno++;
+                        @format "Page %d of %d" pageno total_pages
+                @endcell
+                @endrow
+                @row
+                        @cell
+			@table BORDER=4 CELLSPACING = 1 CELLPADDING=6
+			@row ALIGN=CENTER
+					@cell align=right
+						@ <b>No.</b>
+					@endcell
+					@cell
+						@ <b>Class Description</b>
+					@endcell
+					@cell
+						@ <b>Event Description</b>
+					@endcell
+					@cell
+						@ <b>Member Systems</b>
+					@endcell
+			@endrow
+			balance_rows = row_num + 10;
+			if (balance_rows > number_of_records)
+				balance_rows = number_of_records;
+			ssdbRequestSeek(error_handle,req_handle,row_num,0);
+			for (rec_sequence = row_num; rec_sequence < balance_rows; rec_sequence++)
+			{
+				@row valign=top
+					vector = ssdbGetRow(error_handle,req_handle);
+					if (vector)
+					{
+						@cell
+							@format "%d" rec_sequence+1
+						@endcell
+						@cell
+							@format "%s" vector[0]
+						@endcell
+						@cell
+							@format "%s" vector[1]
+						@endcell
+						@cell
+							if (!(req_handle1 = ssdbSendRequest(error_handle,connection,SSDB_REQTYPE_SELECT,
+                                                        "select sys_id from event_type where type_desc ='%s'",vector[1])))
+							{
+								sscError(hError,"Database API Error: \"%s\"\n\n",ssdbGetLastErrorString(error_handle));
+								return;
+							}
+							if ((number_of_records1 = getnumrecords(hError,error_handle,req_handle)) > 0)
+							{
+								for (i = 0; i < number_of_records1; i++)
+								{
+									vector1 = ssdbGetRow(error_handle,req_handle1);
+									if(vector1)
+									{
+										if (!(req_handle2 = ssdbSendRequest(error_handle,connection,SSDB_REQTYPE_SELECT,
+										"select system.hostname from system where sys_id = '%s'",vector1[0])))
+										{
+											sscError(hError,"Database API Error: \"%s\"\n\n",ssdbGetLastErrorString(error_handle));
+											return;
+										}
+										if ((number_of_records2 = getnumrecords(hError,error_handle,req_handle)) > 0)
+										{
+										if (number_of_records2)
+										{
+											for (j = 0; j < number_of_records2; j++)
+											{
+												vector2 = ssdbGetRow(error_handle,req_handle2);
+												if(vector2)
+													@format "%s<br>" vector2[0]	
+											}
+											ssdbFreeRequest(error_handle,req_handle2);
+										}										
+										}
+									}
+								}
+								ssdbFreeRequest(error_handle,req_handle1);
+							}
+						@endcell
+					}
+				@endrow
+			}
+			ssdbFreeRequest(error_handle,req_handle);
+			@endtable;
+			@endcell
+		}
+		@endrow
+		@row
+			@cell
+				@ &nbsp;
+			@endcell
+		@endrow
+
+                if(total_pages > 1)
+                {
+                        @row
+                        @cell align=center
+                                firstpage = ((pageno-1)/10)*10+1;
+                                lastpage  = firstpage+9;
+                                if (lastpage >= total_pages)
+                                        lastpage = total_pages;
+                                if (firstpage > 1)
+                                {
+                                         @format "<a href=\"/$sss/rg/libsgmserver~SGM_EVENT_DESCRIPTION_CONT?row_num=%d\"><img src=\"/images/double_arrow_left.gif\" border=0 alt=\"first page\"></a>&nbsp;&nbsp; " 0
+                                         @format "<a href=\"/$sss/rg/libsgmserver~SGM_EVENT_DESCRIPTION_CONT?row_num=%d\"><img src=\"/images/arrow_left.gif\" border=0 alt=\"previous 10 pages\"></a>&nbsp;&nbsp; " (firstpage-11)*10 
+                                }
+
+                                for (rec_sequence = firstpage; rec_sequence <= lastpage; rec_sequence++)
+                                {
+                                        if (rec_sequence == pageno)
+                                                @format "<b><font color=\"#cc6633\">%d</b></font>&nbsp;&nbsp;" rec_sequence
+                                        else
+                                                 @format "<a href=\"/$sss/rg/libsgmserver~SGM_EVENT_DESCRIPTION_CONT?row_num=%d\"><b>%d</b></a>&nbsp;&nbsp; " 10*(rec_sequence-1) rec_sequence
+                                }
+                                if (lastpage < total_pages)
+                                {
+                                        bottom = (number_of_records/100)*100;
+                                        if(number_of_records%10 == 0)
+                                                bottom = bottom -10;
+                                        else
+                                                bottom = number_of_records -(number_of_records%10);
+                                         @format "<a href=\"/$sss/rg/libsgmserver~SGM_EVENT_DESCRIPTION_CONT?row_num=%d\"><img src=\"/images/arrow_right.gif\" border=0 alt=\"next 10 pages\"></a>&nbsp;&nbsp; " (firstpage+9)*10 
+                                         @format "<a href=\"/$sss/rg/libsgmserver~SGM_EVENT_DESCRIPTION_CONT?row_num=%d\"><img src=\"/images/double_arrow_right.gif\" border=0 alt=\"last page\"></a>&nbsp;&nbsp; " bottom 
+                                }
+                        @endcell
+                        @endrow
+                }
+		@endtable
+	@endcell
+	@endrow
+        @endtable
+	@ </form></body></html>
+}
+
+void event_description_sgm_class(sscErrorHandle hError, mySession *session,ssdb_Connection_Handle connection,
+        ssdb_Error_Handle error_handle,CMDPAIR *cmdp)
+{
+        ssdb_Request_Handle req_handle,req_handle1,req_handle2;
+        int i,j,number_of_records,number_of_records1,number_of_records2,rec_sequence,row_num,balance_rows,total_pages,pageno,common_int;
+	int firstpage,lastpage,bottom;
+        const char **vector,**vector1,**vector2;
+        char sys_id[32],common_string[2];
+
+        if(!get_variable(hError,cmdp,INTTYPE,"row_num",common_string,&row_num,902))
+                return;
+        @ <HTML> <HEAD> <TITLE>SGI Embedded Support Partner - ver.1.0</TITLE>
+        @ </HEAD>
+        @ <body bgcolor="#ffffcc" vlink="#333300" link="#333300">
+        @ <form method=POST action="/$sss/rg/libsgmserver">
+        @table border=0 cellpadding=0 cellspacing=0 width=100%
+        @row
+                @cell bgcolor="#cccc99" width=15
+                        @ &nbsp;&nbsp;&nbsp;&nbsp;
+                @endcell
+                @cell bgcolor="#cccc99"
+                        @ SETUP &gt; Events  &gt; View Current Setup
+                @endcell
+        @endrow
+        @row
+                @cell colspan=2
+                        @ &nbsp;<p>&nbsp;
+                @endcell
+        @endrow
+        @row
+                @cell
+                        @ &nbsp;
+                @endcell
+                @cell
+
+                if (!(req_handle = ssdbSendRequest(error_handle,connection,SSDB_REQTYPE_SELECT,
+                "select distinct event_class.class_desc,class_id from event_class order by class_id")))
+                {
+                        sscError(hError,"Database API Error: \"%s\"\n\n",ssdbGetLastErrorString(error_handle));
+                        return;
+                }
+
+                if ((number_of_records = getnumrecords(hError,error_handle,req_handle)) == 0)
+                {
+                        @endtable
+                        @ <p><hr><p><b>There are no records for the specified time period.</b>
+                        @endcell
+                        @endrow
+                        @endtable
+                        @ </body></html>
+                        ssdbFreeRequest(error_handle,req_handle);
+                        return;
+                }
+                else
+                {
+                        @table BORDER=0 CELLSPACING = 0 CELLPADDING=0
+                        @row
+                                @cell align=right
+                                total_pages = number_of_records/10;
+                                if (number_of_records%10)
+                                        total_pages++;
+                                pageno = row_num/10;
+                                pageno = row_num/10;
+                                pageno++;
+                                @format "Page %d of %d" pageno total_pages
+                        @endcell
+                        @endrow
+                        @row
+                        @cell
+                        @table BORDER=4 CELLSPACING = 1 CELLPADDING=6
+                        @row ALIGN=CENTER
+                                        @cell align=right
+                                                @ <b>No.</b>
+                                        @endcell
+                                        @cell
+                                                @ <b>Class ID</b>
+                                        @endcell
+                                        @cell
+                                                @ <b>Class Description</b>
+                                        @endcell
+					@cell
+                                                @ <b>Member Systems</b>
+                                        @endcell
+                        @endrow
+                        balance_rows = row_num + 10;
+                        if (balance_rows > number_of_records)
+                                balance_rows = number_of_records;
+                        ssdbRequestSeek(error_handle,req_handle,row_num,0);
+                        for (rec_sequence = row_num; rec_sequence < balance_rows; rec_sequence++)
+                        {
+                                @row valign=top
+                                        vector = ssdbGetRow(error_handle,req_handle);
+                                        if(vector)
+                                        {
+                                                @cell
+                                                        @format "%d" rec_sequence+1
+                                                @endcell
+                                                @cell
+                                                        @format "%s" vector[1]
+                                                @endcell
+                                                @cell
+                                                        @format "%s" vector[0]
+                                                @endcell
+						@cell
+							if (!(req_handle1 = ssdbSendRequest(error_handle,connection,SSDB_REQTYPE_SELECT,
+                                                        "select sys_id from event_class where class_desc ='%s'",vector[0])))
+                                                        {
+                                                                sscError(hError,"Database API Error: \"%s\"\n\n",ssdbGetLastErrorString(error_handle));
+                                                                return;
+                                                        }
+                                                        if ((number_of_records1 = getnumrecords(hError,error_handle,req_handle)) > 0)
+                                                        {
+                                                                for (i = 0; i < number_of_records1; i++)
+                                                                {
+                                                                        vector1 = ssdbGetRow(error_handle,req_handle1);
+                                                                        if(vector1)
+                                                                        {
+                                                                                if (!(req_handle2 = ssdbSendRequest(error_handle,connection,SSDB_REQTYPE_SELECT,
+                                                                                "select system.hostname from system where sys_id = '%s'",vector1[0])))
+                                                                                {
+                                                                                        sscError(hError,"Database API Error: \"%s\"\n\n",ssdbGetLastErrorString(error_handle));
+                                                                                        return;
+                                                                                }
+                                                                                if ((number_of_records2 = getnumrecords(hError,error_handle,req_handle)) >
+0)
+                                                                                {
+                                                                                if (number_of_records2)
+                                                                                {
+                                                                                        for (j = 0; j < number_of_records2; j++)
+                                                                                        {
+                                                                                                vector2 = ssdbGetRow(error_handle,req_handle2);
+                                                                                                if(vector2)
+                                                                                                        @format "%s<br>" vector2[0]
+                                                                                        }
+                                                                                        ssdbFreeRequest(error_handle,req_handle2);
+                                                                                }
+                                                                                }
+                                                                        }
+                                                                }
+                                                                ssdbFreeRequest(error_handle,req_handle1);
+                                                        }
+						@endcell
+                                        }
+                                @endrow
+                        }
+                        ssdbFreeRequest(error_handle,req_handle);
+                        @endtable;
+                        @endcell
+                }
+                @endrow
+                @row
+                        @cell
+                                @ &nbsp;
+                        @endcell
+                @endrow
+
+                if(total_pages > 1)
+                {
+                        @row
+                        @cell align=center
+                                firstpage = ((pageno-1)/10)*10+1;
+                                lastpage  = firstpage+9;
+                                if (lastpage >= total_pages)
+                                        lastpage = total_pages;
+                                if (firstpage > 1)
+                                {
+                                         @format "<a href=\"/$sss/rg/libsgmserver~SGM_EVENT_CLASS_VIEW_CONT?row_num=%d&sys_id=%s\"><img src=\"/images/double_arrow_left.gif\" border=0 alt=\"first page\"></a>&nbsp;&nbsp; " 0 sys_id
+                                         @format "<a href=\"/$sss/rg/libsgmserver~SGM_EVENT_CLASS_VIEW_CONT?row_num=%d&sys_id=%s\"><img src=\"/images/arrow_left.gif\" border=0 alt=\"previous 10 pages\"></a>&nbsp;&nbsp; " (firstpage-11)*10 sys_id
+                                }
+
+                                for (rec_sequence = firstpage; rec_sequence <= lastpage; rec_sequence++)
+                                {
+                                        if (rec_sequence == pageno)
+                                                @format "<b><font color=\"#cc6633\">%d</b></font>&nbsp;&nbsp;" rec_sequence
+                                        else
+                                                 @format "<a href=\"/$sss/rg/libsgmserver~SGM_EVENT_CLASS_VIEW_CONT?row_num=%d&sys_id=%s\"><b>%d</b></a>&nbsp;&nbsp; " 10*(rec_sequence-1) sys_id rec_sequence
+                                }
+                                if (lastpage < total_pages)
+                                {
+                                        bottom = (number_of_records/100)*100;
+                                        if(number_of_records%10 == 0)
+                                                bottom = bottom -10;
+                                        else
+                                                bottom = number_of_records -(number_of_records%10);
+                                         @format "<a href=\"/$sss/rg/libsgmserver~SGM_EVENT_CLASS_VIEW_CONT?row_num=%d&sys_id=%s\"><img src=\"/images/arrow_right.gif\" border=0 alt=\"next 10 pages\"></a>&nbsp;&nbsp; " (firstpage+9)*10 sys_id
+                                         @format "<a href=\"/$sss/rg/libsgmserver~SGM_EVENT_CLASS_VIEW_CONT?row_num=%d&sys_id=%s\"><img src=\"/images/double_arrow_right.gif\" border=0 alt=\"last page\"></a>&nbsp;&nbsp; " bottom sys_id
+                                }
+                        @endcell
+                        @endrow
+                }
+                @endtable
+        @endcell
+        @endrow
+        @endtable
+        @ </form></body></html>
+}
+
+/* Event updates in SGM */
+
+void sgm_update_event_list(sscErrorHandle hError, mySession *session,ssdb_Connection_Handle connection,
+        ssdb_Error_Handle error_handle,CMDPAIR *cmdp)
+{
+	int key,common_int,pageselect,ev_class;
+        char sys_id[32],common_string[2];
+
+        if(!get_variable(hError,cmdp,CHARTYPE,"sys_id",sys_id,&common_int,903))
+                return;
+	if(!get_variable(hError,cmdp,INTTYPE,"ev_class",common_string,&ev_class,904))
+                return;
+
+	create_help(hError,"setup_events_update_type");
+        @ <HTML> <HEAD> <TITLE>SGI Embedded Support Partner - ver.1.0</TITLE>
+	if (!(read_java_scritps("##SGM_EV_UPDT_TYPE","##SGM_EV_UPDT_TYPE_END")))
+	{
+		sscError(hError,"Error reading java script for this operation\n");
+		return ;
+	}
+        @ </HEAD>
+        @ <body bgcolor="#ffffcc" vlink="#333300" link="#333300">
+
+        /* This calls the view event configuration page. Comes from view current event setup */
+
+	@ <form onSubmit="return submitType(this)" method="post" name =ChooseType action="/$sss/rg/libsgmserver~SGM_EVENT_UPDATE_INFO">
+	@format "<input type=\"hidden\" name=\"ev_class\" value=%d>" ev_class
+	@ <input type="hidden" name="multiselect" value=1>
+        @table border=0 cellpadding=0 cellspacing=0 width=100%
+                @row
+                        @cell bgcolor="#cccc99" width=15
+                                @ &nbsp;&nbsp;&nbsp;&nbsp;
+                        @endcell
+                        @cell bgcolor="#cccc99"
+                                        @ SETUP  &gt; Events &gt; Update
+                        @endcell
+                @endrow
+                @row
+                        @cell colspan=2
+                                @ &nbsp;
+                        @endcell
+                @endrow
+                @row
+                        @cell align=right colspan=2
+                                @ <input TYPE=button onClick="showMap()" Value="   Help   ">
+                        @endcell
+                @endrow
+                @row
+                        @cell colspan=2
+                                @ &nbsp;
+                        @endcell
+                @endrow
+                @row
+                        @cell
+                                @ &nbsp;<p>&nbsp;
+                        @endcell
+                        @cell
+                                sgm_type_list(hError,session,connection,error_handle,cmdp);
+                                @format "<input type=\"hidden\" name=\"sys_id\" value=\"%s\">" sys_id
+                        @endcell
+                @endrow
+        @endtable
+        @ </form> </body></html>
+}
+
+void sgm_event_update_info(sscErrorHandle hError, mySession *session,ssdb_Connection_Handle connection,
+        ssdb_Error_Handle error_handle,CMDPAIR *cmdp)
+{
+	ssdb_Request_Handle req_handle;
+	const char **vector;
+        int number_of_records,key,n=1,common_int,pageselect,ev_class,event_type,total_actions,iterator,rec_sequence,number_of_actions[MAX_ACTIONS],flag;
+        char sys_id[32],common_string[2],hostname[64],class_desc[80],type_desc[80];
+
+	if(!get_variable(hError,cmdp,CHARTYPE,"sys_id",sys_id,&common_int,905))
+		return;
+        if(!get_variable(hError,cmdp,INTTYPE,"ev_class",common_string,&ev_class,906))
+                return;
+	if(!get_variable(hError,cmdp,INTTYPE,"event_type",common_string,&event_type,907))
+                return;
+	        create_help(hError,"screens_setup_events_update1");
+        @ <HTML> <HEAD> <TITLE>SGI Embedded Support Partner - ver.1.0</TITLE>
+        if (!(read_java_scritps("##SGM_EV_UPDT_INFO","##SGM_EV_UPDT_INFO_END")))
+        {
+                sscError(hError,"Error reading java script for this operation\n");
+                return ;
+        }
+        @ </HEAD>
+        @ <body bgcolor="#ffffcc" vlink="#333300" link="#333300">
+        @ <form method="post" name =ChooseType action="/$sss/rg/libsgmserver~SGM_EVENT_UPDATE_CONFIRM" onSubmit="return verifyData(this)">
+        @format "<input type=\"hidden\" name=\"ev_class\" value=%d>" ev_class
+        @table border=0 cellpadding=0 cellspacing=0 width=100%
+                @row
+                        @cell bgcolor="#cccc99" width=15
+                                @ &nbsp;&nbsp;&nbsp;&nbsp;
+                        @endcell
+                        @cell bgcolor="#cccc99"
+                                        @ SETUP  &gt; Events &gt; Update
+                        @endcell
+                @endrow
+                @row
+                        @cell colspan=2
+                                @ &nbsp;
+                        @endcell
+                @endrow
+                @row
+                        @cell align=right colspan=2
+                                @ <input TYPE=button onClick="showMap()" Value="   Help   ">
+                        @endcell
+                @endrow
+                @row
+                        @cell colspan=2
+                                @ &nbsp;
+                        @endcell
+                @endrow
+                @row
+                        @cell
+                                @ &nbsp;
+                        @endcell
+                        @cell
+				@table border=0 cellpadding=0 cellspacing=0
+				@row
+					@cell
+						@ System name
+					@endcell
+					@cell
+						@ &nbsp;&nbsp;&nbsp;&nbsp;:&nbsp;&nbsp;
+					@endcell
+					@cell
+						if (!(req_handle = ssdbSendRequest(error_handle,connection,SSDB_REQTYPE_SELECT,
+						"select hostname from system where sys_id='%s' and active=1",sys_id)))
+						{
+							sscError(hError,"Database API Error: \"%s\"\n\n",ssdbGetLastErrorString(error_handle));
+							return;
+						}
+						if ((number_of_records = getnumrecords(hError,error_handle,req_handle)) > 0)
+						{
+							vector= ssdbGetRow(error_handle,req_handle);
+							if(vector)
+							{
+								@format "%s" vector[0]
+								strcpy(hostname,vector[0]);
+							}
+							else
+							{
+								@ Unknown
+								strcpy(type_desc,"Unknown");
+                                                        }
+						}
+						else
+						{
+							@ Unknown
+							strcpy(type_desc,"Unknown");
+						}
+						ssdbFreeRequest(error_handle,req_handle);
+					@endcell
+				@endrow
+				@row
+					@cell colspan=3
+						@ &nbsp;
+					@endcell
+				@endrow
+				@row    
+                                        @cell
+                                                @ Event class
+					@endcell
+                                        @cell
+                                                @ &nbsp;&nbsp;&nbsp;&nbsp;:&nbsp;&nbsp;
+                                        @endcell
+                                        @cell
+                                                if (!(req_handle = ssdbSendRequest(error_handle,connection,SSDB_REQTYPE_SELECT, 
+                                                "select class_desc from event_class where class_id = %d and sys_id = '%s'",ev_class,sys_id)))
+						{
+                                                        sscError(hError,"Database API Error: \"%s\"\n\n",ssdbGetLastErrorString(error_handle));
+                                                        return;
+                                                }
+                                                if ((number_of_records = getnumrecords(hError,error_handle,req_handle)) > 0)
+                                                {
+                                                        vector= ssdbGetRow(error_handle,req_handle);
+                                                        if(vector)
+							{
+                                                                @format "%s" vector[0]
+								strcpy(class_desc,vector[0]);
+                                                        }
+                                                        else
+                                                        {
+						        	@ Unknown
+								strcpy(type_desc,"Unknown");
+							}
+                                                }
+                                                else
+						{
+                                                        @ Unknown
+							strcpy(type_desc,"Unknown");
+						}
+                                                ssdbFreeRequest(error_handle,req_handle);
+                                        @endcell
+				@endrow
+				@row valign=top
+                                        @cell colspan=3
+                                                @ &nbsp;
+                                        @endcell
+                                @endrow
+                                @row    
+                                        @cell
+                                                @ Event
+					@endcell
+                                        @cell
+                                                @ &nbsp;&nbsp;&nbsp;&nbsp;:&nbsp;&nbsp;
+                                        @endcell
+                                        @cell
+                                                if (!(req_handle = ssdbSendRequest(error_handle,connection,SSDB_REQTYPE_SELECT, 
+                                                "select type_desc from event_type where type_id = %d and sys_id = '%s'",event_type,sys_id)))
+						{       
+                                                        sscError(hError,"Database API Error: \"%s\"\n\n",ssdbGetLastErrorString(error_handle));
+                                                        return;
+                                                }
+                                                if ((number_of_records = getnumrecords(hError,error_handle,req_handle)) > 0)
+                                                {
+                                                        vector= ssdbGetRow(error_handle,req_handle);
+                                                        if(vector)
+							{
+                                                                @format "%s" vector[0]
+								strcpy(type_desc,vector[0]);
+                                                        }
+                                                        else
+							{
+                                                                @ Unknown
+								strcpy(type_desc,"Unknown");
+							}
+                                                }
+                                                else
+						{
+							@ Unknown
+							strcpy(type_desc,"Unknown");
+						}
+                                                ssdbFreeRequest(error_handle,req_handle);
+                                        @endcell
+				@endrow
+				@endtable
+				@ <p><hr><p>
+				@table border=0 cellpadding=0 cellspacing=0
+				if (!(req_handle = ssdbSendRequest(error_handle,connection,SSDB_REQTYPE_SELECT,
+				"select sehthrottle, sehfrequency from event_type where type_id = %d and sys_id = '%s'",event_type,sys_id)))
+				{
+					sscError(hError,"Database API Error: \"%s\"\n\n",ssdbGetLastErrorString(error_handle));
+					return;
+				}
+				if ((number_of_records = getnumrecords(hError,error_handle,req_handle)) > 0)
+				{
+					vector= ssdbGetRow(error_handle,req_handle);
+				}
+                                @row valign=top
+                                        @cell
+                                                @ Enter the number of event occurrences prior to registration with SGI Embedded Support Partner
+                                        @endcell
+                                        @cell
+                                                @ &nbsp;&nbsp;
+                                        @endcell
+                                        @cell 
+                                                if (vector)
+                                                        @format "<INPUT TYPE=TEXT NAME=thcount size=10 value=%d>" atoi(vector[0])
+                                        @endcell
+                                @endrow
+                                /* @row valign=top
+                                        @cell colspan=3
+                                                @ &nbsp;
+                                        @endcell
+                                @endrow
+                                @row valign=top
+                                        @cell
+                                                @ Enter frequency between events before registration in seconds (multiple of 5):
+                                        @endcell
+                                        @cell
+                                                @ &nbsp;&nbsp;
+                                        @endcell
+                                        @cell
+                                                if(vector)
+                                                        @format  "<INPUT TYPE=TEXT NAME=thfreq size=10 value=%d>" atoi(vector[1])
+                                        @endcell
+                                @endrow */
+				@endtable
+				@ <p>
+				ssdbFreeRequest(error_handle,req_handle);
+				if (!(req_handle = ssdbSendRequest(error_handle,connection,SSDB_REQTYPE_SELECT,
+                                "select action_id from event_actionref where type_id = %d and sys_id = '%s'",event_type,sys_id)))
+                                {
+                                        sscError(hError,"Database API Error: \"%s\"\n\n",ssdbGetLastErrorString(error_handle));
+                                                return;
+                                }
+                                total_actions = getnumrecords(hError,error_handle,req_handle);
+                                if (total_actions > 0)
+                                {
+                                        for (rec_sequence = 0; rec_sequence < total_actions; rec_sequence++)
+                                        {
+                                                vector = ssdbGetRow(error_handle,req_handle);  
+                                                if (vector)
+                                                        number_of_actions[rec_sequence] = atoi(vector[0]);
+                                        }
+                                }
+                                ssdbFreeRequest(error_handle,req_handle);
+                                if (!(req_handle = ssdbSendRequest(error_handle,connection,SSDB_REQTYPE_SELECT,
+                                "select action_id,action_desc from event_action where private=0")))
+                                {
+                                        sscError(hError,"Database API Error: \"%s\"\n\n",ssdbGetLastErrorString(error_handle));
+                                                return;
+                                }
+                                if ((number_of_records = getnumrecords(hError,error_handle,req_handle)) == 0)
+                                {
+                                        @ <b>There are no actions in the database.</b>
+                                        ssdbFreeRequest(error_handle,req_handle);
+                                }
+                                else
+                                {
+                                        @ <p>Choose action(s) that is(are) taken as a result of this event:<p><select name=actionid multiple size=5>
+                                        for (rec_sequence = 0; rec_sequence < number_of_records; rec_sequence++)
+                                        {
+                                                flag = 0;
+                                                vector = ssdbGetRow(error_handle,req_handle);
+                                                if (vector)
+                                                {
+                                                        common_int = atoi(vector[0]);
+                                                        for (iterator = 0; iterator < total_actions; iterator++)
+                                                        {
+                                                                if (common_int == number_of_actions[iterator])
+                                                                        flag = 1;
+                                                        }
+                                                        if (flag)
+                                                                @format "<option selected value = %d> %s" atoi(vector[0]) vector[1]
+                                                        else
+                                                                @format "<option value = %d> %s" atoi(vector[0]) vector[1]
+                                                }
+                                        }
+                                        @ </select>
+                                        @ <input type="hidden" name=act_id value="present">
+                                        ssdbFreeRequest(error_handle,req_handle);
+                                }
+				@ <p>
+				@table border=0 cellpadding=0 cellspacing=0
+                                @row valign=top
+					@cell
+						@ <font color="#666633"><b>Tip: </b></font> 	
+					@endcell
+					@cell
+						@ Several actions can be selected.<br>If you cannot find an action that you need in the list above, add it by using <a href="/action_add.html">SETUP: Actions: Add</a>.	
+					@endcell
+				@endrow
+				@endtable
+					@ <p><INPUT TYPE="SUBMIT"  VALUE="   Accept   "> &nbsp;&nbsp;&nbsp; <INPUT TYPE="button"  VALUE="   Clear   " onClick="clearForm(this.form)";>
+					@format "<input type=\"hidden\" name=\"hostname\" value=\"%s\">" hostname
+					@format "<input type=\"hidden\" name=\"sys_id\" value=\"%s\">" sys_id
+					@format "<input type=\"hidden\" name=\"class_desc\" value=\"%s\">" class_desc
+					@format "<input type=\"hidden\" name=\"type_desc\" value=\"%s\">" type_desc
+					@format "<input type=\"hidden\" name=\"ev_class\" value=%d>" ev_class
+					@format "<input type=\"hidden\" name=\"event_type\" value=%d>" event_type 
+                        @endcell
+                @endrow
+        @endtable
+        @ </form> </body></html>
+}
+
+void sgm_event_update_confirm(sscErrorHandle hError, mySession *session,ssdb_Connection_Handle connection,
+	ssdb_Error_Handle error_handle,CMDPAIR *cmdp)
+{
+	ssdb_Request_Handle req_handle;
+	const char **vector;
+	int i, actionid,number_of_records,key,common_int,total_actions,ev_class,event_type,iterator,rec_sequence,number_of_actions[MAX_ACTIONS],flag;
+	int thcount, thfreq;
+	char sys_id[32],common_string[2],hostname[64],class_desc[80],type_desc[80];
+	char buf[1024];
+	const char *update_event="UPDATE %s -1 -1 0 0 0";
+
+	if(!get_variable(hError,cmdp,CHARTYPE,"sys_id",sys_id,&common_int,908))
+		return;
+	if(!get_variable(hError,cmdp,CHARTYPE,"hostname",hostname,&common_int,909))
+                return;
+	if(!get_variable(hError,cmdp,CHARTYPE,"class_desc",class_desc,&common_int,910))
+                return;
+	if(!get_variable(hError,cmdp,CHARTYPE,"type_desc",type_desc,&common_int,911))
+                return;
+	if(!get_variable(hError,cmdp,INTTYPE,"ev_class",common_string,&ev_class,912))
+		return;
+        if(!get_variable(hError,cmdp,INTTYPE,"event_type",common_string,&event_type,913))
+                return;
+        if(!get_variable(hError,cmdp,INTTYPE,"thcount",common_string,&thcount,914))
+                return;
+        /* if(!get_variable(hError,cmdp,INTTYPE,"thfreq",common_string,&thfreq,915))
+                return; */
+
+
+	@ <HTML><HEAD><TITLE>SGI Embedded Support Partner - ver.1.0</TITLE></HEAD>
+        @ <body bgcolor="#ffffcc" vlink="#333300" link="#333300">
+        @table border=0 cellpadding=0 cellspacing=0 width=100%
+                @row
+                        @cell bgcolor="#cccc99" width=15
+                                @ &nbsp;&nbsp;&nbsp;&nbsp;
+                        @endcell
+                        @cell bgcolor="#cccc99"
+                                        @ SETUP  &gt; Events &gt; Update
+                        @endcell
+                @endrow
+                @row
+                        @cell colspan=2
+                                @ &nbsp;<p>&nbsp;
+                        @endcell
+                @endrow
+                @row
+                        @cell
+                                @ &nbsp;
+                        @endcell
+                        @cell
+                                @table border=0 cellpadding=0 cellspacing=0 width=100%
+				@row valign=top
+					@cell colspan=3
+						@ The following event(s) were updated:<p><hr><p> 
+					@endcell
+				@endrow
+                                @row valign=top
+					@cell
+						@ System name
+					@endcell
+					@cell
+						@ &nbsp;&nbsp;&nbsp;&nbsp;:&nbsp;&nbsp;
+					@endcell
+                                        @cell
+						@format "%s" hostname
+                                        @endcell
+				@endrow
+				@row
+                                        @cell colspan=3
+						 @ &nbsp;
+					@endcell
+                                @endrow 
+                                @row     valign=top
+                                        @cell
+						@ Event class
+					@endcell
+                                        @cell
+                                                @ &nbsp;&nbsp;&nbsp;&nbsp;:&nbsp;&nbsp;
+                                        @endcell
+                                        @cell
+                                                @format "%s" class_desc
+					@endcell
+                                @endrow 
+                                @row valign=top 
+                                        @cell colspan=3 
+                                                 @ &nbsp;       
+                                        @endcell        
+                                @endrow         
+                                @row valign=top           
+                                        @cell   
+                                                @ Event
+					@endcell
+                                        @cell
+                                                @ &nbsp;&nbsp;&nbsp;&nbsp;:&nbsp;&nbsp;
+                                        @endcell
+                                        @cell
+                                                @format "%s" type_desc
+					 @endcell
+                                @endrow 
+                                @row valign=top   
+                                        @cell colspan=3 
+                                                 @ &nbsp;       
+                                        @endcell        
+                                @endrow         
+				if(!(ssdbLockTable(error_handle,connection,"event_type,event_action,event_actionref")))
+				{
+					sscError(hError,"Database API Error: \"%s\"\n\n",ssdbGetLastErrorString(error_handle));
+					return;
+				}
+				@row valign=top
+                                        @cell  
+                                                @ Number of event occurances prior to registration with SGI Embedded Support Partner
+					@endcell
+					@cell
+                                                @ &nbsp;&nbsp;&nbsp;&nbsp;:&nbsp;&nbsp;
+                                        @endcell
+                                        @cell
+						if (!(req_handle = ssdbSendRequest(error_handle,connection,SSDB_REQTYPE_UPDATE,
+						"update event_type set sehthrottle=%d where type_id=%d and sys_id='%s'",
+						thcount,event_type,sys_id)))
+						{
+							sscError(hError,"Database API Error: \"%s\"\n\n",ssdbGetLastErrorString(error_handle));
+							if (!ssdbUnLockTable(error_handle,connection))
+								sscError(hError,"Database API Error: \"%s\"\n\n",ssdbGetLastErrorString(error_handle));
+							return;
+						}
+						ssdbFreeRequest(error_handle,req_handle);
+						@format "%d" thcount
+					@endcell
+				@endrow
+				/* @row valign=top  
+                                        @cell colspan=3
+                                                 @ &nbsp;
+                                        @endcell
+                                @endrow
+				@row valign=top
+					@cell 
+						@ Frequence of event registration
+					@endcell
+                                        @cell
+                                                @ &nbsp;&nbsp;&nbsp;&nbsp;:&nbsp;&nbsp;
+                                        @endcell
+					@cell
+						@format "%d" thfreq
+					@endcell
+				@endrow */
+				@row valign=top
+                                        @cell colspan=3 
+                                                 @ &nbsp;       
+                                        @endcell        
+                                @endrow
+                                @row valign=top           
+                                        @cell   
+                                                @ Actions
+					@endcell
+                                        @cell
+                                                @ &nbsp;&nbsp;&nbsp;&nbsp;:&nbsp;&nbsp;
+                                        @endcell
+                                        @cell
+					if (!(req_handle = ssdbSendRequest(error_handle,connection,SSDB_REQTYPE_DELETE,
+					"delete from event_actionref where type_id=%d and sys_id='%s'",event_type,sys_id)))
+					{
+						sscError(hError,"Database API Error: \"%s\"\n\n",ssdbGetLastErrorString(error_handle));
+						if (!ssdbUnLockTable(error_handle,connection))
+							sscError(hError,"Database API Error: \"%s\"\n\n",ssdbGetLastErrorString(error_handle));
+						return;
+					}
+					ssdbFreeRequest(error_handle,req_handle);
+
+					for (i=0; (i = sscFindPairByKey(cmdp,i,"actionid")) >= 0;i++)
+					{
+						if ((sscanf(cmdp[i].value,"%d",&actionid)) < 0)
+						{
+							sscError(hError,"Invalid action id parameter\n");
+							if (!ssdbUnLockTable(error_handle,connection))
+								sscError(hError,"Database API Error: \"%s\"\n\n",ssdbGetLastErrorString(error_handle));
+							return;
+						}
+						else
+						{
+							if (!(req_handle = ssdbSendRequest(error_handle,connection,SSDB_REQTYPE_INSERT,
+							"insert into event_actionref values('%s',NULL,%d,%d,%d)",sys_id,ev_class,event_type,actionid)))
+							{
+								sscError(hError,"Database API Error: \"%s\"\n\n",ssdbGetLastErrorString(error_handle));
+								if (!ssdbUnLockTable(error_handle,connection))
+								sscError(hError,"Database API Error: \"%s\"\n\n",ssdbGetLastErrorString(error_handle));
+								return;
+							}
+							ssdbFreeRequest(error_handle,req_handle);
+							if (!(req_handle = ssdbSendRequest(error_handle,connection,SSDB_REQTYPE_SELECT,
+							"select action_desc from event_action where action_id = %d",actionid)))
+							{
+                                                                sscError(hError,"Database API Error: \"%s\"\n\n",ssdbGetLastErrorString(error_handle));
+                                                                if (!ssdbUnLockTable(error_handle,connection))
+                                                                sscError(hError,"Database API Error: \"%s\"\n\n",ssdbGetLastErrorString(error_handle));
+                                                                return;
+                                                        }
+							if ((number_of_records = getnumrecords(hError,error_handle,req_handle)) > 0)
+							{
+								vector = ssdbGetRow(error_handle,req_handle);
+								if(vector)
+									@format "%s<br>" vector[0]
+							}
+							ssdbFreeRequest(error_handle,req_handle);
+						}
+					}
+					@endcell
+				@endrow
+				@row
+					@cell colspan=3
+						@ <p><hr>
+					@endcell
+				@endrow
+				@endtable
+			@endcell
+		@endrow
+	@endtable
+	if (!ssdbUnLockTable(error_handle,connection))
+	{
+		sscError(hError,"Database API Error: \"%s\"\n\n",ssdbGetLastErrorString(error_handle));
+		return;
+	}
+
+	if(snprintf(buf,1024,update_event,hostname) > 0 && 
+	   configure_event(buf))
+	{
+	        sscError(hError, (char*) szErrMsgEventMonDead );
+		return;
+	}
+	
+
+	if(configure_rule("UPDATE -1"))
+	{
+		sscError(hError, (char*) szErrMsgEventMonDead );
+		return;
+	}
+	@ </body></html>
+}
+
+void sgm_update_evclass_list(sscErrorHandle hError, mySession *session,ssdb_Connection_Handle connection,
+        ssdb_Error_Handle error_handle,CMDPAIR *cmdp)
+{
+	ssdb_Request_Handle req_handle;
+        const char **vector;
+	int common_int;
+        char sys_id[32];
+
+	if(!get_variable(hError,cmdp,CHARTYPE,"sys_id",sys_id,&common_int,908))
+                return;
+	create_help(hError,"screens_setup_events_update");
+        @ <HTML> <HEAD> <TITLE>SGI Embedded Support Partner - ver.1.0</TITLE>
+        if (!(read_java_scritps("##SGM_EV_UPDT_CLASS","##SGM_EV_UPDT_CLASS_END")))
+        {
+                sscError(hError,"Error reading java script for this operation\n");
+                return ;
+        }
+        @ </HEAD>
+        @ <body bgcolor="#ffffcc" vlink="#333300" link="#333300">
+
+        /* This calls the view event configuration page. Comes from view current event setup */
+
+        @ <form onSubmit="return submitType(this)" method="post" name =ChooseType action="/$sss/rg/libsgmserver~SGM_UPDATE_EVENT_LIST">
+        @ <input type="hidden" name="multiselect" value=0>
+        @table border=0 cellpadding=0 cellspacing=0 width=100%
+                @row
+                        @cell bgcolor="#cccc99" width=15
+                                @ &nbsp;&nbsp;&nbsp;&nbsp;
+                        @endcell
+                        @cell bgcolor="#cccc99"
+                                        @ SETUP  &gt; Events &gt; Update
+                        @endcell
+                @endrow
+                @row
+                        @cell colspan=2
+                                @ &nbsp;
+                        @endcell
+                @endrow
+                @row
+                        @cell align=right colspan=2
+                                @ <input TYPE=button onClick="showMap()" Value="   Help   ">
+                        @endcell
+                @endrow
+                @row
+                        @cell colspan=2
+                                @ &nbsp;
+                        @endcell
+                @endrow
+                @row
+                        @cell
+                                @ &nbsp;<p>&nbsp;
+                        @endcell
+                        @cell
+				@ Choose a class to find an event that you want to update:<p>
+				sgm_class_list(hError,session,connection,error_handle,cmdp);
+				@format "<input type=\"hidden\" name=\"sys_id\" value=\"%s\">" sys_id
+			@endcell
+		@endrow
+	@endtable
+}

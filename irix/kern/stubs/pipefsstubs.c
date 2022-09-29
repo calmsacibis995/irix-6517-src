@@ -1,0 +1,2 @@
+
+oldpipe() {return -1;}

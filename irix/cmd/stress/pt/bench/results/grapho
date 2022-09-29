@@ -1,0 +1,119 @@
+#!/bin/perl
+
+# this utility somewhat helps make gnuplot output out of big fat data files;
+# the real gain is that it lets you use perl re's, rather than scanf formats,
+# for parsing lines, and that it is forgiving of lines that don't match the
+# re.
+
+use Getopt::Std;
+
+sub give_up($);
+sub tmpnam();
+sub label_wack($);
+
+$cmdfilename="/tmp/gnuplotcmds";
+$termtype="postscript eps";
+
+while ($#ARGV > 0) {
+	my $tmpfilename;
+	my @matches;
+
+	$options{'o'} = "graph.ps";
+	while ($ret = getopt ("xyzo", \%options)) { 
+		print "after getopt: $#ARGV, $ret\n"; 
+	}
+
+#	while (my $res = GetOptions("xlabel=s", \$xlabel,
+#			  "ylabel=s", \$ylabel,
+#			  "zlabel=s", \$zlabel,
+#			  "outfile=s", \$outfile,
+#			  "termtype=s", \$termtype))  { print "$res\n";}
+		
+	my $datafilename = shift @ARGV;
+	give_up("couldn't open data file " . $datafilename)
+		if !(open(DATAFILE, $datafilename));
+	give_up("couldn't open tmpfile") if !($tmpfilename = open_tmpfile());
+
+	my $filere = shift @ARGV;
+	# we let user's use '#' as a stand-in for a number in their regexps
+	# we also have ' ' stand for one or more whitespace characters
+	my $numre = '[0-9]+(?:\.[0-9]+)?'; $filere =~ s/#/($numre)/g; my $spacere = '\s+';
+	$filere =~ s/ +/$spacere/g;
+	
+	# write the data out to the tmpfile...
+	while (<DATAFILE>) {
+		if ( /$filere/ ) {
+			@matches = /$filere/;
+			foreach my $num (@matches) {
+				print TMPFILE "$num ";
+			}
+			print TMPFILE "\n";
+		}
+	}
+
+	# in order to gnuplot it, make a command file
+	give_up("couldn't open $cmdfilename") 
+		if !(open(CMDFILE, "> $cmdfilename"));
+	print CMDFILE "set terminal $termtype\n";
+	my $outfile = $options{"o"};
+	print CMDFILE "set output \"$outfile\"\n";
+	label_wack('x');
+	label_wack('y');
+	label_wack('z');
+
+	if ($#matches == 1) {
+		print CMDFILE "plot \"$tmpfilename\"\n";
+	} else {
+		print CMDFILE "set parametric\n";
+		print CMDFILE "splot \"$tmpfilename\" with impulses\n";
+	}
+
+	# release resources
+	close (CMDFILE);
+	close (DATAFILE);
+	close (TMPFILE);
+}
+
+# now gnuplot it
+if (fork()) {
+	exec "gnuplot $cmdfilename";
+	perror("exec");
+	exit(-1);
+} else {
+	wait;
+}
+
+#unlink $cmdfilename;
+#unlink $tmpfilename;
+exit 0;
+
+sub label_wack($)
+{
+	my $label = $_[0];
+	if ($options{$label}) {
+		print CMDFILE "set $label"."label \" $options{$label}\"\n";
+		print CMDFILE "show $label"."label\n";
+	}
+}
+
+# TMPFILE is the temporary file full of gnuplot data
+sub open_tmpfile()
+{
+	my $name = "/tmp/grtmp";
+	while (-f $tmpfilename) {
+		$name . 'x';
+	}
+	# race here; screw it.
+	return 0 if (! open(TMPFILE, "> $name"));
+	
+	return $name;
+}
+
+sub give_up($)
+{
+	perror;
+	print STDERR "$0: error: $_[0]\n";
+	print STDERR "usage: $0 <filename> <re> [ <filename> <re> ... ]\n";
+	exit(1);
+}
+

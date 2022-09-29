@@ -1,0 +1,246 @@
+'\"macro stdmacro
+.TH BTOOL 1
+.SH NAME
+btool \- branch coverage tool to test branch coverage for C programs
+.SH SYNOPSIS
+.B btool
+[
+.B \-test-control
+.I control_file_name
+] [
+.B \-test-macro
+] [
+.B \-test-map
+.I map_file_name
+] [
+.B \-test-dir
+.I master_directory
+] [
+.B \-test-quest-bug
+] [
+.B \-test-count
+.I count_file
+]
+.I \ filename ...
+
+.SH DESCRIPTION
+.LP
+.B btool
+is a branch coverage tool for C programs. The tool works as a
+preprocessor on C source files. These files will be instrumented by
+adding library routine calls. The instrumented source can be compiled
+with any standard C compiler. The information of the amount of
+coverage of the test suite can be gained by using the reporting
+programs \f4btell\fP, \fBbreport\fR, \fBbmerge\fR, and \fBbsummary\fR.
+.LP
+\fBbtool\fR uses three different files: a \fBmap file\fR, a
+\fBlog file\fR, and a \fBcontrol file\fR. The \fBmap file\fR is written
+to disk during instrumentation, and it maps the branches to their
+location in the source code. The log file keeps track of branches
+taken/not taken. This file is written out by the library function
+\fBbtool_writelog(\fIlog_file_name\fB)\fR which has to be called
+wherever the program exits, or for non-terminating processes during
+the execution at some point.
+The purpose of the control file is to control which files and
+procedures are instrumented.
+.LP
+Instrumenting the source code requires several steps. Since the tool
+is designed to be usable with \fBmake\fR, you can automate these with
+the help of your makefile (see USAGE).
+
+.SH OPTIONS
+.TP
+.BI \-test-dir " master_directory"
+Specifies the \fI masterdirectory\fR where the map file will be stored and where
+\fBbtool\fR expects the control file. The default is the current
+directory. If you work with hierarchical makefiles (calling different
+makefiles in different directories) this option must be used and an
+absolute path name given.
+.TP
+.BI \-test-count " count_file_name"
+Use the \fIcount_file_name\fR as the count file found in the
+master directory. If you don't use this option btool will look for
+\fIbtool_map.count\fR.
+.TP
+.BI \-test-control " control_file_name"
+Use the \fIcontrol_file_name\fR as the control file found in the
+master directory. If you don't use this option btool will look for
+\fIbtool_ctrl\fR.
+.TP
+.B \-test-macro
+Instruments branches in macros. Default is not to.
+.TP
+.BI \-test-map " map_file_name"
+The \fImap_file_name\fR will be used instead of the default, \fIbtool_map\fR.
+\fImap_file_name\fR is still found in the master directory.
+.TP
+.B \-test-quest-bug
+This suppresses the instrumentation of the \fI?\fR operator.
+Some compilers have bugs.
+.LP
+In addition to these options, 
+.B btool
+accepts 
+.B cc
+options.
+.SH "USAGE"
+.\"Refer to the branch testing tool's \fBUser's Manual\fR for complete
+.\"information and technical reference.
+.LP
+.SS "Control file usage"
+The control file specifies which files and which procedures will be
+instrumented by the branch testing tool. The defined format for the
+control file is as follows:
+.RS
+.nf
+[filename1 [procedurename] [procedurename] ... ]
+[filename2 [procedurename] [procedurename] ... ]
+\ ...
+.RE
+.fi
+The matching of a filename in the control file against an actual
+filename is done by matching inode numbers.  Therefore, asking for
+instrumentation of a file also asks for instrumentation of its links.
+Pathnames in the control file are relative to the master directory.
+If no control file is present, \f4btool\fP assumes that all procedures
+in all files are to be instrumented (subject to \f2pragma\f1 control detailed
+below).
+.SS "Instrumentation"
+See \f4kbtool\f1(1) for the steps to instrument the kernel.
+Instrumentation consists of 4 steps:
+.br
+Step 1: Initialization
+.RS
+Before starting \fBbtool\fR you have to run \fBbtool_init\fR. This
+program creates the library routines and sets up a headerfile for
+them.
+.RE
+Step 2: Running \fBbtool\fR
+.RS
+Run \fBbtool\fR for every file you want to have instrumented. 
+.RE
+Step 3: Compiling the Library Routines
+.RS
+Due to the fact that the Library Routines need the information stored
+in the header file produced by \fBbtool\fR, it is necessary to compile the
+Library Routines \fBbtool_lib.c\fR each time you instrument.
+.RE
+Step 4: Compiling the program
+.RS
+Before compilation the name of the log file must be specified. This
+will be done by adding "btool_writelog("\fIlog_file_name\fR")" in the
+source code wherever the program exits, or with a trigger in
+non-terminating processes. The program can then be compiled the
+regular way and be linked with the Library Routines.
+.RE
+All this can be done in a makefile.
+.SS "Makefile usage"
+Two conditions apply while using makefiles:
+.br
+.IP \(bu
+The makefile must use the $(CC) macro (instead of using cc) because
+the makefile can then process all dependent files with \fBbtool\fR.
+.br
+.IP \(bu
+The makefile must use some macro that describes the object files of
+the program (often called $(OBJ)). The library routines have to be
+added to the macro value.
+.LP
+A typical makefile would have the following target added:
+.nf
+
+branch:
+	$(MAKE) clobber
+	btool_init
+	$(MAKE) CC="btool -test-quest-bug -realcc $(CC)" $(OBJECTS)
+	$(CCF) -c -DNUM_BRANCHES=`cat btool_map.count` btool_lib.c
+	${CCF} ${OBJECTS} btool_lib.o ${LDFLAGS} -o xxx
+
+.fi
+.br
+The command \fB"make branch"\fR then does all the instrumentation.  If
+you use a hierarchical structure of makefiles, \fB-test-dir\fR must be
+used and passed down to sub-makefiles.
+.SS "Report Generation"
+In order to generate reports from the information produced by \fBbtool\fR
+and the Library Routines you have to use the \f4btell\fP or \fBbreport\fR
+command. For a
+summary of a given report use \fBbsummary\fR.
+If you want to have one report
+for several test runs you will use \fBbmerge\fR before using \fBbreport\fR.
+\f4btell\fP can handle multiple test run files without the use of \f4bmerge\fP.
+.SH PRAGMA CONTROL
+\f4btool\fP understands four pragmas that can help control which
+parts of a file are to be instrumented:
+.TP 15
+btool_prevent
+source lines following this pragma will not be instrumented.
+.TP
+btool_unprevent
+permits instrumentation to resume.
+.TP
+btool_force
+forces instrumentation even in functions not in the control file and
+even on branches in macros when the \f4\-test\-macro\fP option
+is not given.
+.TP
+btool_unforce
+ends a forced instrumentation section.
+Note that the force and unforce pragmas cannot be used to avoid
+the control file completely, as files not in the control file will
+always be untouched by \f4btool\fP (unless of course there is no control file).
+.PP
+If both \fBbtool_prevent\fR and \fBbtool_force\fR are in effect,
+\fBbtool_prevent\fR takes precedence.
+.SH RESTRICTIONS
+.IP \(bu 
+Switch statements can only be nested to a depth of 100.
+.IP \(bu 
+The \fIlong long int\fR type cannot be used in switch statements.
+.IP \(bu
+The following names are reserved: \fIbtool_writelog, btool_branch,
+btool_switch, btool_case, btool_branch_t, btool_log_t,
+btool_func, and Btool_branches.\fR.
+.SH "SEE ALSO"
+.BR btell (1),
+.BR breport (1),
+.BR bmerge (1),
+.BR bresore (1),
+.BR bsummary (1),
+.BR bdiff (1), 
+.BR cc (1),
+.BR make (1),
+\fIBranch Coverage Tool Documentation\fR
+.SH DIAGNOSTICS
+\fBbtool\fR replaces the files and returns an exit code 0. On any
+error, the files will not be replaced and exit code 1 is returned.
+.sp
+btool: Invalid master directory.
+.br
+btool: \fIcontrolfile name\fR: Invalid controlfile.
+.br
+btool: \fIfilename\fR: Already instrumented.
+.br
+btool: Can't open controlfile \fIcontrolfile name\fR.
+.br
+btool: Filename \fIfilename\fR... too long.
+.br
+btool: Functionname \fIfunctionname\fR... too long.
+.br
+btool: \fIfilename\fR: Invalid filename in controlfile.
+.br
+btool: \fIfilename\fR: No such file or directory.
+.br
+btool: \fItemporary filename\fR: Couldn't open temporary file.
+.br
+btool: Can't find file btool_lib.h.
+.br
+btool: Branch count initialization failed.
+.br
+btool: Not enough memory for output buffer.
+.br
+btool: Branch failure -- no character to print.
+.br
+btool: Warning: More than 100 switches nested.
+
+

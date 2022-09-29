@@ -1,0 +1,1310 @@
+<!-- Produced by version 3.14 (11/22/96) of SGI Frame/SGML translator -->
+<CHAPTER LBL="5"><TITLE><XREFTARGET ID="49542">RPC Programming Guide</TITLE><PARAGRAPH>This chapter is for programmers who want to write network applications using RPC. For most applications, you can use the <COMMAND>rpcgen</COMMAND> compiler, thus avoiding the need to understand much of the information in this chapter. (<XREF IDREF="84027" TYPE="TITLE">Chapter&nbsp;4, &ldquo;Programming with rpcgen,&rdquo;</XREF> contains the source for a working RPC service, which uses <COMMAND>rpcgen</COMMAND> to generate XDR routines and client and server stubs.)</PARAGRAPH>
+<PARAGRAPH>Topics in this chapter include:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>programming in each RPC layer</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>RPC features such as broadcast, batching, and authentication</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>examples of other uses of RPC</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<NOTE><PREFIX>Note</PREFIX>For a general introduction to RPC, see <XREF IDREF="11571" TYPE="TITLE">Chapter&nbsp;3, &ldquo;Introduction to RPC Programming.&rdquo;</XREF> For information about XDR and RPC language, see <XREF IDREF="55141" TYPE="TITLE">Chapter&nbsp;6, &ldquo;XDR and RPC Language Structure.&rdquo;</XREF> For a description of the RPC Protocol, see <XREF IDREF="94783" TYPE="TITLE">Appendix&nbsp;A, &ldquo;RPC Protocol Specification.&rdquo;</XREF> For details about the routines described in this chapter, see <REFPAGE>rpc(3R)</REFPAGE>.</NOTE>
+<SECTION1 LBL="" HELPID = ""><TITLE>The Layers of RPC</TITLE><PARAGRAPH>This section presents detailed information about programming in the three RPC layers (see <XREF IDREF="11571" TYPE="TITLE">Chapter&nbsp;3, &ldquo;Introduction to RPC Programming,&rdquo;</XREF> for background information about the RPC layers).</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>The Highest Layer of RPC</TITLE><PARAGRAPH>The highest layer of RPC is transparent to the operating system, machine, and network upon which it is run and consists of RPC library-based services. Suppose you're writing a program that needs to know how many users are logged into a remote machine. </PARAGRAPH>
+<PARAGRAPH>You can do this by calling the RPC library routine <FUNCTION>rnusers()</FUNCTION>, as shown in this code fragment:</PARAGRAPH>
+<CODE>
+/*
+&space;* howmany.c
+&space;*/
+
+#include &lt;stdio.h>
+
+main(int argc, char **argv)
+{
+&space;   int num;
+
+&space;   if (argc != 2) {
+&space;       fprintf(stderr, "usage: howmany hostname\n");
+&space;       exit(1);
+&space;   }
+&space;   if ((num = rnusers(argv[1])) &lt; 0) {
+&space;       fprintf(stderr, "error: howmany\n");
+&space;       exit(1);
+&space;   }
+&space;   printf("%d users on %s\n", num, argv[1]);
+&space;   exit(0);
+}
+</CODE>
+<PARAGRAPH>RPC library routines in C, such as<FUNCTION>&space;rnusers()</FUNCTION>, are included in the DSO librpcsvc.so. (For more information about DSOs, see the <DOCTITLE>IRIX System Programming Guide.</DOCTITLE>) Thus, you can compile the above program with <COMMAND>cc</COMMAND>:</PARAGRAPH>
+<EXAMPLE>
+% <USERINPUT>cc howmany.c -lrpcsvc -o howmany</USERINPUT>&space;
+</EXAMPLE>
+<NOTE><PREFIX>Note</PREFIX>See <XREF IDREF="24434" TYPE="TITLE">&ldquo;Compiling BSD and RPC Programs&rdquo; in Chapter&nbsp;1</XREF> for other compiling hints.</NOTE>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>The Middle Layer of RPC</TITLE><PARAGRAPH>The middle layer of RPC consists of routines used for most applications. In this layer, the user can make remote procedure calls to routines on other machines without considering details about the socket interface, the UNIX system, or other low-level implementation mechanisms.</PARAGRAPH>
+<PARAGRAPH>The simplest interface, which explicitly makes RPC calls, uses the <FUNCTION>callrpc()</FUNCTION> and <FUNCTION>registerrpc()</FUNCTION> functions. Another way to determine the number of remote users is shown in this example, which can be compiled in the same way as the previous example:</PARAGRAPH>
+<CODE>
+/*
+&space;* howmany2.c
+&space;*/
+
+#include &lt;stdio.h>
+#include &lt;rpc/rpc.h>
+#include &lt;rpcsvc/rusers.h>
+
+main(int argc, char **argv)
+{
+&space;   unsigned long nusers;
+&space;   int stat;
+&space;   if (argc != 2) {
+&space;       fprintf(stderr, "usage: howmany2 hostname\n");
+&space;       exit(1);
+&space;   }
+
+&space;   if (stat = callrpc(argv[1], RUSERSPROG, RUSERSVERS,
+&space;                      RUSERSPROC_NUM, xdr_void, 0,
+&space;                      xdr_u_long, &amp;nusers) != 0) {
+&space;       clnt_perrno(stat);
+&space;       exit(1);
+&space;   }
+&space;   printf("%d users on %s\n", nusers, argv[1]);
+&space;   exit(0); 
+}
+</CODE>
+<PARAGRAPH>Each RPC procedure is uniquely defined by a program number, version number, and procedure number (see <XREF IDREF="10975" TYPE="TITLE">&ldquo;Assigning RPC Program Numbers&rdquo; in Chapter&nbsp;3</XREF> for details). The program number specifies a group of related remote procedures, each of which has a different procedure number. Each program also has a version number, so when a minor change is made to a remote service (such as adding a new procedure), a new program number doesn't have to be assigned.</PARAGRAPH>
+<PARAGRAPH>The simplest way to make a remote procedure call is with the <FUNCTION>callrpc()</FUNCTION> routine. <FUNCTION>callrpc()</FUNCTION> has eight parameters:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>The first parameter is the name of the remote server machine.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The next three parameters identify the procedure to be called and consist of the program, version, and procedure numbers.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The fifth parameter is an XDR filter.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The sixth parameter is an argument to be encoded and passed to the remote procedure.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The seventh parameter is a filter for decoding the results returned by the remote procedure.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The last parameter is a pointer to the place where the procedure's results are to be stored.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>Multiple arguments and results are handled by embedding them in structures. If <FUNCTION>callrpc() </FUNCTION>completes successfully, it returns zero; otherwise, it returns a nonzero value. The return codes (of type cast into an integer) are found in &lt;rpc/clnt.h>.</PARAGRAPH>
+<PARAGRAPH>Since data types may be represented differently on different machines, <FUNCTION>callrpc()</FUNCTION>&space;needs both the type of the RPC argument and a pointer to the argument itself (and similarly for the result). For RUSERSPROC_NUM, the return value is an unsigned long.&space;So, <FUNCTION>callrpc()</FUNCTION>&space;has xdr_u_long as its first return parameter, which says that the result is of type unsigned long,&space;and &amp;nusers as its second return parameter, which is a pointer to where the long result will be placed. Since RUSERSPROC_NUM takes no argument, the argument parameter of <FUNCTION>callrpc()</FUNCTION>&space;is xdr_void.</PARAGRAPH>
+<PARAGRAPH>After trying several times to deliver a message, if <FUNCTION>callrpc()</FUNCTION>&space;gets no answer, it returns with an error code. The delivery mechanism is UDP. Methods for adjusting the number of retries or for using a different protocol require you to use the lowest layer of the RPC library (see <XREF IDREF="70654" TYPE="TITLE">&ldquo;The Lowest Layer of RPC&rdquo;</XREF>). </PARAGRAPH>
+<PARAGRAPH>The remote server procedure corresponding to the preceding example might look like this:</PARAGRAPH>
+<CODE>
+void *nuser(indata)
+char *indata; 
+{
+&space;   static int nusers;
+&space;   /* Code here to compute the number of users
+&space;    * and place result in variable nusers.
+&space;    */
+&space;   return ((void *)&amp;nusers); 
+}
+</CODE>
+<PARAGRAPH>It takes one argument, which is a pointer to the input of the remote procedure call (ignored in the example), and it returns a pointer to the result.</PARAGRAPH>
+<PARAGRAPH>Normally, a server registers all of the RPC calls it plans to handle and then goes into an infinite loop waiting to service requests. In this example, there is only a single procedure to register, so the main body of the server looks like this:</PARAGRAPH>
+<CODE>
+#include &lt;stdio.h>
+#include &lt;rpc/rpc.h>
+#include &lt;rpcsvc/rusers.h>
+
+void *nuser();
+
+main()
+{
+&space;   registerrpc(RUSERSPROG, RUSERSVERS, RUSERSPROC_NUM,
+&space;               nuser, xdr_void, xdr_u_long);
+&space;   svc_run();                    /* never returns */
+&space;   fprintf(stderr, "Error: svc_run returned!\n");
+&space;   exit(1); 
+}
+</CODE>
+<PARAGRAPH>The <FUNCTION>registerrpc()</FUNCTION>&space;routine establishes what C procedure corresponds to each RPC procedure number. The first three parameters&mdash;RUSERSPROG, RUSERSVERS, and RUSERSPROC_NUM&mdash;are the program, version, and procedure numbers of the remote procedure to be registered; nuser is the name of the C procedure implementing it; and xdr_void and xdr_u_long are the XDR filters for the remote procedure's arguments and results, respectively. (Multiple arguments or multiple results are passed as structures.)</PARAGRAPH>
+<PARAGRAPH>Only the UDP transport mechanism can use <FUNCTION>registerrpc()</FUNCTION>;&space;thus, <FUNCTION>registerrpc()</FUNCTION> is always safe in conjunction with calls generated by <FUNCTION>callrpc()</FUNCTION>.</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>The UDP transport mechanism can only deal with arguments and results that are less than 8 kilobytes long.</NOTE>
+<PARAGRAPH>After registering the local procedure, the server program's main procedure calls &lbreak;<FUNCTION>svc_run()</FUNCTION>, the RPC library's remote procedure dispatcher. It is this function that calls the remote procedures in response to RPC call messages. Note that the dispatcher takes care of decoding remote procedure arguments and encoding results, using the XDR filters specified when the remote procedure was registered.</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="97898">Passing Arbitrary Data Types</TITLE><PARAGRAPH>In the previous example, the RPC call passes a single unsigned long. RPC can handle arbitrary data structures, regardless of different machines' byte order or structure-layout conventions, by always converting them to XDR before sending them over the network. (The process of converting from a particular machine representation to XDR format is called serializing, and the reverse is called deserializing.)</PARAGRAPH>
+<PARAGRAPH>The type field parameters passed to <FUNCTION>callrpc()</FUNCTION>&space;and <FUNCTION>registerrpc()</FUNCTION>&space;can be built-in procedures like <FUNCTION>xdr_u_long()</FUNCTION>&space;or user-supplied procedures. XDR has the following built-in type&space;routines that can be used with <FUNCTION>callrpc()</FUNCTION> and <FUNCTION>registerrpc()</FUNCTION>:</PARAGRAPH>
+<CODE>
+xdr_int()        xdr_u_int()        xdr_enum()
+xdr_long()       xdr_u_long()       xdr_bool()
+xdr_short()      xdr_u_short()      xdr_wrapstring()
+xdr_char()       xdr_u_char()
+</CODE>
+<PARAGRAPH>Note that the routine <FUNCTION>xdr_string()</FUNCTION> exists but cannot be used with <FUNCTION>callrpc()</FUNCTION> and <FUNCTION>registerrpc()</FUNCTION>, which pass only two parameters to their XDR routines. <FUNCTION>xdr_wrapstring()</FUNCTION> has only two parameters and is thus okay; it calls <FUNCTION>xdr_string()</FUNCTION>.</PARAGRAPH>
+<PARAGRAPH>This is an example of a user-defined type routine: </PARAGRAPH>
+<CODE>
+struct simple {
+&space;   int a;
+&space;   short b;
+} simple;
+</CODE>
+<PARAGRAPH>If you want to send and receive this structure, call <FUNCTION>callrpc()</FUNCTION>&space;like this:</PARAGRAPH>
+<CODE>
+callrpc(hostname, PROGNUM, VERSNUM, PROCNUM, xdr_simple,
+&space;       &amp;simple, xdr_simple, &amp;simple);
+</CODE>
+<PARAGRAPH>In this case, <FUNCTION>xdr_simple()</FUNCTION>&space;is written as:</PARAGRAPH>
+<CODE>
+#include &lt;rpc/rpc.h>
+xdr_simple(XDR *xdrsp, struct simple *simplep)
+{
+&space;   if (!xdr_int(xdrsp, &amp;simplep->a))
+&space;       return(0);
+&space;   if (!xdr_short(xdrsp, &amp;simplep->b))
+&space;       return(0);
+&space;   return(1);
+}
+</CODE>
+<PARAGRAPH>An XDR routine returns a nonzero value (which means &ldquo;true&rdquo; in C) if it completes successfully; zero otherwise. </PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>This section gives only a few examples of implementing XDR. For more information, see <XREF IDREF="41930" TYPE="TITLE">Chapter&nbsp;7, &ldquo;XDR Programming Notes.&rdquo;</XREF></NOTE>
+<PARAGRAPH>In addition to the built-in routines, XDR has these prefabricated building blocks:</PARAGRAPH>
+<CODE>
+xdr_array()     xdr_bytes()        xdr_reference()
+xdr_vector()    xdr_union()        xdr_pointer()
+xdr_string()    xdr_opaque()
+</CODE>
+<PARAGRAPH>To send a variable array of integers, you might package them as a structure:</PARAGRAPH>
+<CODE>
+struct varintarr {
+&space;   int *data;
+&space;   int arrlength;
+} arr; 
+</CODE>
+<PARAGRAPH>Next, you could make an RPC call something like this:</PARAGRAPH>
+<CODE>
+callrpc(hostname, PROGNUM, VERSNUM, PROCNUM, xdr_varintarr,
+&space;       &amp;arr, xdr_varintarr, &amp;arr);
+</CODE>
+<PARAGRAPH>In this case, <FUNCTION>xdr_varintarr()</FUNCTION>&space;is defined as:</PARAGRAPH>
+<CODE>
+xdr_varintarr(XDR *xdrsp, struct varintarr *arrp)
+{
+&space;   return (xdr_array(xdrsp, &amp;arrp->data, &amp;arrp->arrlength,
+&space;           MAXLEN, sizeof(int), xdr_int)); 
+} 
+</CODE>
+<PARAGRAPH>This routine takes as parameters the XDR handle, a pointer to the array, a pointer to the size of the array, the maximum allowable array size, the size of each array element, and an XDR routine for handling each array element.</PARAGRAPH>
+<PARAGRAPH>If the size of the array is known in advance, you can use <FUNCTION>xdr_vector()</FUNCTION>, which serializes fixed-length arrays:</PARAGRAPH>
+<CODE>
+int intarr[SIZE];
+xdr_intarr(XDR *xdrsp, int intarr[])
+{
+&space;   int i;
+&space;   return (xdr_vector(xdrsp, intarr, SIZE, sizeof(int),
+&space;                      xdr_int));
+}
+</CODE>
+<PARAGRAPH>XDR always converts quantities to four-byte multiples when it is serializing. Thus, if either of the preceding examples involved characters instead of integers, each character would occupy 32 bits, which is the reason for the <FUNCTION>xdr_bytes()</FUNCTION> routine. <FUNCTION>xdr_bytes()</FUNCTION> is like <FUNCTION>xdr_array()</FUNCTION>, except it packs characters; <FUNCTION>xdr_bytes()</FUNCTION> has four parameters, similar to the first four parameters of <FUNCTION>xdr_array()</FUNCTION>. </PARAGRAPH>
+<PARAGRAPH>For null-terminated strings, there is also the <FUNCTION>xdr_string()</FUNCTION>&space;routine. <FUNCTION>xdr_string()</FUNCTION>&space;is the same as <FUNCTION>xdr_bytes()</FUNCTION>&space;without the length&space;parameter. When serializing, the string length is taken from&space;<FUNCTION>strlen()</FUNCTION>; when deserializing, a null-terminated string is created.</PARAGRAPH>
+<PARAGRAPH>In this final example of the middle layer, a call is made to the previously written <FUNCTION>xdr_simple()</FUNCTION>, as well as to the built-in functions <FUNCTION>xdr_string()</FUNCTION>&space;and <FUNCTION>xdr_reference()</FUNCTION>:</PARAGRAPH>
+<CODE>
+struct finalexample {
+&space;   char *string;
+&space;   struct simple *simplep;
+} finalexample;
+
+xdr_finalexample(XDR *xdrsp, struct finalexample *finalp)
+{
+&space;   int i;
+&space;   if (!xdr_string(xdrsp, &amp;finalp->string, MAXSTRLEN))
+&space;       return (0);
+&space;   if (!xdr_reference(xdrsp, &amp;finalp->simplep,
+&space;                      sizeof(struct simple), xdr_simple))
+&space;       return (0);
+&space;   return (1);
+} 
+</CODE>
+<PARAGRAPH>Note that you could just as easily call <FUNCTION>xdr_simple()</FUNCTION>&space;instead of <FUNCTION>xdr_reference()</FUNCTION>.</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="70654">The Lowest Layer of RPC</TITLE><PARAGRAPH>The lowest layer of RPC is used for more-sophisticated applications. In this section, you'll see how to change defaults by using the lowest layer of the RPC library. </PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>This section assumes that you are familiar with socket-related concepts and the socket library (see <XREF IDREF="60843" TYPE="TITLE">Chapter&nbsp;2, &ldquo;Sockets-based Communication&rdquo;</XREF>). </NOTE>
+<PARAGRAPH>You may need to use the lowest layer of RPC in one of the following instances:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>To use TCP (the highest layer uses UDP, which restricts RPC calls to 8 kilobytes of data). Using TCP permits calls to send long streams of data (see <XREF IDREF="24443" TYPE="TITLE">&ldquo;TCP&rdquo;</XREF>). </PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>To allocate and free memory while serializing or deserializing with XDR routines. There is no call at the highest level to let you free memory explicitly. See <XREF IDREF="83455" TYPE="TITLE">&ldquo;Memory Allocation with XDR&rdquo;</XREF>.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>To perform authentication on either the client or server side, by supplying credentials or verifying them. See <XREF IDREF="45584" TYPE="TITLE">&ldquo;Authentication&rdquo;</XREF>.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<SECTION3 LBL="" HELPID = ""><TITLE>More Information about the Server</TITLE><PARAGRAPH>There are a number of assumptions built into <FUNCTION>registerrpc()</FUNCTION>. One is that you are using the UDP datagram protocol. Another is that you don't want to do anything unusual while deserializing, since deserialization is automatic and occurs before the user's server routine is called. </PARAGRAPH>
+<PARAGRAPH>The server for the following program is written using the lowest layer of RPC, which does not make these assumptions:</PARAGRAPH>
+<CODE>
+#include &lt;stdio.h>
+#include &lt;rpc/rpc.h>
+#include &lt;utmp.h>
+#include &lt;rpcsvc/rusers.h> 
+
+main()
+{
+&space;   SVCXPRT *transp;
+&space;   void nuser();
+
+&space;   transp = svcudp_create(RPC_ANYSOCK);
+&space;   if (transp == NULL){
+&space;       fprintf(stderr, "can't create an RPC server\n");
+&space;       exit(1);
+&space;   }
+&space;   pmap_unset(RUSERSPROG, RUSERSVERS);
+&space;   if (!svc_register(transp, RUSERSPROG, RUSERSVERS, nuser,
+&space;                     IPPROTO_UDP)) {
+&space;       fprintf(stderr, "can't register RUSER service\n");
+&space;       exit(1);
+&space;   }
+&space;   svc_run();  /* never returns */
+&space;   fprintf(stderr, "should never reach this point\n");
+&space;   exit(1);
+} 
+
+void nuser(rqstp, transp)
+struct svc_req *rqstp;
+SVCXPRT *transp;
+{
+&space;   unsigned long nusers;
+
+&space;   switch (rqstp->rq_proc) {
+&space;   case NULLPROC:
+&space;       if (!svc_sendreply(transp, xdr_void, 0)) {
+&space;           fprintf(stderr, "can't reply to RPC call\n");
+&space;           exit(1);
+&space;       }
+&space;       return;
+&space;   case RUSERSPROC_NUM:
+&space;       /* Code here to compute the number of users and
+&space;        * assign to the variable nusers
+&space;        */
+&space;       if (!svc_sendreply(transp, xdr_u_long, &amp;nusers)) {
+&space;           fprintf(stderr, "can't reply to RPC call\n");
+&space;           exit(1);
+&space;       }
+&space;       return;
+&space;   default:
+&space;       svcerr_noproc(transp);
+&space;       return;
+&space;   } 
+}
+</CODE>
+<PARAGRAPH>In this example, the server gets a transport handle, which is used for sending RPC messages. <FUNCTION>registerrpc()</FUNCTION>&space;uses <FUNCTION>svcudp_create()</FUNCTION>&space;to get a UDP handle. If you require a reliable protocol, call <FUNCTION>svctcp_create()</FUNCTION>&space;instead. If the argument to <FUNCTION>svcudp_create()</FUNCTION>&space;is RPC_ANYSOCK, the RPC library creates a socket on which to send out RPC calls. Otherwise, <FUNCTION>svcudp_create()</FUNCTION>&space;expects its argument to be a valid socket number.</PARAGRAPH>
+<PARAGRAPH>If you specify your own socket, it can be bound or unbound. If it is bound to a port by the user, the port numbers of <FUNCTION>svcudp_create()</FUNCTION>&space;and <FUNCTION>clntudp_create()</FUNCTION>&space;(the low-level client routine) must match.</PARAGRAPH>
+<PARAGRAPH>If you specify RPC_ANYSOCK for a socket, the RPC library routines will open sockets. Otherwise, they will expect the caller to do so. The <FUNCTION>svcudp_create()</FUNCTION> and <FUNCTION>clntudp_create()</FUNCTION> routines will cause RPC library routines to bind their sockets if they are not bound already.</PARAGRAPH>
+<PARAGRAPH>A service may choose to register its port number with the local port mapper service. This is done by specifying a nonzero protocol number in <FUNCTION>svc_register()</FUNCTION>. Incidentally, a client can discover the server's port number by consulting the port mapper on the server's machine. This can be done automatically by specifying a zero port number in <FUNCTION>clntudp_create()</FUNCTION> or <FUNCTION>clnttcp_create()</FUNCTION>.</PARAGRAPH>
+<PARAGRAPH>After creating a SVCXPRT, the next step is to call <FUNCTION>pmap_unset()</FUNCTION>&space;so that if the nusers server crashed earlier, any previous trace of it is erased before restarting. More precisely, <FUNCTION>pmap_unset()</FUNCTION>&space;erases the entry for RUSERS from the port mapper's tables.</PARAGRAPH>
+<PARAGRAPH>Finally, you associate the program number for nusers with the procedure <FUNCTION>nuser()</FUNCTION>. The final argument to <FUNCTION>svc_register()</FUNCTION>&space;is normally the protocol being used, which in this case is IPPROTO_UDP. Notice that unlike <FUNCTION>registerrpc()</FUNCTION>, there are no XDR routines involved in the registration process. In addition, registration is done on the program level rather than the procedure level.</PARAGRAPH>
+<PARAGRAPH>The user routine <FUNCTION>nuser()</FUNCTION>&space;must call and dispatch the appropriate XDR routines based on the procedure number. Note that two things are handled by <FUNCTION>nuser()</FUNCTION>&space;that <FUNCTION>registerrpc()</FUNCTION>&space;handles automatically:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>A simple test to detect whether a remote program is running: call procedure NULLPROC (currently zero), which returns with no arguments.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>A check for invalid procedure numbers. If one is detected, <FUNCTION>svcerr_noproc()</FUNCTION>&space;is called to handle the error.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>The user service routine serializes the results and returns them to the RPC caller via <FUNCTION>svc_sendreply()</FUNCTION>. Its first parameter is the SVCXPRT handle, the second parameter is the XDR routine, and the third parameter is a pointer to the data to be returned.</PARAGRAPH>
+<PARAGRAPH>Not illustrated previously is how a server handles an RPC program that passes data. For example, we could add a procedure RUSERSPROC_BOOL, which has an argument nusers, and returns TRUE or FALSE, depending on whether the number of users logged in is equal to nusers. The procedure looks something like this:</PARAGRAPH>
+<CODE>
+case RUSERSPROC_BOOL: {
+&space;   int bool;
+&space;   unsigned nuserquery;
+&space;   
+&space;   if (!svc_getargs(transp, xdr_u_int, &amp;nuserquery) {
+&space;       svcerr_decode(transp);
+&space;       return;
+&space;   }
+&space;   /* Insert code here to set nusers = number of users */
+&space;   if (nuserquery == nusers)
+&space;       bool = TRUE;
+&space;   else
+&space;       bool = FALSE;
+&space;   if (!svc_sendreply(transp, xdr_bool, &amp;bool)) {
+&space;       fprintf(stderr, "can't reply to RPC call\n");
+&space;       exit(1);
+&space;   }
+&space;   return;
+}
+</CODE>
+<PARAGRAPH>The relevant routine is <FUNCTION>svc_getargs()</FUNCTION>, which takes a SVCXPRT handle, the XDR routine, and a pointer to where the input is to be placed as arguments.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>More Information about the Client</TITLE><PARAGRAPH>When you use <FUNCTION>callrpc()</FUNCTION>,&space;you have no control over the RPC delivery mechanism or the socket used to transport the data. To illustrate how the lowest layer of RPC lets you adjust these parameters, consider the following code sample, which calls the nusers service:</PARAGRAPH>
+<CODE>
+/*
+&space;* howmany3.c
+&space;*/
+#include &lt;stdio.h>
+#include &lt;rpc/rpc.h>
+#include &lt;utmp.h>
+#include &lt;rpcsvc/rusers.h>
+#include &lt;sys/socket.h>
+#include &lt;sys/time.h>
+#include &lt;netdb.h>
+
+main(int argc, char **argv)
+{
+&space;   struct hostent *hp;
+&space;   struct timeval pertry_timeout, total_timeout;
+&space;   struct sockaddr_in server_addr;
+&space;   int sock = RPC_ANYSOCK;
+&space;   register CLIENT *client;
+&space;   enum clnt_stat clnt_stat;
+&space;   unsigned long nusers;
+&space;   if (argc != 2) {
+&space;       fprintf(stderr, "usage: howmany3 hostname\n");
+&space;       exit(1);
+&space;   }
+&space;   if ((hp = gethostbyname(argv[1])) == NULL) {
+&space;       herror(argv[1]);
+&space;       exit(1);
+&space;   }
+&space;   pertry_timeout.tv_sec = 3;
+&space;   pertry_timeout.tv_usec = 0;
+&space;   bcopy(hp->h_addr, (caddr_t)&amp;server_addr.sin_addr,
+&space;         hp->h_length);
+&space;   server_addr.sin_family = AF_INET;
+&space;   server_addr.sin_port =  0;
+&space;   if ((client = clntudp_create(&amp;server_addr, RUSERSPROG,
+&space;        RUSERSVERS, pertry_timeout, &amp;sock)) == NULL) {
+&space;       clnt_pcreateerror("clntudp_create");
+&space;       exit(1);
+&space;   }
+&space;   total_timeout.tv_sec = 20;
+&space;   total_timeout.tv_usec = 0;
+&space;   clnt_stat = clnt_call(client,RUSERSPROC_NUM,xdr_void,0,
+&space;                         xdr_u_long,&amp;nusers, total_timeout);
+&space;   if (clnt_stat != RPC_SUCCESS) {
+&space;       clnt_perror(client, "rpc");
+&space;       exit(1);
+&space;   }
+
+&space;   printf("%d users on %s\n", nusers, argv[1]);
+
+&space;   clnt_destroy(client);
+&space;   close(sock);
+&space;   exit(0);
+}
+</CODE>
+<PARAGRAPH>The low-level version of <FUNCTION>callrpc()</FUNCTION>&space;is <FUNCTION>clnt_call()</FUNCTION>, which takes a CLIENT pointer rather than a host name. The parameters to <FUNCTION>clnt_call()</FUNCTION>&space;are a CLIENT pointer, the procedure number, the XDR routine for serializing the argument, a pointer to the argument, the XDR routine for deserializing the return value, a pointer to where the return value will be placed, and the time in seconds to wait for a reply.</PARAGRAPH>
+<PARAGRAPH>The CLIENT pointer is encoded with the transport mechanism. <FUNCTION>callrpc()</FUNCTION>&space;uses UDP; thus it calls <FUNCTION>clntudp_create()</FUNCTION>&space;to get a CLIENT pointer. To specify TCP/IP, use <FUNCTION>clnttcp_create()</FUNCTION>.</PARAGRAPH>
+<PARAGRAPH>The parameters to <FUNCTION>clntudp_create()</FUNCTION> are the server address, the program number, the version number, a timeout value (how long to wait before trying again), and a pointer to a socket. The final argument to <FUNCTION>clnt_call()</FUNCTION>&space;is the total time to wait for a response. Thus, the number of tries is the <FUNCTION>clnt_call()</FUNCTION>&space;timeout divided by the <FUNCTION>clntudp_create()</FUNCTION>&space;timeout.</PARAGRAPH>
+<PARAGRAPH>Note that the <FUNCTION>clnt_destroy()</FUNCTION> call always deallocates the space associated with the CLIENT handle. It closes the socket associated with the CLIENT handle, however, only if the RPC library opened it. If the socket was opened by the user, it stays open. This makes it possible, in cases where there are multiple client handles using the same socket, to destroy one handle without closing the socket that other handles are using.</PARAGRAPH>
+<PARAGRAPH>To make a stream connection, the call to <FUNCTION>clntudp_create()</FUNCTION>&space;is replaced with a call to <FUNCTION>clnttcp_create()</FUNCTION>:&space;</PARAGRAPH>
+<CODE>
+clnttcp_create(&amp;server_addr, prognum, versnum, &amp;socket,
+&space;              inputsize, outputsize);
+</CODE>
+<PARAGRAPH>There is no timeout argument; instead, the receive and send buffer sizes must be specified. When the <FUNCTION>clnttcp_create()</FUNCTION>&space;call is made, a TCP connection is established. All RPC calls using that CLIENT handle use this connection. The server side of an RPC call using TCP has <FUNCTION>svcudp_create()</FUNCTION>&space;replaced by <FUNCTION>svctcp_create()</FUNCTION>:</PARAGRAPH>
+<CODE>
+transp = svctcp_create(RPC_ANYSOCK, 0, 0);
+</CODE>
+<PARAGRAPH>The last two arguments to <FUNCTION>svctcp_create()</FUNCTION> are send and receive sizes, respectively. If 0 is specified for either argument, the system chooses a reasonable default.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="83455">Memory Allocation with XDR</TITLE><PARAGRAPH>In addition to input and output, XDR routines do memory allocation. For this reason, the second parameter of <FUNCTION>xdr_array()</FUNCTION>&space;is a pointer to an array, rather than the array itself. If it is NULL, <FUNCTION>xdr_array()</FUNCTION>&space;allocates space for the array and returns a pointer to it, putting the size of the array in the third argument. For example, consider the following XDR routine, <FUNCTION>xdr_chararr1()</FUNCTION>, which deals with a fixed array of bytes with length SIZE:</PARAGRAPH>
+<CODE>
+xdr_chararr1(XDR *xdrsp, char chararr[])
+{
+&space;   char *p;
+&space;   int len;
+&space;   p = chararr;
+&space;   len = SIZE;
+&space;   return (xdr_bytes(xdrsp, &amp;p, &amp;len, SIZE));
+}
+</CODE>
+<PARAGRAPH>If space has already been allocated in&space;chararr, it can be called from a server:</PARAGRAPH>
+<CODE>
+char chararr[SIZE];
+svc_getargs(transp, xdr_chararr1, chararr);
+</CODE>
+<PARAGRAPH>In this case, chararr has already allocated space.</PARAGRAPH>
+<PARAGRAPH>If you want XDR to do the allocation, you have to rewrite the routine; for example:</PARAGRAPH>
+<CODE>
+xdr_chararr2(XDR *xdrsp, char **chararrp)
+{
+&space;   int len;
+&space;   len = SIZE;
+&space;   return (xdr_bytes(xdrsp, charrarrp, &amp;len, SIZE));
+}
+</CODE>
+<PARAGRAPH>The RPC call might then look like this: </PARAGRAPH>
+<CODE>
+char *arrptr;
+arrptr = NULL;
+svc_getargs(transp, xdr_chararr2, &amp;arrptr);
+/* Use the result here */
+svc_freeargs(transp, xdr_chararr2, &amp;arrptr);
+</CODE>
+<PARAGRAPH>Note that after being used, the character array can be freed with <FUNCTION>svc_freeargs()</FUNCTION>, which will not attempt to free any memory if the variable indicating memory is NULL. For example, in the routine <FUNCTION>xdr_finalexample()</FUNCTION> (described in <XREF IDREF="97898" TYPE="TITLE">&ldquo;Passing Arbitrary Data Types&rdquo;</XREF>), if finalp->string is NULL, it is not freed. The same is true for finalp&ndash;>simplep.</PARAGRAPH>
+<PARAGRAPH>To summarize, each XDR routine is responsible for serializing, deserializing, and freeing memory. When an XDR routine is called from <FUNCTION>callrpc()</FUNCTION>, the serializer is used. When called from <FUNCTION>svc_getargs()</FUNCTION>, the deserializer is used. When called from <FUNCTION>svc_freeargs()</FUNCTION>, the memory deallocator is used. </PARAGRAPH>
+<PARAGRAPH>When building simple examples like the ones in this section, a user doesn't have to worry about the three modes. <XREF IDREF="41930" TYPE="TITLE">Chapter&nbsp;7, &ldquo;XDR Programming Notes,&rdquo;</XREF> provides examples of more sophisticated XDR routines that determine which of the three modes they are in order to function correctly. </PARAGRAPH>
+</SECTION3>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE>Other RPC Features</TITLE><PARAGRAPH>This section discusses some other aspects of RPC that can be useful to RPC programmers.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>Select on the Server Side</TITLE><PARAGRAPH>Suppose a process is processing RPC requests while performing some other activity. If the other activity involves periodically updating a data structure, the process can set an alarm signal before calling <FUNCTION>svc_run()</FUNCTION>. But if the other activity involves waiting on a file descriptor, the <FUNCTION>svc_run()</FUNCTION>&space;call won't work. The following is the code for <FUNCTION>svc_run()</FUNCTION>:</PARAGRAPH>
+<CODE>
+void svc_run()
+{
+&space;   fd_set readfds;
+&space;   int dtbsz = getdtablesize();
+&space;   for (;;) {
+&space;       readfds = svc_fdset;
+&space;       switch (select(dtbsz, &amp;readfds, NULL,NULL,NULL)) {
+&space;       case -1:
+&space;           if (errno == EINTR)
+&space;               continue;
+&space;           perror("select");
+&space;           return;
+&space;       case 0:
+&space;           break;
+&space;       default:
+&space;           svc_getreqset(&amp;readfds);
+&space;       }
+&space;   }
+}
+</CODE>
+<PARAGRAPH>You can bypass <FUNCTION>svc_run()</FUNCTION>&space;and call <FUNCTION>svc_getreqset()</FUNCTION>&space;yourself. All you need to know are the file descriptors of the sockets associated with the programs you are waiting on. Thus, you can have your own <FUNCTION>select()</FUNCTION>&space;that waits on both the RPC socket and your own descriptors. Note that svc_fdset&space;is a bit mask of all the file descriptors that RPC is using for services. It can change whenever any&space;RPC library routine is called, because descriptors are constantly being opened and closed, such as for TCP connections.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Broadcast RPC</TITLE><PARAGRAPH>You cannot do broadcast RPC without a port mapper, which converts RPC program numbers into UDP or TCP port numbers; see <REFPAGE>portmap(1M)</REFPAGE> or <REFPAGE>rpcbind(1M)</REFPAGE> for more information.</PARAGRAPH>
+<PARAGRAPH>The main differences between broadcast RPC and normal RPC calls are:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>Normal RPC expects one answer, whereas broadcast RPC expects many answers (one or more answers from each responding machine).</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Broadcast RPC can be supported only by packet-oriented (connectionless) transport protocols, such as UDP/IP.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The implementation of broadcast RPC treats all unsuccessful responses as garbage by filtering them out. Thus, if there is a version mismatch between the broadcaster and a remote service, the user of broadcast RPC never knows.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>All broadcast messages are sent to the port mapper port. Thus, only services that register themselves with their port mapper are accessible via the broadcast RPC mechanism.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Broadcast requests are limited in size to the Maximum Transfer Unit (MTU) of the local network. For Ethernet, the MTU is 1500 bytes. For FDDI, the MTU is 4352 bytes.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<SECTION3 LBL="" HELPID = ""><TITLE>Broadcast RPC Synopsis</TITLE><PARAGRAPH>The following is the synopsis of broadcast RPC:</PARAGRAPH>
+<CODE>
+#include &lt;rpc/pmap_clnt.h>
+enum clnt_stat  clnt_stat;
+&space;   . . .
+clnt_stat = clnt_broadcast(prognum, versnum, procnum,
+&space;           inproc, in, outproc, out, eachresult)
+&space;       u_long    prognum;     /* program number */
+&space;       u_long    versnum;     /* version number */
+&space;       u_long    procnum;     /* procedure number */
+&space;       xdrproc_t inproc;      /* xdr routine for args */
+&space;       void      *in;         /* pointer to args */
+&space;       xdrproc_t outproc;      /* xdr routine for results */
+&space;       void      *out;        /* pointer to results */
+&space;       bool_t  (*eachresult)();
+&space;                         /* call with each result gotten */
+clnt_stat = clnt_broadcast_exp(prognum, versnum, procnum,
+&space;                              inproc, in, outproc, out,
+&space;                              eachresult,inittime,waittime)
+&space;       /* first eight parameters same as above. */
+&space;       int    inittime;        /* initial wait period */
+&space;       int    waittime;        /* total wait period */ 
+</CODE>
+<PARAGRAPH>The procedure <FUNCTION>eachresult()</FUNCTION>&space;is called each time a valid result is obtained. It returns a boolean that indicates whether or not the client wants more responses:</PARAGRAPH>
+<CODE>
+bool_t done;
+
+done = eachresult(resultsp, raddr)
+&space;      void *resultsp;
+&space;      struct sockaddr_in *raddr;
+&space;      /* address of machine that sent response */
+</CODE>
+<PARAGRAPH>If done is TRUE, broadcasting stops and <FUNCTION>clnt_broadcast()</FUNCTION>&space;returns successfully. Otherwise, the routine waits for another response. The request is rebroadcast after a few seconds of waiting. If no responses come back, the routine returns with RPC_TIMEDOUT. Use <FUNCTION>clnt_broadcast_exp()</FUNCTION> to control the initial and total waiting intervals. To interpret clnt_stat errors, feed the error code to <FUNCTION>clnt_perrno()</FUNCTION>.</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Batching</TITLE><PARAGRAPH>The RPC architecture is designed so that a client sends a call to a server and waits for a reply that the call succeeded. Clients do not compute while servers are processing a call, which is inefficient if the client does not want or need an acknowledgment for every message sent. RPC batch facilities make it possible for clients to continue computing while waiting for a response.</PARAGRAPH>
+<PARAGRAPH>Batching occurs when RPC messages are placed in a &ldquo;pipeline&rdquo; of calls to a server. Batching assumes that:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>Each RPC call in the pipeline does not require a response from the server, and the server does not send a response message.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The pipeline of calls is transported on a reliable byte stream transport such as TCP/IP.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>Since the server does not respond to every call, the client can generate new calls in parallel, with the server executing previous calls. In addition, the TCP/IP implementation can buffer many calls and send them to the server in a single <FUNCTION>write</FUNCTION>&space;system call.</PARAGRAPH>
+<PARAGRAPH>This overlapped execution greatly decreases the inter-process communication overhead of the client and server processes, and the total elapsed time of a series of calls.</PARAGRAPH>
+<PARAGRAPH>Since the batched calls are buffered, the client should eventually do a nonbatched call to flush the pipeline.</PARAGRAPH>
+<PARAGRAPH>The following is a (contrived) example of batching. Assume that a string&ndash;rendering service (such as a window system) has two similar calls: one renders a string and returns void results, while the other renders a string and remains silent. The service (using the TCP/IP transport) could look something like this:</PARAGRAPH>
+<CODE>
+#include &lt;stdio.h>
+#include &lt;rpc/rpc.h>
+#include &lt;rpcsvc/windows.h>  /* assumes this files exists
+&space;                             * and defines all the
+&space;                             * necessary constants.
+&space;                             */
+
+void windowdispatch();
+
+main()
+{
+&space;   SVCXPRT *transp;
+
+&space;   transp = svctcp_create(RPC_ANYSOCK, 0, 0);
+&space;   if (transp == NULL) {
+&space;       fprintf(stderr, "can't create an RPC server\n");
+&space;       exit(1);
+&space;   }
+&space;   pmap_unset(WINDOWPROG, WINDOWVERS);
+&space;   if (!svc_register(transp, WINDOWPROG, WINDOWVERS,
+&space;                     windowdispatch, IPPROTO_TCP)) {
+&space;       fprintf(stderr, "can't register WINDOW service\n");
+&space;       exit(1);
+&space;   }
+&space;   svc_run();            /* never returns */
+&space;   fprintf(stderr, "should never reach this point\n");
+&space;   exit(1);
+}
+
+void windowdispatch(rqstp, transp)
+struct svc_req *rqstp;
+SVCXPRT *transp;
+{
+&space;   char *s = NULL;
+&space;   switch (rqstp->rq_proc) {
+&space;   case NULLPROC:
+&space;       if (!svc_sendreply(transp, xdr_void, 0)) {
+&space;           fprintf(stderr, "can't reply to RPC call\n");
+&space;           exit(1);
+&space;       }
+&space;       return;
+&space;   case RENDERSTRING:
+&space;       if (!svc_getargs(transp, xdr_wrapstring, &amp;s)) {
+&space;           fprintf(stderr, "can't decode arguments\n");
+&space;           /* tell caller it messed up */
+&space;           svcerr_decode(transp);
+&space;           break;
+&space;       } 
+&space;       /* Code here to render the string s */
+&space;       if (!svc_sendreply(transp, xdr_void, NULL)) {
+&space;           fprintf(stderr, "can't reply to RPC call\n");
+&space;           exit(1);
+&space;       }
+&space;       break;
+&space;   case RENDERSTRING_BATCHED:
+&space;       if (!svc_getargs(transp, xdr_wrapstring, &amp;s)) {
+&space;           fprintf(stderr, "can't decode arguments\n");
+&space;           /* We are silent in face of protocol errors */
+&space;           break;
+&space;       }
+&space;       /*Code here to render string s, but send no reply!*/
+&space;       break;
+&space;   default:
+&space;       svcerr_noproc(transp);
+&space;       return;
+&space;   }
+&space;   /* Now free string allocated while decoding arguments */
+&space;   svc_freeargs(transp, xdr_wrapstring, &amp;s); 
+}
+</CODE>
+<PARAGRAPH>Of course, the service could have one procedure that takes the string and a boolean to indicate whether or not the procedure should respond.</PARAGRAPH>
+<PARAGRAPH>In order for a client to take advantage of batching, the client must perform RPC calls on a TCP-based transport, and the actual calls must have these attributes:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>The result's XDR routine must be zero (NULL).</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The RPC call's timeout must be zero.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>The following is an example of a client that uses batching to render a collection of strings; the batching is flushed when the client gets a null string:</PARAGRAPH>
+<CODE>
+#include &lt;stdio.h>
+#include &lt;rpc/rpc.h>
+#include &lt;rpcsvc/windows.h>
+#include &lt;sys/socket.h>
+#include &lt;sys/time.h>
+#include &lt;netdb.h>
+
+main(int argc, char **argv)
+{
+&space;   struct hostent *hp;
+&space;   struct timeval pertry_timeout, total_timeout;
+&space;   struct sockaddr_in server_addr;
+&space;   int sock = RPC_ANYSOCK;
+&space;   register CLIENT *client;
+&space;   enum clnt_stat clnt_stat;
+&space;   char buf[1000], *s = buf;
+&space;   if ((client = clnttcp_create(&amp;server_addr,
+&space;        WINDOWPROG, WINDOWVERS, &amp;sock, 0, 0)) == NULL) {
+&space;       perror("clnttcp_create");
+
+&space;       exit(1);
+&space;   }
+&space;   total_timeout.tv_sec = 0;
+&space;   total_timeout.tv_usec = 0;
+&space;   while (scanf("%s", s) != EOF) {
+&space;       clnt_stat = clnt_call(client, RENDERSTRING_BATCHED,
+xdr_wrapstring, &amp;s, NULL, NULL, total_timeout);
+&space;       if (clnt_stat != RPC_SUCCESS) {
+&space;          clnt_perror(client, "batched rpc");
+&space;          exit(1);
+&space;       }
+&space;   }
+
+&space;   /* Now flush the pipeline */
+
+&space;   total_timeout.tv_sec = 20;
+&space;   clnt_stat = clnt_call(client, NULLPROC, xdr_void, NULL,
+&space;                         xdr_void, NULL, total_timeout);
+&space;   if (clnt_stat != RPC_SUCCESS) {
+&space;       clnt_perror(client, "rpc");
+&space;       exit(1);
+&space;   }
+&space;   clnt_destroy(client);
+&space;   exit(0); 
+}
+</CODE>
+<PARAGRAPH>Since the server does not send a message, the clients cannot be notified of any failures that occur. Therefore, clients are on their own when it comes to handling errors.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="45584">Authentication</TITLE><PARAGRAPH>In the examples presented so far, the caller never identifies itself to the server, and the server never requires an ID from the caller. Clearly, some network services, such as a network filesystem, require stronger security.</PARAGRAPH>
+<PARAGRAPH>The Silicon Graphics RPC authentication subsystem provides two protocols: AUTH_NONE and AUTH_UNIX. AUTH_UNIX provides only for identification of the client in the RPC call, while AUTH_NONE, the default, turns the subsystem off. Therefore, for these two protocols, no authentication is actually performed by the RPC code or library code prior to calling the program's implementation function.</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>For these two protocols, authentication is entirely the responsibility of the server application program. Applications should not rely on the veracity of the identification information in the AUTH_UNIX protocol without first taking steps to authenticate. An example of how to implement an authentication procedure is provided in <XREF IDREF="15504" TYPE="TITLE">&ldquo;Server-side Authentication.&rdquo;</XREF></NOTE>
+<PARAGRAPH>The authentication subsystem of the RPC package is open-ended. That is, other types of authentication are easy to support. However, this section deals only with the AUTH_UNIX authentication type, which is the only supported type other than AUTH_NONE.</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="16183">Client-side Authentication</TITLE><PARAGRAPH>In this example, a caller creates a new RPC client handle:</PARAGRAPH>
+<CODE>
+clnt = clntudp_create(address, prognum, versnum, wait, sockp)
+</CODE>
+<PARAGRAPH>The appropriate transport instance defaults to the associated authentication protocol:</PARAGRAPH>
+<CODE>
+clnt->cl_auth = authnone_create();
+</CODE>
+<PARAGRAPH>The RPC client can choose to use the AUTH_UNIX protocol by setting clnt&ndash;>cl_auth after creating the RPC client handle: </PARAGRAPH>
+<CODE>
+clnt->cl_auth = authunix_create_default();
+</CODE>
+<PARAGRAPH>This code causes each RPC call associated with clnt to carry with it this AUTH_UNIX protocol credentials structure:</PARAGRAPH>
+<CODE>
+/*
+* AUTH_UNIX protocol credentials
+*/
+struct authunix_parms {
+&space;   u_long aup_time;        /* credentials creation time */
+&space;   char   *aup_machname;   /* host name where client is */
+&space;   int    aup_uid;         /* client's UNIX effective uid */
+&space;   int    aup_gid;         /* client's current group ID */
+&space;   u_int  aup_len;         /* element length of aup_gids */
+&space;   int    *aup_gids;       /* array of groups user in */
+};
+</CODE>
+<PARAGRAPH>These fields are set by <FUNCTION>authunix_create_default</FUNCTION>() when you invoke the appropriate system calls.</PARAGRAPH>
+<PARAGRAPH>Since the RPC user created the AUTH_UNIX protocol structure, he or she is responsible for destroying it with:</PARAGRAPH>
+<CODE>
+auth_destroy(clnt->cl_auth);
+</CODE>
+<PARAGRAPH>You should use this call in all cases to conserve memory.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="15504">Server-side Authentication</TITLE><PARAGRAPH>Server-side authentication is necessary in cases where security needs to be enforced. Since by default, no authentication is provided, this section provides an example of how to implement an authentication of the UID that is passed in the AUTH_UNIX protocol.</PARAGRAPH>
+<PARAGRAPH>Consider the fields of a request handle passed to a service dispatch routine:</PARAGRAPH>
+<CODE>
+/*
+&space;* An RPC Service request
+&space;*/ 
+struct svc_req {
+&space; u_long  rq_prog;        /* service program number */
+&space; u_long  rq_vers;        /* service protocol vers num */
+&space; u_long  rq_proc;        /* desired procedure num */
+&space; struct opaque_auth rq_cred; /* raw credentials from wire */
+&space; caddr_t rq_clntcred;    /* read only credentials */
+};
+</CODE>
+<PARAGRAPH>The rq_cred is mostly opaque, except for one field of interest&mdash;the style or flavor of authentication credentials:</PARAGRAPH>
+<CODE>
+/*
+&space;* Authentication info.  Mostly opaque to the programmer.
+&space;*/ 
+struct opaque_auth {
+&space; enum_t  oa_flavor;    /* style of credentials */
+&space; caddr_t oa_base;      /* address of more auth stuff */
+&space; u_int   oa_length;    /* not to exceed MAX_AUTH_BYTES */
+}; 
+</CODE>
+<PARAGRAPH>The RPC package guarantees the following to the service dispatch routine: </PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>The request's rq_cred is well formed. Thus, the service implementor should inspect the request's rq_cred.oa_flavor to determine which style of authentication protocol the caller used. The service implementor may also want to inspect the other fields of rq_cred if the style is not one supported by the RPC package. </PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The request's rq_clntcred field is either NULL or points to a well&ndash;formed structure that corresponds to a supported style of authentication protocol. Only the AUTH_UNIX protocol is currently supported, so it is strongly recommended that the program check that the value of rq_cred.oa_flavor is AUTH_UNIX before rq_clntcred is cast to a pointer to the authunix_parms structure. If the authentication protocol in the client request differs from the protocol used in the server's rq_cred.oa_flavor value, errant behavior and possible security holes could result.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<NOTE><PREFIX>Note</PREFIX>In both cases, the authentication protocol does not verify the veracity of the request; it checks only that the structure format is adhered to.</NOTE>
+<PARAGRAPH>The following example implements authentication by first checking that the protocol used in the authentication credential (<ITALICS>rq_cred.oa_flavor</ITALICS>) is AUTH_UNIX. If it is, and since AUTH_UNIX provides no authentication, further checks are made to verify that the identity provided in the client identity structure, <ITALICS>rq_clntcred,</ITALICS> is valid. If either of these checks fails, the function <FUNCTION>svcerr_weakauth</FUNCTION>() is called to alert the server that security is not being enforced.</PARAGRAPH>
+<CODE>
+#include &lt;stdio.h>
+#include &lt;syslog.h>
+#include &lt;pwd.h>
+#include &lt;sys/types.h>
+#include &lt;sys/socket.h>
+#include &lt;netinet/in.h>
+#include &lt;netdb.h>
+#include &lt;rpc/rpc.h>  /* Required. */
+#include &lt;utmp.h>
+#include &lt;rpcsvc/rusers.h>
+
+#define MAX_LOG_MESSAGE 160
+
+int nuser_client_ok(struct svc_req *rqstp, SVCXPRT *transp);
+void nuser();
+
+main()
+{
+&space;   SVCXPRT *transp;
+&space;   transp = svcudp_create(RPC_ANYSOCK);
+&space;   if (transp == NULL){
+&space;       fprintf(stderr, "can't create an RPC server\n");
+&space;       exit(1);
+&space;   }
+&space;   pmap_unset(RUSERSPROG, RUSERSVERS);
+&space;   if (!svc_register(transp, RUSERSPROG, RUSERSVERS, nuser,
+&space;                     IPPROTO_UDP)) {
+&space;       fprintf(stderr, "can't register RUSER service\n");
+&space;       exit(1);
+&space;   }
+&space;   svc_run();  /* never returns */
+&space;   fprintf(stderr, "should never reach this point\n");
+&space;   exit(1);
+} 
+
+void
+nuser(rqstp, transp)
+struct svc_req *rqstp;
+SVCXPRT *transp;
+{
+&space;   uid_t uid;
+&space;   unsigned long nusers;
+&space;   struct authunix_parms *unix_cred;
+
+&space;   /* we don't care about authentication for the null procedure */
+&space;   if (rqstp->rq_proc == NULLPROC) {
+&space;       if (!svc_sendreply(transp, xdr_void, 0)) {
+&space;           fprintf(stderr, "can't reply to RPC call\n");
+&space;           exit(1);
+&space;       }
+&space;       return;
+&space;   }
+&space;   /* now get the uid */
+&space;   switch (rqstp->rq_cred.oa_flavor) {
+&space;   case AUTH_UNIX:
+&space;       /* perform authentication checks on client credentials */
+&space;       if (! nuser_client_ok(rqstp, transp)) {
+&space;           svcerr_weakauth(transp);
+&space;           return;
+&space;       }
+&space;       /* passed test */
+&space;       unix_cred = (struct authunix_parms *)rqstp->rq_clntcred;
+&space;       uid = unix_cred->aup_uid;
+&space;       break;
+&space;   case AUTH_NULL:
+&space;   default:
+&space;       svcerr_weakauth(transp);
+&space;       return;
+&space;   }
+&space;   switch (rqstp->rq_proc) {
+&space;   case RUSERSPROC_NUM:
+&space;       /* make sure the caller is allowed to call this procedure.  */
+&space;       if (uid == 16) {
+&space;           svcerr_systemerr(transp);
+&space;           return;
+&space;       }
+&space;       /* code here to compute the number of users and put
+&space;        * in variable nusers
+&space;        */
+&space;       if (!svc_sendreply(transp, xdr_u_long, &amp;nusers)) {
+&space;           fprintf(stderr, "can't reply to RPC call\n");
+&space;           exit(1);
+&space;       }
+&space;       return;
+&space;   default:
+&space;       svcerr_noproc(transp);
+&space;       return;
+&space;   }
+} /* nuser */
+
+static int logging_successful_requests = 1;
+
+/* This routine attempts to verify that the client user is
+&space;* authorized access on the server host.  A value of 0 is
+&space;* returned to indicate that the client user is not authorized.
+&space;* Otherwize the value returned is 1. */
+int
+nuser_client_ok(struct svc_req *rqstp, SVCXPRT *transp)
+{
+&space;   uid_t uid;
+&space;   char *user = NULL;
+&space;   struct authunix_parms *unix_cred;
+&space;   struct hostent *host_entry = NULL;
+&space;   struct passwd *passwd_entry;
+&space;   char log_message[MAX_LOG_MESSAGE];
+
+&space;   static u_long peer_addr = 0;
+&space;   static char *client_host = NULL;
+&space;   static u_long client_host_addr = 0;
+
+&space;   if (transp->xp_raddr.sin_port >= IPPORT_RESERVED) {
+&space;       sprintf(log_message, "Rejected request, "
+&space;                "non-priviledged port %d", transp->xp_raddr.sin_port);
+&space;       syslog(LOG_NOTICE | LOG_AUTH, log_message);
+&space;       return 0;
+&space;   }
+&space;   /* Determine the client host name and address. */
+&space;   if (peer_addr != transp->xp_raddr.sin_addr.s_addr) {
+&space;       host_entry = gethostbyaddr(&amp;transp->xp_raddr.sin_addr,
+&space;                                   sizeof(struct in_addr),
+&space;                                   AF_INET);
+&space;       if (host_entry == NULL) {
+&space;           sprintf(log_message, "Rejected request, "
+&space;                    "unknown client host at address 0x%08x",
+&space;                    transp->xp_raddr.sin_addr);
+&space;           syslog(LOG_NOTICE | LOG_AUTH, log_message);
+&space;           return 0;
+&space;       }
+&space;       peer_addr = transp->xp_raddr.sin_addr.s_addr;
+&space;       if (client_host != NULL) {
+&space;           free(client_host);
+&space;       }
+&space;       client_host = strdup(host_entry->h_name);
+&space;       client_host_addr = *(u_long *) host_entry->h_addr;
+&space;   }
+
+&space;   /* Determine the user name. */
+&space;   unix_cred = (struct authunix_parms *)rqstp->rq_clntcred;
+&space;   uid = unix_cred->aup_uid;
+&space;   passwd_entry = getpwuid(uid);
+&space;   if (passwd_entry == NULL) {
+&space;       sprintf(log_message, "Rejected request, "
+&space;                "unknown uid %d from host %s",
+&space;                uid, client_host);
+&space;       syslog(LOG_NOTICE | LOG_AUTH, log_message);
+&space;       return 0;
+&space;   }
+
+&space;   user = strdup(passwd_entry->pw_name);
+&space;   if (passwd_entry->pw_passwd != NULL &amp;&amp;
+&space;       *passwd_entry->pw_passwd != '\0' &amp;&amp;
+&space;       ruserok(client_host, uid == 0, user, user) &lt; 0) {
+&space;       sprintf(log_message, "Rejected request by %s at %s",
+&space;                user, client_host);
+&space;       syslog(LOG_NOTICE | LOG_AUTH, log_message);
+&space;       free(user);
+&space;       return 0;
+&space;   }
+
+&space;   if (logging_successful_requests) {
+&space;       if (user != NULL) {
+&space;           sprintf(log_message, "Granted request by %s at %s",
+&space;                    user, client_host);
+&space;       } else {
+&space;           sprintf(log_message, "Granted request by uid %d at %s",
+&space;                    uid, client_host);
+&space;       }
+&space;       syslog(LOG_INFO | LOG_AUTH, log_message);
+&space;   }
+&space;   if (user != NULL) {
+&space;       free(user);
+&space;   }
+&space;   return 0;
+} /* nuser_client_ok */
+</CODE>
+<PARAGRAPH>Several points should be noted:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>It is customary not to check the authentication parameters associated with the NULLPROC (procedure number zero).</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>If the authentication parameter's type is not suitable for your service, you should call <FUNCTION>svcerr_weakauth()</FUNCTION>.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The service protocol itself should return status for access denied; in the case of our example, the protocol does not have such a status, so we call the service primitive <FUNCTION>svcerr_systemerr()</FUNCTION>&space;instead.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>The last point underscores the relationship between the RPC authentication package and the services&mdash;RPC with the AUTH_UNIX protocol is concerned only with identification and not with individual services' authentication or access control. The services themselves must implement these policies, and they must reflect these policies as return statuses in their protocols.</PARAGRAPH>
+<PARAGRAPH>It is important to recognize that the AUTH_ UNIX credential is passed in the clear across the network and can be easily modified or counterfeited. There are no checks performed on the AUTH_ UNIX credential except to make sure it is correctly formatted.</PARAGRAPH>
+<PARAGRAPH>Services that provide functions that require root permissions, and accept requests bearing AUTH_UNIX credentials, should take steps to perform authentication of the information in the AUTH_UNIX credential before relying on that information for access control decisions. </PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>Limit the service to a reserved port. This requires that the originator have sufficient privilege to create a port with an address less than 1024.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Verify that the source IP address of the RPC request is from the machine named in the RPC AUTH_UNIX credential. The name corresponding to the source IP address should be in the list of addresses for the name.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Ensure that the user name/UID is known to the local system. This requires that the originator be in the network name service.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Consider using <FUNCTION>ruserok()</FUNCTION> (see <REFPAGE>ruserok(3N)</REFPAGE>) or an equivalent functionality to limit access to a list of known hosts.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>Further authentication such as encryption, digital signatures, Kerberos, and time stamps can be incorporated into the body of the RPC request. Consult references on network security such as <DOCTITLE>Applied Cryptography, Second Edition</DOCTITLE>, for more examples.</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Using inetd</TITLE><PARAGRAPH>An RPC server can be started from inetd. Call the service creation routine as follows (since inetd passes a socket as file descriptor 0):</PARAGRAPH>
+<CODE>
+transp = svcudp_create(0);    /* For UDP */ 
+transp = svctcp_create(0,0,0);/* For listener TCP sockets */ 
+transp = svcfd_create(0,0,0); /* For connected TCP sockets */ 
+</CODE>
+<PARAGRAPH>In addition, you should call <FUNCTION>svc_register()</FUNCTION>&space;as:</PARAGRAPH>
+<CODE>
+svc_register(transp, PROGNUM, VERSNUM, service, 0);
+</CODE>
+<PARAGRAPH>The final flag is 0, since the program will already be registered by inetd.</PARAGRAPH>
+<PARAGRAPH>Remember that if you want to exit from the server process and return control to inetd, you must explicitly exit, since <FUNCTION>svc_run()</FUNCTION>&space;never returns.</PARAGRAPH>
+<PARAGRAPH>Entries in /usr/etc/inetd.conf for RPC services should be in one of these two formats:</PARAGRAPH>
+<CODE>
+p_name/version dgram  rpc/udp wait user server args
+p_name/version stream rpc/tcp wait user server args
+</CODE>
+<PARAGRAPH>In these entries, p_name is the symbolic name of the program as it appears in <REFPAGE>rpc(4)</REFPAGE>; server is the program implementing the server; and version is the version number of the service. By convention, the first argument must be the program's name. For more information about inetd, see <REFPAGE>inetd(1M)</REFPAGE>.</PARAGRAPH>
+<PARAGRAPH>If the same program handles multiple versions, the version number can be a range. For example:</PARAGRAPH>
+<EXAMPLE>
+rstatd/1-2 dgram rpc/udp wait root /usr/etc/rpc.rstatd rstatd
+</EXAMPLE>
+<PARAGRAPH>For server programs that handle multiple services or protocols, inetd allocates socket descriptors to protocols based on lexicographic order of service and protocol names. </PARAGRAPH>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE>More Examples</TITLE><PARAGRAPH>The examples in this section illustrate a program version number, TCP use, and a callback procedure.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>Program Version Number</TITLE><PARAGRAPH>By convention, the first version number of program PROG is PROGVERS_ORIG, and the most recent version is PROGVERS. Suppose there is a new version of the user program that returns an unsigned short&space;rather than a long.&space;If we name this version RUSERSVERS_SHORT, a server that wants to support both versions does a double register:</PARAGRAPH>
+<CODE>
+if (!svc_register(transp, RUSERSPROG, RUSERSVERS_ORIG,
+&space;                 nuser, IPPROTO_TCP)) {
+&space;   fprintf(stderr, "can't register RUSER service\n");
+&space;   exit(1);
+}
+if (!svc_register(transp, RUSERSPROG, RUSERSVERS_SHORT,
+&space;                 nuser, IPPROTO_TCP)) {
+&space;   fprintf(stderr, "can't register RUSER service\n");
+&space;   exit(1);
+}
+</CODE>
+<PARAGRAPH>Both versions can be handled by the same C procedure:</PARAGRAPH>
+<CODE>
+nuser(struct svc_req *rqstp, SVCXPRT *transp)
+{
+&space;   unsigned long nusers;
+&space;   unsigned short nusers2;
+&space;   switch (rqstp->rq_proc) {
+&space;   case NULLPROC:
+&space;       if (!svc_sendreply(transp, xdr_void, 0)) {
+&space;           fprintf(stderr, "can't reply to RPC call\n");
+&space;           exit(1);
+&space;       }
+&space;       return;
+
+&space;   case RUSERSPROC_NUM:
+&space;       /* Code here to compute the number of users and
+&space;        * assign it to the variable nusers
+&space;        */
+&space;       nusers2 = nusers;
+&space;       switch (rqstp->rq_vers) {
+&space;       case RUSERSVERS_ORIG:
+&space;          if (!svc_sendreply(transp, xdr_u_long,
+&space;                             &amp;nusers)) {
+&space;            fprintf(stderr, "can't reply to RPC call\n");
+&space;            }
+&space;           break;
+&space;       case RUSERSVERS_SHORT:
+&space;          if (!svc_sendreply(transp,xdr_u_short,&amp;nusers2)) {
+&space;               fprintf(stderr,"can't reply to RPC call\n");
+&space;           }
+&space;           break;
+&space;       }
+&space;   default:
+&space;       svcerr_noproc(transp);
+&space;       return;
+&space;   }
+}
+</CODE>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="24443">TCP</TITLE><PARAGRAPH>This example is essentially rcp. The initiator of the RPC <FUNCTION>snd()</FUNCTION>&space;call sends its standard input to the server <FUNCTION>rcv()</FUNCTION>, which prints it on standard output. The RPC call uses TCP. This example also illustrates an XDR procedure that behaves differently on serialization than on deserialization:</PARAGRAPH>
+<CODE>
+/*
+&space;* The xdr routine:
+&space;* on decode, read from wire, write onto fp
+&space;* on encode, read from fp, write onto wire
+&space;*/
+#include &lt;stdio.h>
+#include &lt;rpc/rpc.h>
+
+xdr_rcp(XDR *xdrs, FILE *fp)
+{
+&space;   unsigned long size;
+&space;   char buf[MAXCHUNK], *p;
+&space;   
+&space;   if (xdrs->x_op == XDR_FREE)  /* nothing to free */
+&space;       return 1;
+&space;   while (1) {
+&space;       if (xdrs->x_op == XDR_ENCODE) {
+&space;           if ((size = fread (buf, sizeof(char),
+&space;                MAXCHUNK, fp)) == 0 &amp;&amp; ferror(fp)) {
+&space;               fprintf(stderr, "can't fread\n");
+&space;               exit(1);
+&space;           }
+&space;       }
+&space;       p = buf;
+&space;       if (!xdr_bytes(xdrs, &amp;p, &amp;size, MAXCHUNK))
+&space;           return 0;
+&space;       if (size == 0)
+&space;           return 1;
+&space;       if (xdrs->x_op == XDR_DECODE) {
+&space;          if (fwrite(buf, sizeof(char), size, fp) != size) {
+&space;           fprintf(stderr, "can't fwrite\n");
+&space;           exit(1);
+&space;          }
+&space;       }
+&space;   } 
+}
+
+/* The sender routines */
+#include &lt;stdio.h>
+#include &lt;netdb.h>
+#include &lt;rpc/rpc.h>
+#include &lt;sys/socket.h>
+#include &lt;sys/time.h>
+main(int argc, char **argv)
+{
+&space;   int xdr_rcp();
+&space;   int err;
+
+&space;   if (argc &lt; 2) {
+&space;       fprintf(stderr, "usage: %s server-name\n", argv[0]);
+&space;       exit(-1);
+&space;   }
+&space;   if ((err = callrpctcp(argv[1], RCPPROG, RCPPROC_FP,
+&space;        RCPVERS, xdr_rcp, stdin, xdr_void, 0)) != 0) {
+&space;       clnt_perrno(err);
+&space;       fprintf(stderr, " can't make RPC call\n");
+&space;       exit(1);
+&space;   }
+&space;   exit(0); 
+}
+
+callrpctcp(host, prognum, procnum, versnum, inproc, in,
+&space;          outproc, out)
+char *host;
+int prognum;
+int procnum;
+int versnum;
+xdrproc_t inproc;
+char *in;
+xdrproc_t outproc;
+char *out;
+{
+&space;   struct sockaddr_in server_addr;
+&space;   int socket = RPC_ANYSOCK;
+&space;   enum clnt_stat clnt_stat;
+&space;   struct hostent *hp;
+&space;   register CLIENT *client;
+&space;   struct timeval total_timeout;
+&space;   if ((hp = gethostbyname(host)) == NULL) {
+&space;       herror(host);
+&space;       return (-1);
+&space;   }
+&space;   bcopy(hp->h_addr, (caddr_t)&amp;server_addr.sin_addr,
+&space;         hp->h_length);
+&space;   server_addr.sin_family = AF_INET;
+&space;   server_addr.sin_port = 0;
+&space;   if ((client = clnttcp_create(&amp;server_addr, prognum,
+&space;        versnum, &amp;socket, BUFSIZ, BUFSIZ)) == NULL) {
+&space;       perror("rpctcp_create");
+&space;       return(-1);
+&space;   }
+&space;   total_timeout.tv_sec = 20;
+&space;   total_timeout.tv_usec = 0;
+&space;   clnt_stat = clnt_call(client, procnum, inproc, in,
+&space;                         outproc, out, total_timeout);
+&space;   clnt_destroy(client);
+&space;   return (int)clnt_stat; 
+}
+
+/* The receiving routines */
+#include &lt;stdio.h>
+#include &lt;rpc/rpc.h>
+
+main()
+{
+&space;   register SVCXPRT *transp;
+&space;   int rcp_service(), xdr_rcp();
+&space;   if ((transp = svctcp_create(RPC_ANYSOCK, 1024, 1024))
+&space;       == NULL) {
+&space;       fprintf(stderr, "svctcp_create: error\n");
+&space;       exit(1);
+&space;   }
+&space;   pmap_unset(RCPPROG, RCPVERS);
+&space;   if (!svc_register(transp, RCPPROG, RCPVERS, rcp_service,
+&space;                     IPPROTO_TCP)) {
+&space;       fprintf(stderr, "svc_register: error\n");
+&space;       exit(1);
+&space;   }
+&space;   svc_run();              /* never returns */
+&space;   fprintf(stderr, "svc_run should never return\n");
+&space;   exit(1);
+}
+
+rcp_service(rqstp, transp)
+register struct svc_req *rqstp;
+register SVCXPRT *transp; 
+{
+&space;   switch (rqstp->rq_proc) {
+&space;   case NULLPROC:
+&space;       if (svc_sendreply(transp, xdr_void, 0) == 0) {
+&space;           fprintf(stderr, "err: rcp_service\n");
+&space;           return(1);
+&space;       }
+&space;       return;
+&space;   case RCPPROC_FP:
+&space;       if (!svc_getargs(transp, xdr_rcp, stdout)) {
+&space;           svcerr_decode(transp);
+&space;           return(1);
+&space;       }
+&space;       if (!svc_sendreply(transp, xdr_void, 0)) {
+&space;           fprintf(stderr, "can't reply\n");
+&space;           return(1);
+&space;       }
+&space;       return(0);
+&space;   default: 
+&space;       svcerr_noproc(transp);
+&space;       return(1);
+&space;   }
+}
+</CODE>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Callback Procedures</TITLE><PARAGRAPH>In some cases (for example, in remote debugging), it's useful for a server to become a client and make an RPC callback to its client process. </PARAGRAPH>
+<PARAGRAPH>For example, if the client is a window system program and the server is a debugger running on a remote machine, when the user clicks a mouse button in the debugging window, the click is converted to a debugger command, and an RPC call is made to the server (where the debugger is actually running) telling it to execute that command. </PARAGRAPH>
+<PARAGRAPH>When the debugger hits a breakpoint, however, the roles are reversed. The debugger wants to make an RPC call to the window program to notify the user of the breakpoint.</PARAGRAPH>
+<PARAGRAPH>To do an RPC callback, you need a program number on which to make the RPC call (see <XREF IDREF="10975" TYPE="TITLE">&ldquo;Assigning RPC Program Numbers&rdquo; in Chapter&nbsp;3</XREF> for more information). Because the callback will be a dynamically generated program number, it should be in the transient range, 0x40000000&mdash;0x5fffffff. </PARAGRAPH>
+<PARAGRAPH>The <FUNCTION>gettransient()</FUNCTION>&space;routine returns a valid program number in the transient range and registers it with the port mapper (see <XREF IDREF="62513" TYPE="TITLE">&ldquo;The Port Mapper Programs&rdquo; in Chapter&nbsp;3</XREF> for more information). The program talks only to the port mapper running on the same machine as the <FUNCTION>gettransient()</FUNCTION>&space;routine itself.</PARAGRAPH>
+<PARAGRAPH>The call to <FUNCTION>pmap_set()</FUNCTION>&space;is a test-and-set operation. <FUNCTION>pmap_set()</FUNCTION> indivisibly tests whether a program number has already been registered; if the number has not been registered, <FUNCTION>pmap_set()</FUNCTION> reserves it. Upon return, the sockp argument will contain a socket that can be used as the argument to a <FUNCTION>svcudp_create()</FUNCTION>&space;or <FUNCTION>svctcp_create()</FUNCTION>&space;call.</PARAGRAPH>
+<CODE>
+#include &lt;stdio.h>
+#include &lt;rpc/rpc.h>
+#include &lt;sys/socket.h>
+#include &lt;netinet/in.h>
+
+gettransient(proto, vers, sockp)
+int proto, vers, *sockp;
+{
+&space;   static int prognum = 0x40000000;
+&space;   int s, len, socktype;
+&space;   struct sockaddr_in addr;
+&space;   switch(proto) {
+&space;       case IPPROTO_UDP:
+&space;           socktype = SOCK_DGRAM;
+&space;           break;
+&space;       case IPPROTO_TCP:
+&space;           socktype = SOCK_STREAM;
+&space;           break;
+&space;       default:
+&space;           fprintf(stderr, "unknown protocol type\n");
+&space;           return(0);
+&space;   }
+&space;   if (*sockp == RPC_ANYSOCK) {
+&space;       if ((s = socket(AF_INET, socktype, 0)) &lt; 0) {
+&space;           perror("socket");
+&space;           return(0);
+&space;       }
+&space;       *sockp = s;
+&space;   } else
+&space;       s = *sockp;
+&space;   addr.sin_addr.s_addr = 0;
+&space;   addr.sin_family = AF_INET;
+&space;   addr.sin_port = 0;
+&space;   len = sizeof(addr);
+&space;        /* may be already bound, so don't check for error*/
+&space;   bind(s, &amp;addr, len);
+&space;   if (getsockname(s, &amp;addr, &amp;len)&lt; 0) {
+&space;       perror("getsockname");
+&space;       return(0);
+&space;   } 
+&space;   while (!pmap_set(prognum++, vers, proto,
+&space;                    ntohs(addr.sin_port)))
+&space;       continue;
+&space;   return (prognum-1);
+}
+</CODE>
+<NOTE><PREFIX>Note</PREFIX>The call to <FUNCTION>ntohs()</FUNCTION> is necessary to ensure that the port number in addr.sin_port, which is in network byte order, is passed in host byte order (as <FUNCTION>pmap_set()</FUNCTION> expects). See <REFPAGE>byteorder(3N)</REFPAGE> for more information about network address conversion from network to host byte order.</NOTE>
+<PARAGRAPH>The following programs illustrate how to use the <FUNCTION>gettransient()</FUNCTION>&space;routine. The client makes an RPC call to the server, passing it a transient program number. Next, the client waits to receive a callback from the server at that program number. The server registers the program EXAMPLEPROG so it can receive the RPC call informing it of the callback program number. Then, at some random time (on receiving a SIGALRM signal in this example), it sends a callback RPC call, using the program number it received earlier.</PARAGRAPH>
+<CODE>
+/* client */
+#include &lt;stdio.h>
+#include &lt;rpc/rpc.h>
+
+void callback();
+char hostname[256];
+
+main()
+{
+&space;   int x, ans, s;
+&space;   SVCXPRT *xprt;
+&space;   
+&space;   gethostname(hostname, sizeof(hostname));
+&space;   s = RPC_ANYSOCK;
+&space;   x = gettransient(IPPROTO_UDP, 1, &amp;s);
+&space;   fprintf(stderr, "client gets prognum %d\n", x);
+&space;   if ((xprt = svcudp_create(s)) == NULL) {
+&space;       fprintf(stderr, "rpc_server: svcudp_create\n");
+&space;       exit(1);
+&space;   }
+&space;   /* protocol is 0 - gettransient does registering */
+&space;   (void) svc_register(xprt, x, 1, callback, 0);
+&space;   ans = callrpc(hostname, EXAMPLEPROG, EXAMPLEVERS,
+&space;         EXAMPLEPROC_CALLBACK, xdr_int, &amp;x, xdr_void, 0);
+&space;   if ((enum clnt_stat) ans != RPC_SUCCESS) {
+&space;       fprintf(stderr, "call:");
+&space;       clnt_perrno(ans);
+&space;       fprintf(stderr, "\n");
+&space;   }
+&space;   svc_run();
+&space;   fprintf(stderr,
+&space;           "Error: svc_run shouldn't have returned\n");
+&space;   exit(1);
+} 
+
+void callback (rqstp, transp)
+&space;   register struct svc_req *rqstp;
+&space;   register SVCXPRT *transp; 
+{
+&space;   switch (rqstp->rq_proc) {
+&space;   case 0:
+&space;       if (!svc_sendreply(transp, xdr_void, 0)) {
+&space;           fprintf(stderr, "err: exampleprog\n");
+&space;           return(1);
+&space;       }
+&space;       return(0);
+&space;   case 1:
+&space;       if (!svc_getargs(transp, xdr_void, 0)) {
+&space;           svcerr_decode(transp);
+&space;           return(1);
+&space;       }
+&space;       fprintf(stderr, "client got callback\n");
+&space;       if (!svc_sendreply(transp, xdr_void, 0)) {
+&space;           fprintf(stderr, "err: exampleprog");
+&space;           return(1);
+&space;       }
+&space;   }
+}
+
+
+
+/* server */
+#include &lt;stdio.h>
+#include &lt;rpc/rpc.h>
+#include &lt;sys/signal.h>
+
+char *getnewprog();
+char hostname[256];
+void docallback();
+int pnum;           /*program number for callback routine */ 
+
+main()
+{
+&space;   gethostname(hostname, sizeof(hostname));
+&space;   registerrpc(EXAMPLEPROG, EXAMPLEVERS,
+&space;               EXAMPLEPROC_CALLBACK, getnewprog, xdr_int,
+&space;               xdr_void);
+&space;   fprintf(stderr, "server going into svc_run\n");
+&space;   signal(SIGALRM, docallback);
+&space;   alarm(10);
+&space;   svc_run();
+&space;   fprintf(stderr,
+&space;           "Error: svc_run shouldn't have returned\n");
+&space;   exit(1);
+} 
+
+char *getnewprog(pnump)
+char *pnump;
+{
+&space;   pnum = *(int *)pnump;
+&space;   return NULL;
+} 
+
+void docallback()
+{
+&space;   int ans;
+&space;   ans = callrpc(hostname, pnum, 1, 1, xdr_void, 0,
+&space;                 xdr_void, 0);
+&space;   if (ans != 0) {
+&space;       fprintf(stderr, "server: %s", clnt_sperrno(ans));
+&space;   }
+}
+</CODE>
+</SECTION2>
+</SECTION1>
+</CHAPTER>

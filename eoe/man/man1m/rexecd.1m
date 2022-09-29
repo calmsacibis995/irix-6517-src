@@ -1,0 +1,231 @@
+'\"macro stdmacro
+.\" Copyright (c) 1983 Regents of the University of California.
+.\" All rights reserved.  The Berkeley software License Agreement
+.\" specifies the terms and conditions for redistribution.
+.\"
+.\"	@(#)rexecd.8c	6.2 (Berkeley) 5/9/86
+.\"
+.TH REXECD 1M
+.UC 5
+.SH NAME
+rexecd \- remote execution server
+.SH SYNOPSIS
+.B /usr/etc/rexecd
+[
+.B -l
+]
+.SH DESCRIPTION
+.I Rexecd
+is the server for the 
+.IR rexec (3N)
+routine.  The server provides remote execution facilities
+with authentication based on user names and
+passwords.
+\fBNOTE\fP: password aging is not supported by this daemon.
+.PP
+.I Rexecd
+listens for service requests at the port indicated in
+the ``exec'' service specification; see
+.IR services (4).
+When a service request is received the following protocol
+is initiated:
+.IP 1)
+The server reads characters from the socket up
+to a null (`\e0') byte.  The resultant string is
+interpreted as an ASCII number, base 10.
+.IP 2)
+If the number received in step 1 is non-zero,
+it is interpreted as the port number of a secondary
+stream to be used for the 
+.BR stderr .
+A second connection is then created to the specified
+port on the client's machine.
+.IP 3)
+A null-terminated user name of at most 16 characters
+is retrieved on the initial socket.
+.IP 4)
+A null-terminated, unencrypted password of at most
+16 characters is retrieved on the initial socket.  
+.IP 5)
+A null-terminated command to be passed to a
+shell is retrieved on the initial socket.  The length of
+the command is limited by the upper bound on the size of
+the system's argument list.  
+.IP 6)
+.I Rexecd
+then validates the user as is done at login time
+and, if the authentication was successful, changes
+to the user's home directory, and establishes the user
+and group protections of the user.
+If any of these steps fail the connection is
+aborted with a diagnostic message returned.
+.IP 7)
+A null byte is returned on the initial socket
+and the command line is passed to the normal login
+shell of the user.  The
+shell inherits the network connections established
+by
+.IR rexecd .
+.SH SHARE II ACTIONS
+If the Share II system is installed and enabled, then
+the following privilege and resource checks are made
+immediately after validation checks are complete
+(\f4rshd\f1(1))
+but before the shell is started:
+.IP 1. 4n
+If your
+\f4nologin\f1
+flag is set, or you already have another connection and your
+\f4onelogin\f1
+flag is set, then you are denied connection.
+.IP 2.
+If a disk usage exceeds the soft disk limit in any of your domains,
+then a message is printed and you are given a
+\f2warning\f1.
+If you accumulate too many warnings, further connection attempts are denied and
+you must see your subadministrator to rectify the situation.
+Whenever you connect with no disk usages in excess of any soft limits,
+all your accumulated warnings are cleared.
+.IP 3.
+If you do not have permission to use an
+\f4rexec\f1
+connection, as determined by the terminal permission flag
+\f4terminal.flag.rexec\f1,
+then you are denied connection.
+.IP 4.
+Some installations place limits on terminal connect-time,
+which apply equally to connection by way of 
+\f4rexec\f1.
+If you have already reached your connect-time limit, then you are
+denied connection.
+Otherwise, if you have a limit, your remaining connect-time is printed.
+.PP
+If all these checks are passed,
+\f4rexecd\f1
+proceeds normally.
+.PD
+.SH OPTIONS
+.TP
+.B -l
+This option causes all successful accesses to be logged to
+.IR syslogd (1M)
+as
+.I auth.info
+messages.
+.SH FILES
+.TP \w'/etc/limconf'u+3m
+\f4/etc/limconf\f1
+The compiled Share II configuration file (machine readable).
+.SH SEE ALSO
+login(1), rshd(1M), rexec(3N), passwd(4), share(5)
+.SH DIAGNOSTICS
+Except for the last one listed below,
+all diagnostic messages are returned on the initial socket,
+after which any network connections are closed.
+An error is indicated by a leading byte with a value of
+1 (0 is returned in step 7 above upon successful completion
+of all the steps prior to the command execution).
+.PP
+.B ``username too long''
+.br
+The name is
+longer than 16 characters.
+.PP
+.B ``password too long''
+.br
+The password is longer than 16 characters.
+.PP
+.B ``command too long ''
+.br
+The command line passed exceeds the size of the argument
+list (as configured into the system).
+.PP
+.B ``Login incorrect.''
+.br
+No password file entry for the user name existed.
+(Also logged to the 
+.IR syslogd (1M)
+daemon as an
+.I auth.notice 
+message.)
+.PP
+.B ``Password incorrect.''
+.br
+The wrong was password supplied.
+(Also logged to the 
+.IR syslogd (1M)
+daemon as an 
+.I auth.notice 
+message.)
+.PP
+.B ``No remote directory.''
+.br
+The 
+.I chdir
+command to the home directory failed.
+.PP
+.B ``Try again.''
+.br
+A
+.I fork
+by the server failed.
+.PP
+.B ``<shellname>: ...''
+.br
+The user's login shell could not be started.
+This message is returned
+on the connection associated with the
+.BR stderr ,
+and is not preceded by a flag byte.
+.br
+.PP
+The Share II specific diagnostic messages are listed as follows:
+.PP
+\f3``Warning <X> of <Y>: soft disk limit exceeded.''\fP
+.br
+One of your domains has a disk usage in excess of its soft limit.
+.PP
+\f3``Connection denied.  Too many warnings.''\fP
+.br
+You have reached your warning limit.  See your subadministrator.
+.PP
+\f3``Connection denied.  Already logged in \- only one login allowed.''\fP
+.br
+You are already connected to the system and your
+\f4onelogin\f1
+flag is set.
+.PP
+\f3``Connection denied.  Currently barred from logging in.''\fP
+.br
+Your
+\f4nologin\f1
+flag is set.
+.PP
+\f3``Connection denied.  No permission to use this terminal.''\fP
+.br
+You are not allowed to log in at this terminal because of a clear
+\f4terminal.flag.rexec\f1
+flag.
+.PP
+\f3``You have a remaining terminal connect-time of <Y>.''\fP
+.br
+You may use this connection until you have used up your remaining
+connect-time, at which point you are forced to disconnect.
+.PP
+\f3``Connection denied.  Terminal connect-time limit exceeded.''\fP
+.br
+You have already reached your terminal connect-time limit.
+.PP
+\f3``Share not configured \- no limit checks.''\fP
+.br
+The configuration file is unreadable for some reason, so
+terminal privileges, connect-time limits and disk space limits
+could not be checked.
+.SH BUGS
+Indicating ``Login incorrect'' as opposed to ``Password incorrect''
+is a security breach which allows people to probe a system for users
+with null passwords.
+.PP
+A facility to allow all data and password exchanges to be encrypted should be
+present.
+'\".so /pubs/tools/origin.bsd

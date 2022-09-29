@@ -1,0 +1,2 @@
+cat Makefile
+doio.sh

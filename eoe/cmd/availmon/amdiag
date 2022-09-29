@@ -1,0 +1,459 @@
+#! /sbin/sh
+#
+#ident "$Revision: 1.13 $"
+#
+# amdiag -- live diagnosis reporting
+#
+
+
+AMRVERSIONNUM=2.1
+AVAILDIR=/var/adm/avail
+SAVEDIR=$AVAILDIR/.save
+CONFIGDIR=$AVAILDIR/config
+USRETCDIR=/usr/etc
+OPTIONS=`cat /etc/config/savecore.options 2> /dev/null`
+CRASHDIR=""
+if [ "$OPTIONS" != "" ] ; then
+    for DIR in $OPTIONS ; do
+	if [ -d "$DIR" ] ; then
+	    CRASHDIR=$DIR
+	fi
+    done
+    if [ "$CRASHDIR" = "" ] ; then
+	CRASHDIR=/var/adm/crash
+    fi
+else
+    CRASHDIR=/var/adm/crash
+fi
+
+AMREGISTER=$USRETCDIR/amregister
+AMCONFIG=$USRETCDIR/amconfig
+AMSYSINFO=$USRETCDIR/amsysinfo
+AMNOTIFY=$USRETCDIR/amnotify
+AMSYSLOG=$USRETCDIR/amsyslog
+AMTIME1970=$USRETCDIR/amtime1970
+AMTICKERD=$USRETCDIR/amtickerd
+
+TICKFILE=$AVAILDIR/lasttick
+TICKDURATION=300
+
+SYSLOGDCONF=/etc/syslog.conf
+
+if [ -f "$SYSLOGDCONF" ] ; then
+    SYSLOGFILE=`cat $SYSLOGDCONF | grep -v "^#" | grep amfilter | awk '{print $NF}' 2> /dev/null`
+    if [ "z$SYSLOGFILE" = "z" -o ! -f "$SYSLOGFILE" ] ; then
+	SYSLOGFILE=/var/adm/SYSLOG
+    fi
+else
+    SYSLOGFILE=/var/adm/SYSLOG
+fi
+
+# Use SYSLOGFILE to generate OSYSLOGFILE
+OSYSLOGFILE=`dirname $SYSLOGFILE`\/o`basename $SYSLOGFILE`
+LASTSYSLOG=$SAVEDIR/lastsyslog
+
+LOGFILE=$AVAILDIR/availlog
+PREVSTARTFILE=$SAVEDIR/prevstart
+EVENTFILE=$SAVEDIR/event
+
+SINCE1970=`$AMTIME1970`
+SINCE1970DATE=`$AMTIME1970 -d $SINCE1970`
+BOUND=-1
+
+AUTOEMAIL=$CONFIGDIR/autoemail
+SHUTDOWNREASONFILE=$CONFIGDIR/shutdownreason
+TICKERDFILE=$CONFIGDIR/tickerd
+AUTOEMAILLIST=$CONFIGDIR/autoemail.list
+
+AVAILREPFILE=$CRASHDIR/availreport.$$
+DIAGREPFILE=$CRASHDIR/diagreport.$$
+
+TMPFILE=$CRASHDIR/tmpfile
+DIFFFILE=$CRASHDIR/difffile
+TMPSORTFILE=$CRASHDIR/tmpsortfile
+
+PLATFORM=`uname -m`
+
+comparefile() {
+# arg: $1 = saved configuration file
+#      $2 = configuration file to be compared
+# ret: 0 = files are different
+#      1 = $1 missing or files are the same
+
+    if [ ! -f $SAVEDIR/$1 ] ; then
+	return 1
+    fi
+
+    if [ ! -f $2 ] ; then
+	echo "System configuration file $2 is missing!!"
+	echo "Please try re-installing it"
+	logger -t availmon -p err -i availmon config file $2 is missing
+	return 1
+    fi
+
+    diff $SAVEDIR/$1 $2 > /dev/null
+    if  [ $? -ne 0 ] ; then
+	return 0
+    else
+	return 1
+    fi
+}
+
+compareandsavefile() {
+# arg: $1 = saved configuration file
+#      $2 = configuration file to be compared
+# ret: 0 = files are different
+#      1 = files are the same
+
+    diff $SAVEDIR/$1 $2 > $DIFFFILE
+    if  [ $? -ne 0 ] ; then
+	cp $2 $SAVEDIR/$1
+	return 0
+    else
+	return 1
+    fi
+}
+
+checkandappend() {
+# due to hinv's bug that cannot generate hinv output in a special
+# order, availmon needs to sort hinv's output and then compare with
+# saved sorted data
+
+    if [ "$1" = "hinv" ] ; then
+	if [ -x $3 ] ; then
+	    if [ ! -f $SAVEDIR/$1 ] ; then
+		touch $SAVEDIR/$1
+	    fi
+	    if [ ! -f $SAVEDIR/$1.sort ] ; then
+		touch $SAVEDIR/$1.sort
+	    fi
+	    $3 $4 $5 $6 $7 > $TMPFILE
+	    sort $TMPFILE > $TMPSORTFILE
+	    if compareandsavefile $1.sort $TMPSORTFILE ; then
+		NOINSTE=0
+		diff $SAVEDIR/$1 $TMPFILE > $DIFFFILE
+		cp $TMPFILE $SAVEDIR/$1
+		echo "$2|Begin" >> $DIAGREPFILE
+		cat $TMPFILE  >> $DIAGREPFILE
+		echo "$2|End" >> $DIAGREPFILE
+		echo "$2|Begin" >> $LOGFILE
+		cat $DIFFFILE  >> $LOGFILE
+		echo "$2|End" >> $LOGFILE
+	    fi
+	fi
+    elif [ -x $3 ] ; then
+	if [ ! -f $SAVEDIR/$1 ] ; then
+	    touch $SAVEDIR/$1
+	fi
+	$3 $4 $5 $6 $7 > $TMPFILE
+	if compareandsavefile $1 $TMPFILE ; then
+	    NOINSTE=0
+	    echo "$2|Begin" >> $DIAGREPFILE
+	    cat $TMPFILE  >> $DIAGREPFILE
+	    echo "$2|End" >> $DIAGREPFILE
+	    echo "$2|Begin" >> $LOGFILE
+	    cat $DIFFFILE  >> $LOGFILE
+	    echo "$2|End" >> $LOGFILE
+	fi
+    fi
+}
+
+#
+# lock yourself just in case if another instance of
+# amdiag is running.
+#
+
+RETRIES=15
+LOCKDIR="$CRASHDIR/._aMdIaG__tMp__DiR"
+until mkdir "$LOCKDIR" 2>/dev/null
+do
+    if [ "$RETRIES" = 0 ] ; then
+	exit
+    fi
+
+    MYPID=`cat $LOCKDIR/pid 2>/dev/null`
+    if [ -n "$MYPID" ] ; then
+	kill -0 $MYPID 2>/dev/null
+	if [ $? != 0 ] ; then
+	    rm -rf $LOCKDIR 2>/dev/null
+        else
+	    sleep 5
+        fi
+    fi
+    RETRIES=`expr $RETRIES - 1`
+done
+echo $$ > $LOCKDIR/pid
+trap "rm -rf $LOCKDIR 2>/dev/null; exit" 0 1 2 3 15
+
+#
+# check for improper installation and corruption
+#
+
+if [ ! -d $AVAILDIR ] ; then
+    echo "\navailmon: cannot find directory $AVAILDIR"
+    echo "Please try re-installing availmon\n"
+    logger -t availmon -p err -i cannot find directory $AVAILDIR
+    exit
+elif [ ! -x $AMREGISTER -o ! -x $AMNOTIFY -o ! -x $AMSYSLOG \
+	-o ! -x $AMTICKERD -o ! -x $AMTIME1970 -o ! -x $AMSYSINFO \
+	-o ! -x $AMCONFIG ] ; then
+    echo "availmon: executable files corrupted"
+    echo "Please try re-installing availmon\n"
+    logger -t availmon -p err -i executable files corrupted
+    exit
+elif [ ! -d $SAVEDIR ] ; then
+    mkdir $SAVEDIR
+    if [ -f $CRASHDIR/bounds ] ; then
+	cp $CRASHDIR/bounds $SAVEDIR/bounds
+    else
+	echo "0" > $SAVEDIR/bounds
+    fi
+    $AMSYSINFO -s > $SAVEDIR/serialnum
+    $AMSYSINFO -n > $SAVEDIR/hostname
+    MSG=`$AMTIME1970 -i`
+    echo "PREV$MSG" > $PREVSTARTFILE
+    if [ -f $LOGFILE ] ; then
+	mv $LOGFILE $LOGFILE.O
+    fi
+    echo "$MSG" > $LOGFILE
+    if [ -f $SYSLOGFILE ] ; then
+	tail -1 $SYSLOGFILE > $LASTSYSLOG
+    fi
+    if [ -x /usr/bin/hinv ] ; then
+	/usr/bin/hinv -mvv > $SAVEDIR/hinv
+    fi
+    if [ -x /usr/sbin/versions ] ; then
+	/usr/sbin/versions -n eoe.sw.base support.sw.fru "patchSG*" > $SAVEDIR/versions
+    fi
+    if [ -x /usr/gfx/gfxinfo ] ; then
+	/usr/gfx/gfxinfo -vv > $SAVEDIR/gfxinfo
+    fi
+    cp $CONFIGDIR/autoemail $SAVEDIR
+    cp $CONFIGDIR/autoemail.list $SAVEDIR
+fi
+
+case $# in
+    1)
+	DIAGTYPE=$1
+	if [ "$DIAGTYPE" != "STATUS" ] ; then
+	    echo "amdiag: incorrect argument number"
+	    echo "Usage: amdiag <diag-type> <summary-file> <report-file>"
+	    exit 1
+	fi
+    ;;
+    2)
+	DIAGTYPE=$1
+	if [ "$DIAGTYPE" != "SYSLOG" ] ; then
+	    echo "amdiag: incorrect argument number"
+	    echo "Usage: amdiag <diag-type> <summary-file> <report-file>"
+	    exit 1
+        fi
+	SUMMARYFILE=$2
+    ;;
+    3)
+	DIAGTYPE=$1
+	SUMMARYFILE=$2
+	REPORTFILE=$3
+	if [ ! -r "$REPORTFILE" ] ; then
+	    echo "amdiag: cannot access $REPORTFILE"
+	    exit 1
+        fi
+    ;;
+    *)
+	echo "amdiag: incorrect argument number"
+	echo "Usage: amdiag <diag-type> <summary-file> <report-file>"
+	exit 1
+    ;;
+esac
+
+#
+# Common check for all types of DIAGS except for STATUS
+#
+
+if [ "$DIAGTYPE" != "STATUS" ] ; then
+    if [ ! -r $SUMMARYFILE ] ; then
+        echo "amdiag: cannot access $SUMMARYFILE"
+	exit 1
+    fi
+fi
+
+#
+# Check whether 'livenotification' is turned on.  If not, exit right
+# at this point without doing further processing
+#
+
+if [ "$DIAGTYPE" = "SYSLOG" ] ; then
+    if $AMCONFIG livenotification ; then
+	:
+    else
+	rm -f $SUMMARYFILE
+	exit 0
+    fi
+fi
+
+LASTTICK=`cat $TICKFILE 2> /dev/null`
+LASTTICK=${LASTTICK:=-1}
+if [ $LASTTICK -ge 0 ] ; then
+    LASTTICKDATE=`$AMTIME1970 -d $LASTTICK`
+else
+    LASTTICKDATE="unknown"
+fi
+
+if [ -f $SAVEDIR/autoemail ] ; then
+    if comparefile autoemail $CONFIGDIR/autoemail ; then
+	if $AMCONFIG autoemail -s ; then
+	    $AMREGISTER -d -c $SAVEDIR/autoemail.list
+	    cp $CONFIGDIR/autoemail $SAVEDIR/autoemail
+	    cp $CONFIGDIR/autoemail.list $SAVEDIR/autoemail.list
+	else
+	    $AMREGISTER -r -c $CONFIGDIR/autoemail.list
+	    cp $CONFIGDIR/autoemail $SAVEDIR/autoemail
+	    cp $CONFIGDIR/autoemail.list $SAVEDIR/autoemail.list
+	fi
+    else
+	if comparefile autoemail.list $CONFIGDIR/autoemail.list ; then
+	    $AMCONFIG -k
+	fi
+    fi
+else
+    cp $CONFIGDIR/autoemail $SAVEDIR/autoemail
+    cp $CONFIGDIR/autoemail.list $SAVEDIR/autoemail.list
+    if $AMCONFIG autoemail ; then
+	$AMREGISTER -r
+    fi
+fi
+
+if [ -f $SAVEDIR/serialnum ] ; then
+    SERIALNUM=`cat $SAVEDIR/serialnum`
+else
+    SERIALNUM=`$AMSYSINFO -s`
+    echo "$SERIALNUM" > $SAVEDIR/serialnum
+fi
+if [ -f $SAVEDIR/hostname ] ; then
+    HOSTNAME=`cat $SAVEDIR/hostname`
+else
+    HOSTNAME=`$AMSYSINFO -n`
+    echo "$HOSTNAME" > $SAVEDIR/hostname
+fi
+
+echo "SERIALNUM|$SERIALNUM" > $AVAILREPFILE
+echo "SERIALNUM|$SERIALNUM" > $DIAGREPFILE
+echo "HOSTNAME|$HOSTNAME" >> $AVAILREPFILE
+echo "HOSTNAME|$HOSTNAME" >> $DIAGREPFILE
+echo "AMRVERSION|$AMRVERSIONNUM" >> $AVAILREPFILE
+echo "AMRVERSION|$AMRVERSIONNUM" >> $DIAGREPFILE
+echo "UNAME|`uname -Ra`" >> $AVAILREPFILE
+echo "UNAME|`uname -Ra`" >> $DIAGREPFILE
+if [ -f $PREVSTARTFILE ] ; then
+    cat $PREVSTARTFILE >> $AVAILREPFILE
+    cat $PREVSTARTFILE >> $DIAGREPFILE
+elif [ -f $LOGFILE ] ; then
+    MSG=`grep "^START|" $LOGFILE | tail -1`
+    echo "PREV$MSG" >> $AVAILREPFILE
+    echo "PREV$MSG" >> $DIAGREPFILE
+    echo "PREV$MSG" > $PREVSTARTFILE
+else
+    echo "\navailmon: availlog and saved data were corrupted!!"
+    echo "Please chech file system\n"
+    logger -t availmon -p err -i availlog and saved data were corrupted
+    MSG=`$AMTIME1970 -i`
+    echo "PREV$MSG" > $PREVSTARTFILE
+    echo "$MSG" > $LOGFILE
+fi
+if [ "$DIAGTYPE" != "STATUS" ] ; then
+    if [ "$DIAGTYPE" = "SYSLOG" ] ; then
+	EVENTCODE=-19
+    else
+        SUMMARYLINE=`head -2 $SUMMARYFILE | tail -1`
+        if echo $SUMMARYLINE | grep -i 'No error' > /dev/null ; then
+            EVENTCODE=-10
+        elif echo $SUMMARYLINE | grep -i 'No hardware error' > /dev/null ; then
+            EVENTCODE=-10
+        elif echo $SUMMARYLINE | grep -i 'Hardware error' > /dev/null ; then
+            EVENTCODE=-11
+        else
+            EVENTCODE=-12
+        fi
+    fi
+    EVENTTIME=`awk '/TIME/ {print $2}' $SUMMARYFILE`
+    EVENTTIMEC=`awk '/TIME/ {print $3, $4, $5, $6, $7}' $SUMMARYFILE`
+else
+    EVENTCODE=-13
+    EVENTTIME=$SINCE1970
+    EVENTTIMEC=$SINCE1970DATE
+fi
+
+MSG="EVENT|$EVENTCODE|$EVENTTIME|$EVENTTIMEC"
+echo "$MSG" >> $LOGFILE
+echo "$MSG" >> $AVAILREPFILE
+echo "$MSG" >> $DIAGREPFILE
+MSG="LASTTICK|$LASTTICK|$LASTTICKDATE"
+echo "$MSG" >> $AVAILREPFILE
+echo "$MSG" >> $DIAGREPFILE
+STATUSINTERVAL=`cat $CONFIGDIR/statusinterval 2> /dev/null`
+echo "STATUSINTERVAL|$STATUSINTERVAL" >> $AVAILREPFILE
+echo "STATUSINTERVAL|$STATUSINTERVAL" >> $DIAGREPFILE
+
+NOINSTE=1
+if [ "$DIAGTYPE" != "STATUS" ] ; then
+    NOINSTE=0
+    echo -n "SUMMARY|Begin\n$DIAGTYPE\t" >> $LOGFILE
+    echo -n "SUMMARY|Begin\n$DIAGTYPE\t" >> $DIAGREPFILE
+    tail +2 $SUMMARYFILE >> $LOGFILE
+    tail +2 $SUMMARYFILE >> $DIAGREPFILE
+    echo "SUMMARY|End" >> $LOGFILE
+    echo "SUMMARY|End" >> $DIAGREPFILE
+
+    if [ "$DIAGTYPE" = "SYSLOG" ] ; then
+	rm -f $SUMMARYFILE
+    else
+        echo "$DIAGTYPE|Begin" >> $DIAGREPFILE
+        cat $REPORTFILE >> $DIAGREPFILE
+        echo "$DIAGTYPE|End" >> $DIAGREPFILE
+        echo "SYSLOG|Begin" >> $DIAGREPFILE
+        $AMSYSLOG -S $SYSLOGFILE -O $OSYSLOGFILE | tail -700 >> $DIAGREPFILE
+        tail -1 $SYSLOGFILE > $LASTSYSLOG
+        echo "SYSLOG|End" >> $DIAGREPFILE
+    fi
+fi
+
+set `/sbin/stat -mq /var/inst/hist $SAVEDIR/versions 2>/dev/null` >/dev/null
+if [ ! -r $SAVEDIR/versions -o \( "$2" -a "$1" -gt "$2" \) ] ; then
+    checkandappend versions VERSIONS /usr/sbin/versions -n eoe.sw.base support.sw.fru "patchSG*"
+    touch $SAVEDIR/versions
+fi
+if $AMCONFIG hinvupdate ; then
+    checkandappend hinv HINV /usr/bin/hinv -mvv
+    checkandappend gfxinfo GFXINFO /usr/gfx/gfxinfo -vv
+else
+    echo "HINV|Begin\nunknown\nHINV|End" >> $DIAGREPFILE
+    echo "GFXINFO|Begin\nunknown\nGFXINFO|End" >> $DIAGREPFILE
+fi
+
+if [ "$DIAGTYPE" != "STATUS" ] ; then
+    NOTIFYOPTIONS=" -c $AUTOEMAILLIST"
+else
+    NOTIFYOPTIONS=" -c $AUTOEMAILLIST -a $AVAILREPFILE"
+fi
+
+if [ $NOINSTE -eq 0 ] ; then
+    NOTIFYOPTIONS="$NOTIFYOPTIONS -i $DIAGREPFILE"
+else
+    NOTIFYOPTIONS="$NOTIFYOPTIONS -d $DIAGREPFILE"
+fi
+
+if [ $SERIALNUM != "unknown" ] ; then
+    if $AMCONFIG autoemail ; then
+	$AMNOTIFY $NOTIFYOPTIONS 
+    fi
+fi
+
+if [ -f $AVAILREPFILE ] ; then
+    cp $AVAILREPFILE $CRASHDIR/availreport
+fi
+
+if [ -f $DIAGREPFILE ] ; then
+    cp $DIAGREPFILE $CRASHDIR/diagreport
+fi
+
+rm -f $TMPFILE $DIFFFILE $AVAILREPFILE $DIAGREPFILE

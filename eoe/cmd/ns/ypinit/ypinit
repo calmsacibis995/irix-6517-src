@@ -1,0 +1,217 @@
+#! /usr/bin/perl5
+eval 'exec perl5 -S $0 "$@"'
+    if 0;
+
+chomp($domain = `domainname`);
+$XFR = "/usr/sbin/ypxfr";
+$CHKCONFIG = "/sbin/chkconfig";
+$PARSE = "/var/yp/ypmake NOPUSH=1";
+$YPSET = "/usr/sbin/ypset";
+$YPWHICH = "/usr/bin/ypwhich";
+$ypdir = "/var/ns";
+$domdir = "$ypdir/domains";
+$|=1;
+
+sub rmdest {
+	my @files;
+
+	@files = <$domdir/$domain/*>;
+	unlink(@files);
+	if (! rmdir("$domdir/$domain")) {
+		print STDERR "Failed to remove directory: $!\n";
+		exit(1);
+	}
+}
+
+sub template {
+	my $line;
+
+	foreach $line (@_) {
+		if ($line =~ /^\s*([^\s\(:]*)/ && $1) {
+			chomp($NSC{$1} = $line);
+		}
+	}
+}
+
+sub nsw_line {
+	my $map;
+	my $short;
+
+	$map = shift;
+	if ($map =~ /\./) {
+		$short = $`;
+	} else {
+		undef $short;
+	}
+	if ($NSC{$map}) {
+		if ($NSC{$map} eq "done") {
+			return undef;
+		} else {
+			$val = $NSC{$map};
+			$NSC{$map} = "done";
+			return("$val\n");
+		}
+	} elsif ($NSC{$short}) {
+		if ($NSC{$short} eq "done") {
+			return undef;
+		} else {
+			$val = $NSC{$short};
+			$NSC{$short} = "done";
+			return("$val\n");
+		}
+	} else {
+		return("$map:\tnisserv\n");
+	}
+}
+
+while ($arg = shift(@ARGV)) {
+	if ($arg eq "-c") {
+		$client = 1;
+	} elsif ($arg eq "-d") {
+		$domain = shift(@ARGV);
+	} elsif ($arg eq "-f") {
+		$source = "DIR=" . shift(@ARGV);
+	} elsif ($arg eq "-s") {
+		$host = shift(@ARGV);
+		($server, $address) = (gethostbyname($host))[0,4];
+		if (! $server) {
+			print STDERR "Connot resolve server name: $host\n";
+			exit(1);
+		}
+		@address = unpack('C4',$address);
+		$address = join('.', @address);
+	} elsif ($arg eq "-l") {
+		@slave_list = split(/,+/, shift(@ARGV));
+	} elsif ($arg eq "-m") {
+		$server = "";
+	} elsif ($arg eq "-y") {
+		$yes = 1;
+	} else {
+		print STDERR
+    "usage: ypinit -ym [-d domainname] [-f source_dir] [-l slave[,slave]]\n";
+		print STDERR "       ypinit -ys master [-d domainname]\n";
+		print STDERR
+		    "       ypinit -c [-d domainname] [-l slave[,slave]]\n";
+		exit(1);
+	}
+}
+
+if (! $domain) {
+	print STDERR "Set domainname or use \"-d\" argument.\n";
+	exit(1);
+}
+
+if ($client) {
+	if (! open(OUT, ">/var/yp/ypdomain")) {
+		print STDERR "failed to open file /var/yp/ypdomain\n";
+		exit(1);
+	}
+	print OUT "$domain\n";
+	close(OUT);
+	`domainname $domain`;
+	`$CHKCONFIG yp on`;
+	exec '/sbin/killall -HUP nsd';
+}
+
+if (open(NSC,"$domdir/$domain/nsswitch.conf")) {
+	@NSC = <NSC>;
+	template(@NSC);
+	close (NSC);
+}
+if ($#NSC < 0 && open(NSC, "$ypdir/nsswitch.conf.nisserv")) {
+	@NSC = <NSC>;
+	template(@NSC);
+	close (NSC);
+}
+
+if (-d "$domdir/$domain") {
+	if ($yes) {
+		rmdest();
+	} else {
+		print
+		  "Destination directory, $domdir/$domain, already exists.\n";
+		print "Can we remove it? [y/n] ";
+		$answer = <STDIN>;
+		if ($answer =~ /^y/i) {
+			rmdest();
+		} else {
+			print STDERR
+			    "Please clean it up by hand and start again.\n";
+			exit(1);
+		}
+	}
+}
+if (! mkdir("$domdir/$domain", 0700)) {
+	print STDERR "Could not make domain directory: $!\n";
+}
+
+if ($server) {
+	`$YPSET -d $domain $address 2>/dev/null`;
+	@maps = `$YPWHICH -d $domain -m 2>/dev/null`;
+	if ($#maps < 0) {
+		print STDERR "Cannot enumerate maps from $server.\n";
+		print STDERR
+		    "Please check that $server is running an NIS server.\n";
+		exit(1);
+	}
+	undef @NSC;
+	foreach $map (sort @maps) {
+		($name, $host) = split(/\s+/, $map);
+		next if ($name =~ /^ypxfr_map/);
+		($master) = gethostbyname($host);
+		if (! $master) {
+			print STDERR
+			    "Cannot resolve hostname $host: skipping $name\n";
+			next;
+		}
+		if ($master ne $server) {
+			print STDERR
+			    "Map $map is served by $master skipping.\n";
+			next;
+		}
+		print "Transferring map $name from server $server.\n";
+		`$XFR -h $server -c -d $domain $name`;
+		$line = nsw_line($name);
+		push(@NSC, $line) if ($line);
+	}
+
+	`$CHKCONFIG ypserv on`;
+	`$CHKCONFIG ypmaster off`;
+} else {
+	if (! open(OUT, ">$domdir/$domain/ypservers")) {
+		print STDERR "Failed to create ypservers file: $!\n";
+		exit(1);
+	}
+
+	if (defined @slave_list) {
+		print OUT join("\n", @slave_list);
+	} else {
+		print "We now need to construct a list of hosts which run NIS servers.\n";
+		print "Enter the names or addresses of these hosts one at a time,\n";
+		print "excluding this host, then simply hit <Enter> to end the list.\n";
+
+		do {
+			print "Name (<Enter> to exit): ";
+			chomp($input = <STDIN>);
+			if ($input) {
+				print OUT "$input\n";
+			}
+		} while ($input);
+	}
+
+	close(OUT);
+
+	print "Parsing configuration files into databases.\n";
+	`$PARSE DOM=$domain $source`;
+	`$CHKCONFIG ypmaster on`;
+	`$CHKCONFIG ypserv on`;
+}
+
+if ($#NSC >= 0 && open(NSC,">$domdir/$domain/nsswitch.conf")) {
+	print NSC @NSC;
+	close(NSC);
+} else {
+	`cp $ypdir/nsswitch.conf.nisserv $domdir/$domain/nsswitch.conf`;
+}
+
+exec '/sbin/killall -HUP nsd';

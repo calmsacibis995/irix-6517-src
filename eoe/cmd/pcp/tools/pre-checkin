@@ -1,0 +1,612 @@
+#!/bin/sh
+#
+# For PTG use ... run before p_finalize into kudzu source tree
+#
+# $Id: pre-checkin,v 1.27 1997/12/14 23:32:13 markgw Exp $
+
+status=1
+tmp=/tmp/$$
+trap "rm -f $tmp.*; exit \$status" 0 1 2 3 15
+
+_ans()
+{
+    if $default_ans
+    then
+	ans=""
+	echo ""
+    else
+	read ans </dev/tty
+    fi
+}
+
+_abort_continue()
+{
+    echo "a(bort) or c(ontinue) [c] ?\c"
+    _ans
+    [ "$ans" = "a" ] && exit
+}
+
+_usage()
+{
+    echo "Usage: pre-checkin [options]"
+    echo "Options:"
+    echo "	-d		automatically take default responses to all questions"
+    echo "	-l dir		directory to put build logs"
+    echo "	-r newroot	tlink \$ROOT with newroot and populate with pcp_eoe headers+exports"
+    echo "	                (by default, skip headers+exports phase)"
+}
+
+logdir=$WORKAREA/eoe/cmd/pcp/logs
+rflag=false
+default_ans=false
+while getopts 'l:r:d?' c
+do
+    case $c
+    in
+	d)	# take defaults
+		default_ans=true
+		;;
+	r)	# newroot for headers+exports
+		NEWROOT="$OPTARG"
+		rflag=true
+		;;
+	l)	# log directory
+		logdir="$OPTARG"
+		;;
+		
+	\?)	_usage
+		exit 1
+		;;
+    esac
+done
+shift `expr $OPTIND - 1`
+
+
+# hack warning ... this is not constant!
+#
+[ -z "$ROOT" ] && ROOT=/usr/dist/6.5/LATEST/proot
+[ -z "$TOOLROOT" ] && TOOLROOT=/usr/dist/6.5/LATEST/ptoolroot
+
+echo "\$ROOT? [$ROOT] \c"
+_ans
+[ ! -z "$ans" ] && ROOT="$ans"
+
+echo "\$TOOLROOT? [$TOOLROOT] \c"
+_ans
+[ ! -z "$ans" ] && TOOLROOT="$ans"
+
+[ ! -d "$ROOT" ] && echo "Error: could not find \$ROOT \"$ROOT\"" && exit
+[ ! -d "$TOOLROOT" ] && echo "Error: could not find \$TOOLROOT \"$TOOLROOT\"" && exit
+
+echo "Directory for build logs? [$logdir] \c"
+_ans
+[ ! -z "$ans" ] && logdir="$ans"
+
+# go to root of kudzu tree
+#
+[ -z "$WORKAREA" ] && WORKAREA=$HOME/isms/kudzu
+echo "kudzu \$WORKAREA? [$WORKAREA] \c"
+_ans
+[ ! -z "$ans" ] && WORKAREA="$ans"
+[ -z "$WORKAREA" -o ! -d "$WORKAREA" ] && echo "Error: \$WORKAREA is not found." && exit
+cd $WORKAREA
+rm -rf "$logdir"
+mkdir -p "$logdir"
+WORKAREA=`pwd`
+echo "=== Relocate to $WORKAREA ==="
+
+#
+# tlink a new root for headers + exports
+#
+echo "tlink a new \$ROOT for headers+exports later? [n] \c"
+_ans
+$rflag && [ -z "$ans" ] && ans="y"
+
+if [ "$ans" = "y" ]
+then
+    [ ! -x "$TOOLROOT/usr/sbin/tlink" ] && echo "Error: could not find \"$TOOLROOT/usr/sbin/tlink\"" && exit
+    [ -z "$NEWROOT" ] && NEWROOT="$WORKAREA/../root+pcp_eoe"
+    echo "New \$ROOT? [$NEWROOT] \c"
+    _ans
+    [ ! -z "$ans" ] && NEWROOT="$ans"
+    if [ -d "$NEWROOT" ]
+    then
+	echo "Remove \"$NEWROOT\" first [y] \c"
+	_ans
+	if [ "$ans" = "y" -o -z "$ans" ]
+	then
+	    echo "=== removing \"$NEWROOT\": \c"
+	    rm -rf $NEWROOT
+	    echo "==="
+	fi
+    fi
+    echo "=== tlinking new root: \c"
+    # usually non-zero exit status - ignore
+    $TOOLROOT/usr/sbin/tlink $ROOT $NEWROOT >$tmp.tlink 2>&1
+    tlink_status=$?
+    echo "==="
+    if [ -s "$tmp.tlink" ]
+    then
+	cat $tmp.tlink
+	echo "\nNote: tlink exit status=$tlink_status."
+	echo "Is the above output from tlink OK? [y] \c"
+	_ans
+	[ ! -z "$ans" -a "$ans" != "y" ] && echo "fix it and rerun." && exit
+    fi
+
+    echo "ROOT now set to \"$NEWROOT\""
+    ROOT=$NEWROOT
+fi
+
+export ROOT TOOLROOT WORKAREA
+
+HEADERS="eoe/cmd/pcp"
+EXPORTS="eoe/lib/libpcp eoe/lib/libpcp_dev eoe/lib/libpcp_pmda eoe/cmd/pcp"
+DIRS="$EXPORTS eoe/cmd/dkstat irix/lib/libirixpmda eoe/man eoe/relnotes/pcp_eoe"
+
+_cd()
+{
+    cd $WORKAREA
+    if [ ! -d $dir ]
+    then
+	echo
+	echo "Error: directory \"$dir\" does not exist"
+	_abort_continue
+    elif cd $dir
+    then
+	return 0
+    else
+	echo
+	echo "Error: cannot chdir to \"$dir\""
+	_abort_continue
+    fi
+    return 1
+}
+
+_strain_install()
+{
+    sed \
+	-e '/^[ 	]*$/d' \
+	-e '/usr\/sbin\/tag/d' \
+	-e '/usr\/sbin\/tlink/d' \
+	-e '/etc\/install/d' \
+	-e '/^--- /d' \
+	-e '/\] && *ln -sf/d' \
+	-e '/rm -f .*versiondefs$/d' \
+	-e '/ln -sf .*versiondefs$/d' \
+	-e '/ln -sf .*versiondefs;$/d' \
+	-e '/cd .*; smake/d'
+
+}
+
+_convert_idb()
+{
+    sed -e 's/ *$//' \
+    | nawk '
+	{ save=""
+	  for (i=1; i <= NF; i++) {
+	    if (i == 6)
+		# strip eoe/ prefix
+		sub("^eoe/", "", $6)
+	    if ($i ~ /^PCP_EOE/)
+		save=$i
+	    else
+		printf "%s ", $i
+	  }
+	  printf "%s\n", save
+	}' \
+    | sort \
+    | nawk '
+BEGIN	{ first=1 }
+	{ same=1
+	  for (i=5; i<NF; i++) {
+	    if ($i != last[i]) same=0
+	    last[i] = $i
+	  }
+	  if (same) printf " %s", $NF
+	  else {
+	    if (first)
+		first = 0
+	    else
+		print ""
+	    printf $0
+	  }
+	}
+END	{ print "" }'
+}
+
+# p_tupdate
+#
+echo "p_tupdate PCP bits? [y] \c"
+_ans
+case "$ans"
+in
+    ""|y)
+	echo "=== p_tupdate: \c"
+	for dir in $DIRS
+	do
+	    echo "$dir \c"
+	    if _cd $dir
+	    then
+		if p_tupdate >$tmp.out 2>&1
+		then
+		    :
+		else
+		    echo
+		    cat $tmp.out
+		    echo "Error: \"p_tupdate\" failed"
+		    exit
+		fi
+	    fi
+	done
+	echo " ==="
+	cd $WORKAREA
+	;;
+esac
+
+# remove trash
+#
+echo "Remove trash and clobber? [y] \c"
+_ans
+case "$ans"
+in
+    ""|y)
+	echo "=== make clobber & purge: \c"
+	for dir in $DIRS
+	do
+	    [ $dir = "eoe/man" ] && continue
+	    echo "$dir \c"
+	    if _cd $dir
+	    then
+		echo "=== $dir ===" >>$logdir/clobber
+		if make clobber >>$logdir/clobber 2>&1
+		then
+		    :
+		else
+		    echo
+		    cat $logdir/clobber
+		    echo "Error: \"make clobber\" failed"
+		    exit
+		fi
+		p_check -s >$tmp.in
+		if [ -s $tmp.in ]
+		then
+		    p_purge -yiq <$tmp.in >$tmp.out 2>&1
+		    if [ -s $tmp.out ]
+		    then
+			echo
+			cat $tmp.out
+			echo "Error: \"p_check -s | p_purge -yiq\" produced errors or warnings"
+			exit
+		    fi
+		fi
+	    fi
+	done
+	echo " ==="
+	cd $WORKAREA
+	;;
+esac
+
+# check for virgins
+#
+echo "Check for virgins? [y] \c"
+_ans
+case "$ans"
+in
+    ""|y)
+	echo "=== virgin check: \c"
+	for dir in $DIRS
+	do
+	    echo "$dir \c"
+	    p_check -w $dir \
+	    | sed -e '/man.*\.z/d' -e '/eoe\/cmd\/pcp\/logs/d' -e '/eoe\/cmd\/pcp\/images/d' >$tmp.out
+	    if [ -s $tmp.out ]
+	    then
+		echo
+		echo "Warning: virgin files (not checked in)"
+		fmt $tmp.out | sed -e 's/^/    /'
+		echo "... continuing virgin check: \c"
+	    fi
+	done
+	echo " ==="
+	cd $WORKAREA
+	;;
+esac
+
+#
+# headers + exports
+echo "make headers exports? [y] \c"
+_ans
+case "$ans"
+in
+    ""|y)
+	echo "=== make headers: \c"
+	for dir in $HEADERS
+	do
+	    echo "$dir \c"
+	    if _cd $dir
+	    then
+		echo "=== $dir ===" >>$logdir/headers
+		if make headers >>$logdir/headers 2>&1
+		then
+		    :
+		else
+		    echo
+		    cat $logdir/headers
+		    echo "Error: \"make headers\" failed"
+		    exit
+		fi
+	    fi
+	    echo " ==="
+	done
+
+	cd $WORKAREA
+	echo "=== make exports: \c"
+	for dir in $EXPORTS
+	do
+	    echo "$dir \c"
+	    if _cd $dir
+	    then
+		echo "=== $dir ===" >>$logdir/exports
+		if make exports >>$logdir/exports 2>&1
+		then
+		    :
+		else
+		    echo
+		    cat $logdir/exports
+		    echo "Error: \"make exports\" failed"
+		    exit
+		fi
+	    fi
+	done
+	echo " ==="
+	cd $WORKAREA
+	;;
+esac
+
+# make default
+#
+echo "make default? [y] \c"
+_ans
+case "$ans"
+in
+    ""|y)
+	echo "=== make default: \c"
+	for dir in $DIRS
+	do
+	    [ $dir = "eoe/man" ] && continue
+	    echo "$dir \c"
+	    if _cd $dir
+	    then
+		echo "=== $dir ===" >>$logdir/default
+		if make default >>$logdir/default 2>&1
+		then
+		    :
+		else
+		    echo
+		    cat $logdir/default
+		    echo "Error: \"make default\" failed"
+		    exit
+		fi
+	    fi
+	done
+	echo " ==="
+	cd $WORKAREA
+	;;
+esac
+
+# make default in eoe/man
+#
+echo "make default in eoe/man? [y] \c"
+_ans
+case "$ans"
+in
+    ""|y)
+	echo "=== make default: \c"
+	for dir in eoe/man/man1 eoe/man/man4 eoe/man/man5
+	do
+	    echo "$dir \c"
+	    if _cd $dir
+	    then
+		echo "=== $dir ===" >>$logdir/default
+		if make default >>$logdir/default 2>&1
+		then
+		    :
+		else
+		    echo
+		    cat $tmp.out
+		    echo "Error: \"make default\" failed"
+		    exit
+		fi
+	    fi
+	done
+	echo " ==="
+	cd $WORKAREA
+	;;
+esac
+
+echo "make and check rawidb? [y] \c"
+_ans
+case "$ans"
+in
+    ""|y)
+	SRC=`pwd`
+	RAWIDB=$tmp.idb
+	export SRC RAWIDB
+	rm -f $RAWIDB
+	echo "=== Collect idb lines: \c"
+	for dir in $DIRS
+	do
+	    [ $dir = "eoe/man" -o $dir = "eoe/relnotes/pcp_eoe" -o $dir = "irix/lib/libirixpmda" ] && continue
+	    echo "$dir \c"
+	    if _cd $dir
+	    then
+		if make install >$tmp.out 2>&1
+		then
+		    _strain_install <$tmp.out >$tmp.tmp
+		    if [ -s $tmp.tmp ]
+		    then
+			echo
+			echo "Warning: non-install lines from \"make install\""
+			cat $tmp.tmp
+			echo "... continuing collect idb lines: \c"
+		    fi
+		else
+		    echo
+		    echo "=== $dir ===" >>$logdir/install
+		    cat $tmp.out >>$logdir/install
+		    echo "Error: \"make install\" failed"
+		    exit
+		fi
+	    fi
+	done
+	echo " ==="
+	_convert_idb <$tmp.idb | sort >$tmp.our.idb
+	cd $WORKAREA
+
+	# check idbs
+	#
+	p_tupdate eoe/build/idb eoe/build/idb.man eoe/build/spec >/dev/null 2>&1
+	[ ! -f eoe/build/idb ] && echo "Error: cannot find \"eoe/build/idb\"" && exit 1
+	[ ! -f eoe/build/idb.man ] && echo "Error: cannot find \"eoe/build/idb\"" && exit 1
+	[ ! -f eoe/build/spec ] && echo "Error: cannot find \"eoe/build/spec\"" && exit 1
+
+	p_tupdate irix/build/idb >/dev/null 2>&1
+	if [ ! -f irix/build/idb ]
+	then
+	    echo "Error: cannot find \"irix/build/idb\""
+	    exit 1
+	fi
+
+	sed -n -e '/^#/d' -e '/PCP_EOE/p' eoe/build/idb |sort >$tmp.master.idb
+
+	echo "=== Check dup PCP_EOE lines in eoe/build/idb \c"
+	uniq -c $tmp.master.idb | nawk '$1 > 1 { print $2 }' >$tmp.out
+	if [ -s $tmp.out ]
+	then
+	    echo
+	    echo "Error: duplicate lines"
+	    cat $tmp.out
+	else
+	    echo " ==="
+	fi
+
+	echo "=== Lines in Makefiles, not in eoe/build/idb \c"
+	comm -23 $tmp.our.idb $tmp.master.idb >$tmp.out
+	if [ -s $tmp.out ]
+	then
+	    echo
+	    echo "Error: missing lines from eoe/build/idb"
+	    cat $tmp.out
+	else
+	    echo " ==="
+	fi
+
+	echo "=== Lines in eoe/build/idb, not in Makefiles \c"
+	comm -13 $tmp.our.idb $tmp.master.idb >$tmp.out
+	if [ -s $tmp.out ]
+	then
+	    echo
+	    echo "Error: extra lines in eoe/build/idb"
+	    cat $tmp.out
+	else
+	    echo " ==="
+	fi
+
+	cd $WORKAREA
+	echo "=== Modified files \c"
+	p_list -m >$tmp.out 2>&1
+	if [ -s $tmp.out ]
+	then
+	    echo
+	    echo "Warning: modified files"
+	    sed -e 's/^/    /' $tmp.out
+	else
+	    echo " ==="
+	fi
+
+	cd $WORKAREA
+	echo "=== Integrated files \c"
+	p_list -i >$tmp.out 2>&1
+	if [ -s $tmp.out ]
+	then
+	    echo
+	    echo "Warning: integrated files"
+	    sed -e 's/^/    /' $tmp.out
+	else
+	    echo " ==="
+	fi
+
+	echo "=== Save our idb lines in \"eoe/cmd/pcp/pcpidb\" ==="
+	sort +4 -6 -u $tmp.our.idb >eoe/cmd/pcp/pcpidb
+
+	cd $WORKAREA
+	;;
+esac
+
+echo "generate images? [y] \c"
+_ans
+case "$ans"
+in
+    ""|y)
+	cd $WORKAREA
+	oldspec=specs/spec.pcp_eoe
+	p_tupdate $oldspec >/dev/null 2>&1
+	[ ! -f "$oldspec" ] && echo "Error: could find spec file \"$oldspec\"" && exit
+	newspec=eoe/cmd/pcp/images/spec
+	majrel=127
+	echo "Major release number? [$majrel] \c"
+	_ans
+	[ ! -z "$ans" ] && majrel="$ans"
+
+	VERSION=`$TOOLROOT/usr/sbin/mkversionnum -r $majrel`
+
+	echo "Version is $VERSION"
+	export VERSION
+
+	rm -rf eoe/cmd/pcp/images
+	mkdir -p eoe/cmd/pcp/images
+
+	sed \
+		-e 's/eoe_eoe.sw.pcp_lib/PCP_EOE_LIB/g' \
+		-e 's/eoe_eoe.sw.pcp_lib64/PCP_EOE_LIB64/g' \
+		-e 's/eoe_eoe.sw.pcp_eoe/PCP_EOE/g' \
+		-e 's/irix_eoe.sw.pcp_eoe/PCP_EOE/g' \
+		-e 's/eoe_eoe.sw.pcp_monitor/PCP_EOE_MON/g' \
+		-e 's/eoe_eoe.man.pcp_eoe_rn/RN_PCP_EOE/g' \
+		-e 's/eoe_eoe.man.pcp_eoe/MAN_PCP_EOE/g' \
+		<$oldspec >$newspec
+	
+	nawk '
+	/^product pcp_eoe_root/ { found=1 }
+	found { print }
+	/^endproduct/ { found=0 }
+	' eoe/build/spec >>$newspec
+	
+	cp specs/spec.versions.h eoe/cmd/pcp/images
+
+	finalidb="eoe/cmd/pcp/images/finalidb"
+	nawk '/^#/ {next} /PCP_EOE/ {print}' eoe/build/idb eoe/build/idb.man >$finalidb
+	nawk '/^#/ {next} /PCP_EOE/ {print}' irix/build/idb \
+	| sed -e 's/lib\/libirixpmda/..\/irix\/lib\/libirixpmda/' >>$finalidb
+
+	sort +4 -6 -u $finalidb -o $finalidb
+
+	# LD_LIBRARY32_PATH=$ROOT/usr/lib32 $TOOLROOT/usr/sbin/gendist \
+	#
+	/usr/sbin/gendist \
+		-spec $newspec \
+		-idb $finalidb \
+		-source $WORKAREA/eoe \
+		-all \
+		-dist eoe/cmd/pcp/images \
+		-verbose \
+		pcp_eoe pcp_eoe_root >>$logdir/images 2>&1
+	echo "\n === generated images are in \"eoe/cmd/pcp/images\" ==="
+    ;;
+esac
+
+echo "\n === logs are in \"$logdir\" ==="
+
+status=0
+exit

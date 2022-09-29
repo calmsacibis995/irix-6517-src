@@ -1,0 +1,138 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2//EN">
+<HTML>
+<HEAD>
+    <META NAME="Generator" CONTENT="Cosmo Create 1.0.3">
+    <TITLE>Internal Structure (clshm)</TITLE>
+</HEAD>
+<BODY>
+<H1>
+Internal Structure</H1>
+<H2>
+Original Design</H2>
+<P>
+The clshm driver and daemon were originally written by Kaushik Ghosh. 
+It had an ioctl user interface with mmaps. The user would call into the 
+driver with a request and then send it ioctl queries until the driver 
+indicated that the request had been satisfied. The driver would send 
+any request for other partitions to the daemon through shared memory 
+which simply passed the information on to the daemon of the other 
+partition. The daemon would talk to the driver through ioctl calls as 
+well. There was a mechanism of &quot;jobs&quot;, where every job was 
+basically a hwgraph file that could be mmap to create a different share 
+memory segment. So all processes that wanted to talk would decide ahead 
+of time which job (00 through 0f) to use. All state was saved in the 
+driver and the daemon was used only for sending messages to the other 
+drivers. </P>
+<H2>
+Interface Changes</H2>
+<P>
+The original idea was to place a user interface on top of the already 
+existing clshm interface. However, we wanted to place a system V shared 
+memory type interface on top and this did not work with this the 
+existing ioctl interface. So instead of fighting with what was already 
+there, most of the code was changed. The original error handling and 
+calls into the xpc and partition code were used, but almost everthing 
+else changed.</P>
+<P>
+The interface was changed to look like the system V shared memory 
+interface and all the complexity of calling into the driver was 
+replaced by a user library that talked to the daemon. The original 
+&quot;jobs&quot; idea was removed and replaced by a single hwgraph file 
+that would be mmapped by all different processes that want shared 
+memory segments. The different shared memory segments use different 
+offsets into this file.</P>
+<H2>
+User Library</H2>
+<P>
+The user library caches some state of what is going on, but mostly 
+talks to the daemon with sockets to get state about existing shared 
+memory segments and to set up new shared memory segments. The following <A
+ HREF="man.html#xp_func">xp_*</A>
+ functions were defined and have similar meanings as their system V 
+counterparts:</P>
+<UL>
+    <LI>
+    xp_ftok: create a key useable by clshm. The partition that the memory 
+    will reside is determined at the time this is called. It is either 
+    specified by a path into the hwgraph (/hw/clshm/partition/XX) or by 
+    placing the memory on the calling process's partition. 
+    <LI>
+    xp_shmget: associates a key with a shmid with a given size. 
+    <LI>
+    xp_shmat: attaches the given shmid. 
+    <LI>
+    xp_shmdt: detaches the given shmid. 
+    <LI>
+    xp_shmctl: takes IPC_RMID (to remove a shmid associated segment) and 
+    IPC_AUTORMID (to specify that the segment should be removed 
+    automatically after the last detach). 
+</UL>
+<P>
+In addition to the system V like shared memory calls, there are also <A
+ HREF="man.html#part_func">part_*</A>
+ helper functions that are also provided to get information about 
+partitioning in general.</P>
+<UL>
+    <LI>
+    part_getid: get the partition id of the partition we are running on. 
+    <LI>
+    part_getcount: get the number of partitions that are up. 
+    <LI>
+    part_getlist: get the list of partition numbers that are up. 
+    <LI>
+    part_gethostnames: get the hostnames of the partitions that are up. 
+    <LI>
+    part_getpart: get the partition that owns a shmid. 
+    <LI>
+    part_setpmo: set a pmo_handle/type to be assigned to a key before 
+    the shmid is created. This uses the mld interface to place the memory 
+    associated with this key on a specific node.
+    <LI>
+    part_getnode: get the node path in the hwgraph of the memory associated 
+    with the shmid (but only if the memory was all placed on a single node).
+</UL>
+<P>
+The user library talks to the daemon sending messages that are 
+specified in the daemon header file (clshmd.h) through a socket. All 
+messages wait for a return message from the daemon before they return 
+from the call into the user library. There are also locks within the 
+user library so that it is protected if there are multi threads using 
+the same socket to talk to the daemon.</P>
+<H2>
+Clshm Daemon</H2>
+<P>
+The <A HREF="man.html#clshmd">clshmd</A>
+ daemon sits in the middle of the driver and the user library and does 
+all communication between the two. It also talks to other daemons on 
+other partitions. It keeps the state of all keys and manages all 
+shmids. The daemon was changed from the original code so that the user 
+library does not make any ioctl calls into the driver and also to pull 
+as much code out of the kernel as possible and into a user level (more 
+easily debuggable) program. The daemon is started and stopped by the 
+command.</P>
+<H2>
+Clshm Driver</H2>
+<P>
+The driver does the actual calls to the xpc and partition layer. It 
+gets messages from the local partition's daemon about what pages to 
+register as cross partition pages and when to allocate the pages. It 
+also gets mmap calls directly from the user library that actually 
+attach to the cross partition pages. Error recovery code is included to 
+kill off any process that is trying to access cross partition pages 
+which the permissions have been taken away or if another partition 
+dies, etc. The daemon is sent messages though shared memory any time 
+state changes as well (other partitions die, someone attaches to a 
+page, etc).</P>
+<H2>
+Version Control</H2>
+<P>
+All pieces of the system have their own major and minor version 
+numbers. The driver, the daemon and the user library all have separate 
+version numbers. The major version numbers must always match. If they 
+don't, then the code will fail as soon as they try to talk to any other 
+piece of the system. The minor version numbers don't need to match, but 
+the piece of the system with the larger minor version number is 
+responsible for making sure that the two different version interoperate 
+correcly.</P>
+</BODY>
+</HTML>

@@ -1,0 +1,189 @@
+.TH peer_snmpd_config 4
+.SH NAME
+peer_snmpd_config \- SNMP master agent configuration
+.SH SYNOPSIS
+.nf
+/etc/peer_snmpd_config
+.fi
+.SH DESCRIPTION
+This file controls the behavior of the
+.IR peer_snmpd (1M)
+daemon.  It contains information about manager applications, SNMPv1 community
+definitions, and SNMPv2 party definitions.  For information on the format of
+v2 party definitions, please rfer to the section \f4SNMPv2 CONFIGURATION\fP.
+.LP
+The general format is:
+.LP
+.in +.5i
+MANAGER <addr> [ON TRANSPORT <name>] [SEND [ALL | NO | traplist] TRAPS [TO PORT <#> ] [WITH COMMUNITY <name>]]
+
+COMMUNITY <name> ALLOW op [,op]* [OPERATIONS] [USE encrypt ENCRYPTION] [MEMBERS <manager> [,<manager>]* ]
+.in -.5i
+.fi
+.LP
+where constructs enclosed in braces "[]" are optional and constructs
+enclosed in braces and followed by a '*' may be repeated zero or more
+times.
+.SH MANAGERS
+The \fBMANAGER\fP entries in the configuration file define SNMP trap
+destinations.  An example would be:
+.in +.5i
+.nf
+.LP
+MANAGER		server
+		SEND ALL TRAPS
+		TO PORT 999
+		WITH COMMUNITY public
+.fi
+.in -.5i
+.SH COMMUNITIES
+Communities define spatial semantics, temporal semantics, and access
+control policy.  \fBCOMMUNITY\fP entries determine which community
+strings are valid.  If no \fBCOMMUNITY\fP entries are present then
+all community strings will be accepted.
+An example of communities would be:
+.in +.5i
+.nf
+.LP
+COMMUNITY	public
+		ALLOW GET OPERATIONS
+
+COMMUNITY	superman
+		ALLOW ALL OPERATIONS
+		MEMBERS	bigboss.megalith.com,	192.146.153.65
+.in =.5i
+.fi
+.SH SNMPv2 CONFIGURATION
+peer_snmpd implements Party based security for SNMPv2p packets.
+A knowledge of SNMPv2 security issues (discussed at length in 
+RFC 1445, RFC 1446, and RFC 1447) is helpful in understanding 
+Party configuration.
+.SH ENTITY DEFINITION
+A SNMPv2 entity is the actual process which performs the Network
+Management operations by responding to Manager queries.
+.LP
+The general format is :
+.LP
+ENTITY <entityName> DESCRIPTION <string>
+.LP
+An example would be :
+.LP
+ENTITY peer_master DESCRIPTION "PEER Master Entity"
+.SH CONTEXT DEFINITIONS
+Context definitions map directly to the context table in the party MIB 
+(RFC 1447).  There are two major types, local and proxy contexts.  The 
+function of a context definition is to inform the agent of a relationship
+between a SNMPv2 context and a SNMPv2 entity.  A local context is always 
+associated with a VIEW, which describes the constraints that are in effect 
+on this context.  View definitions are described in sections below.
+.LP
+The format for a local context definition is :
+.LP
+LOCAL CONTEXT <contextName>
+    VIEW <viewName>
+    REFERS TO ENTITY <entityName>
+    AS OID <oid>
+.LP
+An example would be :
+.LP
+LOCAL CONTEXT normalContext
+    VIEW normalView
+    REFERS TO ENTITY peer_master
+    AS 1.3.6.1.6.3.3.1.4.127.0.0.1.1
+.LP
+The format for a proxy context definition is :
+.LP
+PROXY CONTEXT <oid>
+    SOURCE PARTY <oid>
+    DESTINATION PARTY <oid>
+    AND CONTEXT <oid>
+.LP
+.SH VIEW DEFINITIONS
+Each View associates a label with a set of included and excluded subtrees.
+The definition corresponds to the view table in the party MIB.
+.LP
+The general format is :
+.LP
+VIEW [INCLUDE | EXCLUDE] SUBTREE <oid> [MASK <bitmask>]
+.LP
+The bitmask identifies which positions in the specified object identifier
+are to be regarded as "wildcards" for the purpose of pattern-matching.
+.LP
+The following example view definition includes only the system and
+snmp groups from MIB-II (RFC 1213) :
+.LP
+VIEW normalView
+    INCLUDE SUBTREE 1.3.6.1.2.1.1
+    INCLUDE SUBTREE 1.3.6.1.2.1.11
+.LP
+.SH ACCESS CONTROL LISTS
+The access control entries define a policy that control 
+communication between the source and target parties with respect
+to a particular SNMPv2 context.  The entries map directly to
+the access control list table in the party MIB.
+.LP
+The general format is :
+.LP
+ALLOW <op>, [<op>]* OPERATIONS 
+    SOURCE PARTY <srcPartyName>
+    DESTINATION PARTY <destPartyName>
+    CONTEXT <contextName>
+.LP 
+As an example, the following access control definitions will enable
+a SNMP Manager acting as party "initialMgrParty" to perform get, and 
+get-next operations on a SNMP Agent acting as party "initialAgtParty" :
+.LP
+ALLOW SIMPLE-GET, GET-NEXT, OPERATIONS
+    SOURCE PARTY      initialMgrParty
+    DESTINATION PARTY initialAgtParty
+    CONTEXT           normalContext
+.LP
+ALLOW RESPONSE, NOTIFY OPERATIONS
+    SOURCE PARTY      initialAgtParty
+    DESTINATION PARTY initialMgrParty
+    CONTEXT           normalContext
+.LP
+Such a configuration would allow the manager and agent to communicate
+correctly.
+.SH PARTY DEFINITIONS
+A party definition is used to establish initial values for both
+authentication and encryption keys, if used.  Party definitions map 
+directly to the party table in the party MIB.
+.LP
+The general format is :
+.LP
+LOCAL
+PARTY <partyName> ON TRANSPORT <transport>
+    AT <ADDR> 
+    USING <NO | MD5> AUTHENTICATION
+        [<WITH <key> AS KEY>]
+    AND <NO | DES> ENCRYPTION [<key>]
+    AS <oid>
+.LP
+If MD5 authentication is used, then the key has to be provided in the
+next line of configuration.
+.LP
+The following definition complements the examples given in the
+preceding sections, configuring 2 parties for MD5 authentication :
+.LP
+LOCAL PARTY initialAgtParty ON TRANSPORT snmpUDPDomain
+    AT 0x7f00000100a1
+    USING MD5 AUTHENTICATION
+        WITH 0x7468973746869737468697374686933 AS KEY
+    AND NO ENCRYPTION
+    AS 1.3.6.1.6.3.3.1.3.127.0.0.1.3
+.LP
+LOCAL PARTY initialMgrParty ON TRANSPORT snmpUDPDomain
+    AT 0x7f00000100a1
+    USING MD5 AUTHENTICATION
+        WITH 0x7468973746869737468697374686933 AS KEY
+    AND NO ENCRYPTION
+    AS 1.3.6.1.6.3.3.1.3.127.0.0.1.4
+.SH NOTE
+The peer_snmpd daemon is based on PEER Networks' PATROL product.
+PEER Networks is a division of BMC Software Inc.
+.SH FILES
+/etc/peer_snmpd_config
+.SH SEE ALSO
+peer_encaps(1M),
+peer_snmpd(1M),

@@ -1,0 +1,931 @@
+'\"!tbl|mmdoc
+'\"macro stdmacro
+.TH mmci 5
+.SH NAME
+mmci \- Memory Management Control Interface
+.SH DESCRIPTION
+This document describes the concepts and interfaces provided by Cellular Irix
+for fine tuning memory management policies for user applications.
+.SS Policy Modules
+.PP
+The ability of applications to control memory management becomes an essential
+feature in multiprocessors with a CCNUMA memory system architecture. For most
+applications, the operating system is capable of producing reasonable levels
+of locality via dynamic page migration and replication; however, in order to
+maximize performance, some applications may need fine tuned memory management
+policies.
+.PP
+We provide a Memory Management Control Interface based on the specification of 
+policies for different kinds of operations executed by the Virtual Memory
+Management System. Users are allowed to select a policy from a set of available
+policies for each one of these VM operations. Any portion of a virtual address 
+space, down to the level of a page, may be connected to a specific policy via
+a Policy Module. 
+.PP
+A policy module or PM contains the policy methods used to handle each of the
+operations shown in the table below.
+.PP
+.ne 20
+.TS
+center;
+c c c
+l l l
+l l l
+l l l
+l l l
+l l l
+l l l.
+MEMORY OPERATION	POLICY	DESCRIPTION
+_
+Initial Allocation	Placement Policy	Determines what physical
+		memory node to use when
+		memory is allocated
+	Page Size Policy	Determines what virtual page
+		size to use to map physical
+		memory
+	Fallback Policy	Determines the relative
+		importance between placement
+		and page size
+_
+Dynamic Relocation	Migration Policy	Determines the aggressiveness
+		of memory migration
+	Replication Policy	Determines the aggressiveness
+		of replication
+_
+Paging	Paging Policy	Determines the aggressiveness
+		and domain of memory paging
+.TE
+.PP
+When the operating system needs to execute an operation to manage a section of
+a process' address space, it uses the methods specified by the Policy Module
+connected (attached) to that section.
+.PP
+To allocate a physical page, the VM system physical memory allocator first
+calls the method provided by the Placement Policy that determines where the
+page should be allocate from. Internally, this method returns a handle
+identifying the node memory should be allocated from. The Placement Policy is
+described in detail later in this document.
+.PP
+Second, the physical memory allocator determines the page size to be used for
+the current allocation. This page size is acquired using a method provided by
+the Page Size Policy. Now, knowing both the source node and the page size, the
+physical memory allocator calls a per-node memory allocator specifying both
+parameters. If the system finds memory on this node that meets the page size
+requirement, the allocation operation finishes successfully; if not, the
+operation fails, and a fallback method specified by the Fallback Policy is
+called. The fallback method provided by this policy decides whether to try the
+same page size on a different node, a smaller page size on the same source
+node, sleep, or just fail.
+.PP
+The Fallback Policy to choose depends on the kind of memory access patterns
+an application exhibits. If the application tends to generate lots of cache
+misses, giving locality precedence over the page size may make sense;
+otherwise, especially if the application's working set is large, but has
+reasonable cache behavior, giving the page size higher precedence may make
+sense.
+.PP
+Once a page has been placed, it stays on its source node until it is either
+migrated to a different node, or paged out and faulted back in. Migratability
+of a page is determined by the migration policy. For some applications, those
+that present a very uniform memory access pattern from beginning to end,
+initial placement may be sufficient and migration can be turned off; on the
+other hand, applications with phase changes can really benefit from some level
+of dynamic migration, which has the effect of attracting memory to the nodes 
+where it's being used.
+.PP
+Read-only text can also be replicated. The degree of replication of text is
+determined by the Replication policy. Text shared by lots of processes running
+on different nodes may benefit substantially from several replicas which both
+provide high locality and minimize interconnect contention. For example
+/bin/sh may be a good candidate to replicate on several nodes, whereas
+programs such as /bin/bc really don't need much replication at all.
+.PP
+Finally, all paging activity is controlled by the Paging Policy. When a page
+is about to be evicted, the pager uses the Paging Policy Methods in the
+corresponding PM to determine whether the page can really be stolen or not.
+Further, this policy also controls page replacement.
+.PP
+The current version of Cellular Irix provides the policies shown in the table
+below.
+.PP
+.ne 24
+.TS
+center;
+c c c
+l l l
+l l l
+l l l
+l l l
+l l l
+l l l
+l l l
+l l l
+l l l
+l l l
+l l l
+l l l
+l l l
+l l l
+l l l.
+POLICY TYPE	POLICY NAME	ARGUMENTS
+_
+Placement Policy	PlacementDefault	Number Of Threads
+	PlacementFixed	Memory Locality Domain
+	PlacementFirstTouch	No Arguments
+	PlacementRoundRobin	Roundrobin Mldset
+	PlacementThreadLocal	Application Mldset
+	PlacementCacheColor	Memory Locality Domain
+_
+Fallback Policy	FallbackDefault	No Arguments
+	FallbackLargepage	No Arguments
+_
+Replication Policy	ReplicationDefault	No Arguments
+	ReplicationOne	No Arguments
+_
+Migration Policy	MigrationDefault	No Arguments
+	MigrationControl	migr_policy_uparms_t
+	MigrationRefcnt	No Arguments
+_
+Paging Policy	PagingDefault	No Arguments
+_
+Page Size Policy	-	Page size
+_
+.TE
+.PP
+The following list briefly describes each policy.
+.PP
+.TP 22
+PlacementDefault
+This policy automatically creates and places an MLD for every two processes in
+a process group. Each process's memory affinity link (memory affinity hint
+used by the process scheduler) is automatically set to the MLD created on
+behalf of the process.  Memory is allocated using the MLD being used as the
+memory affinity link for the currently running process.
+.TP
+PlacementFixed
+This policy requires a placed MLD to be passed as an argument. All memory
+allocation is done using the node where the MLD has been placed.
+.TP
+PlacementFirstTouch
+This policy starts with the creation of one MLD, placing it on the node where
+creation happened. All memory allocation is done using the node where the MLD
+has been placed.
+.TP
+PlacementRoundRobin
+This policy requires a placed MLDSET to be passed as an argument. Memory
+allocation happens in a round robin fashion over each one of the MLDs in the
+MLDSET. The policy maintains a round robin pointer that points to the next MLD
+to be used for memory allocation, which is moved to point to the next MLD in
+the MLDSET after every successful memory allocation. Note that the round robin
+operation is done in the time axis, not the space axis.
+.TP
+PlacementThreadLocal
+This policy requires a placed MLDSET to be passed as an argument. The
+application has to set the affinity links for all processes in the process
+group. Memory is allocated using the MLD being used as the memory affinity
+link for the currently running process.
+.TP
+PlacementCacheColor
+This policy requires a placed MLD to be passed as an argument. The application
+is responsible for setting the memory affinity links. Memory is allocated
+using the specified MLD, with careful attention to cache coloring relative to
+the Policy Module instead of the global virtual address space. 
+.TP
+FallbackDefault
+The default fallback policy gives priority to locality. We first try to
+allocate a base page (16KB in Origin systems) on the requested node. If
+no memory is available on that node, we borrow from some close neighbor,
+following a spiral search path.
+.TP
+FallbackLargepage
+When this fallback policy is selected, we give priority to the page size. We
+first try to allocate a page of the requested size on a nearby node, and
+fallback to a base page only if a page of this size is not available on any
+node in the system.
+.TP
+ReplicationDefault
+When this policy is selected, read-only pages are replicated following the
+\fICoverage Radius\fP algorithm described in replication(5).
+.TP
+ReplicationOne
+Force the system to use only one replica.
+.TP
+MigrationDefault
+When this default migration policy is selected, migration behaves as explained
+in migration(5) according to the tunable parameters also described in
+migration(5).
+.TP
+MigrationControl
+Users can select different migration parameters when using this policy. It
+takes an argument of type migr_policy_uparms_t shown below. 
+
+.RS 22
+.ne 12
+typedef struct migr_policy_uparms {
+        __uint64_t  migr_base_enabled         :1,
+                    migr_base_threshold       :8,
+                    migr_freeze_enabled       :1,
+                    migr_freeze_threshold     :8,
+                    migr_melt_enabled         :1,
+                    migr_melt_threshold       :8,
+                    migr_enqonfail_enabled    :1,
+                    migr_dampening_enabled    :1,
+                    migr_dampening_factor     :8,
+                    migr_refcnt_enabled       :1;
+} migr_policy_uparms_t;
+.PP
+This structure allows users to override the default migration parameters
+defined in /var/sysgen/mtune/numa and described in migration(5).
+.TP 2
+\(em
+\fBmigr_base_enabled\fP enables (1) or disables (0) migration.
+.TP
+\(em
+\fBmigr_base_threshold\fP defines the migration threshold.
+.TP
+\(em
+\fBmigr_freeze_enabled\fP enables (1) or disables (0) freezing.
+.TP
+\(em
+\fBmigr_freeze_threshold\fP defines the freezing threshold.
+.TP
+\(em
+\fBmigr_melt_enabled\fP enables (1) or disables (0) melting.
+.TP
+\(em
+\fBmigr_melt_threshold\fP defines the melting threshold.
+.TP
+\(em
+\fBmigr_enqonfail_enabled\fP is a no-op for Cellular Irix 6.5 and earlier.
+.TP
+\(em
+\fBmigr_dampening_enabled\fP enables (1) or disables (0) dampening.
+.TP
+\(em
+\fBmigr_dampening_factor\fP defines the dampening threshold.
+.TP
+\(em
+\fBmigr_refcnt_enabled\fP enables (1) or disables (0) extended reference counters.
+.PP
+.RE
+.PP
+.TP 22
+MigrationRefcnt
+This policy turns migration completely off (for the associated section
+of virtual address space) and enables the extended reference counters.
+No arguments are needed.
+.TP
+PagingDefault
+This is currently the only available paging policy. It's the usual IRIX
+paging policy.
+.TP
+Page Size
+Users can select any of the page sizes supported by the processor being
+used. For Origin 2000 systems the allowed sizes are: 16KB, 64KB, 256KB,
+1024KB (1MB), 4096KB (4MB), and 16384KB (16MB).
+.PP
+.SS Creation of Policy Modules
+A policy module can be created using the following Memory Management Control 
+Interface call:
+.Ex
+typedef struct policy_set {
+        char*  placement_policy_name;
+        void*  placement_policy_args;
+        char*  fallback_policy_name;
+        void*  fallback_policy_args;
+        char*  replication_policy_name;
+        void*  replication_policy_args;
+        char*  migration_policy_name;
+        void*  migration_policy_args;
+        char*  paging_policy_name;
+        void*  paging_policy_args;
+        size_t page_size;
+	short  page_wait_timeout;
+	short  policy_flags;
+} policy_set_t;
+
+pmo_handle_t pm_create(policy_set_t* policy_set);
+.Ee
+.PP
+The policy_set_t structure contains all the data required to create a Policy
+Module. For each selectable policy listed above, this structure contains a
+field to specify the name of the selected policy and the list of possible
+arguments that the selected policy may require. The page size policy is the
+exception, for which the specification of the wanted page size suffices. Pages
+of larger sizes reduce TLBMISS overhead and can improve the performance of
+applications with large working sets. Like other system resources large pages
+are not guaranteed to be available in the system when the application makes
+the request. The application has two choices. It can either wait for a
+specified timeout or use a page of lower page size. The page_wait_timeout
+specifies the number of seconds a process can wait for a page of the requested
+size to be available. If the timeout value is zero or if the page of the
+requested size is not available even after waiting for the specified timeout
+the system uses a page of a lower page size.  The policy_flags field allows
+users to specify special behaviors that apply to all the policies that define
+a Policy Module. The only special behavior currently implemented forces the
+memory allocator to prioritize cache coloring over locality, and it can
+be selected using the flag \fBPOLICY_CACHE_COLOR_FIRST\fP. For example:
+.RS
+.Ex
+policy_set.placement_policy_name = "PlacementFixed";
+policy_set.placement_policy_args = (void *)mld_handle;
+policy_set.fallback_policy_name = "FallbackDefault";
+policy_set.fallback_policy_args = NULL;
+policy_set.replication_policy_name = "ReplicationDefault";
+policy_set.replication_policy_args = NULL;
+policy_set.migration_policy_name = "MigrationDefault";
+policy_set.migration_policy_args = NULL;
+policy_set.paging_policy_name = "PagingDefault";
+policy_set.paging_policy_args = NULL;
+policy_set.page_size = PM_PAGESZ_DEFAULT;
+policy_set.page_wait_timeout = 0;
+policy_set.policy_flags = POLICY_CACHE_COLOR_FIRST;
+.Ee
+.RE
+.PP
+This example is filling up the policy_set_t structure to create a PM with a
+placement policy called "PlacementFixed" which takes a Memory Locality Domain
+(MLD) as an argument. All other policies are set to be the default policies,
+including the page size. We also ask for cache coloring to be given precedence
+over locality.
+.PP
+Since filling up this structure with mostly default values is a common
+operation, we provide a special call to pre-fill this structure with default
+values:
+.RS
+.Ex
+void pm_filldefault(policy_set_t* policy_set);
+.Ee
+.RE
+.PP
+The pm_create call returns a handle to the Policy Module just created, or a
+negative long integer in case of error, in which case errno is set to the
+corresponding error code. The handle returned by pm_create is of type
+pmo_handle_t. The acronym PMO stands for Policy Management Object. This type
+is common for all handles returned by all the Memory Management Control
+Interface calls. These handles are used to identify the different memory
+control objects created for an address space, much in the same way as file 
+descriptors are used to identify open files or devices. Every address space
+contains one independent PMO table. A new table is created only when a process
+execs.
+.PP
+A simpler way to create a Policy Module is to used the restricted Policy
+Module creation call:
+.RS
+.Ex
+pmo_handle_t pm_create_simple(char* plac_name,
+                              void* plac_args,
+                              char* repl_name,
+                              void* repl_args,
+                              size_t page_size);
+.Ee
+.RE
+.PP
+This call allows for the specification of only the Placement Policy, the
+Replication Policy and the Page Size. Defaults are automatically chosen for
+the Fallback Policy, the Migration Policy, and the Paging Policy.
+.SS Association of Virtual Address Space Sections to Policy Modules 
+.PP
+The Memory Management Control Interface allows users to select different
+policies for different sections of a virtual address space, down to the
+granularity of a page. To associate a virtual address space section with a set
+of policies, users need to first create a Policy Module with the wanted
+policies, as described in the previous section, and then use the following
+MMCI call:
+.RS
+
+int pm_attach(pmo_handle_t pm_handle, void* base_addr, size_t length);
+.RE
+.PP
+The \fBpm_handle\fP identifies the Policy Module the user has previously
+created, \fBbase_addr\fP is the base virtual address of the virtual address
+space section the user wants to associate to the set of policies, and
+\fBlength\fP is the length of the section.
+.PP
+All physical memory allocated on behalf of a virtual address space section
+with a newly attached policy module follows the policies specified by this
+policy module. Physical memory that has already been allocated is not affected
+until the page is either migrated or swapped out to disk and then brought back
+into memory.
+.PP
+Only existing address space mappings are affected by this call. For example,
+if a file is memory-mapped to a virtual address space section for which a
+policy module was previously associated via \fBpm_attach\fP, the default
+policies will be applied rather than those specified by the \fBpm_attach\fP
+call.
+
+.SS Default Policy Module
+.PP
+A new Default Policy Module is created and inserted in the PMO Name Space
+every time a process execs. This Default PM is used to define memory
+management policies for all freshly created memory regions. This Default PM
+can be later overridden by users via the pm_attach MMCI call.
+This Default Policy Module is created with the policies listed below:
+.TP 2
+*
+PlacementDefault
+.TP
+*
+FallbackDefault
+.TP
+*
+ReplicationDefault
+.TP
+*
+MigrationDefault
+.TP
+*
+PagingDefault
+.TP
+*
+Page size: 16KB
+.TP
+*
+Flags: 0
+.PP
+.PP
+The Default Policy Module is used in the following situations:
+.TP  2
+-
+At exec time, when we create the basic memory regions for the stack, text, and
+heap.
+.TP 
+-
+At fork time, when we create all the private memory regions.
+.TP
+-
+At sproc time, when we create all the private memory regions (at least the
+stack when the complete address space is shared).
+.TP
+-
+When mmapping a file or a device.
+.TP
+-
+When growing the stack and we find that the stack's region has been removed by
+the user via unmap, or the user has done a setcontext, moving the stack to a
+new location.
+.TP
+-
+When sbreaking and we find the user has removed the associated region using 
+munmap, or the region was not growable, anonymous or copy-on-write.
+.TP
+-
+When a process attaches a portion of the address space of a "monitored" process
+via procfs, and a new region needs to be created.
+.TP
+-
+When a user attaches a SYSV shared memory region.
+.PP
+.PP
+The Default Policy Module is also stored in the per-process group PMO Name
+space, and therefore follows the same inheritance rules as all Policy Modules:
+it is inherited at fork or sproc time, and a new one is created at exec time. 
+.PP
+Users can select a new default policy module for the stack, text, and heap:
+.Ex
+.RS
+pmo_handle_t 
+pm_setdefault(pmo_handle_t pm_handle, mem_type_t mem_type);
+.RE
+.Ee
+.PP
+The argument pm_handle is the handle returned by pm_create. The argument
+mem_type is used to identify the memory section the user wants to change the
+default policy module for, and it can take any of the following 3 values:
+.TP 2
+\(bu
+MEM_STACK
+.TP
+\(bu
+MEM_TEXT
+.TP
+\(bu
+MEM_DATA
+.PP
+.PP
+Users can also obtain a handle to the default PM using the following call:
+.Ex
+.RS
+pmo_handle_t pm_getdefault(mem_type_t mem_type);
+.RE
+.Ee
+.PP
+This call returns a PMO handle referring to the calling process's address space
+default PM for the specified memory type. The handle is greater or equal to
+zero when the call succeeds, and it's less than zero when the call fails, and
+errno is set to the appropriate error code.
+.SS Destruction of a Policy Module
+.PP
+Policy Modules are automatically destructed when all the members of a process
+group or a shared group have died. However, users can explicitly ask the
+operating system to destroy Policy Modules that are not in use anymore, using
+the following call:
+.Ex
+.RS
+int pm_destroy(pmo_handle_t pm_handle);
+.RE
+.Ee
+.PP
+The argument pm_handle is the handle returned by pm_create. Any association to
+this PM that already exists will remain effective, and the PM will only be
+destroyed when the section of the address space that is associated to this PM
+is also destroyed (unmapped), or when the association is overridden via a
+pm_attach call.
+.SS Policy Status of an Address Space
+.PP
+Users can obtain the list of policy modules currently associated to a section
+of a virtual address space using the following call:
+.Ex
+.RS
+typedef struct pmo_handle_list {
+        pmo_handle_t* handles;
+        uint          length;
+} pmo_handle_list_t;
+
+int pm_getall(void* base_addr,
+              size_t length,
+              pmo_handle_list_t* pmo_handle_list);
+
+.RE
+.Ee
+.PP
+The argument base_addr is the base address for the section the user is
+inquiring about, length is the length of the section, and pmo_handle_list is a
+pointer to a list of handles as defined by the structure pmo_handle_list_t.
+.PP
+On success, this call returns the effective number of PMs that are being used
+by the specified virtual address space range. If this number is greater than
+the size of the list to be used as a container for the PM handles, the user
+can infer that the specified virtual address space range is using more PM's
+than we can fit in the list. On failure, this call returns a negative integer,
+and errno is set to the corresponding error code.
+.PP
+Users also have read-only access to the internal details of a PM, using the
+following call:
+.Ex
+.RS
+.ne 10
+typedef struct pm_stat {
+        char         placement_policy_name[PM_NAME_SIZE + 1];
+        char         fallback_policy_name[PM_NAME_SIZE + 1];
+        char         replication_policy_name[PM_NAME_SIZE + 1];
+        char         migration_policy_name[PM_NAME_SIZE + 1];
+        char         paging_policy_name[PM_NAME_SIZE + 1];
+        size_t       page_size;
+        int          policy_flags;
+        pmo_handle_t pmo_handle;
+} pm_stat_t;
+
+int pm_getstate(pmo_handle_t pm_handle, pm_stat_t* pm_stat);
+.RE
+.Ee
+.PP
+The argument pm_handle identifies the PM the user needs information about, and
+pm_stat is an out parameter of the form defined by the structure pm_stat_t.
+On success this call returns a non-negative integer, and the PM internal data
+in pm_stat. On error, the call returns a negative integer, and errno is set to
+the corresponding error code.
+.SS Setting the Page Size
+.PP
+Users can modify the page size of a PM using the following MMCI call:
+.Ex
+.RS
+int pm_setpagesize(pmo_handle_t pm_handle, size_t page_size);
+.RE
+.Ee
+.PP
+The argument pm_handle identifies the PM the user is changing the page size
+for, and the argument page_size is the requested page size. This call changes
+the page size for the PM's associated with the specified section of virtual
+address space so that newly allocated memory will use the new page size.
+On success this call returns a non-negative integer, and on error, it returns
+a negative integer with errno set to the corresponding error code.
+.SS Locality Management
+.PP
+One of the most important goals of memory management in a CCNUMA system like
+the Origin 2000 is the maximization of locality. Cellular IRIX uses several
+mechanisms to manage locality:
+.TP 2
+\(bu
+Cellular IRIX implements dynamic memory migration to automatically attract
+memory to those processes that are making the heaviest use of a page of memory.
+.TP
+\(bu
+Cellular IRIX replicates read-only memory sections, such as application and
+library code, in order to maximize local memory accesses and avoid
+interconnect contention.
+.TP
+\(bu
+Cellular IRIX schedules memory in such a way that applications can allocate
+large amounts of relatively close memory pages.
+.TP
+\(bu
+Cellular IRIX does topology aware initial memory placement.
+.TP
+\(bu
+Cellular IRIX provides a topology aware process scheduler that integrates
+cache and memory affinity into the scheduling algorithms.
+.TP
+\(bu
+Cellular IRIX allows and encourages application writers to provide initial
+placement hints, using high level tools, compiler directives, or direct system
+calls.
+.TP
+\(bu
+Cellular IRIX allows users to select different policies for the most important
+memory management operations.
+.PP
+.SS The Placement Policy
+.PP
+The Placement Policy defines the algorithm used by the physical memory
+allocator to decide what memory source to use to allocate a page in a
+multi-node CCNUMA machine. The goal of this algorithm is to place memory in
+such a way that local accesses are maximized. 
+.PP
+The optimal placement algorithm would have knowledge of the exact number of
+cache misses that will be caused by each thread sharing the page to be placed.
+Using this knowledge, the algorithm would place the page on the node currently
+running the thread that will generate most cache misses, assuming that the
+thread always stays on the same node.  
+.PP
+Unfortunately, we don't have perfect knowledge of the future. The algorithm
+has to be based on heuristics that predict the memory access patterns and
+cache misses on a page, or on user provided hints.
+.PP
+All placement policies are based on two abstractions of physical memory nodes: 
+.TP 2
+\(bu
+Memory Locality Domains (MLDs)
+.TP
+\(bu
+Memory Locality Domain Sets (MLDsets)
+.PP
+.SS Memory Locality Domains
+.PP
+A Memory Locality Domain or MLD with center c and radius r is a source of
+physical memory composed of all memory nodes within a "hop distance" r of a
+center node c. Normally, MLDs have radius 0,representing one single node.
+.PP
+MLDs may be interpreted as virtual memory nodes. Normally the application
+writer defining MLDs specifies the MLD radius, and lets the operating system
+decide where it will be centered. The operating system tries to choose a center
+according to current memory availability and other placement parameters that
+the user may have specified such as device affinity and topology.
+.PP
+Users can create MLDs using the following MMCI call:
+.Ex
+.RS
+pmo_handle_t mld_create(int radius, long size);
+.RE
+.Ee
+.PP
+The argument radius defines the MLD radius, and the argument size is a hint
+specifying approximately how much physical memory will be required for this
+MLD.  On success this call returns a handle for the newly created MLD. On
+error, this call returns a negative long integer and errno is set to the
+corresponding error code.
+.PP
+MLDs are not placed when they are created. The MLD handle returned by the
+constructor cannot be used until the MLD has been placed by making it part of
+an MLDset.
+.PP
+Users can also destroy MLDs not in use anymore using the following call:
+.Ex
+.RS
+int mld_destroy(pmo_handle_t mld_handle);
+.RE
+.Ee
+.PP
+The argument mld_handle is the handle returned by mld_create. On success, this
+call returns a non-negative integer. On error it returns a negative integer
+and errno is set to the corresponding error code.
+.SS Memory Locality Domain Sets 
+.PP
+Memory Locality Domain Sets or MLDsets address the issue of placement topology
+and device affinity. 
+.PP
+Users can create MLDsets using the following MMCI call:
+.RS
+
+pmo_handle_t mldset_create(pmo_handle_t* mldlist, int mldlist_len);
+.RE
+.PP
+The argument mldlist is an array of MLD handles containing all the MLD's the
+user wants to make part of the new MLDset, and the argument mldlist_len is
+the number of MLD handles in the array. On success, this call returns an
+MLDset handle. On error, this call returns a negative long integer and errno
+is set to the corresponding error code.
+.PP
+This call only creates a basic MLDset without any placement information. An
+MLDset in this state is useful just to specify groups of MLDs that have already
+been placed. In order to have the operating system place this MLDset, and
+therefore place all the MLDs that are now members of this MLDset, users have
+to specify the wanted MLDset topology and device affinity, using the following
+MMCI call:
+.Ex
+.RS
+int mldset_place(pmo_handle_t mldset_handle,
+                 topology_type_t topology_type,
+                 raff_info_t* rafflist,
+                 int rafflist_len,
+                 rqmode_t rqmode);
+.RE
+.Ee
+.PP
+The argument mldset_handle is the MLDset handle returned by mldset_create, and 
+identifies the MLDset the user is placing. The argument topology_type specifies
+the topology the operating system should consider in order to place this
+MLDset, which can be one of the following:
+.TP 21
+TOPOLOGY_FREE
+This topology specification lets the Operating System decide what shape to use
+to allocate the set. The Operating System will try to place this MLDset on a
+cluster of physical nodes as compact as possible, depending on the current
+system load.
+.TP
+TOPOLOGY_CUBE
+This topology specification is used to request a cube-like shape.
+.TP
+TOPOLOGY_CUBE_FIXED
+This topology specification is used to request a physical cube.
+.TP
+TOPOLOGY_PHYSNODES
+This topology specification is used to request that the MLDs in an MLDset be
+placed in the exact physical nodes enumerated in the device affinity list,
+described below.
+.TP
+TOPOLOGY_CPUCLUSTER
+This topology specification is used to request the placement of one MLD per
+processor instead of the default one MLD per node. In an Origin 2000, the
+number of cpus per node is 2, so this topology requests that 2 MLDs be placed
+on each node. This topology is useful when the placement policy is managing
+cache coloring relative to MLDs instead of virtual memory regions.
+.PP
+The topology_type_t type shown below is defined in <sys/pmo.h>.
+.Ex
+/*
+ * Topology types for mldsets
+ */
+typedef enum {
+        TOPOLOGY_FREE,
+        TOPOLOGY_CUBE,
+        TOPOLOGY_CUBE_FIXED,
+        TOPOLOGY_PHYSNODES,
+        TOPOLOGY_CPUCLUSTER,
+        TOPOLOGY_LAST
+} topology_type_t;
+.Ee
+.PP
+The argument rafflist is used to specify resource affinity. It is an array 
+of resource specifications using the structure shown below:
+.Ex
+/*
+ * Specification of resource affinity.
+ * The resource is specified via a
+ * file system name (dev, file, etc).
+*/
+typedef struct raff_info {
+	void* resource;
+	ushort reslen;
+	ushort restype;
+	ushort radius;
+	ushort attr;
+} raff_info_t;
+.Ee
+
+.PP
+The fields resource, reslen, and restype define the resource. The field
+resource is used to specify the name of the resource, the field reslen must
+always be set to the actual number of bytes the resource pointer points to,
+and the field restype specifies the kind of resource identification being
+used, which can be any of the following:
+.TP 13
+RAFFIDT_NAME
+This resource identification type should be used for the cases where a hardware
+graph path name is used to identify the device.
+.TP
+RAFFIDT_FD
+This resource identification type should be used for the cases where a file
+descriptor is being used to identify the device.
+.PP
+The radius field defines the maximum distance from the actual resource the user
+would like the MLDset to be place at. The attr field specified whether the user
+wants the MLDset to be placed close or far from the resource:
+.TP 20
+RAFFATTR_ATTRACTION
+The MLDset should be placed as close as possible to the specified device.
+.TP
+RAFFATTR_REPULSION
+The MLDset should be placed as far as possible from the specified device.
+.PP
+The argument rafflist_len in the mldset_place call specifies the number of raff
+structures the user is passing via rafflist. There must be at least as many
+raff structures passed as the size of the corresponding mldset or the operation
+will fail and EINVAL will be returned.
+.PP
+Finally, the rqmode argument is used to specify whether the placement request
+is ADVISORY or MANDATORY:
+.Ex
+.ne 7
+/*
+ * Request types
+ */
+typedef enum {
+        RQMODE_ADVISORY,
+        RQMODE_MANDATORY
+} rqmode_t;
+.Ee
+.PP
+The Operating System places the MLDset by finding a section of the machine that
+meets the requirements of topology, device affinity, and expected physical
+memory used.
+.PP
+The mldset_place call returns a non-negative integer on success. On error, it
+returns a negative integer and errno is set to the corresponding error code.
+.PP
+Users can destroy MLDsets using the following call:
+.Ex
+int mldset_destroy(pmo_handle_t mldset_handle);
+.Ee
+.PP
+The argument mldset_handle identifies the MLDset to be destroyed. On success,
+this call returns a non-negative integer. On error it returns a negative
+integer and errno is set to the corresponding error code.
+.SS Linking Execution Threads to MLDs
+.PP
+After creating MLDs and placing them using an MLDset, a user can create a
+Policy Module that makes use of these memory sources, and attach sections of a
+virtual address space to this Policy Module.
+.PP
+We still need to make sure that the application threads will be executed on the
+nodes where we are allocating memory. To ensure this, users need to link
+threads to MLDs using the following call:
+.Ex
+int process_mldlink(pid_t pid, pmo_handle_t mld_handle);
+.Ee
+.PP
+The argument pid is the pid of the process to be linked to the MLD specified by
+the argument mld_handle. On success this call return a non-negative integer.
+On error it returns a negative integer and errno is set to the corresponding
+error code.
+.PP
+This call sets up a hint for the process scheduler. However, the process
+scheduler is not required to always run the process on the node specified by
+the mld. The scheduler may decide to temporarily use different cpus in
+different nodes to execute threads to maximize resource utilization.
+.PP
+.SS Name Spaces For Memory Management Control 
+.PP
+.TP 2
+\(bu
+\fBThe Policy Name Space\fP. This is a global system name space that contains
+all the policies that have been exported and therefore are available to users.
+The domain of this name space is the set of exported policy names, strings of
+characters such as "PlacementDefault", and its range is the corresponding set
+of policy constructors. When a user creates a policy module, he or she has to
+specify the policies for all selectable policies by name. Internally, the
+operating system searches for each name in the Policy Name Space, thereby
+getting hold of the constructors for each of the specified policies, which are
+used to initialize the actual internal policy modules.
+.TP
+\(bu
+\fBThe Policy Management Object Name Space\fP. 
+This is a per-process group, either shared (sprocs) or not shared (forks), name
+space used to store handles for all the Policy Management Objects that have
+been created within the context of any of the members of the process group. 
+The domain of this name space is the set of Policy Management Object (PMO)
+handles and its range is the set of references (internal kernel pointers) to
+the PMO's.
+.RS 2
+.PP
+PMO handles can refer to any of several kinds of Policy Management Objects:
+.TP 2
+-
+Policy Modules
+.TP
+-
+Memory Locality Domains (MLDs)
+.TP
+-
+Memory Locality Domain Sets (MLDsets)
+.PP
+.RE
+.PP
+The PMO Name Space is inherited at fork or sproc time, and created at exec time.
+.SH SEE ALSO
+numa(5),
+migration(5),
+mtune(4),
+/var/sysgen/mtune/numa,
+refcnt(5),
+replication(5),
+nstats(1),
+sn(1),
+mld(3c), 
+mldset(3c),
+pm(3c),
+migration(3c),
+pminfo(3c),
+numa_view(1),
+dplace(1),
+dprof(1).

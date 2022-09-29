@@ -1,0 +1,226 @@
+.TH DPLACE 1
+.SH NAME
+\f3dplace\f1 \- a NUMA memory placement tool
+.SH SYNOPSIS
+.nf
+dplace [\f3-place\f1 \f2placement_file\f1]
+[\f3-data_pagesize\f1 \f2n-bytes\f1]
+[\f3-data_lpage_wait\f1 \f2[off|on]\f1]
+[\f3-stack_pagesize\f1 \f2n-bytes\f1]
+[\f3-stack_lpage_wait\f1 \f2[off|on]\f1]
+[\f3-text_pagesize\f1 \f2n-bytes\f1]
+[\f3-text_lpage_wait\f1 \f2[off|on]\f1]
+[\f3-migration\f1 \f2[off|on|threshold]\f1]
+[\f3-migration_level\f1 \f2threshold\f1]
+[\f3-propagate\f1]
+[\f3-mustrun\f1]
+[\f3-v[erbose]\f1]
+\f2program\f1 [\f2program-arguments\f1]
+.fi
+
+.SH DESCRIPTION
+The given \f2program\f1 is executed after placement policies are
+set up according to command line arguments and the specifications 
+described in \f2placement_file\f1.
+
+.SH OPTIONS
+.TP
+\f3-place\f1 \f2placement_file\f1
+Placement information is read from \f2placement_file\f1. If this argument is
+omitted, no input file is read. See \f3dplace\f1(5) for correct placement
+file format.
+.TP
+\f3-data_pagesize\f1 \f2n-bytes\f1
+Data and heap page sizes will be of size \f2n-bytes\f1. Valid page sizes
+are 16k multiplied by a non negative integer powers of 4 up to a 
+maximum size of 16m. Valid page sizes are 
+16k, 64k, 256k, 1m, 4m, and 16m.
+.TP
+\f3-data_lpage_wait\f1 \f2[off|on]\f1
+Normal behavior in the event of large page shortages is to continue running
+utilizing smaller pages instead. If this option is specified as \f2on\f1 then
+the process will wait until large pages become available for use by the
+data segment.
+.TP
+\f3-stack_pagesize\f1 \f2n-bytes\f1
+Stack page sizes will be of size \f2n-bytes\f1. Valid page sizes
+are 16k multiplied by a non negative integer powers of 4 up to a 
+maximum size of 16m. Valid page sizes are
+16k, 64k, 256k, 1m, 4m, and 16m.
+.TP
+\f3-stack_lpage_wait\f1 \f2[off|on]\f1
+Normal behavior in the event of large page shortages is to continue running
+utilizing smaller pages instead. If this option is specified as \f2on\f1 then
+the process will wait until large pages become available for use by the
+stack segment.
+.TP
+\f3-text_pagesize\f1 \f2n-bytes\f1
+Text page sizes will be of size \f2n-bytes\f1. Valid page sizes
+are 16k multiplied by a non negative integer powers of 4 up to a 
+maximum size of 16m. Valid page sizes are
+16k, 64k, 256k, 1m, 4m, and 16m.
+.TP
+\f3-text_lpage_wait\f1 \f2[off|on]\f1
+Normal behavior in the event of large page shortages is to continue running
+utilizing smaller pages instead. If this option is specified as \f2on\f1 then
+the process will wait until large pages become available for use by the
+stack segment.
+.TP
+\f3-migration\f1 \f2[off|on|threshold]\f1
+Page migration is turned on or off. If a threshold is specified then page
+migration will be turned on and the migration threshold will be set in the
+same manner as when \f3-migration_level\f1 is specified (see below).
+.TP
+\f3-migration_level\f1 \f2threshold\f1
+Page migration threshold is set to \f2threshold\f1.  This value specifies the
+maximum percentage difference between the number of remote memory accesses and
+local memory accesses (relative to maximum counter values ) for a given page, 
+before a migration request event occurs. A special argument of 0 will turn
+page migration off. This option is provided for backward compatibility only,
+new scripts should use the \f3-migration\f1 option (see above) instead.
+.TP
+\f3-propagate\f1
+Migration and page size information will be inherited by descendents
+which are exec'ed. 
+.TP
+\f3-mustrun\f1
+When threads are attached to memories or cpus they are run mandatorily.
+.TP
+\f3-verbose\f1 or \f3-v\f1
+Detailed diagnostic information is written to standard error.
+.P
+.SH EXAMPLE
+
+To place data according to the file \f2placement_file\f1 for the executable
+a.out that would normally be run by:
+.nf.
+\f3	% a.out < in > out \f1
+.fi
+one would simply
+.nf
+\f3	% dplace -place placement_file a.out < in > out \f1.
+.fi
+
+An example placement file \f2placement_file\f1, when a.out is two threaded
+might look like:
+.nf
+\f3
+# placement_file
+memories 2 in topology cube # set up 2 memories which are close
+threads 2                   # number of threads
+run thread 0 on memory 1    # run the first thread on the 2nd memory
+run thread 1 on memory 0    # run the 2nd thread on the first memory
+\f1
+.fi
+.P
+This specification, would request 2 nearby memories from the operating
+system. At creation, the threads are requested to run on an available
+cpu which is local to the specified memory. As data and stack space is
+touched or faulted in, physical memory is allocated from the memory
+which is local to the thread which initiated the fault.
+.P
+This can be written in a \f2scalable\f1 way for a variable number of
+threads using the environment variable
+NP as follows:
+.nf
+\f3
+# scalable placement_file
+memories $NP in topology cube # set up memories which are close
+threads $NP                   # number of threads
+# run the last thread on the first memory etc.
+distribute threads $NP-1:0:-1 across memories 
+
+\f1
+.fi
+.SH USING MPI
+Since most MPI implementations use $MPI_NP+1 threads; where the first
+thread is mainly inactive. One might use the placement file:
+.nf
+\f3
+# scalable placement_file for MPI
+memories ($MPI_NP + 1)/2 in topology cube # set up memories which are close
+threads $MPI_NP + 1	                  # number of threads
+# ignore the lazy thread
+distribute threads 1:$MPI_NP across memories 
+
+\f1
+.fi
+When using MPI with \f3dplace\f1, syntax similar to the following
+should be used: 
+.nf
+	\f3mpirun -np <number_of_processes> dplace <dplace_args> a.out\f1
+
+.SH LARGE PAGES
+Some applications run more efficiently using large pages.  To run a
+program a.out utilizing 64k pages for both stack and data, a placement
+file is not necessary. One need only invoke the command:
+.nf
+	\f3dplace -data_pagesize 64k -stack_pagesize 64k a.out\f1
+.fi
+from the shell.
+
+.SH PHYSICAL PLACEMENT
+Physical placement can also be accomplished using dplace. The following placement file:
+
+.nf
+\f3
+# physical placement_file for 3 specific memories and 6 threads
+memories 3 in topology physical near \\
+	/hw/module/2/slot/n4/node \\
+	/hw/module/3/slot/n2/node \\
+	/hw/module/4/slot/n3/node
+threads 6
+#the first  two threads (0 & 1 ) will run on /hw/module/2/slot/n4/node
+#the second two threads (2 & 3 ) will run on /hw/module/3/slot/n2/node
+#the last   two threads (4 & 5 ) will run on /hw/module/4/slot/n3/node
+distribute threads across memories 
+
+\f1
+.fi
+specifies three physical nodes using the proper /hw path. To find out
+the names of the memory nodes on the machine you are using, type "find
+/hw -name node -print" at the shell command prompt.
+
+.SH DEFAULTS
+If command line arguments are omitted, dplace chooses the following
+set of defaults:
+.nf
+\f3
+	place           /dev/null                                          
+	data_pagesize   16k                                        
+	stack_pagesize  16k                                        
+	text_pagesize   16k                                            
+	migration       off                                              
+	propagate       off
+	mustrun         off                                              
+	verbose         off                                             
+\f1
+.fi
+.SH RESTRICTIONS
+
+Programs must be dynamic executables; non shared executables behavior
+are are unaffected by \f3dplace\f1. Placement files will only affect
+direct descendents of dplace. Parallel applications must be based on the 
+\f3sproc\f1(2) or \f3fork\f1(2) mechanism. Page sizes for regions which
+are not stack, text, or data can not be specified with dplace (eg: SYSV
+shared memory). Regions shared by multiple processes (eg: DSO text) are
+faulted in with the pagesize settings of the faulting process.
+Dplace sets the environment variable _DSM_OFF which will disable
+\f3libmp\f1's own DSM directives and environment variables.
+
+.SH ENVIRONMENT
+
+Dplace recognizes and uses the environment variables PAGESIZE_DATA, 
+PAGESIZE_STACK and PAGESIZE_TEXT. When using these variables it is
+important to note that the units are in kilobytes.
+The command line option will override environment variable setting.
+
+.SH ERRORS
+If errors are encountered in the placement file, \f3dplace\f1 will
+print a diagnostic message to standard error specifying where the
+error occurred in the placement file and abort execution.
+
+.SH SEE ALSO
+
+\f3dplace\f1(3), \f3dplace\f1(5), \f3dprof\f1(1),
+\f3numa\f1(5), \f3mmci\f1(5), \f3dlook\f1(1), \f3numa_view(1)\f1.

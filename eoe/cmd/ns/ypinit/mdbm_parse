@@ -1,0 +1,1575 @@
+#! /usr/bin/perl5
+eval 'exec perl5 -S $0 "$@"'
+    if 0;
+
+push(@INC, "/usr/share/lib/perl5/sgi_lib");
+use MDBM_File;
+use Fcntl;
+use Socket;
+
+$YPPUSH=$ENV{'YPPUSH'}?$ENV{'YPPUSH'}:"/usr/sbin/yppush";
+
+#
+# This routine sets up default values for variables using historic environment
+# variables after parsing the command line.
+#
+sub set_defaults {
+	$ns_dir = $ENV{"NSDIR"} ? $ENV{"NSDIR"} : "/var/ns/domains"
+	    unless $ns_dir;
+	$source_dir = $ENV{"DIR"} ? $ENV{"DIR"} : "/etc" unless $source_dir;
+	$force = $ENV{"UPDATE"} ? 1 : 0 unless $force;
+	$aliases_file = $ENV{"ALIASES"} ? $ENV{"ALIASES"} : "aliases"
+	    unless $aliases_file;
+	$bootparams_file = "bootparams" unless $bootparams_file;
+	$ethers_file = "ethers" unless $ethers_file;
+	$group_file = "group" unless $group_file;
+	$hosts_file = "hosts" unless $hosts_file;
+	$netgroup_file = "netgroup" unless $netgroup_file;
+	$networks_file = "networks" unless $networks_file;
+	$passwd_file = $ENV{"PWFILE"} ? $ENV{"PWFILE"} : "passwd"
+	    unless $passwd_file;
+	$protocols_file = "protocols" unless $protocols_file;
+	$rpc_file = "rpc" unless $rpc_file;
+	$services_file = "services" unless $services_file;
+	$capability_file = "capability" unless $capability_file;
+	$clearance_file = "clearance" unless $clearance_file;
+	$mac_file = "mac" unless $mac_file;
+	$shadow_file = "shadow" unless $shadow_file;
+	$ypservers_file = "ypservers" unless $ypservers_file;
+
+	$no_netgroup_expand = 0 unless $no_netgroup_expand;
+
+	if (! $domain) {
+		if ($ENV{"DOM"}) {
+			$domain = $ENV{"DOM"};
+		} else {
+			chomp($domain = `domainname`);
+		}
+	}
+	chomp($hostname = `hostname`);
+
+	$nopush = $ENV{"NOPUSH"} unless $nopush;
+	$dest_dir = "$ns_dir/$domain" unless $dest_dir;
+}
+
+$SIG{CHLD} = sub { wait };
+
+#
+# This just adds the magic keys required for NIS to work.
+#
+sub yp_keys {
+	local $db = $_[0];
+	local $source = $_[1];
+	local $dest = $_[2];
+
+	$time = time();
+
+	$$db{"YP_MASTER_NAME"} = $hostname;
+	$$db{"YP_LAST_MODIFIED"} = "$time";
+	$$db{"YP_INPUT_FILE"} = $source;
+	$$db{"YP_OUTPUT_NAME"} = $dest;
+	$$db{"YP_DOMAIN_NAME"} = $domain;
+}
+
+#
+# This execs yppush on a map.
+#
+sub yp_push {
+	local $db = $_[0];
+
+	do {
+		$pid = fork;
+		unless (defined $pid) {
+			print STDERR "cannot fork: $!";
+			if ($count++ > 6) {
+				print STDERR "giving up\n";
+				return 0;
+			}
+		}
+	} until defined $pid;
+
+	if ($pid) {
+		return 1;
+	} else {
+		if (! exec($YPPUSH, "-d", $domain, $db)) {
+			print STDERR "failed exec $YPPUSH -d $domain $db\n";
+			exit(1);
+		}
+	}
+}
+
+#
+# The aliases file is used to build two maps:  aliases.byname and
+# aliases.bymember.  Note that historically alias keys have included the
+# trailing null, so we do that here as well.
+#
+sub ns_aliases {
+	if (-r "$ns_dir/$domain/$aliases_file") {
+		$source = "$ns_dir/$domain/$aliases_file";
+	} elsif ( -r "$source_dir/$aliases_file") {
+		$source = "$source_dir/$aliases_file";
+	} elsif ( -r $aliases_file) {
+		$source = $aliases_file;
+	} else {
+		print STDERR "Unable to read source file: $?\n";
+		return;
+	}
+
+	$byname = "$dest_dir/mail.aliases.m";
+	$bymember = "$dest_dir/mail.byaddr.m";
+
+	$mtime = -M $source;
+	if ((! $force) && (-w $byname) && ($mtime > (-M _)) &&
+	    (-w $bymember) && ($mtime > (-M _))) {
+		return;
+	}
+
+	print "Parsing $source\n\tinto $byname\n\tand $bymember\n";
+
+	tie(%byname, MDBM_File, "$byname.$$", O_RDWR|O_CREAT, 0600) &&
+	    tie(%bymember, MDBM_File, "$bymember.$$", O_RDWR|O_CREAT, 0600) ||
+	    (warn("Unable to open destination database files.\n") && return);
+	open(IN, "<$source") ||
+	    (warn("Unable to open source file.\n") && return);
+
+	while (<IN>) {
+		next if /^\s*[+#\n]/;
+
+		chomp;
+		s/^\s+//;
+
+		if (! /\s*:\s*/) {
+			print STDERR "WARNING: no ':' in line: $_\n";
+			next;
+		}
+
+		$value = $';
+		$key = $`;
+		$key =~ tr/A-Z/a-z/;
+
+		while((! $value || /\s*,\s*$/) && ($_ = <IN>)) {
+			chomp;
+			if (! $_ || /^\s*#/) {
+				print STDERR "WARNING: trailing ',' in $key: $value\n";
+				last;
+			} elsif (! /^\s/) {
+				print STDERR "WARNING: no whitespace at beginning of continuation line in $key: $_\n";
+				last;
+			}
+			s/^\s+//;
+			$value .=  $_;
+		}
+
+		@value = split(/\s*,\s*/, $value);
+
+		#
+		# Note: we take the last key instead of the first since this
+		# is what sendmail does.
+		#
+		print STDERR "WARNING: duplicate key: $key\n"
+		    if ($byname{"$key\0"});
+		$byname{"$key\0"} = join(',', @value);
+
+		foreach $member (@value) {
+			next if ($member =~ /\|/);
+			next if ($member =~ /:include:/);
+			next unless ($member =~ /\@/ || $member =~ /\!/);
+			next if ($member =~ /^\@/ || $member =~ /^YP_/);
+
+			# note that this doesn't check for
+			# duplicates.  This is because a duplicate
+			# is normall, but the old version only
+			# used one key, and it was the last one
+			# encountered.
+			$bymember{"$member\0"} = "$key";
+		}
+	}
+
+	close(IN);
+	yp_keys(\%byname, $source, $byname);
+	untie(%byname);
+	yp_keys(\%bymember, $source, $bymember);
+	untie(%bymember);
+
+	rename("$byname.$$", $byname);
+	rename("$bymember.$$", $bymember);
+	if (! $nopush) {
+		yp_push("mail.aliases");
+		yp_push("mail.byaddr");
+	}
+}
+
+#
+# The bootparams file is used to build the bootparams.byname database.
+#
+sub ns_bootparams {
+	if (-r "$ns_dir/$domain/$bootparams_file") {
+		$source = "$ns_dir/$domain/$bootparams_file";
+	} elsif (-r "$source_dir/$bootparams_file") {
+		$source = "$source_dir/$bootparams_file";
+	} elsif (-r $bootparams_file) {
+		$source = $bootparams_file;
+	} else {
+		print STDERR "Unable to read source file: $?\n";
+		return;
+	}
+
+	$byname = "$dest_dir/bootparams.m";
+
+	$mtime = -M $source;
+	if ((! $force) && (-w $byname) && ($mtime > (-M _))) {
+		return;
+	}
+
+	print "Parsing $bootparams_file\n\tinto $byname\n";
+
+	tie(%byname, MDBM_File, "$byname.$$", O_RDWR|O_CREAT, 0600) ||
+	    (warn("Unable to open destination database files.\n") && return);
+	open(IN, "<$source") ||
+	    (warn("Unable to open source file.\n") && return);
+
+	while (<IN>) {
+		next if /^\s*[#\n]/;
+
+		chomp;
+		s/^\s+//;
+		$value = $_;
+
+		while(($value =~ s/\s*\\$//) && <IN>) {
+			chomp;
+			s/^\s+/ /;
+			$value .=  $_;
+		}
+
+		@value = split(/\s+/, $value);
+		$key = shift(@value);
+		$key =~ tr/A-Z/a-z/;
+
+		if ($byname{$key}) {
+			print STDERR "WARNING: duplicate key: $key\n";
+		} else {
+			$byname{$key} = join(' ', @value);
+		}
+	}
+
+	close(IN);
+	yp_keys(\%byname, $source, $byname);
+	untie(%byname);
+
+	rename("$byname.$$", $byname);
+	if (! $nopush) {
+		yp_push("bootparams");
+	}
+}
+
+#
+# The ethers file is used to build two maps:  ethers.byname and ethers.byaddr.
+#
+sub ns_ethers {
+	if (-r "$ns_dir/$domain/$ethers_file") {
+		$source = "$ns_dir/$domain/$ethers_file";
+	} elsif (-r "$source_dir/$ethers_file") {
+		$source = "$source_dir/$ethers_file";
+	} elsif (-r $ethers_file) {
+		$source = $ethers_file;
+	} else {
+		print STDERR "Could not read source file: $ethers_file\n";
+		return;
+	}
+
+	$byname = "$dest_dir/ethers.byname.m";
+	$byaddr = "$dest_dir/ethers.byaddr.m";
+
+	$mtime = -M $source;
+	if ((! $force) && (-w $byname) && ($mtime > (-M _)) &&
+	    (-w $byaddr) && ($mtime > (-M _))) {
+		return;
+	}
+
+	print "Parsing $ethers_file\n\tinto $byname\n\tand $byaddr\n";
+
+	tie(%byname, MDBM_File, "$byname.$$", O_RDWR|O_CREAT, 0600) &&
+	    tie(%byaddr, MDBM_File, "$byaddr.$$", O_RDWR|O_CREAT, 0600) ||
+	    (warn("Failed to open destination database files.\n") && return);
+	open(IN, "<$source") ||
+	    (warn("Failed to open source file.\n") && return);
+
+	while (<IN>) {
+		next if /^\s*[#\n]/;
+
+		chomp;
+		s/^\s+//;
+		s/#.*//;
+
+		($addr, $name) = split(/\s+/);
+		$line = "$addr\t$name";
+
+		$addr = sprintf("%x:%x:%x:%x:%x:%x",
+			    map { hex($_) } split(':', $addr));
+		$name =~ tr/A-Z/a-z/;
+
+		if ($byaddr{$addr}) {
+			print STDERR "WARNING: duplicate address: $addr\n";
+		} else {
+			$byaddr{$addr} = $line;
+		}
+
+		if ($byname{$name}) {
+			print STDERR "WARNING: duplicate name: $name\n";
+		} else {
+			$byname{$name} = $line;
+		}
+	}
+
+	close(IN);
+	yp_keys(\%byname, $source, $byname);
+	untie(%byname);
+	yp_keys(\%byaddr, $source, $byaddr);
+	untie(%byaddr);
+
+	rename("$byname.$$", $byname);
+	rename("$byaddr.$$", $byaddr);
+	if (! $nopush) {
+		yp_push("ethers.byname");
+		yp_push("ethers.byaddr");
+	}
+}
+
+#
+# The group file is used to build three maps:  group.byname, group.bygid,
+# and group.bymember.
+#
+sub ns_group {
+	if (-r "$ns_dir/$domain/$group_file") {
+		$source = "$ns_dir/$domain/$group_file";
+	} elsif (-r "$source_dir/$group_file") {
+		$source = "$source_dir/$group_file";
+	} elsif (-r $group_file) {
+		$source = $group_file;
+	} else {
+		print STDERR "Could not open source file: $group_file\n";
+		return;
+	}
+
+	$byname = "$dest_dir/group.byname.m";
+	$bygid = "$dest_dir/group.bygid.m";
+	$bymember = "$dest_dir/group.bymember.m";
+
+	$mtime = -M $source;
+	if ((! $force) && (-w $byname) && ($mtime > (-M _)) &&
+	    (-w $bygid) && ($mtime > (-M _)) &&
+	    (-w $bymember) && ($mtime > (-M _))) {
+		return;
+	}
+
+	print "Parsing $source\n\tinto $byname,\n\t$bygid\n\tand $bymember\n";
+
+	tie(%byname, MDBM_File, "$byname.$$", O_RDWR|O_CREAT, 0600) &&
+	    tie(%bygid, MDBM_File, "$bygid.$$", O_RDWR|O_CREAT, 0600) &&
+	    tie(%bymember, MDBM_File, "$bymember.$$", O_RDWR|O_CREAT, 0600) ||
+	    (warn("Failed to open destination database files.\n") && return);
+	open(IN, "<$source") ||
+	    (warn("Failed to open source file.\n") && return);
+
+	while (<IN>) {
+		next if /^\s*[#\n]/;
+		next if /^\s*\+/;
+
+		chomp;
+		s/^\s+//;
+
+		$line = $_;
+		($name, $gid, $members) = (split(/:/))[0,2,3];
+
+		next unless ($name);
+		if ($byname{$name}) {
+			print STDERR "WARNING: duplicate name: $name\n";
+		} else {
+			$byname{$name} = $line;
+		}
+
+		next unless ($gid ne "");
+		if ($bygid{$gid}) {
+			print STDERR "WARNING: duplicate gid: $gid\n";
+		} else {
+			$bygid{$gid} = $line;
+		}
+
+		next unless ($members);
+		foreach $member (split(/\s*,\s*/, $members)) {
+			if ($bymember{$member}) {
+				$bymember{$member} .= ",$gid";
+			} else {
+				$bymember{$member} = "$member:$gid";
+			}
+		}
+	}
+
+	close(IN);
+	yp_keys(\%byname, $source, $byname);
+	untie(%byname);
+	yp_keys(\%bygid, $source, $bygid);
+	untie(%bygid);
+	yp_keys(\%bymember, $source, $bymember);
+	untie(%bymember);
+
+	rename("$byname.$$", $byname);
+	rename("$bygid.$$", $bygid);
+	rename("$bymember.$$", $bymember);
+	if (! $nopush) {
+		yp_push("group.byname");
+		yp_push("group.bygid");
+		yp_push("group.bymember");
+	}
+}
+
+#
+# The hosts file is used to build two maps:  hosts.byname and hosts.byaddr.
+#
+sub ns_hosts {
+	if (-r "$ns_dir/$domain/$hosts_file") {
+		$source = "$ns_dir/$domain/$hosts_file";
+	} elsif (-r "$source_dir/$hosts_file") {
+		$source = "$source_dir/$hosts_file";
+	} elsif (-r $hosts_file) {
+		$source = $hosts_file;
+	} else {
+		print STDERR "Could not read source file: $hosts_file\n";
+		return;
+	}
+
+	$byname = "$dest_dir/hosts.byname.m";
+	$byaddr = "$dest_dir/hosts.byaddr.m";
+
+	$mtime = -M $source;
+	if ((! $force) && (-w $byname) && ($mtime > (-M _)) &&
+	    (-w $byaddr) && ($mtime > (-M _))) {
+		return;
+	}
+
+	print "Parsing $source\n\tinto $byname\n\tand $byaddr\n";
+
+	tie(%byname, MDBM_File, "$byname.$$", O_RDWR|O_CREAT, 0600) &&
+	    tie(%byaddr, MDBM_File, "$byaddr.$$", O_RDWR|O_CREAT, 0600) ||
+	    (warn("Failed to open destination database files.\n") && return);
+	open(IN, "<$source") ||
+	    (warn("Failed to open source file.\n") && return);
+
+	while (<IN>) {
+		next if /^\s*[#\n]/;
+
+		chomp;
+		s/^\s+//;
+		s/#.*//;
+
+		@line = split(/\s+/);
+		$line = join("\t", @line);
+
+		$a = Socket::inet_aton(shift(@line));
+		next unless($a);
+		$address = join('.',unpack(C4, $a));
+		if ($byaddr{$address}) {
+			print STDERR "WARNING: duplicate address: $address\n";
+		} else {
+			$byaddr{$address} = $line;
+		}
+
+		foreach $name (@line) {
+			$name =~ tr/A-Z/a-z/;
+			if ($byname{$name}) {
+				print STDERR "WARNING: duplicate name: $name\n";
+			} else {
+				$byname{$name} = $line;
+			}
+		}
+	}
+
+	close(IN);
+	yp_keys(\%byname, $source, $byname);
+	untie(%byname);
+	yp_keys(\%byaddr, $source, $byaddr);
+	untie(%byaddr);
+
+	rename("$byname.$$", $byname);
+	rename("$byaddr.$$", $byaddr);
+	if (! $nopush) {
+		yp_push("hosts.byname");
+		yp_push("hosts.byaddr");
+	}
+}
+
+#
+# This routine will be called recursively to unroll a netgroup.
+# All netgroups are stored in the %all array.
+#
+sub expand_netgroup {
+	my $name = $_[0];
+	local @line;
+	local $line = $all{$name} or return "";
+
+	while ($line) {
+		while ($line =~ /^(\([^\)]+\))\s*/) {
+			push(@line, $&);
+			$line = $';
+		}
+		next unless $line;
+		if ($line =~ /\s+/) {
+			$group = $`;
+			$line = $';
+		} else {
+			$group = $line;
+			$line = "";
+		}
+
+		if ($groups_visited{$group}) {
+			print STDERR "WARNING duplicate group: $group\n";
+			next;
+		} 
+
+		$groups_visited{$group} = 1;
+
+		$add = expand_netgroup($group);
+		$line = $add . $line;
+	};
+
+	return join(' ', @line);
+}
+
+#
+# The netgroup file is used to build three maps:  netgroup, netgroup.byuser,
+# and netgroup.byhost.
+#
+sub ns_netgroup {
+	local %all, %groups_visited;
+	local $MAX_NETGROUP = 1024;
+	local %users, %hosts;
+	local $lower;
+
+	if (-r "$ns_dir/$domain/$netgroup_file") {
+		$source = "$ns_dir/$domain/$netgroup_file";
+	} elsif (-r "$source_dir/$netgroup_file") {
+		$source = "$source_dir/$netgroup_file";
+	} elsif (-r $netgroup_file) {
+		$source = $netgroup_file;
+	} else {
+		print STDERR "Could not read source file: $netgroup_file\n";
+		return;
+	}
+
+	$byname = "$dest_dir/netgroup.m";
+	$byhost = "$dest_dir/netgroup.byhost.m";
+	$byuser = "$dest_dir/netgroup.byuser.m";
+
+	$mtime = -M $source;
+	if ((! $force) && (-w $byname) && ($mtime > (-M _)) &&
+	    (-w $byhost) && ($mtime > (-M _)) &&
+	    (-w $byuser) && ($mtime > (-M _))) {
+		return;
+	}
+
+	print "Parsing $source\n\tinto $byname,\n\t$byhost\n\tand $byuser\n";
+
+	tie(%byname, MDBM_File, "$byname.$$", O_RDWR|O_CREAT, 0600) &&
+	    tie(%byhost, MDBM_File, "$byhost.$$", O_RDWR|O_CREAT, 0600) &&
+	    tie(%byuser, MDBM_File, "$byuser.$$", O_RDWR|O_CREAT, 0600) ||
+	    (warn("Failed to open destination database files.\n") && return);
+	open(IN, "<$source") ||
+	    (warn("Failed to open source file.\n") && return);
+
+	while (<IN>) {
+		$ln = $_;
+
+		next if $ln =~ /^\s*[#\n]/;
+		$ln =~ s/^\s+//;
+		$ln =~ s/\s*#.*//;
+
+		while ($ln =~ /\\\n$/ && ($new = <IN>)) {
+			$new =~ s/^\s+/ /;
+			$new =~ s/\s*#.*//;
+			substr($ln, -2, 2) = $new;
+		}
+
+		chomp $ln;
+		$ln =~ s/^\s+//;
+		$ln =~ s/\s*#.*//;
+
+		$ln =~ /\s+/;
+		$key = $`;
+		$line = $';
+
+		next unless ($key && $line);
+
+		$all{$key} = $line;
+	}
+
+	foreach $key (keys %all) {
+		undef %groups_visited;
+		$groups_visited{$key} = 1;
+
+		next unless ($line = expand_netgroup($key));
+		@line = split(/\s*\(\s*/, $line);
+
+		if ($byname{$key}) {
+			print STDERR "WARNING: duplicate name: $key\n";
+		} else {
+			if ($no_netgroup_expand || length($line) >
+			    $MAX_NETGROUP) {
+				$byname{$key} = $all{$key};
+			} else {
+				$byname{$key} = $line;
+			}
+		}
+
+		foreach $name (@line) {
+			next unless $name;
+			$name =~ s/[\)\s]+$//;
+			($host, $user, $dom) = split(/\s*,\s*/, $name);
+			$lower = $dom;
+			$lower =~ tr/A-Z/a-z/;
+
+			$host = '*' unless($host);
+			$fullhost = ($dom) ? "$host.$dom" : "$host.*";
+			$fullhost =~ tr/A-Z/a-z/;
+			if ($fullhost =~ /^[a-z0-9_*]/) {
+				if ($byhost{$fullhost}) {
+					if (! $hosts{$fullhost,$key}) {
+						$byhost{$fullhost} .= ",$key";
+						$hosts{$fullhost,$key} = 1;
+					}
+				} else {
+					$byhost{$fullhost} = "$key";
+					$hosts{$fullhost,$key} = 1;
+				}
+				if ($lower ne $dom) {
+					$fullhost = "$host.$dom";
+					if ($byhost{$fullhost}) {
+						if (! $hosts{$fullhost,$key}) {
+							$byhost{$fullhost} .=
+							    ",$key";
+							$hosts{$fullhost,$key}=
+							    1;
+						}
+					} else {
+						$byhost{$fullhost} = "$key";
+						$hosts{$fullhost,$key} = 1;
+					}
+				}
+			}
+
+			$user = '*' unless($user);
+			$fulluser = ($dom) ? "$user.$dom" : "$user.*";
+			if ($fulluser =~ /^[A-Za-z0-9_*]/) {
+				if ($byuser{$fulluser}) {
+					if (! $users{$fulluser,$key}) {
+						$byuser{$fulluser} .= ",$key";
+						$users{$fulluser,$key} = 1;
+					}
+				} else {
+					$byuser{$fulluser} = "$key";
+					$users{$fulluser,$key} = 1;
+				}
+				if ($lower ne $dom) {
+					$fulluser = "$user.$lower";
+					if ($byuser{$fulluser}) {
+						if (! $users{$fulluser,$key}) {
+							$byuser{$fulluser} .=
+							    ",$key";
+							$users{$fulluser,$key}=
+							    1;
+						}
+					} else {
+						$byuser{$fulluser} = "$key";
+						$users{$fulluser,$key} = 1;
+					}
+				}
+			}
+		}
+	}
+
+	close(IN);
+	yp_keys(\%byname, $source, $byname);
+	untie(%byname);
+	yp_keys(\%byhost, $source, $byhost);
+	untie(%byhost);
+	yp_keys(\%byuser, $source, $byuser);
+	untie(%byuser);
+
+	rename("$byname.$$", $byname);
+	rename("$byhost.$$", $byhost);
+	rename("$byuser.$$", $byuser);
+	if (! $nopush) {
+		yp_push("netgroup");
+		yp_push("netgroup.byhost");
+		yp_push("netgroup.byuser");
+	}
+}
+
+#
+# The netid.byname map is built using the passwd and hosts files.
+#
+sub ns_netid {
+	my %groups = ();
+
+	if (-r "$ns_dir/$domain/$hosts_file") {
+		$hosts = "$ns_dir/$domain/$hosts_file"
+	} elsif (-r "$source_dir/$hosts_file") {
+		$hosts = "$source_dir/$hosts_file";
+	} elsif (-r $hosts_file) {
+		$hosts = $hosts_file;
+	} else {
+		print STDERR "Could not read hosts file: $hosts_file\n";
+		return;
+	}
+	if (-r "$ns_dir/$domain/$passwd_file") {
+		$passwd = "$ns_dir/$domain/$passwd_file"
+	} elsif (-r "$source_dir/$passwd_file") {
+		$passwd = "$source_dir/$passwd_file";
+	} elsif (-r $passwd_file) {
+		$passwd = $passwd_file;
+	} else {
+		print STDERR "Could not read passwd file: $passwd_file\n";
+		return;
+	}
+	if (-r "$ns_dir/$domain/$group_file") {
+		$group = "$ns_dir/$domain/$group_file"
+	} elsif (-r "$source_dir/$group_file") {
+		$group = "$source_dir/$group_file";
+	} elsif (-r $group_file) {
+		$group = $group_file;
+	} else {
+		print STDERR "Could not read group file: $group_file\n";
+		return;
+	}
+
+	$byname = "$dest_dir/netid.byname.m";
+
+	$mtime = -M $byname;
+	if ((! $force) && (-w $byname) && ($mtime < (-M $hosts)) &&
+	    ($mtime < (-M $passwd)) && ($mtime < (-M $group))) {
+		return;
+	}
+
+	print "Parsing $hosts,\n\t$passwd\n\tand $group\n\tinto $byname\n";
+
+	tie(%byname, MDBM_File, "$byname.$$", O_RDWR|O_CREAT, 0600) ||
+	    (warn("Failed to open destination database file.\n") && return);
+	open(HOSTS, "<$hosts") && open(PASSWD, "<$passwd") &&
+	    open(GROUP, "<$group") ||
+	    (warn("Failed to open source file.\n") && return);
+
+	while (<GROUP>) {
+		next if /^\s*[#\n]/;
+
+		($gid, $members) = (split(/:/))[2,3];
+		chomp($members);
+		next unless ($members);
+		@members = split(/\s*,\s*/, $members);
+		foreach $member (@members) {
+			if ($groups{$member}) {
+				$groups{$member} .= ",$gid";
+			} else {
+				$groups{$member} = $gid;
+			}
+		}
+	}
+
+	while (<PASSWD>) {
+		next if /^\s*[#\n]/;
+		next if (/^\s*[+-]/);
+
+		($login, $uid, $gid) = (split(/:/))[0,2,3];
+		next unless ($login && $gid && $uid);
+		$fullname = "unix.$uid\@$domain";
+		if ($byname{$fullname}) {
+			print STDERR "WARNING: duplicate user: $fullname\n";
+		} else {
+			if ($groups{$login}) {
+				$groups{$login} = "$gid," . $groups{$login};
+			} else {
+				$groups{$login} = $gid;
+			}
+			$byname{$fullname} = $uid . ":" . $groups{$login};
+		}
+	}
+
+	while (<HOSTS>) {
+		next if /^\s*[#\n]/;
+
+		chomp;
+		s/^\s+//;
+		s/#.*//;
+
+		$name = (split(/\s+/))[1];
+		$fullname = "unix.$name\@$domain";
+
+		if ($byname{$fullname}) {
+			print STDERR "WARNING: duplicate host: $fullname\n";
+		} else {
+			$byname{$fullname} = "0:$name";
+		}
+	}
+
+	close(HOSTS);
+	close(PASSWD);
+	close(GROUP);
+	yp_keys(\%byname, $source, $byname);
+	untie(%byname);
+
+	rename("$byname.$$", $byname);
+	if (! $nopush) {
+		yp_push("netid.byname");
+	}
+}
+
+#
+# The networks file is used to build two maps:  networks.byname and
+# networks.byaddr.
+#
+sub ns_networks {
+	if (-r "$ns_dir/$domain/$networks_file") {
+		$source = "$ns_dir/$domain/$networks_file";
+	} elsif (-r "$source_dir/$networks_file") {
+		$source = "$source_dir/$networks_file";
+	} elsif (-r $networks_file) {
+		$source = $networks_file;
+	} else {
+		print STDERR "Could not read source file: $networks_file\n";
+		return;
+	}
+
+	$byname = "$dest_dir/networks.byname.m";
+	$byaddr = "$dest_dir/networks.byaddr.m";
+
+	$mtime = -M $source;
+	if ((! $force) && (-w $byname) && ($mtime > (-M _)) &&
+	    (-w $byaddr) && ($mtime > (-M _))) {
+		return;
+	}
+
+	print "Parsing $source\n\tinto $byname\n\tand $byaddr\n";
+
+	tie(%byname, MDBM_File, "$byname.$$", O_RDWR|O_CREAT, 0600) &&
+	    tie(%byaddr, MDBM_File, "$byaddr.$$", O_RDWR|O_CREAT, 0600) ||
+	    (warn("Failed to open destination database files.\n") && return);
+	open(IN, "<$source") ||
+	    (warn("Failed to open source file.\n") && return);
+
+	while (<IN>) {
+		next if /^\s*[#\n]/;
+
+		chomp;
+		s/^\s+//;
+		s/\s*#.*//;
+
+		@line = split(/\s+/);
+		$line = join("\t", @line);
+
+		$network = splice(@line, 1, 1);
+		next unless ($network);
+		if ($byaddr{$network}) {
+			print STDERR "WARNING: duplicate network: $network\n";
+		} else {
+			$byaddr{$network} = $line;
+		}
+		
+		foreach $name (@line) {
+			if ($byname{$name}) {
+				print STDERR "WARNING: duplicate name: $name\n";
+			} else {
+				$byname{$name} = $line;
+			}
+		}
+	}
+
+	close(IN);
+	yp_keys(\%byname, $source, $byname);
+	untie(%byname);
+	yp_keys(\%byaddr, $source, $byaddr);
+	untie(%byaddr);
+
+	rename("$byname.$$", $byname);
+	rename("$byaddr.$$", $byaddr);
+	if (! $nopush) {
+		yp_push("networks.byname");
+		yp_push("networks.byaddr");
+	}
+}
+
+#
+# The passwd file is used to build two maps:  passwd.byname and passwd.byuid.
+#
+sub ns_passwd {
+	if (-r "$ns_dir/$domain/$passwd_file") {
+		$source = "$ns_dir/$domain/$passwd_file";
+	} elsif (-r "$source_dir/$passwd_file") {
+		$source = "$source_dir/$passwd_file";
+	} elsif (-r $passwd_file) {
+		$source = $passwd_file;
+	} else {
+		print STDERR "Could not read source file: $passwd_file\n";
+		return;
+	}
+
+	$byname = "$dest_dir/passwd.byname.m";
+	$byuid = "$dest_dir/passwd.byuid.m";
+
+	$mtime = -M $source;
+	if ((! $force) && (-w $byname) && ($mtime > (-M _)) &&
+	    (-w $byuid) && ($mtime > (-M _))) {
+		return;
+	}
+
+	print "Parsing $source\n\tinto $byname\n\tand $byuid\n";
+
+	tie(%byname, MDBM_File, "$byname.$$", O_RDWR|O_CREAT, 0600) &&
+	    tie(%byuid, MDBM_File, "$byuid.$$", O_RDWR|O_CREAT, 0600) ||
+	    (warn("Failed to open destination database files.\n") && return);
+	open(IN, "<$source") ||
+	    (warn("Failed to open source file.\n") && return);
+
+	while (<IN>) {
+		next if /^\s*[#\n]/;
+		chomp;
+		s/^\s+//;
+
+		$line = $_;
+		($name, $uid) = (split(/:/))[0,2];
+
+		# skip root or passthru records
+		if (($uid == 0) || ($name =~ /^\s*[+-]/)) {
+			print STDERR "SKIPPING: $line\n";
+			next;
+		}
+
+		if ($byname{$name}) {
+			print STDERR "WARNING: duplicate name: $name\n";
+		} else {
+			$byname{$name} = $line;
+		}
+
+		if ($byuid{$uid}) {
+			print STDERR "WARNING: duplicate uid: $uid\n";
+		} else {
+			$byuid{$uid} = $line;
+		}
+	}
+
+	close(IN);
+	yp_keys(\%byname, $source, $byname);
+	untie(%byname);
+	yp_keys(\%byuid, $source, $byuid);
+	untie(%byuid);
+
+	rename("$byname.$$", $byname);
+	rename("$byuid.$$", $byuid);
+	if (! $nopush) {
+		yp_push("passwd.byname");
+		yp_push("passwd.byuid");
+	}
+}
+
+#
+# The protocols file is used to build two maps:  protocols.byname and
+# protocols.bynumber.
+#
+sub ns_protocols {
+	if (-r "$ns_dir/$domain/$protocols_file") {
+		$source = "$ns_dir/$domain/$protocols_file";
+	} elsif (-r "$source_dir/$protocols_file") {
+		$source = "$source_dir/$protocols_file";
+	} elsif (-r $protocols_file) {
+		$source = $protocols_file;
+	} else {
+		print STDERR "Could not read source file: $protocols_file\n";
+		return;
+	}
+
+	$byname = "$dest_dir/protocols.byname.m";
+	$bynumber = "$dest_dir/protocols.bynumber.m";
+
+	$mtime = -M $source;
+	if ((! $force) && (-w $byname) && ($mtime > (-M _)) &&
+	    (-w $bynumber) && ($mtime > (-M _))) {
+		return;
+	}
+
+	print "Parsing $source\n\tinto $byname\n\tand $bynumber\n";
+
+	tie(%byname, MDBM_File, "$byname.$$", O_RDWR|O_CREAT, 0600) &&
+	    tie(%bynumber, MDBM_File, "$bynumber.$$", O_RDWR|O_CREAT, 0600) ||
+	    (warn("Failed to open destination database files.\n") && return);
+	open(IN, "<$source") ||
+	    (warn("Failed to open source file.\n") && return);
+
+	while (<IN>) {
+		next if /^\s*[#\n]/;
+
+		chomp;
+		s/^\s+//;
+		s/\s*#.*//;
+
+		@line = split(/\s+/);
+		$line = join("\t", @line);
+
+		$number = splice(@line, 1, 1);
+		if ($bynumber{$number}) {
+			print STDERR "WARNING: duplicate number: $number\n";
+		} else {
+			$bynumber{$number} = $line;
+		}
+		
+		foreach $name (@line) {
+			if ($byname{$name}) {
+				print STDERR "WARNING: duplicate name: $name\n";
+			} else {
+				$byname{$name} = $line;
+			}
+		}
+	}
+
+	close(IN);
+	yp_keys(\%byname, $source, $byname);
+	untie(%byname);
+	yp_keys(\%bynumber, $source, $bynumber);
+	untie(%bynumber);
+
+	rename("$byname.$$", $byname);
+	rename("$bynumber.$$", $bynumber);
+	if (! $nopush) {
+		yp_push("protocols.byname");
+		yp_push("protocols.bynumber");
+	}
+}
+
+#
+# The rpc file is used to build two maps, rpc.byname and rpc.bynumber.
+#
+sub ns_rpc {
+	if (-r "$ns_dir/$domain/$rpc_file") {
+		$source = "$ns_dir/$domain/$rpc_file";
+	} elsif (-r "$source_dir/$rpc_file") {
+		$source = "$source_dir/$rpc_file";
+	} elsif (-r $rpc_file) {
+		$source = $rpc_file;
+	} else {
+		print STDERR "Could not read source file: $rpc_file\n";
+		return;
+	}
+
+	$byname = "$dest_dir/rpc.byname.m";
+	$bynumber = "$dest_dir/rpc.bynumber.m";
+
+	$mtime = -M $source;
+	if ((! $force) && (-w $byname) && ($mtime > (-M _)) &&
+	    (-w $bynumber) && ($mtime > (-M _))) {
+		return;
+	}
+
+	print "Parsing $source\n\tinto $byname\n\tand $bynumber\n";
+
+	tie(%byname, MDBM_File, "$byname.$$", O_RDWR|O_CREAT, 0600) &&
+	    tie(%bynumber, MDBM_File, "$bynumber.$$", O_RDWR|O_CREAT, 0600) ||
+	    (warn("Failed to open destination database files.\n") && return);
+	open(IN, "<$source") ||
+	    (warn("Failed to open source file.\n") && return);
+
+	while (<IN>) {
+		next if /^\s*[#\n]/;
+
+		chomp;
+		s/^\s+//;
+		s/\s*#.*//;
+
+		@line = split(/\s+/);
+		$line = join("\t", @line);
+
+		$number = splice(@line, 1, 1);
+		if ($bynumber{$number}) {
+			print STDERR "WARNING: duplicate number: $number\n";
+		} else {
+			$bynumber{$number} = $line;
+		}
+		
+		foreach $name (@line) {
+			if ($byname{$name}) {
+				print STDERR "WARNING: duplicate name: $name\n";
+			} else {
+				$byname{$name} = $line;
+			}
+		}
+	}
+
+	close(IN);
+	yp_keys(\%byname, $source, $byname);
+	untie(%byname);
+	yp_keys(\%bynumber, $source, $bynumber);
+	untie(%bynumber);
+
+	rename("$byname.$$", $byname);
+	rename("$bynumber.$$", $bynumber);
+	if (! $nopush) {
+		yp_push("rpc.byname");
+		yp_push("rpc.bynumber");
+	}
+}
+
+#
+# The services file is used to build two maps:  services.byname and
+# services.byport.  These are really by-name-and-protocol and
+# by-port-and-protocol.
+#
+sub ns_services {
+	if (-r "$ns_dir/$domain/$services_file") {
+		$source = "$ns_dir/$domain/$services_file";
+	} elsif (-r "$source_dir/$services_file") {
+		$source = "$source_dir/$services_file";
+	} elsif (-r $services_file) {
+		$source = $services_file;
+	} else {
+		print STDERR "Could not read source file: $services_file\n";
+		return;
+	}
+
+	$byname = "$dest_dir/services.m";
+	$byport = "$dest_dir/services.byname.m";
+
+	$mtime = -M $source;
+	if ((! $force) && (-w $byname) && ($mtime > (-M _)) &&
+	    (-w $byport) && ($mtime > (-M _))) {
+		return;
+	}
+
+	print "Parsing $source\n\tinto $byname\n\tand $byport\n";
+
+	tie(%byname, MDBM_File, "$byname.$$", O_RDWR|O_CREAT, 0600) &&
+	    tie(%byport, MDBM_File, "$byport.$$", O_RDWR|O_CREAT, 0600) ||
+	    (warn("Failed to open destination database files.\n") && return);
+	open(IN, "<$source") ||
+	    (warn("Failed to open source file.\n") && return);
+
+	while (<IN>) {
+		next if /^\s*[#\n]/;
+
+		chomp;
+		s/^\s+//;
+		s/\s*#.*//;
+
+		@line = split(/\s+/);
+		$line = join("\t", @line);
+
+		$portnproto = splice(@line, 1, 1);
+		next unless ($portnproto =~ m#/#);
+		$proto = $';
+
+		if ($byport{$portnproto}) {
+			print STDERR "WARNING: duplicate port: $portnproto\n";
+		} else {
+			$byport{$portnproto} = $line;
+		}
+		
+		foreach $name (@line) {
+			$namenproto = "$name/$proto";
+			$byname{$name} = $line unless $byname{$name};
+			if ($byname{"$namenproto"}) {
+				print STDERR
+				    "WARNING: duplicate name: $namenproto\n";
+			} else {
+				$byname{"$namenproto"} = $line;
+			}
+		}
+	}
+
+	close(IN);
+	yp_keys(\%byname, $source, $byname);
+	untie(%byname);
+	yp_keys(\%byport, $source, $byport);
+	untie(%byport);
+
+	rename("$byname.$$", $byname);
+	rename("$byport.$$", $byport);
+	if (! $nopush) {
+		yp_push("services.byname");
+		yp_push("services");
+	}
+}
+
+#
+# The capability file is used to build one map, capability.byname
+#
+sub ns_capability {
+	if (-r "$ns_dir/$domain/$capability_file") {
+		$source = "$ns_dir/$domain/$capability_file";
+	} elsif (-r "$source_dir/$capability_file") {
+		$source = "$source_dir/$capability_file";
+	} elsif (-r $capability_file) {
+		$source = $capability_file;
+	} else {
+		print STDERR "Could not read source file: $capability_file\n";
+		return;
+	}
+
+	$byname = "$dest_dir/capability.byname.m";
+
+	$mtime = -M $source;
+	if ((! $force) && (-w $byname) && ($mtime > (-M _))) {
+		return;
+	}
+
+	print "Parsing $source\n\tinto $byname\n";
+
+	tie(%byname, MDBM_File, "$byname.$$", O_RDWR|O_CREAT, 0600) ||
+	    (warn("Failed to open destination database files.\n") && return);
+	open(IN, "<$source") ||
+	    (warn("Failed to open source file.\n") && return);
+
+	while (<IN>) {
+		chomp;
+		s/^\s+//;
+
+		@line = split(/:/);
+		$line = $_;
+
+		if ($byname{$line[0]}) {
+			print STDERR "WARNING: duplicate name: $line[0]\n";
+		} else {
+			$byname{$line[0]} = $line;
+		}
+	}
+
+	close(IN);
+	yp_keys(\%byname, $source, $byname);
+	untie(%byname);
+
+	rename("$byname.$$", $byname);
+	if (! $nopush) {
+		yp_push("capability.byname");
+	}
+}
+
+#
+# The clearance file is used to build one map, clearance.byname
+#
+sub ns_clearance {
+	if (-r "$ns_dir/$domain/$clearance_file") {
+		$source = "$ns_dir/$domain/$clearance_file";
+	} elsif (-r "$source_dir/$clearance_file") {
+		$source = "$source_dir/$clearance_file";
+	} elsif (-r $clearance_file) {
+		$source = $clearance_file;
+	} else {
+		print STDERR "Could not read source file: $clearance_file\n";
+		return;
+	}
+
+	$byname = "$dest_dir/clearance.byname.m";
+
+	$mtime = -M $source;
+	if ((! $force) && (-w $byname) && ($mtime > (-M _))) {
+		return;
+	}
+
+	print "Parsing $source\n\tinto $byname\n";
+
+	tie(%byname, MDBM_File, "$byname.$$", O_RDWR|O_CREAT, 0600) ||
+	    (warn("Failed to open destination database files.\n") && return);
+	open(IN, "<$source") ||
+	    (warn("Failed to open source file.\n") && return);
+
+	while (<IN>) {
+		chomp;
+		s/^\s+//;
+
+		@line = split(/:/);
+		$line = $_;
+
+		if ($byname{$line[0]}) {
+			print STDERR "WARNING: duplicate name: $line[0]\n";
+		} else {
+			$byname{$line[0]} = $line;
+		}
+	}
+
+	close(IN);
+	yp_keys(\%byname, $source, $byname);
+	untie(%byname);
+
+	rename("$byname.$$", $byname);
+	if (! $nopush) {
+		yp_push("clearance.byname");
+	}
+}
+
+#
+# The mac file is used to build two maps, mac.byname and mac.byvalue.
+#
+sub ns_mac {
+	if (-r "$ns_dir/$domain/$mac_file") {
+		$source = "$ns_dir/$domain/$mac_file";
+	} elsif (-r "$source_dir/$mac_file") {
+		$source = "$source_dir/$mac_file";
+	} elsif (-r $mac_file) {
+		$source = $mac_file;
+	} else {
+		print STDERR "Could not read source file: $mac_file\n";
+		return;
+	}
+
+	$byname = "$dest_dir/mac.byname.m";
+	$byvalue = "$dest_dir/mac.byvalue.m";
+
+	$mtime = -M $source;
+	if ((! $force) && (-w $byname) && ($mtime > (-M _)) &&
+	    (-w $byvalue) && ($mtime > (-M _))) {
+		return;
+	}
+
+	print "Parsing $source\n\tinto $byname\n\tand $byvalue\n";
+
+	tie(%byname, MDBM_File, "$byname.$$", O_RDWR|O_CREAT, 0600) &&
+	    tie(%byvalue, MDBM_File, "$byvalue.$$", O_RDWR|O_CREAT, 0600) ||
+	    (warn("Failed to open destination database files.\n") && return);
+	open(IN, "<$source") ||
+	    (warn("Failed to open source file.\n") && return);
+
+	while (<IN>) {
+		next if /^\s*[#\n]/;
+
+		chomp;
+		s/^\s+//;
+
+		@line = split(/:/);
+		$line = $_;
+
+		$name = join(':', @line[0,1]);
+		$value = join(':', @line[1,2]);
+
+		if ($byname{$name}) {
+			print STDERR "WARNING: duplicate key: $name\n";
+		} else {
+			$byname{$name} = $line;
+		}
+
+		if ($byvalue{$value}) {
+			print STDERR "WARNING: duplicate key: $value\n";
+		} else {
+			$byvalue{$value} = $line;
+		}
+	}
+
+	close(IN);
+	yp_keys(\%byname, $source, $byname);
+	untie(%byname);
+	yp_keys(\%byvalue, $source, $byvalue);
+	untie(%byvalue);
+
+	rename("$byname.$$", $byname);
+	rename("$byvalue.$$", $byvalue);
+	if (! $nopush) {
+		yp_push("mac.byname");
+		yp_push("mac.byvalue");
+	}
+}
+
+#
+# The shadow file is used to build one map, shadow.byname
+#
+sub ns_shadow {
+	if (-r "$ns_dir/$domain/$shadow_file") {
+		$source = "$ns_dir/$domain/$shadow_file";
+	} elsif (-r "$source_dir/$shadow_file") {
+		$source = "$source_dir/$shadow_file";
+	} elsif (-r $shadow_file) {
+		$source = $shadow_file;
+	} else {
+		print STDERR "Could not read source file: $shadow_file\n";
+		return;
+	}
+
+	$byname = "$dest_dir/shadow.byname.m";
+
+	$mtime = -M $source;
+	if ((! $force) && (-w $byname) && ($mtime > (-M _))) {
+		return;
+	}
+
+	print "Parsing $source\n\tinto $byname\n";
+
+	tie(%byname, MDBM_File, "$byname.$$", O_RDWR|O_CREAT, 0600) ||
+	    (warn("Failed to open destination database files.\n") && return);
+	open(IN, "<$source") ||
+	    (warn("Failed to open source file.\n") && return);
+
+	while (<IN>) {
+		chomp;
+		s/^\s+//;
+
+		@line = split(/:/);
+		$line = $_;
+
+		if ($byname{$line[0]}) {
+			print STDERR "WARNING: duplicate name: $line[0]\n";
+		} else {
+			$byname{$line[0]} = $line;
+		}
+	}
+
+	close(IN);
+	yp_keys(\%byname, $source, $byname);
+	untie(%byname);
+
+	rename("$byname.$$", $byname);
+	if (! $nopush) {
+		yp_push("shadow.byname");
+	}
+}
+
+
+#
+# The ypservers file is used to build the map ypservers.
+#
+sub ns_ypservers {
+	if (-r "$ns_dir/$domain/$ypservers_file") {
+		$source = "$ns_dir/$domain/$ypservers_file";
+	} elsif (-r "$source_dir/$ypservers_file") {
+		$source = "$source_dir/$ypservers_file";
+	} elsif (-r $ypservers_file) {
+		$source = $ypservers_file;
+	} else {
+		print STDERR "Could not read source file: $ypservers_file\n";
+		return;
+	}
+
+	$byname = "$dest_dir/ypservers.m";
+
+	$mtime = -M $source;
+	if ((! $force) && (-w $byname) && ($mtime > (-M _))) {
+		return;
+	}
+
+	print "Parsing $source\n\tinto $byname\n";
+
+	tie(%byname, MDBM_File, "$byname.$$", O_RDWR|O_CREAT, 0600) ||
+	    (warn("Failed to open destination database files.\n") && return);
+	open(IN, "<$source") ||
+	    (warn("Failed to open source file.\n") && return);
+
+	while (<IN>) {
+		next if /^\s*[#\n]/;
+
+		chomp;
+		s/^\s+//;
+
+		/\s*(\S*)/ || next;
+		$name = $1;
+		$line = $';
+
+		if ($byname{$name}) {
+			print STDERR "WARNING: duplicate key: $name\n";
+		} else {
+			$byname{$name} = $line;
+		}
+	}
+
+	close(IN);
+	yp_keys(\%byname, $source, $byname);
+	untie(%byname);
+
+	rename("$byname.$$", $byname);
+	if (! $nopush) {
+		yp_push("ypservers");
+	}
+}
+
+while ($arg = shift(@ARGV)) {
+	if ($arg eq "-s") {
+		$ns_dir = $source_dir = shift(@ARGV);
+	}
+	elsif ($arg eq "-d") {
+		$dest_dir = shift(@ARGV);
+	}
+	elsif ($arg eq "-m") {
+		$domain = shift(@ARGV);
+	}
+	elsif ($arg eq "-u") {
+		$force = 1;
+	}
+	elsif ($arg eq "-o") {
+		$no_netgroup_expand = 1;
+	}
+	elsif ($arg eq "-n") {
+		$nopush = 1;
+	}
+	elsif ($arg =~ /\s*=\s*/) {
+		$ENV{$`} = $';
+	}
+	else {
+		push(@maps, $arg);
+	}
+}
+
+set_defaults();
+
+if (! -d $dest_dir) {
+	mkdir($dest_dir, 0700) ||
+	    die "Could not create destination directory: $dest_dir\n";
+}
+
+if ($#maps < 0) {
+	ns_aliases();
+	ns_bootparams();
+	ns_ethers();
+	ns_group();
+	ns_hosts();
+	ns_netgroup();
+	ns_networks();
+	ns_netid();
+	ns_passwd();
+	ns_protocols();
+	ns_rpc();
+	ns_services();
+ 	ns_capability();
+ 	ns_clearance();
+ 	ns_mac();
+	ns_ypservers();
+	exit(0);
+}
+
+for (@maps) {
+	if (/^aliases|mail/i) {
+		ns_aliases();
+	} elsif (/^bootparam/i) {
+		ns_bootparams();
+	} elsif (/^ether/i) {
+		ns_ethers();
+	} elsif (/^group/i) {
+		ns_group();
+	} elsif (/^host/i) {
+		ns_hosts();
+	} elsif (/^netgroup/i) {
+		ns_netgroup();
+	} elsif (/^network/i) {
+		ns_networks();
+	} elsif (/^netid/i) {
+		ns_netid();
+	} elsif (/^passw/i) {
+		ns_passwd();
+	} elsif (/^protocol/i) {
+		ns_protocols();
+	} elsif (/^rpc/i) {
+		ns_rpc();
+	} elsif (/^service/i) {
+		ns_services();
+	} elsif (/^capability/i) {
+		ns_capability();
+	} elsif (/^clearance/i) {
+		ns_clearance();
+	} elsif (/^mac/i) {
+		ns_mac();
+	} elsif (/^shadow/i) {
+		ns_shadow();
+	} elsif (/^ypservers/i || /^servers/i) {
+		ns_ypservers();
+	} else {
+		print STDERR "Do not know how to parse map: $_\n";
+	}
+}

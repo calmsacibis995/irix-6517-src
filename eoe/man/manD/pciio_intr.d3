@@ -1,0 +1,227 @@
+.TH pciio_intr D3
+.SH NAME
+pciio_intr: pciio_intr_alloc,
+pciio_intr_connect,
+pciio_intr_disconnect,
+pciio_intr_free \- manage PCI Interrupts
+.SH SYNOPSIS
+.nf
+.ft 3
+#include <sys/PCI/pciio.h>
+.sp .8v
+pciio_intr_t
+pciio_intr_alloc(
+	vertex_hdl_t \f2vhdl\fP,
+	device_desc_t \f2desc\fP,
+	pciio_intr_line_t \f2lines\fP,
+	vertex_hdl_t \f2owner\fP)
+.sp .8v
+int
+pciio_intr_connect(
+	pciio_intr_t \f2intr\fP,
+	intr_func_t \f2func\fP,
+	intr_arg_t \f2arg\fP,
+	void *\f2thread\fP)
+.sp .8v
+void
+pciio_intr_disconnect(pciio_intr_t \f2intr\fP)
+.sp .8v
+void
+pciio_intr_free(pciio_intr_t \f2intr\fP)\f1
+.fi
+.\" **********************
+.SS Arguments
+.\" **********************
+.IP "\f2arg\fP" 8n
+A parameter to pass to
+.IR func ()
+when this particular interrupt occurs, commonly
+a pointer to a driver-private data structure.
+.IP "\f2desc\fP" 8n
+A device descriptor, usually zero.
+.IP "\f2func\fP" 8n
+The function to perform interrupt service.
+.IP "\f2intr\fP" 8n
+The interrupt channel handle returned by
+.IR pciio_intr_alloc ().
+.IP "\f2lines\fP" 8n
+Specifies one or more of the PCI Interrupt pins used by the device.
+.IP "\f2owner\fP" 8n
+An appropriate vertex handle to use
+when printing messages about this particular interrupt,
+and is usually a vertex created by the device driver.
+.IP "\f2vhdl\fP" 8n
+The PCI device connection point as passed to the driver
+.IR attach ()
+entry point.
+.IP "\f2thread\fP" 8n
+Reserved, should be NULL.
+.\" **********************
+.SH DESCRIPTION
+.\" **********************
+When a device driver wishes to accept
+interrupt events from a device, the
+system needs to make sure that there is
+a path from the PCI interrupt pin to
+the appropriate CPU interrupt hardware.
+This is split into two separate phases,
+establishing the channel and connecting
+a service function, so that the service
+function can be changed or disconnected
+without losing the allocated hardware
+resources.
+.P
+The driver is responsible for connecting an interrupt handler
+when the device needs one, and for disconnecting the handler
+when it does not.
+.P
+The interrupt delivery mechanism
+depends on the address of the interrupt function.
+It is important to disconnect interrupts before a driver unloads,
+otherwise the PCI infrastructure might call a nonexistent function.
+(A driver cannot be auto-loaded when an interrupt occurs.)
+.P
+The necessary sequence of calls is based on the use of the
+driver entry points, as follows:
+.IP "\f2reg\fP()" 12n
+Driver registers to handle a class of PCI devices,
+triggering
+.IR attach ()
+calls.
+.IP "\f2attach\fP()" 12n
+Driver calls
+.IR pciio_intr_alloc ()
+to establishe interrupt connectivity between the device and the processor.
+The designated interrupts are disabled at this point.
+If interrupts can occur and are needed at this time,
+a call to
+.IR pciio_intr_connect ()
+enables interrupts and directs them to the designated handler.
+.IP "\f2unload\fP()" 12n
+The driver is to be unloaded automatically or by operator command.
+The driver text is going to be removed,
+so it is important for all interrupts to be disconnected.
+.IR pciio_iterate ()
+can be used to apply to
+each of the driver's connection points,
+a function that can calls
+.IR pciio_intr_disconnect ()
+as appropriate.
+It is not necessary or desirable to call
+.IR pciio_intr_free ()
+at this time.
+.IP "\f2init\fP()" 12n
+The device driver is being loaded or reloaded.
+It can again use
+.IR pciio_iterate (),
+this time to call a function that re-connects interrupts to the
+new addresses of their service functions.
+No special logic is needed to avoid this at the initial load time,
+because
+.IR pciio_iterate ()
+is a no-operation when the device
+driver is not registered.
+.IP "\f2detach\fP()"
+A device is being detached and will no longer be accessible.
+The driver calls both
+.IR pciio_intr_disconnect ()
+and
+.IR pciio_intr_free ()
+for this particular device.
+.IP "\f2unreg\fP()"
+The device driver is shutting down.
+It calls
+.IR pciio_driver_unregister ().
+This triggers a call to the
+.IR detach ()
+entry point for every attached device.
+.P
+Some devices do not require interrupt service when they are not open.
+Leaving an interrupt allocated but not connected keeps the interrupt
+disabled, possibly reducing impact on the
+system from handling interrupts from devices that do not 
+actually need service.
+.P
+If this is the situation, then the scenario above
+may be somewhat simplified:
+.IP "\f2attach\fP()" 12n
+Allocate the interrupt to establish a connection and disable the interrupt.
+Only connect the interrupt if interrupts are required as part of
+device initialization; then disconnect it.
+.IP "\f2open\fP()" 12n
+If the interrupt is not yet connected, connect it.
+.IP "\f2close\fP()" 12n
+No processes have the device open;
+disconnect the interrupt when all pending I/O is complete or purged.
+.IP "\f2unload\fP()" 12n
+The driver is not called to unload when one of its devices is open,
+so no interrupts should be connected.
+.IP "\f2detach\fP()"
+Devices are closed before detaching,
+so no interrupts should be connected.
+.SS "Specifying PCI Interrupt Lines"
+The
+.I lines
+parameter is formed by
+or-ing together appropriate flags:
+.IP
+PCIIO_INTR_LINE_A
+.br
+PCIIO_INTR_LINE_B
+.br
+PCIIO_INTR_LINE_C
+.br
+PCIIO_INTR_LINE_D
+.\" **********************
+.SH EXAMPLES
+.\" **********************
+Here is how a typical PCI
+device driver might get
+interrupt service started.
+.nf
+.ft 3
+pcifoo_attach(vertex_hdl_t pconn_vhdl)
+{
+	pciio_intr_t	intr;
+	...
+	/* This device uses both INTA and INTB,
+	 * and this driver wants both routed to
+	 * the same interrupt service function.
+	 */
+	intr = pciio_intr_alloc(pconn_vhdl, 0,
+		PCIIO_INTR_LINE_A|
+		PCIIO_INTR_LINE_B,
+		pcifoo_vhdl);
+	pciio_intr_connect(intr,
+		pcifoo_intr, 
+		(intr_arg_t)pcifoo_soft,
+		(void *)0);
+	...
+}
+.ft 1
+.fi
+.\" .SH NOTES
+.\" .SH FILES
+.\" sample_pciio.c
+.\" **********************
+.SH "SEE ALSO"
+.\" **********************
+pciio(D3),
+pciio_config(D3),
+pciio_dma(D3),
+pciio_error(D3),
+pciio_get(D3),
+pciio_pio(D3).
+.\" **********************
+.SH DIAGNOSTICS
+.\" **********************
+.IR pciio_intr_alloc ()
+returns a null value if it can not
+allocate memory.
+.P
+.IR pciio_intr_connect ()
+returns a zero for success or a negative
+value on failure.
+Since the channel is preallocated, the only
+interesting failure for this function is the attempt to use
+a null interrupt handle value.

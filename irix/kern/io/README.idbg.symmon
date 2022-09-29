@@ -1,0 +1,239 @@
+/**************************************************************************
+ *                                                                        *
+ *               Copyright (C) 1994, Silicon Graphics, Inc.               *
+ *                                                                        *
+ *  These coded instructions, statements, and computer programs  contain  *
+ *  unpublished  proprietary  information of Silicon Graphics, Inc., and  *
+ *  are protected by Federal copyright law.  They  may  not be disclosed  *
+ *  to  third  parties  or copied or duplicated in any form, in whole or  *
+ *  in part, without the prior written consent of Silicon Graphics, Inc.  *
+ *                                                                        *
+ **************************************************************************/
+
+README.idbg.symmon - everything you ever wanted to know, etc....
+
+
+Debug vs. Non-debug kernels...
+
+Debug kernel:
+	symmax is set to SYMMAX in master.d/idbg
+	dbstab[SYMMAX] set to 0s in master.d/idbg
+	setsym is run on kernel and fills in dbstab with kernel symbols
+
+Nondebug kernel:
+	symmax is set to 0 in stubs/idbgstubs.c
+	dbstab[] set to 0s in stubs/idbgstubs.c
+	setsym is not run
+
+
+
+Symmon and kernel locations...
+
+Symmon is loaded at a particular address defined in symmon/Makefile 
+for different platforms. If a debug kernel is built, the kernel is
+loaded at DBGLOADADDR, defined in system.gen, to allow for symmon
+being loaded. Otherwise, the kernel is loaded at LOADADDR, defined
+in system.gen.
+
+
+
+Symmon and kernel communications...
+
+The kernel and symmon communicate thru a debug block. SPB->DebugBlock 
+for ARCS. RESTART_ADDR for classic. For ARCS, the debug block, which
+is defined in irix/kern/sys/arcs/debug_block.h, is:
+
+typedef struct debug_block {
+    unsigned int        db_magic;       /* DB_MAGIC */
+    void                (*db_bpaddr)(); /* Breakpoint handler in debugger */
+    __scunsigned_t      db_idbgbase;    /* Idbg table address in client */
+    int                 (*db_printf)(); /* Debugger console printf routine */
+    __scunsigned_t      db_brkpttbl;    /* breakpoints list for client use */
+    __scunsigned_t      db_flush;       /* MP cache invalidate requests */
+    __scunsigned_t      db_nametab;
+    __scunsigned_t      db_symtab;
+    int                 db_symmax;      /* max # of symbols */
+} db_t;
+
+db_idbgbase points to a table of type dbgoff_t, defined in sys/idbg.h:
+
+/*
+ * The kernel writes out an array of these structures to dbgmon memory
+ * at startup, so that dbgmon knows where to find various structures.
+ * Remember to change stand/symmon/idbg.h if this file is changed
+ */
+typedef struct {
+        int     s_type;
+        union {
+                void            (*s_f1)();
+                __psint_t       s_gpa;
+        } un;
+# define s_func         un.s_f1
+# define s_gp           un.s_gpa
+        char    s_name[8];
+} dbgoff_t;
+
+# define        DO_ENV          0x45454545      /* first record */
+# define        DO_END          0x54545454      /* final record */
+
+
+For kp functions, symmon calls the functions in this table.
+
+
+Loading and initialization...
+
+Early in system startup, ml/csu.s start calls io/dbg.c _check_dbg
+to locate and load symmon. Symmon is loaded and jumped to - symmon/csu.s.
+Symmon does some initialization, then jumps to _dbgmon, where the
+debug block area is initialized to default settings. Control returns
+to the kernel and os/startup.c mlsetup is called, which in turn calls
+io/idbg.c idbg_setup. idbg_setup initializes the debug block which
+contains a pointer to idbgtab[MAXIDBGCMDS]. idbgtab is the table of
+idbg kernel commands that symmon calls.
+
+
+
+Dbstab table of kernel symbols...
+
+Symmon uses the idbg command 'symtab' to get the kernel's symbol
+table information. Symmon uses the idbg command 'symsize' to get the
+dbstab table size (SYMMAX) from the kernel. Both the kernel and symmon 
+use routines like fetch_kaddr, fetch_kname, etc. to get symbols and names 
+from the dbstab table.
+
+
+
+Cntrl-A...
+
+The duart drivers: zduart.c, mpzduart.c catch cntrl-a and call
+debug("ring"). The debug routine in ml/locore.s does a break, which
+drops into symmon. symmon/brkpt.c checks to see what debug was
+called with and takes the appropriate action.
+
+
+
+Loadable idbg.o...
+
+Its possible to dynamically load idbg.o, so that the idbg(1M) command 
+can be used without rebuilding and rebooting a new kernel. This is the 
+reason that the stubs/idbgstubs.c routines exist and why idbg.c was broken 
+into idbg.c and dbg.c. The dbg.c code is always resident in the kernel. 
+For a non-debug kernel, the idbgstubs routines exist in the kernel. If 
+the idbg.o module is loaded, then the stubs are replaced by os/mload.c with 
+the real functions in idbg.o.
+
+
+
+How to create a debug kernel...
+
+To create a debug kernel, you must first install idbg.o from eoe2.sw.kdebug.
+You must then modify the /var/sysgen/system/irix.sm file, LDOPTS line:
+
+* Compilation and load flags
+*       To load a kernel that can be co-resident with symmon
+*       (for breakpoint debugging) replace LDOPTS
+*       with the following.  You must also INCLUDE prf and idbg.
+*
+*LDOPTS: -non_shared -coff -N -e start -G 8 -coff -non_shared -T 80056000
+
+You must also change the idbg line in this file, so that idbg is
+included:
+
+*
+* Kernel debugging tools (see profiler(1M) and idbg(1M))
+*
+INCLUDE: idbg
+
+
+Then autoconfig a new kernel and reboot it.
+
+
+
+Prom environment variables that you can set...
+
+dbgname is used to load an alternate symmon, for example:
+
+	>> setenv dbgname bootp()fishbutt:/usr/tmp/symmon.IP20
+
+dbgstop is used to halt right after loading, for example:
+
+	>> setenv dbgstop 1
+	>> bootp()fishbutt:unix.IP20
+
+symstop is used to halt right after loading the symbol table, for example: 
+
+	>> setenv symstop 1
+	>> bootp()fishbutt:unix.IP20
+
+
+
+Search rules for finding symmon...
+
+If dbgname is set, try to load it.
+
+Else if we bootp'ed a kernel, look for a symmon in the same place,
+for example:
+
+	>> bootp()fishbutt:unix.IP20
+	Obtaining unix.IP20 from server fishbutt
+	1857968+564640+245936 entry: 0x8805ace0
+	Attempting to load debugger at "bootp()fishbutt:symmon.IP20" ...
+	Obtaining symmon.IP20 from server fishbutt
+	139760+66048+122480 entry: 0xa8007010
+
+If a debug kernel was booted from disk, dksc(0,1,0) for example, look
+for symmon in the volume header, dksc(0,1,8).
+If its not found there, look in each of the following alternate locations:
+
+	dkip(0,0,8)symmon
+	ipi(0,0,8)symmon
+	xyl(0,0,8)symmon
+
+
+
+
+To place a new symmon in the volume header, use dvhtool... 
+
+For example:
+
+>> dvhtool
+Volume? (/dev/rvh) 
+
+Command? (read, vd, pt, dp, write, bootfile, or quit): vd
+(d FILE, a UNIX_FILE FILE, c UNIX_FILE FILE, g FILE UNIX_FILE or l)?
+        l
+
+Current contents:
+        File name        Length     Block #
+        sgilabel            512           2
+        symmon           199680           3
+        ide              636416         393
+        sash             249344        1636
+
+(d FILE, a UNIX_FILE FILE, c UNIX_FILE FILE, g FILE UNIX_FILE or l)?
+	c /stand/symmon symmon
+
+(d FILE, a UNIX_FILE FILE, c UNIX_FILE FILE, g FILE UNIX_FILE or l)?
+	q
+
+Command? (read, vd, pt, dp, write, bootfile, or quit): write
+
+Command? (read, vd, pt, dp, write, bootfile, or quit): quit
+
+For more information, see dvhtool(1M).
+
+
+
+
+Interactions with NMI...
+
+In a debug kernel, first NMI takes you into symmon
+	second NMI takes you to system monitor (POD)
+In a non-debug kernel, NMI causes core dump
+
+
+
+
+Interactions with kdbx and use of rdebug command, $KDBXPORT, etc....
+
+	(need to add this)

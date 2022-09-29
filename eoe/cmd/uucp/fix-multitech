@@ -1,0 +1,196 @@
+#! /bin/sh
+# $Revision: 1.2 $
+
+# 'Fix' a MultiTech modem
+#    This script writes a configuration suitable for operation with IRIX
+#    into the non-volatile memory in the modem.
+
+#	-i	for inbound use only
+#	-o	for outbound use only
+#	-io	for both
+#	-m model to specify the model number, as in "-m DP14.4"
+#	-v	for verbose debugging
+#	-c cmd	to add the string of Hayes-like commands, "cmd",
+#		    to the end of string of initializations.
+
+# This script must be run by "root".
+
+# When this script is run, it sends the responses of the modem to
+#	standard out.  It ends by telling the modem to display all
+#	of its parameters.  If you do not see the right results,
+#	first check the cable to the modem.
+
+# This script uses 'ttyd*' device names, so that it is not stopped by a
+#	need for DCD.  Since there is often a getty(1M) running on
+#	a 'ttyf*', and since you cannot simultaneously open 'ttyf' and
+#	'ttyd', it is necessary to stop the getty in /etc/inittab
+#	before using this script.  If a uugetty(1M) is running on the
+#	port, it need not be turned off, because this script will
+#	temporarily disable it.
+
+
+# Additional local commands should be added to this file in the following
+#	line or provided with the -c option
+loc=""
+
+
+# With a Multitech ZDX
+# use a line in /etc/inittab that runs /usr/lib/uucp/uugetty with arguments
+# such as the following:
+#	-Nt60 -izdxin,conn ttyf2 dx_38400
+# See `man uugetty` and `man inittab`.
+
+
+USAGE="usage: `basename $0`: -i|-o|-io [-m model] [-v] [-c cmd] portno"
+
+
+while getopts "viom:c:s:" c; do
+    case $c in
+    i) in=1;;
+    o) out=1;;
+    v) if test ! -z "$verbose"; then
+	    set -v
+	fi
+	set -x
+	verbose="-v"
+	;;
+    m) model=`echo "$OPTARG" | tr '[a-z]' '[A-Z]'`;;
+    c) loc="$loc $OPTARG";;
+    s) speed="$OPTARG";;
+    \?) echo "$USAGE"; exit 1;;
+    esac
+done
+shift `expr $OPTIND - 1`
+if test $# != 1 ; then
+    echo "$USAGE"
+    exit 1
+fi
+
+case $1 in
+    [dmf]*) port=`expr $1 : '.\(.*\)'`;;
+    *) port=$1;;
+esac
+dev=/dev/ttyd$port
+odevs="/dev/ttym$port /dev/ttyf$port"
+if test ! -c "$dev"; then
+    echo "bad port number: $1"
+    exit 1
+fi
+if test ! -d /var/spool/locks -a -d /usr/spool/locks; then
+    LOCKDIR=/usr/spool/locks
+else
+    LOCKDIR=/var/spool/locks
+fi
+LOCKD=$LOCKDIR/LCK..ttyd$port
+LOCKM=$LOCKDIR/LCK..ttym$port
+LOCKF=$LOCKDIR/LCK..ttyf$port
+# uucp wants a 10 byte string
+LOCKSTR=`expr "         $$" : '.*\(..........\)'`
+
+LOGFILE=/tmp/fix-modem$$
+
+
+# use factory defaults, except or including:
+#	&D3=reset on DTR false
+#	&E11 &E13=CTS flow control
+#	%E0=no escapes
+#	$F0=stick to v.42
+#	&SF1 &S0 %CD1=DSR true (&SF1 must precede &S0)
+#	X4=extended result codes
+#	S0=1 answer the phone on 1st ring, =0 do not answer the phone
+#	s13=128 disable remote escapes
+#	S36=0 go on-hook when told to
+#	S37=0 go off-hook when told to
+
+# &B1 to reduce the transmit buffer size might help SLIP and PPP
+# interactive response.
+
+# for now, assume all models are the same
+case "${model:=ZDX}" in
+     ZDX)
+	rstcmd='&F0'
+	varcmd1='&D3 &E11 &E13 %E1 $F0 &SF1 &S0 %CD1 X4'
+	varcmd2='S13=128 S36=0 S37=0'
+	infocmd='L5 L6 L7'
+	;;
+     *) echo "unknown model: $model"; exit 1;;
+esac
+
+# Set S0=1 to answer the phone for pure input.
+#	Do not answer the phone (S0=0) for pure output.
+#	Do not answer the phone by default (S0=0) for combined
+#		input & output, because uugetty will answer it.
+if test "$in$out" = ""; then
+    in=1; out=1;		# assume -io if nothing said
+fi
+if test "$out" = 1; then
+    modecmd='S0=0'
+elif test "$in" = 1; then
+    modecmd='S0=1'
+else
+    echo "$USAGE"		# complain if neither in nor out is set
+    exit 1
+fi
+
+
+if test ! -w /dev; then
+    echo "This does not work very well except for the superuser."
+    exit 1
+fi
+
+# fight the UUCP daemons and others for the port
+/etc/renice -20 $$ > /dev/null
+
+
+echo
+echo "  If this effort to program the AT&T \"$model\"" connected to port $port
+echo "  works, you should see a series AT commands and responses."
+echo "  The response to each command should end with 'OK'."
+echo "  The last command should be followed by a list of all of the settings."
+
+# lock the device by all of its names
+rm -f $LOCKD $LOCKM $LOCKF
+echo "$LOCKSTR" > $LOCKD; ln $LOCKD $LOCKM; ln $LOCKD $LOCKF
+
+# zap any gettys or other users
+pids=`/etc/fuser -q $dev $odevs 2>/dev/null`
+if test ! -z "$pids"; then
+    echo "    Stopping processes currently using port $port\n"
+    if test ! -z "$verbose"; then
+	ps -lfp $pids
+    fi
+    kill -1 $pids
+    sleep 2
+fi
+pids="$pids `/etc/fuser -qk $dev $odevs 2>/dev/null`"
+# re-lock in case the other guy removed our rude lock files
+rm -f $LOCKD $LOCKM $LOCKF
+echo "$LOCKSTR" > $LOCKD; ln $LOCKD $LOCKM; ln $LOCKD $LOCKF
+
+trap "rm -f $LOCKD $LOCKM $LOCKF $LOGFILE; /etc/fuser -qk $dev $odevs 2>/dev/null; exit 1" 0 1 2 15
+
+# start listening to the modem, after waiting for previous users to
+# disappear and allow us to open the ttyd* device.
+# Also keep DTR low in the hope of resetting the modem.
+while test ! -z "$pids"; do
+    pids=`/etc/fuser -qk $dev $odevs 2>/dev/null`
+    sleep 2
+done
+
+rm -f $LOGFILE
+tee $LOGFILE <$dev &
+
+stty $speed -echo -icrnl -ixon -ixoff -isig clocal < $dev
+
+# Reset things.
+echo "AT $rstcmd\r\c" > $dev; sleep 1
+
+echo "AT Q0 $varcmd1" > $dev; sleep 1
+echo "AT Q0 $varcmd2 $modecmd $loc\r\c" > $dev; sleep 1
+
+echo "AT &W0\r\c" > $dev; sleep 2
+
+echo "AT $infocmd\r\c" > $dev; sleep 1
+
+#prevent message about the death of the listener
+exec >/dev/null 2>&1

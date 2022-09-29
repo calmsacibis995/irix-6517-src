@@ -1,0 +1,262 @@
+'\"macro stdmacro
+.TH USMALLOC 3P
+.SH NAME
+.Op c p a
+.B usmalloc, usfree, usrealloc, uscalloc, usmallopt, usmallinfo, usrecalloc, usmallocblksize, usmemalign
+\- shared arena memory allocator
+.Op
+.Op f
+.B usmalloc, usmalloc64, usfree, usrealloc, usrealloc64, uscalloc, uscalloc64, usmallopt, usmallinfo, usrecalloc, usrecalloc64, usmallocblksize, usmemalign
+\- shared arena memory allocator
+.Op
+.Op c p a
+.SH C SYNOPSIS
+.nf
+.B #include <ulocks.h>
+.B #include <malloc.h>
+.PP
+.B "void \(**usmalloc (size_t size, usptr_t \(**handle);"
+.PP
+.B "void usfree (void \(**ptr, usptr_t \(**handle);"
+.PP
+.B "void \(**usrealloc (void \(**ptr, size_t size, usptr_t \(**handle);"
+.PP
+.B "void \(**uscalloc (size_t nelem, size_t elsize, usptr_t \(**handle);"
+.PP
+.B "int usmallopt (int cmd, int value, usptr_t \(**handle);"
+.PP
+.B "struct mallinfo usmallinfo (usptr_t \(**handle);"
+.PP
+.B "size_t usmallocblksize (void \(**ptr, usptr_t \(**handle);"
+.PP
+.B "void \(**usrecalloc (void \(**ptr, size_t nelem, size_t elsize,"
+.br
+.ie n \{\
+.B "               usptr_t \(**handle);" \}
+.el \{\
+.B "                  usptr_t \(**handle);" \}
+.PP
+.B "void \(**usmemalign (size_t align, size_t size, usptr_t \(**handle);"
+.fi
+.Op
+.Op f
+.SH FORTRAN SYNOPSIS
+.nf
+.B #include <ulocks.h>
+.PP
+.B #if (_MIPS_SZPTR == 64)
+.B #define pointer integer*8
+.B #else
+.B #define pointer integer*4
+.B #endif
+.PP
+.B integer*4 function usmalloc (size, handle)
+.B integer*4 size
+.B pointer handle
+.PP
+.B integer*8 function usmalloc64 (size64, handle)
+.B integer*8 size64
+.B pointer handle
+.PP
+.B subroutine usfree (ptr, handle)
+.B integer*4 ptr
+.B pointer handle
+.PP
+.B integer*4 function usrealloc (ptr, size, handle)
+.B integer*4 size
+.B pointer ptr, handle
+.PP
+.B integer*8 function usrealloc64 (ptr, size64, handle)
+.B integer*8 size64
+.B pointer ptr, handle
+.PP
+.B integer*4 function usrecalloc (ptr, nelem,
+.B "   elsize, handle)"
+.B integer*4 nelem, elsize
+.B pointer ptr, handle
+.PP
+.B integer*8 function usrecalloc64 (ptr, nelem64,
+.B "   elsize64, handle)"
+.B integer*8 nelem64, elsize64
+.B pointer ptr, handle
+.PP
+.B integer*4 function uscalloc (nelem, elsize, handle)
+.B integer*4 nelem, elsize
+.B pointer handle
+.PP
+.B integer*8 function uscalloc64 (nelem64, elsize64, handle)
+.B integer*8 nelem64, elsize64
+.B pointer handle
+.PP
+.B integer*4 function usmallopt (cmd, value, handle)
+.B integer*4 cmd, value
+.B pointer handle
+.fi
+.Op
+.SH DESCRIPTION
+These routines
+provide a simple general-purpose memory allocation package that
+allows the user to allocate from a shared arena (see
+.IR usinit (3P)).
+All these functions are MP safe, multiple threads/processes may
+access them simultaneously and are guaranteed correct behavior.
+.PP
+More than one call can be made to 
+.IR usinit (3P)
+to set up separate malloc arenas.
+The file name passed to
+.IR usinit (3P)
+is used as a key to allow shared arenas
+to be created for use amongst unrelated processes.
+Once the arena is set up, calls to
+.I usmalloc
+will attempt to allocate space from the arena.
+If the arena gets full,
+.SM
+.B NULL
+is returned.
+Note that this malloc arena is also used by other
+.I us\(**
+calls (such as
+.I usnewlock
+and
+.I usnewsema
+).
+.PP
+The argument to
+.I usfree\^
+is a pointer to a block previously allocated by
+.IR usmalloc ;
+after
+.I usfree\^
+is performed this space is made available for further allocation.
+.PP
+Undefined results will occur if the space
+assigned by
+.I usmalloc\^
+is overrun or if some random number is handed to
+.IR usfree .
+It is always permitted to pass
+.SM NULL
+to
+.IR usfree .
+.PP
+.I usrealloc\^
+changes the size of the block pointed to by
+.I ptr\^
+to
+.I size\^
+bytes and returns a pointer to the (possibly moved)
+block.
+The contents will be unchanged up to the
+lesser of the new and old sizes.
+If no free block of
+.I size\^
+bytes is available in the storage arena, then
+.I usrealloc\^
+will ask
+.I usmalloc\^
+to enlarge the arena by
+.I size\^
+bytes and will then move the data to the new space.
+In the special case of a null
+.IR ptr\^ ,
+.I usrealloc
+degenerates to
+.IR usmalloc .
+A zero
+.I size
+causes the passed block to be freed.
+.PP
+.I uscalloc\^
+allocates space for an array of
+.I nelem\^
+elements of size
+.IR elsize .
+The space is initialized to zeros.
+.PP
+.I usrecalloc\^
+combines
+.I usrealloc
+and
+.IR uscalloc .
+If the size of the block increases, any new bytes are initialized
+to zero.
+Note that for this to work properly, all allocations of
+a given pointer must go through
+.IR usrecalloc .
+If the original pointer was allocated with either
+.I usmalloc
+or
+.I usrealloc
+some new bytes may not be set properly to zero.
+.PP
+.I usmemalign
+allocates
+\f2size\fP
+bytes on a specified alignment boundary,
+and returns a pointer to the allocated block.
+The value of the returned address is guaranteed to be
+an even multiple of
+\f2align\fP.
+Note: the value of
+.I align
+must be a power of two, and must be greater than
+or equal to the size of a word, or, for 64 bit objects, the size
+of a doubleword.
+.PP
+.I usmallocblksize
+returns the actual size of the block pointed to by
+.IR ptr .
+The returned size may be greater than the original requested size due
+to padding and alignment.
+.PP
+.I usmallopt\^
+provides for control over the allocation algorithm.
+See
+.IR amalloc (3P)
+for details on the allowable options.
+.PP
+.I usmallinfo\^
+provides instrumentation describing space usage.
+See
+.IR amalloc (3P)
+for details on the returned information.
+.Op f
+.PP
+.I usmalloc64 ,
+.I uscalloc64 ,
+.I usrealloc64 , and
+.I usrecalloc64 
+are only available in the IRIX64 Operating System.
+.Op
+.SH "SEE ALSO"
+intro(3), usinit(3P), usconfig(3P), amalloc(3P), malloc(3X).
+.SH DIAGNOSTICS
+.Op f
+.IR usmalloc64 ,
+.IR uscalloc64 ,
+.IR usrealloc64 ,
+.IR usrecalloc64 ,
+.Op
+.IR usmalloc ,
+.IR uscalloc ,
+.IR usrecalloc ,
+and
+.I usrealloc\^
+return a
+.SM
+.B NULL
+pointer if there is no available memory
+or if the arena has been detectably corrupted by storing outside the bounds
+of a block.
+If 
+.I usmallopt\^
+is called after any allocation (for most
+.I cmd\^
+arguments) or if
+.I cmd\^ 
+or 
+.I value\^
+are invalid, non-zero is returned.
+Otherwise, it returns zero.

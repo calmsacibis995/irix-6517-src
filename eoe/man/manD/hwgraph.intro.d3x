@@ -1,0 +1,198 @@
+.TH "hwgraph.intro" D3X
+.SH NAME
+hwgraph_intro \- hardware graph overview for device driver writers
+.SH DESCRIPTION
+The system hardware graph (briefly, hwgraph) represents the
+collection of all significant hardware connected to a system.
+It represents each piece of hardware --
+each module, CPU, memory, disk controller, disk drive,
+disk partition, serial port, ethernet port, etc.
+--
+as a distinct vertex in the graph.
+There are additional vertexes that represent
+collections of hardware (for example, "the disks") or more abstract
+architectural concepts (for example, "a node").
+.P
+Because the hwgraph is the whole representation of the hardware,
+a device driver needs to use,
+and sometimes to create,
+vertexes in the hwgraph.
+It takes relatively little effort to create a hardware graph-aware
+IRIX device driver,
+and this is necessary in order to take advantage of
+many kernel interfaces.
+.P
+This section describes the basics of the system hardware graph,
+(briefly, hwgraph),
+from the perspective of a device driver writer.
+Other man pages listed below describe the exact interfaces.
+Additional overview from the user's perspective is found in
+.IR hwgraph (4),
+which should be read first.
+.SS "vertex_hdl_t Type"
+A
+.I vertex_hdl_t
+is a 32-bit integer that uniquely identifies an instance of a device.
+The device driver uses the vertex_hdl_t to identify a device
+and to locate and exploit the hwgraph vertex that describes the device.
+.P
+Because it is the same base type and size as a
+.I dev_t
+and serves the same purpose,
+a vertex_hdl_t is a variety of dev_t.
+Most interfaces that accept a dev_t as parameter
+actually require a vertex_hdl_t.
+.SS Operations
+There are many operations to manipulate the hardware graph
+(and implicitly, the "/hw" filesystem).
+There are operations to create and destroy vertexes and labeled edges,
+to associate labeled and unlabeled information with a vertex
+and to later retrieve it,
+to retrieve administrative information associated with a vertex,
+and to create vertexes that represent block and char devices.
+.SS "Typical Usage"
+The best way to understand how the hwgraph and /hw filesystem work
+is through a simple example for an imaginary XYZ device that sits on,
+say, a PCI bus.
+Say that the device driver's prefix is "XYZ_";
+say that the XYZ_ driver is statically linked into the kernel
+(just for simplicity's sake);
+and say that the XYZ_ driver supports only a "char" interface.
+.P
+Very early in the boot processes,
+.IR XYZ_init ()
+is called.
+This entry point calls
+.IR pciio_driver_register ()
+(see
+.IR pciio (D3))
+to tell the PCI infrastructure which PCI Device ID and Vendor ID
+the driver handles.
+.P
+Later in the boot process, the system probes for I/O.
+On multiprocessor systems,
+I/O probing may be done by multiple CPUs on
+multiple I/O boards simultaneously.
+When a PCI bus is found,
+the PCI infrastructure discovers the Device ID and Vendor ID
+of every device on that bus
+and calls the
+.IR attach ()
+entry point of any driver that has previously registered
+to handle those IDs.
+In this case, the PCI infrastructure invokes
+.IR XYZ_attach ().
+.P
+The
+.I XYZ_attach
+routine allocates and initializes a per-device structure, XYZ_info.
+It then creates a char device vertex
+(and implicitly, a char device special file) using
+.IR hwgraph_char_device_add ().
+.I XYZ_attach
+uses its dev_t parameter
+as the vertex_hdl_t parameter passed to
+.IR hwgraph_char_device_add ().
+Additionally,
+the XYZ_ driver must use that same dev_t whenever it requests
+service of any kind
+(DMA mapping, PIO mapping, interrupt management, etc.)
+from the PCI infrastructure.
+Therefore, the XYZ_ driver saves that dev_t in a field of the per-device
+structure it allocated earlier.
+.P
+.IR hwgraph_char_device_add ()
+returns a vertex_hdl_t (dev_t) to
+.IR XYZ_attach ().
+This is the dev_t parameter that the driver will receive in its
+.IR XYZ_open ()
+entry point if the special file is ever opened.
+.P
+Finally,
+.IR XYZ_attach ()
+calls
+.IR device_info_set ()
+to associate a pointer to the per-device XYZ_info structure
+with the vertex_hdl_t returned from
+.IR hwgraph_char_device_add (),
+and possibly
+.IR device_inventory_add ()
+to attach hardware inventory information.
+.P
+After the system finishes booting,
+users will find somewhere under /hw a char device special file.
+This is the user-visible effect of the driver's call to
+.IR hwgraph_char_device_add ().
+When the user opens this special file,
+the system ends up in
+.IR XYZ_open ().
+The first parameter is a dev_t (vertex_hdl_t).
+.IR XYZ_open ()
+uses
+.IR device_info_get ()
+with this dev_t to retrieve the per-device XYZ_info structure
+it allocated and initialized at attach time.
+One of the fields of this structure is the vertex_hdl_t (dev_t)
+that was passed to
+.IR XYZ_attach (),
+and which is needed for service from the PCI support code.
+.SS "Debugging Support"
+At any point,
+the driver can print the "canonical device name" of a vertex_hdl_t
+using the "%v" conversion specification in a
+.IR cmn_err ()
+format string.
+For
+example,
+.Ex
+     cmn_err(CE_WARN, "....foo....%v....bar....", dev);
+.Ee
+.SS "Reference Counts"
+The hwgraph interfaces track references to vertexes.
+When and only when the reference count drops to 0,
+the vertex is deleted.
+A newly-created vertex starts with a count of 1.
+Any interface that returns a vertex handle increments
+the reference count on the associated vertex.
+An explicit invocation of
+.IR hwgraph_vertex_ref ()
+increments a reference count, and an explicit invocation of
+.IR hwgraph_vertex_unref ()
+decrements a reference count.
+.IR hwgraph_vertex_destroy ()
+automatically decrements the reference count.
+When an edge is added to a vertex, the reference count
+of the destination vertex is incremented.
+Conversely, when an edge is removed,
+the destination vertex's reference count is decremented.
+.P
+For the normal and simple case,
+drivers do not need to explicitly add edges or destroy vertexes,
+so reference counting is irrelevant.
+When it is necessary to explicitly destroy a vertex,
+the driver should first remove all edges that point to it and
+all edges that start from it.
+.SH DIAGNOSTICS
+Many hwgraph_* interfaces return a small integer type,
+graph_error_t, that is defined in sys/graph.h and includes these values:
+.IP GRAPH_SUCCESS 12n
+Operation completed normally and successfully.
+.IP GRAPH_DUP 12n
+Operation tried to create something that already existed.
+.IP GRAPH_NOT_FOUND 12n
+Operation searched for something that could not be found.
+.IP GRAPH_BAD_PARAM 12n
+An invalid parameter was supplied.
+.IP GRAPH_HIT_LIMIT 12n
+An iterative operation reached the end of the list.
+.IP GRAPH_IN_USE 12n
+Attempt to destroy a vertex that is still in use.
+.SH SEE ALSO
+hwgraph(4),
+cmn_err(D3),
+hwgraph.admin(D3X),
+hwgraph.dev(D3X),
+hwgraph.edge(D3X),
+hwgraph.inv(D3X),
+hwgraph.lblinfo(D3X),
+hwgraph.vertex(D3X).

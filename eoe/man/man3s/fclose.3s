@@ -1,0 +1,128 @@
+.if n .pH 3s/gen/fclose @(#)fclose	43.5 of 8/3/92
+.\" Copyright 1992, 1991 UNIX System Laboratories, Inc.
+.\" Copyright 1990, 1989 AT&T
+.TH fclose 3S
+.SH NAME
+\f4fclose\f1, \f4fflush\f1 \- close or flush a stream
+.SH SYNOPSIS
+\f4#include <stdio.h>\f1
+.PP
+\f4int fclose (FILE \(**\f2stream\fP);\f1
+.PP
+\f4int fflush (FILE \(**\f2stream\fP);\f1
+.SH DESCRIPTION
+\f4fclose\fP
+causes any buffered data
+waiting to be written
+for the named
+.I stream\^
+[see \f4intro\fP(3)]
+to be written out,
+and the
+.I stream\^
+to be closed.
+If the underlying file pointer is not already at end of file, and the file is one
+capable of seeking, the file pointer is adjusted so that the next operation on the
+open file pointer deals with the byte after the last one read from or written to
+the file being closed.
+.PP
+If \f2stream\fP points to an output stream or an update stream on which the
+most recent operation was not input,
+\f4fflush\fP
+causes any buffered data
+waiting to be written
+for the named
+.I stream\^
+to be
+written to that file.
+Any unread data buffered in \f2stream\fP is discarded.
+The
+.I stream\^
+remains open.
+.PP
+When calling
+\f4fflush\f1,
+if
+.I stream
+is a null pointer,
+all files open for writing only and all files open for update whose
+last operation was a write are flushed.
+.PP
+\f4fflush\fP(\f4NULL\fP)
+is performed automatically on
+calling
+\f4exit\fP.
+.SH "NOTES"
+If two
+.I streams
+point to the same underlying file descriptor, the semantics associated
+with their use is complex.
+They are described in detail in the 
+\f2POSIX90 1003.1 section 8.2.3\fP.
+The most common way for an unsuspecting application writer to wander into
+this situation is via \f4fork\fP(2).
+\f4fork\fP of course replicates the process, including any stdio buffers,
+while both the parent's and child's underlying file descriptor share a common
+file offset pointer.
+This means that actions performed in one process may affect the other.
+Consider the following:
+.Ex
+.nf
+.in +5
+Parent:
+	fp = fopen("foo", "r");
+	fread(buf, 100, 1, fp);
+	fork();
+	wait(NULL);
+	fread(buf, BUFSIZ+1, 1, fp);
+Child:
+	fclose(fp);
+	exit(0);
+.in -5
+.fi
+.Ee
+The parent reads the first 100 bytes which really reads \f4BUFSIZ\fP
+bytes into an internal
+.I stream
+buffer.
+The underlying file descriptor has its file offset set to \f4BUFSIZ\fP.
+After the \f4fork\fP, the parent waits for the child.
+The child calls \f4fclose\fP which
+causes the underlying file descriptor to be synchronized with
+.IR stream .
+In this case that means that an \f4lseek\fP on the underlying file
+descriptor will be performed to set the file offset back to 100.
+Since the file descriptor offset pointer is shared between parent and child,
+the parent's file descriptor now points at offset 100.
+When the parent continues reading and finishes the first buffer, a second
+buffer will be read.
+The parent is assuming that the file offset is still at \f4BUFSIZ\fP
+but the child's actions have changed it to 100.
+The parent will get the incorrect data.
+The solution to this to either not have the child call \f4fclose\fP or to
+synchronize the file descriptor with
+.I stream
+before calling \f4fork\fP.
+Synchronization is done by calling \f4fflush\fP(\f2fp\fP).
+Note that calling \f4fflush\fP(\f4NULL\fP) will not suffice since
+it doesn't effect read only streams.
+.SH "SEE ALSO"
+\f4close\fP(2),
+\f4exit\fP(2),
+\f4intro\fP(3),
+\f4fopen\fP(3S),
+\f4setbuf\fP(3S),
+\f4stdio\fP(3S)
+.SH DIAGNOSTICS
+On successful completion these functions return a value of zero.
+Otherwise
+\f4EOF\f1 is returned.
+For \f4fflush\fP(\f4NULL\fP), an error is returned if any files encounter
+an error.
+For \f4fclose\fP, \f4EOF\fP is returned if
+.I stream
+is \f4NULL\fP, or
+.I stream
+is not active, or
+there was an error when flushing buffered writes, or
+there was an error closing the underlying file descriptor.

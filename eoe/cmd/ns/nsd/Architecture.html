@@ -1,0 +1,866 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2//EN">
+<HTML>
+<HEAD>
+    <!-- SGI_COMMENT COSMOCREATE -->
+    <!-- SGI_COMMENT VERSION NUMBER="1.0.1" -->
+    <TITLE>SGI Name Service Architecture</TITLE>
+</HEAD>
+<BODY>
+<H1>
+SGI Name Service Architecture</H1>
+<P>
+This document attempts to document the Irix name service 
+implementation. The Irix name service is made up of a set of C library 
+routines, cache files, a resolver daemon, and protocol libraries. Each 
+of the elements is considered separately in some depth.</P>
+<H2>
+Background</H2>
+<P>
+Historically, Unix was designed with a number of configuration files 
+containing information about system resources, accounts, etc. For each 
+of these configuration files a number of library routines were written 
+to parse the files into C data structures. This set of routines has 
+been grouped into a name service API which is standardized across all 
+Unix implementations.</P>
+<P>
+As networking was added, and the number of machines grew, the concept 
+of distributed name space administration was conceived, and code was 
+added in the C library name service routines to look information up in 
+the remote name space on each access. This code base has become very 
+large and complex, and performance has suffered. The new name service 
+implementation for Irix attempts to address all of the problems in the 
+current implementation.</P>
+<H2>
+Overview</H2>
+<P>
+The name service API is left unchanged from previous releases so as to 
+maintain library level compatibility. No applications should need to be 
+recompiled to take advantage of the new name service features. All of 
+the protocol code which once existed in the specific API routines is 
+moved out of the C library into separate shared libraries.</P>
+<P>
+When a C library routine such as gethostbyname() is called in an 
+application memory for the returned data structure is allocated, and 
+the routine ns_lookup() is called with the key, a domain, and the name 
+of the table containing this information. </P>
+<P>
+The ns_lookup() routine will mmap in a global shared cache database 
+corresponding to the table name and attempt to lookup the key in this 
+database. If the lookup fails then the routine will open a file 
+associated with the key, table, and domain, and parse the data the same 
+as has historically been done with flat configuration files. The file 
+that was opened is generated on the fly by a cache miss daemon which 
+acts as a user level NFS file server.</P>
+<P>
+The daemon will determine the resolve order for the request then call 
+routines in shared libraries for each of the protocols supported to 
+answer the request. Once the data is found it is stored in the global 
+shared cache database and a file is generated in memory using the 
+format of the flat text file. </P>
+<P>
+The gethostbyname() routine will then parse the result into the 
+appropriate data structure and return.</P>
+<H2>
+C Library Routines</H2>
+<P>
+The routines ns_lookup() and ns_list() were added to the name service 
+API in the C library, and all of the old library routines which once 
+contained protocol code to directly converse with name service daemons 
+are now all wrappers around these routines. </P>
+<P>
+Each getXbyY() style routine will simply set up a global memory buffer, 
+call ns_lookup() with a normalized key and the name of a map containing 
+the data, and the domain in which the map lives, then parse the results 
+into a map specific data structure. Reintrant routines of the form 
+getXbyY_r() have been added which behave exactly as the getXbyY() 
+routines except that they use passed in memory buffers instead of a 
+global space. All of the standard routines are simply wrappers around 
+the reintrant versions in order to reduce code space in the C library.</P>
+<P>
+The getXent() style routines are wrappers around the ns_list() routine 
+which will provide a concatenation of all records in each of the 
+supported backend databases for a table in what appears to be a flat 
+ASCII file. Reintrant routines of the form getXent_r() have been added 
+which behave exactly as the getXent() routines except that they use 
+passed in memory buffers instead of a global space. All of the standard 
+routines are simply wrappers around the reintrant versions in order to 
+reduce space.</P>
+<P>
+The ns_lookup() routine mmaps the cache file for the given table if it 
+has not already been opened, opens a lock file containing shared 
+writable locks for all of the cache files if that had not previously 
+been opened, then attempts to look up the given key in the cache. The 
+cache is a shared, multi-reader, multi-writer, hash database written 
+specifically for this name service implementation named MDBM.</P>
+<P>
+If the cache file cannot be opened, or the key does not already exist 
+in the cache, then a separate daemon is contacted to act as the cache 
+miss handler, locating the information within some name service and 
+inserting it in the database. This daemon is contacted through the NFS 
+protocol and the result of the lookup is returned to the client in the 
+format of the flat system configuration file.</P>
+<P>
+The ns_list() routine contacts the daemon through the NFS protocol and 
+asks for a concatenation file for a given domain and table then returns 
+a file pointer to this newly formed concatenation file. The getXent() 
+wrapper routines then use stdio to walk through this file, parsing each 
+line into a C data structure, and returning these sequentially. The 
+getXent_r() routines are identical, and use the same file pointer, but 
+they use passed in buffer space to hold the return data instead of 
+dynamically allocated space.</P>
+<P>
+The arguments to ns_lookup are a table structure, the domain name for 
+the query, a key for the query, a buffer to place the results in, and a 
+length for this buffer. The table structure contains the name of the 
+table, a database pointer, a lock pointer, and a flags field which 
+determines whether the cache file needs to be closed between calls. It 
+will return an integer result of NS_SUCCESS, NS_NOTFOUND, or NS_FATAL 
+(All return codes and structures are defined in the 
+/usr/include/ns_api.h header file).</P>
+<P>
+The arguments to ns_list are the domain name, table name, and an 
+optional protocol name. It returns a file pointer.</P>
+<H2>
+Cache Files</H2>
+<P>
+The cache files are multi-reader, multi-writer, mmap'd hash database 
+files based upon the SDBM file format. This new database, MDBM, was 
+written specifically for this name service implementation, but there 
+are plans to use it on a number of other projects. This is a very 
+simple, but very fast, single-key, file format.</P>
+<P>
+There is a cache file for each table maintained by the name service 
+daemon in a well known location. The C library routines will always 
+look for the cache files in the /var/ns/cache directory, and the daemon 
+can be started with flags to override this location. This allows for 
+the creation of cache directories inside of a chroot() environment 
+which uses different rules than the primary environment.</P>
+<P>
+The cache files are writable only by root, and the C library routines 
+always open the cache files read-only. A seperate lock file is mapped 
+writable by all aplications to provide a shared memory segment for 
+database file locking. This is imperfect, and alternatives are being 
+discussed.</P>
+<P>
+Locks in the lock file are of the abilock_t defined in the SGI mutex 
+library routines. And a name service specific version of the mutex lock 
+routines is used. In the case where an application is unable to get a 
+lock on the database it falls back to calling the daemon which will 
+reset the locks if it has problems getting the lock. Currently the lock 
+file is persistent, and if it is corrupted would require that the file 
+be removed and the name server restarted.</P>
+<P>
+The cache files can be set to a fixed size which allows them to be 
+mapped once, then the file descriptor closed, and the mapping remains 
+throughout the processes life. If the caches are a variable size then 
+they are remapped on each lookup unless the &quot;stayopen&quot; flag 
+is given to the setXent() call associated with the table. This is 
+similar behavior to the treatment of files in the historic file-only 
+name service implementations.</P>
+<P>
+Cache file entries are made up of a time_t which can be compared to the 
+current clock for timeouts, a status character to support negative 
+caching, and the data. Timeouts are handled sporadically by a separate 
+daemon walking the cache, or by all applications. When an application 
+notices that the information is out of date is requests new information 
+from the daemon. If the daemon is unreachable the information in the 
+cache is used anyway. When a cache file is opened with a fixed size 
+then the cache is presplit to that size, and anytime adding an element 
+would result in the splitting of the page, a shake function is called 
+instead to free up space for the new data. When the fixed sized 
+approach is used the timeout daemon is never run.</P>
+<P>
+The format of keys in the database is &quot;key\0domain\0protocol&quot; 
+where domain and protocol are not given when they are the default, not 
+specified in the lookup.</P>
+<H2>
+Name Service Daemon</H2>
+<P>
+The Irix name service daemon acts as a cache miss handler for the name 
+service cache files, and implements all of the protocols to speak with 
+remote name servers. The protocol handlers are seperated into protocol 
+libraries which get opened dynamically when the protocols are needed 
+according to the resolve orders in the daemon configuration file. The 
+basic daemon implements a base set of functionality needed by the 
+protocol libraries.</P>
+<H4>
+Name Service Configuration Files and Data Structures</H4>
+<P>
+The daemon behavior is completely controlled by the daemon 
+configuration files. A configuration file exists for the client 
+behavior in /etc/nsswitch.conf, and a similar file exists under 
+/var/ns/domains/DOMAINNAME/nsswitch.conf for each domain supported by 
+this daemon. If the file /etc/nsswitch.conf does not exist a default 
+configuration is used. Server-side domain directories must contain a 
+nsswitch.conf file, or the domain is ignored.</P>
+<P>
+The nsswitch.conf file is made up of lines of the format:</P>
+<CENTER><P ALIGN="CENTER">
+<CODE>map: library library library</CODE></P>
+</CENTER><P>
+where each element in the line can have an attribute list associated 
+with it of the format:</P>
+<CENTER><P ALIGN="CENTER">
+<CODE>(attribute=value, attribute=value, attribute=value)</CODE></P>
+</CENTER><P>
+These attributes may also exist on a line alone, in which case they set 
+the attributes on the domain. And a library may be followed by a 
+control field of the form:</P>
+<CENTER><P ALIGN="CENTER">
+<CODE>[status=action]</CODE></P>
+</CENTER><P>
+All of the data from nsswitch.conf is maintained in the daemon in four 
+data structure trees. A linked list of libraries which have been 
+opened. A linked list of cache files, one for each table. A btree of 
+file structures and a set of attribute lists.</P>
+<P>
+The library data is kept in a simple linked list; one structure for 
+each protocol library that has been opened by the daemon. The structure 
+contains the library name as found in the nsswitch.conf file, the path 
+name for the DSO, and an array of function pointers to each of the 
+protocol library entry points.</P>
+<P>
+The map structures are also kept in a simple linked list, and contain 
+information about the cache files which the daemon maintains. There is 
+one entry per table which inserted into the list the first time a 
+request has been made for data from that table. In contains the name of 
+the cache file, a pointer to the database structure, and information 
+about the mapping. Cache files will be closed and unmapped when the 
+global shake function is called.</P>
+<P>
+The majority of the information in the nsswitch.conf files are saved in 
+an in-memory filesystem. Each data item is stored in a file structure 
+and placed into a large global btree. The file structure contains a set 
+of attributes, and possibly a pointer to a map structure containing 
+information on the cache file which should be updated when this file is 
+changed, or a library structure which contains the function pointers 
+for changing this structure, or data. The data can either be data as 
+read from the back-end databases or a directory list. The hash used for 
+the btree is the file ID which is simply a 32 bit unsigned value stored 
+in the file structure.</P>
+<P>
+The filesystem tree is rooted with a root file referenced by a global 
+variable. Each nsswitch.conf file results in a new file structure 
+(domain), and a reference in the root directory. Each line in the 
+nsswitch.conf file results in a new file structure (table), and a 
+reference in the corresponding domain directory. Each library on a line 
+results in a new file structure (callout), and a reference in the table 
+directory. Each directory file structure also contains a reference to 
+the parent. When the reference count on a file goes to zero it will be 
+removed, and the reference count will be decrimented for each file it 
+points to. Removing the global reference on the root file will 
+effectively remove all files in the tree.</P>
+<P>
+Attributes are stored in linked lists hanging off of file structures. 
+Each atribute list is terminated by an empty structure referencing the 
+attribute list of the parent directory. When attribute lists are 
+searched they start with the local atttributes then follow the link to 
+the parent list and so on. This has the result that all attributes are 
+inherited by the children. Attribute structures are seperately 
+reference counted so that removal of a parent directory while a file is 
+in use will not necessarily result in the removal of the attribute list 
+it points to.</P>
+<H4>
+Name Service Runtime Loop</H4>
+<P>
+Once the configuration files have been read the daemon falls into an 
+infinite select loop waiting for input then dispatching to handler 
+routines. On startup the deamon opens a request socket for reading and 
+sets up a handler for this file descriptor. Whenever the select loop 
+wakes up with data on a file descriptor the handler for the file 
+descriptor is called. New descriptors can be added or removed at any 
+time by the protocol library code using the utility routines 
+nsd_callback_new() and nsd_callback_remove().</P>
+<P>
+Only one callback is setup by default. This callback is the dispatch 
+handler for the NFS protocols. A new packet is parsed as an NFS 
+request, and is answered out of the in-memory file system. When a file 
+is referenced which does not already exist in the tree an new file 
+structure is generated and placed into the tree. A list of callout 
+libraries is inherited from the parent directory then control is 
+returned to the central loop which walks the structure through each of 
+the callout library routines until a result is obtained.</P>
+<P>
+The loop through the callout list will call a callout proceedure in one 
+of the protocol libraries. If the library routine returns the code 
+NSD_OK it means that the request has been filled, and the input 
+specific return proceedure is called to return the results to the 
+calling application. If the library returns the NSD_ERROR code then an 
+error occured while trying to handle the request and an error result 
+should be returned immediately to the client. If a code of NSD_NEXT is 
+returned then the library did not find the result and the next callout 
+proceedure is called. If the NSD_CONTINUE code is returned that means 
+that the protocol routine had to send a request to an external daemon 
+or is doing something that will take a long time so the loop should 
+start working on the next request. The protocol code now owns the 
+request so there must be some way for the request to start processing 
+again in the future or a leak will occur. The two typical ways for this 
+to continue is that a result will come in on a socket resulting in a 
+handler being called, or a timeout will occur. At any time in the 
+callout list the default behavior of the return code may be overriden 
+by an entry in the nsswitch.conf file. For instance, if the following 
+line were in the configuration file:</P>
+<CENTER><P ALIGN="CENTER">
+<CODE>hosts: nis [notfound=return] files</CODE></P>
+</CENTER><P>
+Instead of continuing on to the files callout when a result was not 
+found in the NIS maps an error would be returned to the client. The 
+files callout would only be called if NIS was not running.</P>
+<P>
+Handlers can be setup at any time by protocol code, but typically a 
+socket is setup once during initialization for each library. Timeouts 
+are usually placed on each forwarded request in case the remote agent 
+fails to respond to the request within a reasonable time period. There 
+is a global timeout list for the daemons central select() loop. Each 
+time select() is called the next timeout is first popped off of the 
+stack and used to determine what the select() timeout should be. If 
+select wakes up due to a timeout the handler in the timeout structure 
+is called. Handlers are created using the daemon routine 
+nsd_callback_new(), and removed using nsd_callback_remove(). Timeouts 
+are created using nsd_timeout_new(), and removed using 
+nsd_timeout_remove().</P>
+<H3>
+Utility Functions</H3>
+<P>
+The name service daemon contains a number of utility functions that 
+should be used by protocol libraries. These include routines to 
+manipulate return values, setup callbacks handlers for new file 
+descriptors, setup timeouts on the central select loop, and handle 
+errors.</P>
+<H4>
+nsd_set_result()</H4>
+<P>
+The nsd_set_result() function provides a convenient way to set the 
+return status and data for a request.The function takes four arguments: 
+a pointer to the file structure, a status code which should be one of 
+NS_SUCCESS, NS_NOTFOUND, NS_TRYAGIN, NS_UNAVAIL, NS_BADREQ, and 
+NS_FATAL, a pointer to the result string, the length of the result, and 
+a function pointer to a routine to free this string if needed. There 
+are three routines predefined which include: DYNAMIC which is a pointer 
+to the standard free() function in the C library, STATIC which is a 
+null pointer, and VOLATILE which will result in nsd_set_result() 
+copying the data into a new dynamically allocated buffer. It returns an 
+integer which will be either NSD_OK if successful or NSD_ERROR if 
+unsuccessful. If a result already exists it will be free'd using the 
+existing free function pointer, and the new result will be set.</P>
+<CENTER><P ALIGN="CENTER">
+<CODE>int nsd_set_result(nsd_file_t *, int, char *, int, nsd_free_proc 
+*);</CODE></P>
+</CENTER><H4>
+nsd_append_result()</H4>
+<P>
+The nsd_append_result() utility function is similar to the 
+nsd_set_result() function, but it will append the given string to the 
+end of an already existing result string if one exists. There is no 
+need to pass a free routine, as this function will always copy the data 
+into a new dynamically allocated buffer.</P>
+<P>
+This function takes three arguments: a pointer to the request 
+structure, a pointer to the result string to be appended, and the 
+length of the string. It returns an integer which will be one of NSD_OK 
+on success, or NSD_ERROR when unsuccessful. On error the current result 
+string and code will be unchanged.</P>
+<CENTER><P ALIGN="CENTER">
+<CODE>int nsd_append_result(nsd_file_t *, int, char *, int);</CODE></P>
+</CENTER><H4>
+nsd_append_element()</H4>
+<P>
+The nsd_append_element() function is identical to the 
+nsd_append_result() routine except that the result strings are joined 
+by a newline character. This routine assumes that all result strings it 
+is given are null terminated strings.</P>
+<CENTER><P ALIGN="CENTER">
+<CODE>int nsd_append_element(nsd_file_t *, int, char *, int);</CODE></P>
+</CENTER><H4>
+nsd_callback_new()</H4>
+<P>
+The nsd_callback_new() function is used to setup a file descriptor 
+callback for the daemon main loop. When select() wakes up with data on 
+a file descriptor the callback handler is looked up in a table, and the 
+corresponding function is called. Protocol libraries can setup 
+callbacks at any time for a file descriptor that they have opened. This 
+routine will register the new handler function and cause select to wake 
+up on new data waiting on the descriptor. If a handler was already 
+registered for the descriptor than it will be replaced.</P>
+<P>
+This function takes three arguments an integer file descriptor, a 
+pointer to the handler function, and a flag which contains options for 
+what events the callback should be used for which should be made up of 
+NSD_READ, NSD_WRITE, and NSD_EXCEPT. It returns a pointer to the 
+handler function on success, or a null pointer on failure. The only 
+cause for failure is that the file descriptor is out of range.</P>
+<CENTER><P ALIGN="CENTER">
+<CODE>nsd_callback_proc *nsd_callback_new(int, nsd_callback_proc *);</CODE></P>
+</CENTER><H4>
+nsd_callback_remove()</H4>
+<P>
+The nsd_callback_remove() function will clear a handler from the list 
+of file descriptors.</P>
+<P>
+This function takes one argument which is the integer file descriptor, 
+and returns an integer which will be one of NSD_OK or NSD_ERROR.</P>
+<CENTER><P ALIGN="CENTER">
+<CODE>int nsd_callback_remove(int);</CODE></P>
+</CENTER><H4>
+nsd_callback_get()</H4>
+<P>
+The nsd_callback_get() function will return the callback handler 
+function pointer, given the integer file descriptor.</P>
+<CENTER><P ALIGN="CENTER">
+<CODE>nsd_callback_proc *nsd_callback_get(int);</CODE></P>
+</CENTER><H4>
+nsd_timeout_new()</H4>
+<P>
+The nsd_timeout_new() function is used to setup timeout handlers for 
+the central select loop. Any time a protocol routine returns 
+NS_CONTINUE the routine should setup a timeout handler to continue the 
+request processing.</P>
+<P>
+This function takes four arguments: a pointer to the file structure, an 
+unsigned timeout value in milliseconds, a pointer to a timeout handler 
+routine, and a pointer to any local data needed by the protocol code. 
+It returns a pointer to the timeout structure on success, or a null 
+pointer on failure. The local data pointer can be nil if the calling 
+routine does not need data associated with the timeout.</P>
+<CENTER><P ALIGN="CENTER">
+<CODE>nsd_times_t *nsd_timeout_new(nsd_file_t *, unsigned, 
+nsd_timeout_proc *, void *);</CODE></P>
+</CENTER><H4>
+nsd_timeout_remove()</H4>
+<P>
+The nsd_timeout_remove() function is called to remove a timeout from 
+the timeout list. This is typically called when a protocol function 
+receives a reply from a remote daemon, and no longer needs the select 
+loop to timeout to continue processing.</P>
+<P>
+This function takes one argument, a pointer to the file structure, and 
+returns an integer result which will be NSD_OK for success or NSD_ERROR 
+for failure. Failure usually indicates that there was no matching 
+timeout on the list.</P>
+<CENTER><P ALIGN="CENTER">
+<CODE>int nsd_timeout_remove(nsd_file_t *);</CODE></P>
+</CENTER><H4>
+nsd_attr_store()</H4>
+<P>
+The nsd_attr_store() routine is used to add an attribute to an 
+attribute list. Attributes should be used instead of global variables 
+when possible. Attribute lists are tied together from most specific to 
+least specific walking backwards up the daemon data structure tree.</P>
+<P>
+This function takes three arguments: a pointer to the pointer to the 
+beginning of this attribute list, a pointer to a string for the key, 
+and a pointer to a string for the data. It returns a pointer to the 
+attribute structure if successful, or a null pointer on error.</P>
+<CENTER><P ALIGN="CENTER">
+<CODE>nsd_attr_t *nsd_attr_store(nsd_attr_t **, char *, char *);</CODE></P>
+</CENTER><H4>
+nsd_attr_delete()</H4>
+<P>
+This routine will remove the attribute from the given list. 
+Continuations to other lists will not be followed which means that if 
+nsd_attr_fetch() were immediately called with this key it may find a 
+result.</P>
+<P>
+This function takes two arguments: a pointer to the pointer to the 
+first attribute in the list and a pointer to the string for the key. It 
+returns an integer which will be NSD_OK on success, or NSD_ERROR if the 
+attribute was not found.</P>
+<CENTER><P ALIGN="CENTER">
+<CODE><TT>int nsd_attr_delete(nsd_attr_t **, char *);</TT></CODE></P>
+</CENTER><H4>
+nsd_attr_fetch()</H4>
+<P>
+This routine will search through an attribute list, following 
+continuations to other lists, searching for a matching attribute. Key 
+comparisons are case insensitive.</P>
+<P>
+This function takes two arguments: a pointer to the beginning of the 
+attribute list, and a pointer to the string for the key. It returns a 
+pointer to the attribute structure if found, or a null pointer on 
+failure.</P>
+<CENTER><P ALIGN="CENTER">
+<CODE><TT>nsd_attr_t *nsd_attr_fetch(nsd_attr_t *, char *);</TT></CODE></P>
+</CENTER><H4>
+nsd_attr_fetch_long()</H4>
+<H4>
+nsd_attr_fetch_string()</H4>
+<H4>
+nsd_attr_fetch_bool()</H4>
+<P>
+These routines are simple wrappers around nsd_attr_fetch(). The take a 
+pointer to the attribute list, a string for the key, and a default 
+value. The nsd_attr_fetch_long() routine also takes a radix. They will 
+return the value of the attribute interpreted as a long, string, or 
+boolean, depending on the function called, or the default value if the 
+key was not found.</P>
+<CENTER><P ALIGN="CENTER">
+<CODE>long nsd_attr_fetch_long(nsd_attr_t *, char *, int, long);</CODE></P>
+</CENTER><CENTER><P ALIGN="CENTER">
+<CODE>char *nsd_attr_fetch_string(nsd_attr_t *, char *, char *);</CODE></P>
+</CENTER><CENTER><P ALIGN="CENTER">
+<CODE>int nsd_attr_fetch_bool(nsd_attr_t *, char *, int);</CODE></P>
+</CENTER><H4>
+nsd_logprintf()</H4>
+<P>
+This routine takes the same arguments as printf(), but will result in a 
+message to the log, or to the console depending on arguments to the 
+daemon. It should be used to print error messages.</P>
+<CENTER><P ALIGN="CENTER">
+<CODE>void nsd_logprintf(char *, ...);</CODE></P>
+</CENTER><H4>
+nsd_shake()</H4>
+<P>
+The nsd_shake() routine should be called to free up resources when 
+allocating new resources fails. This results in a call to all of the 
+protocol specific shake() routines. This will free memory, close and 
+unmap files, and generally try to reduce the resources used. The name 
+service daemon and many of the protocol libraries are agressive about 
+caching results, connections to files or remote daemons, etc.</P>
+<P>
+This routine takes no arguments and returns no results.</P>
+<CENTER><P ALIGN="CENTER">
+<CODE>void nsd_shake(void);</CODE></P>
+</CENTER><H4>
+nsd_malloc()</H4>
+<H4>
+nsd_calloc()</H4>
+<H4>
+nsd_strdup()</H4>
+<P>
+These routines are wrappers around the standard malloc(), calloc() and 
+free() routines which call nsd_shake() on failure, then retry the 
+allocation.</P>
+<CENTER><P ALIGN="CENTER">
+<CODE>void *nsd_malloc(int);</CODE></P>
+</CENTER><CENTER><P ALIGN="CENTER">
+<CODE>void *nsd_calloc(int, int);</CODE></P>
+</CENTER><CENTER><P ALIGN="CENTER">
+<CODE>char *nsd_strdup(char *);</CODE></P>
+</CENTER><H2>
+Name Service Protocol Libraries</H2>
+<P>
+All of the name service protocol code which used to exist inside of the 
+API routines in the C library has now been moved into seperate protocol 
+libraries which are used only by the name service daemon. Each library 
+has a small set of entry points which are used by the daemon command 
+routines. These routines are init(), lookup(), list(), master(), 
+version(), create(), write(), symlink(), and shake(). Other routines 
+may be added later.</P>
+<H4>
+Library Init Routine</H4>
+<P>
+The init() routine in a library is called when the library is first 
+opened, and again whenever the daemon receives a SIGHUP signal. 
+Typically the init() proceedure will read any protocol specific 
+configuration files, such as /etc/resolv.conf for DNS, and setup any 
+global data needed by the library, such as a list of domains or server 
+addresses. </P>
+<P>
+The init proceedure takes no arguments, and returns an integer which 
+should be one of NSD_OK or NSD_ERROR.</P>
+<CENTER><P ALIGN="CENTER">
+<CODE>int init(void);</CODE></P>
+</CENTER><P>
+The init() proceedure may also setup handlers for new requests of some 
+alternative protocol-specific form such as the &quot;ypserv&quot; 
+library which accepts Sun RPC requests for NIS version 2.</P>
+<P>
+It may also setup handlers for results for forwarded requests. Most of 
+the name service protocols will reformat the request into a different 
+form and send it to some other daemon, then setup a timeout and 
+callback. When the results come back from the remote system they go 
+through this handler routine which parses the results into an internal 
+form again, and returns a successful result code to the main loop.</P>
+<P>
+The init() routine may also create some false requests to take care of 
+initialization that can happen asyncronously. The &quot;nis&quot; and 
+&quot;nisserv&quot; callouts use this feature to register with portmap. 
+They send off a packet to the portmap daemon then setup a handler and 
+timeout and then give control back to the main loop so as not to hang 
+if there are problems registerring.</P>
+<H4>
+Library Lookup Routine</H4>
+<P>
+The lookup() routine is the most called of all routines in the name 
+server and is the one that most people think of as the protocol. This 
+routine will convert the internal request format into a protocol 
+specific format and send it to a remote daemon. When results come back 
+they will be converted into an internal format again and a status code 
+will be returned. It is up to the initial request handler to setup the 
+reply.</P>
+<P>
+The lookup() routine should take one file pointer argument and return 
+an integer which should be one of NSD_OK, NSD_ERROR, NSD_NEXT, and 
+NSD_CONTINUE.</P>
+<CENTER><P ALIGN="CENTER">
+<CODE><TT>int lookup(nsd_file_t *);</TT></CODE></P>
+</CENTER><P>
+In the simple case the lookup() routine will simply fetch data out of a 
+file convert it into the proper format and return it immediately.</P>
+<H4>
+Library List Routine</H4>
+<P>
+The list() routine will concatenate all records together into an 
+internal flat file. This is used by the getXent() routines or for 
+administration.</P>
+<P>
+The list() function should take one file pointer argument and return an 
+integer which should be one of NSD_OK, NSD_ERROR, NSD_NEXT, and 
+NSD_CONTINUE.</P>
+<CENTER><P ALIGN="CENTER">
+<CODE><TT>int next(nsd_file_t *);</TT></CODE></P>
+</CENTER><H4>
+Library Master Routine</H4>
+<P>
+The master() routine will return the hostname for a machine which is 
+authoritative for the file or table. This is typically used to 
+determine what host should be contacted when changes need to be made to 
+data.</P>
+<P>
+The master() function takes one file pointer argument and returns an 
+integer which should be one of NSD_OK, NSD_ERROR, NSD_NEXT, and 
+NSD_CONTINUE. It should not change the data on the file, but simply set 
+the &quot;master&quot; attribute on the file.</P>
+<CENTER><P ALIGN="CENTER">
+<TT>int master(nsd_file_t *);</TT></P>
+</CENTER><H4>
+Library Version Routine</H4>
+<P>
+The version() routine will return the version of the data for the given 
+file or table. This is typically used to determine if cached data is 
+out of date. The daemon timeout handler will occasionally timeout 
+files, or reverify the data in its cache.</P>
+<P>
+The version() function takes one file pointer and returns an integer 
+which must be one of NSD_OK, NSD_ERROR, NSD_NEXT, and NSD_CONTINUE. It 
+should not change the data on the file, but simply set the 
+&quot;version&quot; attribute on the file.</P>
+<CENTER><P ALIGN="CENTER">
+<TT>int version(nsd_file_t *);</TT></P>
+</CENTER><H4>
+Library Create Routine</H4>
+<H4>
+Library Write Routine</H4>
+<H4>
+Library Symlink Routine</H4>
+<P>
+The create(), write(), and symlink() routines are designed to support 
+dynamic updates of data in the backend databases. Currently these 
+routines are not implemented in any of the callout libraries.</P>
+<H4>
+Library Shake Routine</H4>
+<P>
+The shake() function is called when the daemon runs short of resources. 
+This function should free up any resources used by the protocol library 
+which are not needed. For instance the &quot;files&quot; callout shake 
+function closes and unmaps all of the files it has open.</P>
+<P>
+Any protocol routine which runs out of resources, like attempting a 
+malloc() which fails, or failing to open a new file, should call the 
+daemon utility function nsd_shake() which will free any unneeded global 
+data then call each of the protocol specific shake() functions. After 
+calling nsd_shake() the protocol routine should try again to do 
+whatever failed before returning an error. The utility routines 
+nsd_malloc(), nsd_calloc(), nsd_strdup() do exactly this.</P>
+<P>
+The shake() function should take no arguments and return an integer 
+which should be one of NSD_OK and NSD_ERROR.</P>
+<CENTER><P ALIGN="CENTER">
+<CODE>int shake(void);</CODE></P>
+</CENTER><H3>
+The &quot;files&quot; Callout Library</H3>
+<P>
+The files library will mmap() flat files into the daemon memory and 
+search through them for matching lines in the same fasion as the C 
+library API fallback routines. The filename is determined by the map 
+name, and the directory is determined by the domain name. By default 
+this is /var/ns/domain/file or /etc/file for the .local domain. Either 
+of these can be overriden using attributes &quot;file&quot; or 
+&quot;directory&quot; attached to the files callout in the appropriate 
+nsswitch.conf file.</P>
+<P>
+The passwd.* map is special. For any line of the form: [+-]@?[\S]+ it 
+will verify the element by making a recursive call into the daemon, and 
+then returning the NSD_NEXT code to the main loop. if the directive 
+[notfound=return] is specified after the files callout in nsswitch.conf 
+then this results in behavior identical to the historic behavior of 
+forcing calls into NIS, except that any library may follow files, not 
+only NIS.</P>
+<P>
+The list routine simply copies the entire mapped file into the result 
+instead of attempting to do any parsing.</P>
+<H3>
+The &quot;nis&quot; Callout Library</H3>
+<P>
+The nis library implements the client side of the Sun YP RPC protocol, 
+and the YPBIND protocol. Internal requests are reformatted into RPC 
+requests and sent to a remote host, and a callback and timeout are 
+setup, then control is returned to the main daemon loop. When a 
+response comes back to the socket owned by the nis library a handler is 
+called which will parse the YP RPC result packet into the internal 
+format and returns it to the client. Responses are mapped back to the 
+original request structure using the XID field in the RPC header of the 
+response packet.</P>
+<P>
+The library also maintains a socket for incoming YPBIND RPC requests 
+which are answered using data maintained by the nis library.</P>
+<P>
+If any request comes in and the daemon has not already bound to a 
+server, or if a request to a server times out, then a bind 
+broadcast/multicast is sent out, and the request is held until the 
+daemon is able to bind to a new server. If the daemon is unable to bind 
+within a couple of seconds a NS_TRYAGAIN status is returned to the 
+client so that it will resend the request instead of falling back to 
+local files. If the file /var/yp/domain/binding/servers exists then the 
+hosts listed in this file wil be sent unicast bind requests instead of 
+a broadcast sent out.</P>
+<P>
+The nis library fakes for maps which exist in the nsswitch.conf file, 
+but not in the NIS version 2 standard. These include services.bynumber, 
+group.bymember, and rpc.byname. It will first attempt to lookup data 
+using these names, then will fall back to stepping through the reverse 
+map file if that fails.</P>
+<P>
+The list() routine will spawn a thread which connects to the ypserv 
+daemon using tcp, then writes the results back over a socket to the 
+primary daemon which appends them to the result.</P>
+<H3>
+The &quot;nisserv&quot; Callout Library</H3>
+<P>
+The nisserv callout library implements the server side of the Sun YP 
+RPC protocol. It opens a socket on init on which it accepts new 
+requests. It looks up these requests using the standard callout list, 
+and replies to the requestor using the YP protocol.</P>
+<P>
+When the YP_ALL request is received it will only enumerate the maps for 
+which the boolean &quot;ypall&quot; attribute is set. If this attribute 
+is not set for any callout then it will enumerate the mdbm database 
+instead, provided the mdbm library is listed as a callout.</P>
+<P>
+NOTE: currently yp_all will simply enumerate the mdbm database, and is 
+not supported for anything else. The internal data format needs to 
+change before it can support the other databases.</P>
+<H3>
+The &quot;dns&quot; Callout Library</H3>
+<P>
+The dns library implements the client side of the Domain Name Service 
+Protocol. New requests will be converted from the internal format to a 
+DNS packet format and sent to a remote server, then a timeout and 
+callback will be setup and control will be given back to the main loop. 
+When a response comes back from the server it will come to a socket 
+owned by the dns library and will pass through a dns response handler. 
+The response will be mapped back to the original request using the DNS 
+header xid field then the packet will be parsed back into the internal 
+format to be returned to the client.</P>
+<P>
+The order for contacting servers is controlled by the resolv.conf file, 
+or by the &quot;servers&quot; attribute attatched to the dns callout in 
+nsswitch.conf. The domain is the same as the request domain except in 
+the case of the .local domain. When the .local domain is used then the 
+domain in the dns request will be determined by the domain or search 
+fields in resolv.conf or by the &quot;domain&quot; attribute in 
+nsswitch.conf.</P>
+<P>
+The map hosts.byname is turned into a class IN, type A request to DNS. 
+The map hosts.byaddr is turned into a class IN, type PTR request to 
+DNS. The map mx is turned into a class IN, type MX request to DNS. Any 
+other map is turned into a class IN, type TXT request to DNS using the 
+DNS domain &quot;table.domain&quot; where any '.' characters in the 
+table are replaced with '_'. For instance a call for the key 
+&quot;uucp&quot; in the &quot;passwd.byname&quot; map for the domain 
+&quot;sgi.com&quot; will result in a lookup of 
+&quot;uucp.passwd_byname.sgi.com&quot; in the IN class, and will return 
+a TXT type.</P>
+<P>
+The DNS callout library does not currently support the list() entry 
+point. This will likely be added in a future release.</P>
+<H3>
+The &quot;mdbm&quot; Callout Library</H3>
+<P>
+The mdbm library uses the mdbm database format to store data in local 
+files. A set of parser scripts are provided to parse flat files into 
+the databases. This supports a faster lookup method than the files 
+library. The files default to /var/ns/domain/table.m for each table, or 
+/etc/table.m in the .local domain. This can be overriden by setting the 
+file attribute on the table in the apropriate nsswitch.conf file.</P>
+<P>
+The list() command results in a mdbm_next() loop, appending each 
+successive value to the end of the result.</P>
+<H2>
+The NFS Interface</H2>
+<P>
+The primary interface to the daemon from the API routines is through 
+the Network File System. The name service daemon acts as a user level 
+NFS file server for an in-memory stacked file system. The daemon is 
+mounted onto the local system at startup, and all the API routines 
+simply open files in the filesystem tree managed by the name service 
+daemon.</P>
+<P>
+Currently the name service daemon has a special mount command called 
+nsmount. This command determines the port that the name service is 
+running on, and the initial file handle for the requested domain 
+directory then passes this to the kernel. It is hoped that with future 
+versions of the NFS protocol it will be possible to treat the name 
+service daemon just like any other NFS server so that the regular mount 
+command, automount, and autofs can be used.</P>
+<P>
+It is possible to mount the name service daemon from another machine, 
+and this technique is planned to be used for supporting large networks 
+of systems and trees of domains. The administrator and explicitely 
+restrict a portion of the namespace to the local host by setting the 
+&quot;local&quot; attribute on the top element of the subtree. By 
+default the .local domain sets the &quot;local&quot; attribute to true 
+so other machines cannot read local passwords, etc.</P>
+<P>
+The default location of the mount point is /ns/domain, where domain is 
+the requested domain in the ns_lookup() or ns_list() routines. There is 
+a special domain labled .local which always exists which provides a 
+system local domain to override any parent domain information. All of 
+the API getXbyY() routines currently use the .local domain. There are 
+plans to allow the specifications of alternate domains through the API 
+routines in the future.</P>
+<P>
+The daemon filesystem tree is organized as: /ns/domain/table/key, and 
+there is a special domain .local to represent the local view of the 
+namespace, and &quot;dot&quot; directories under each table to 
+represent the callout libraries. To lookup the login name 
+&quot;uucp&quot; using the local namespace view you would open the 
+file: /ns/.local/passwd.byname/uucp. If only the NIS entry for 
+&quot;uucp&quot; wanted to be found you would open: 
+/ns/.local/passwd.byname/.nis/uucp. The special key &quot;.all&quot; in 
+a map returns a concatenation of all the records in a table, so opening 
+the file: /ns/.local/passwd.byname/.all would give you a giant passwd 
+file containing all users in the local domain. Executing &quot;cat 
+/ns/.local/passwd.byname/.nis/.all&quot; would be equivelent to running 
+&quot;ypcat passwd.byname&quot;. Or &quot;cat 
+/ns/.local/passwd.byname/.files/.all&quot; would be identical to 
+&quot;cat /etc/passwd&quot; on most systems.</P>
+<P>
+Removing a file in the filesystem maintained by the name service daemon 
+results in the cached file structure being removed in the daemon. The 
+directory entries cannot be removed. Instead this is done by editing 
+the nsswitch.conf files and sending the daemon a SIGHUP signal. 
+Attempting to remove a directory does result in the timeout routine 
+being run on that subdirectory so that all dynamic elements under that 
+directory will be removed.</P>
+<P>
+In Irix extended attributes are supported on each name service file. 
+The attributes on the file depend on the library which looked them up, 
+but always include: domain, table, key, timeout, source, version and 
+server. The timeout is the time in seconds since epoch that the cache 
+entry will disappear from the daemon. The source is the name of the 
+library as given in nsswitch.conf that provided the data in the file, 
+and server is the address of the system which provided us the data. The 
+server may not be the actual authoritative owner of the information, 
+but is instead simply the machine from which we got the information. 
+These can be read using the xattr command. For example to get the 
+source of a key you would run &quot;xattr get source 
+/ns/.local/passwd.byname/uucp&quot;. Only the get function currently 
+works with the name service daemon. The list and set methods may be 
+added later.</P>
+<P>
+All information in the name server tree is currently read-only. Future 
+versions the the name service implementation will support create, 
+write, and symlink operations as well.</P>
+</BODY>
+</HTML>

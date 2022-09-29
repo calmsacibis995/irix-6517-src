@@ -1,0 +1,139 @@
+#!/bin/csh
+#
+# Last Edited: 29 Nov 1994, 13:42
+#
+# make_mg_ide
+#
+# Calls _make_mg_id which does all the real work.
+#
+# A script to do nightly builds of the mgras ide executable.
+#
+# Usage: make_mg_ide [-nopurge] [-noupdate] [-noclobber] [gold] [-irix_hdrs]
+# 	noclobber, noupdate, and nopurge are optional args to prevent clobbering
+#	p_tupdates or p_purges. The default is to purge, clobber, and update 
+#	everything.
+#
+#
+# Set some env vars
+#
+
+#
+# Get arguments if any
+#
+unalias rm
+
+setenv INSTOPTS -t
+setenv PRODUCT 4DMG
+setenv LOGDIR $WORKAREA/stand/arcs/ide/IP22/graphics/MGRAS/buildlog
+setenv LOGFILE `date '+%y%m%d_%H%M'`
+setenv ERRFILE $LOGFILE.err
+setenv CLOBBER 1
+setenv UPDATE 1
+setenv PURGE 1
+setenv SEND_MAIL 0
+setenv GOLD	0
+setenv IRIX_HDRS 0
+
+while ($#argv)
+	switch ($argv[1])
+		case -noclobber:
+			setenv CLOBBER 0
+			breaksw
+		case -noupdate:
+			setenv UPDATE 0
+			breaksw
+		case -nopurge:
+			setenv PURGE 0
+			breaksw
+		case -workarea:
+			setenv WORKAREA $argv[2]
+			breaksw
+		case -toolroot:
+			setenv TOOLROOT $argv[2]
+			breaksw
+		case -root:
+			setenv ROOT $argv[2]
+		breaksw
+		case -mail:
+			setenv SEND_MAIL 1
+		breaksw
+		case -gold:
+			setenv GOLD 1
+		breaksw
+		case -irix_hdrs:
+			setenv IRIX_HDRS 1
+		breaksw
+	endsw
+	shift
+end
+
+setenv LOGDIR $WORKAREA/stand/arcs/ide/IP22/graphics/MGRAS/buildlog
+
+if !(-e $LOGDIR) then
+	mkdir -p $LOGDIR
+endif
+
+if (-e $LOGDIR/$LOGFILE) then
+	cp $LOGDIR/$LOGFILE $LOGDIR/$LOGFILE.old
+	rm $LOGDIR/$LOGFILE
+endif
+touch $LOGDIR/$LOGFILE
+
+if (-e $LOGDIR/$ERRFILE) then
+	cp $LOGDIR/$ERRFILE $LOGDIR/$ERRFILE.old
+	rm $LOGDIR/$ERRFILE
+endif
+
+# capture all the output
+tail -f $LOGDIR/$LOGFILE &
+
+./_make_mg_ide $PURGE $UPDATE $CLOBBER $LOGFILE $WORKAREA $ROOT $TOOLROOT $IRIX_HDRS >>& $LOGDIR/$LOGFILE
+
+if ($status) then # _make_mg_ide exited with error
+	echo >>& $LOGDIR/$LOGFILE
+	echo "_make_mg_ide exited with error" >>& $LOGDIR/$LOGFILE
+endif
+
+sleep 3 # wait for everything to be done
+
+echo >>& $LOGDIR/$LOGFILE
+echo "Script completed at `date`" >>& $LOGDIR/$LOGFILE
+echo >>& $LOGDIR/$LOGFILE
+
+killall tail
+sleep 2
+#
+# Check for errors
+#
+echo | tee -a $LOGDIR/$LOGFILE 
+echo "Checking log file..." | tee -a $LOGDIR/$LOGFILE
+echo | tee -a $LOGDIR/$LOGFILE
+egrep -in "Error code|Error in reading|Permission denied|No such file|Usage|_make_mg_ide exited" $LOGDIR/$LOGFILE >>! $LOGDIR/$ERRFILE
+if ($status == 0) then # found errors
+        banner "Errors" | tee -a $LOGDIR/$LOGFILE
+        echo | tee -a $LOGDIR/$LOGFILE; echo | tee -a $LOGDIR/$LOGFILE
+        echo "Log file in ./buildlog/$LOGFILE" | tee -a $LOGDIR/$LOGFILE
+        echo "Error file in ./buildlog/$ERRFILE" | tee -a $LOGDIR/$LOGFILE
+if ($SEND_MAIL == 0) then 
+	echo "ide build had errors. See $LOGDIR/$LOGFILE"
+else
+	echo "ide build had errors. See $LOGDIR/$LOGFILE" | Mail -s "ide build had errors. See $LOGDIR/$LOGFILE" shou kkn dilip keiming
+endif
+
+else
+        banner "Ran OK" | tee -a $LOGDIR/$LOGFILE
+if ($GOLD == 1) then 
+	cp $WORKAREA/stand/arcs/ide/4DMG.O/mgshell.ide /usr/local/boot/gold.ide
+endif
+        echo "Log file in ./buildlog/$LOGFILE" | tee -a $LOGDIR/$LOGFILE
+if ($SEND_MAIL == 0) then 
+	echo "ide build okay. Log in $LOGDIR/$LOGFILE"
+else
+	echo "ide build okay. Log in $LOGDIR/$LOGFILE" | Mail -s "ide build okay. Log $LOGDIR/$LOGFILE" shou kkn dilip keiming
+endif
+	if (-e $LOGDIR/$ERRFILE) then
+		rm $LOGDIR/$ERRFILE
+	endif
+endif
+
+echo "Done" | tee -a $LOGDIR/$LOGFILE

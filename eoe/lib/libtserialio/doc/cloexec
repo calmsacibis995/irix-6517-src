@@ -1,0 +1,116 @@
+
+
+Bill Claghorn of Diaquest (claghorn@crl.com) was using tserialio to
+write his app.
+
+He noticed that if he system()ed off a sub-process (apanel or vcp for
+example) while a TSport was open, then he closed the TSport, subsequent
+attempt to open the same serial port would fail with EBUSY.
+
+Basically the fork() and exec() done by system() caused the ts file
+descriptor to get dup'ed, and then we only called tsClosePort() from
+one process, so the driver thinks the serial port never gets closed.
+
+Here's the cause and a solution.
+
+
+From cpirazzi Tue Sep 23 20:43:59 1997
+From: cpirazzi@cp (Chris Pirazzi)
+Date: Tue, 23 Sep 1997 20:43:59 -0700
+In-Reply-To: Bill Claghorn <claghorn@crl.com>
+       "tserialio failure" (Sep 22,  6:06pm)
+X-Mailer: Mail User's Shell (7.2.5 10/14/92)
+To: Bill Claghorn <claghorn@crl.com>
+Subject: Re: tserialio failure
+Status: OR
+
+hmm, 
+
+when you open a TSport (or an ALport, or a VLPath, or a ...), the
+library opens up an fd to communicate with some driver.  when you
+fork, those fds are still open.  when you exec, those fds are still
+open unless the file descriptor has the kludgy irix-specific F_CLOEXEC
+flag of fcntl(2) set.  maybe I need to set that flag from
+libtserialio.
+
+I just checked and we don't use CLOEXEC from the AL.  I doubt we use
+it from the VL either.  but in those cases the fd being open does not
+lock out subsequent openers quite so much (it DOES lock out openers
+after a driver-specific number of opens, probably about 16.  this would
+cause alOpenPort and vlCreatePath to fail).
+
+hmm, let me think about the ramficiations of CLOEXEC.
+
+in the meantime you can work around this during your development
+with
+  
+   fcntl(tsGetFD(port), F_GETFD, &flags);
+   flags |= FD_CLOEXEC;
+   fcntl(tsGetFD(port), F_SETFD, &flags);
+
+make sure I've given you some more long-term answer on this before you
+ship it.  this may not be a good thing to have when you're porting your
+app to other machines.
+
+        - Chris Pirazzi
+
+
+
+From cpirazzi Tue Sep 23 20:55:01 1997
+From: cpirazzi@cp (Chris Pirazzi)
+Date: Tue, 23 Sep 1997 20:55:01 -0700
+X-Mailer: Mail User's Shell (7.2.5 10/14/92)
+To: staff@mindless
+Subject: dmedia libs and FD_CLOEXEC
+Cc: alai, sporter, bryanj, wtw
+Status: OR
+
+
+this is a library implementation issue that I know has come up before,
+but I'm not sure if anyone who dealt with it is still working for SGI
+and not on sabbatical, but here goes:
+
+I got a customer complaint about tserialio like this:
+
+:-> I am having a failure in tserialio.  
+:-> 
+:-> If I open tserialio, fork my application to exec apanel,
+:-> and then close the tserialio port and my application without closing 
+:-> apanel,
+:-> then the next time I open my application, tserialio says that the 
+:-> tserialio port is busy.  It remains busy until the apanel is clised.
+
+this issue also applies to AL, VL, dmIC, and several other libraries.
+
+the issue is that our libraries open up file descriptors for various
+purposes in their handle open routines.  when the app forks, those
+file descriptors get duped.  when the app execs, those files
+descriptors remain open, unless they were opened with the kludgy
+irix-specific FD_CLOEXEC flag of fcntl(2):
+
+     F_GETFD   Get the file descriptor flags associated with the descriptor
+               fildes.  If the FD_CLOEXEC flag is 0 the descriptor will remain
+               open across exec, otherwise the descriptor will be closed upon
+               execution of exec.
+
+the end result is that after a library- and device-specific number of
+fork/execs (as low as 1), any attempt to open up another instance of
+that device by ANY PROCESS ON THE SYSTEM will fail.  this is because
+our drivers have hard upper limits on the number of times they can
+be opened in various directions.
+
+in the case of tserialio, this was 1, because a serial port is an
+exclusive-open device for output.  for VL and dmIC, the number is
+probably more like 16.
+
+the answer in the case of this problem is obviously not to crank up
+the driver-specific limits!  in this situation, the app only intends
+to open the resource once but accidentlly keeps it open for the
+lifetime of N>1 programs.
+
+none of our libraries use FD_CLOEXEC as far as I know.
+
+does anyone know of gotchas we'd hit if our libraries did use FD_CLOEXEC?
+(or at least tserialio)?
+
+        - Chris Pirazzi

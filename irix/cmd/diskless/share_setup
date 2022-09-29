@@ -1,0 +1,239 @@
+#!/usr/bin/perl 
+#
+#
+# This will help create a share.dat file
+#
+# $Revision: 1.14 $
+#
+#
+
+require 5.003;			#Needs perl 5.003 or recent
+require (".dl_setup");		#Include file with functions
+use Sys::Hostname;		#Need this to find the hostname
+use Net::Ping;			#Need this to see if host is alive
+use File::Path;			#Use this to make a directory without mkdir
+local (*data);
+
+#Assert usage
+
+if (scalar@ARGV != 0)
+{
+        print STDERR "Usage: share_setup\n";
+        exit(1);
+}
+
+#Get IRIX version to install 
+
+system(clear);
+print "This program will help you create a share tree configuration file for a \n";
+print "single IRIX version.  Create a separate share tree configuration file for\n";
+print "a 32-bit and a 64-bit version of the same IRIX release.\n\n";
+
+#Get networking information 
+
+print "Retrieving system information...\n\n";
+$HOSTNAME=hostname();
+$SHAREHOST="\$HOSTNAME";
+print "Hostname is $HOSTNAME\n";
+print "If you wish to use a different interface name for this host, enter it now\n";
+
+xc:
+
+print "(Press return if $HOSTNAME is ok): ";
+chomp($choice=<STDIN>);
+if ($choice eq "")
+{
+	goto xa;
+}
+if (pingecho($choice,5))
+{
+ 	$HOSTNAME=$choice;
+}
+else 
+{
+	print "$choice is not configured.  Please enter another interface name or use \[Ctrl\]\+C to exit\n";
+	goto xc;
+}
+
+xa:
+
+print "\nDo you want client boot information stored on $HOSTNAME (y/n)? ";
+ea:
+chomp($choice=<STDIN>);
+if ($choice eq "n")
+{
+	$SERVER_NIS="yes";
+	print "Make sure $HOSTNAME is listed in the NIS server's /etc/updaters file.\n";
+}
+elsif ($choice eq "y")
+{
+	$SERVER_NIS="no";
+}
+else
+{
+	print "\aPlease enter y or n: ";
+	goto ea;
+}
+ed:
+
+# Get path for diskless tree
+
+print "\nEnter the root directory of the diskless tree \n(e.g. /diskless) : ";
+chomp($choice=<STDIN>);
+
+#Let's check if that directory exists
+
+if ((-e $choice)&&(-d $choice))
+{
+	$DISKLESS=$choice;
+}
+else
+{
+	print "\a$choice does not exist.  Create (y/n)? ";
+	ex:
+	chomp($c = <STDIN>);
+        if ($c eq "y")
+        {
+		@arguments = ("mkdir","-p","$choice");
+                mkpath($choice,0,0755) || die "share_setup: Can't create $choice: $!\n"; 
+		$DISKLESS=$choice;
+        }
+        elsif ($c eq "n")
+        {
+                goto ed;
+        }
+        else
+        {
+                print "\aPlease enter y or n: ";
+                goto ex;
+        }
+}
+
+# Get a name for the share tree because there can be multiple trees for
+# the same IRIX version
+
+ta:
+
+print "\nEnter the name of the share tree (e.g. IRIX65): ";
+chomp($choice=<STDIN>);
+if ($choice eq "")
+{
+	goto ta;
+}
+$TREE = $choice;
+$SHARE = $DISKLESS . "\/share\/" . $TREE;
+print "\nShare tree will be installed at $SHARE\n\n";
+again:
+print "Enter the name of the share tree configuration file (no extension please): ";
+chomp($choice=<STDIN>);
+$choice.=".dat";
+if ( -e $choice )
+{
+	print "$choice exists: Overwrite (y/n)? ";
+eb:	chomp($c=<STDIN>);
+	if ($c eq "y")
+	{
+		goto ok;
+	}
+	elsif ($c eq "n")
+	{
+		goto again;
+	}
+	else
+	{
+		print "\aPlease enter y or n: ";
+		goto eb;
+	}
+}
+ok:
+print "\nShare tree configuration file will be written at \/var\/boot\/$choice\n";
+$filename=$choice;
+print "Press [Enter] to continue";
+chomp($choice=<STDIN>);
+system(clear);
+
+#Get architecture information
+print "***CLIENT ARCHITECTURE INFORMATION***\n\n\n";
+print "*** PLEASE READ CAREFULLY ***\n";
+print "If you are using a 32 bit machine as your diskless server, you can only\n";
+print "install share trees for 32 bit platforms.  If you have a 64 bit server,\n";
+print "you can install either a 32 or a 64 bit share tree.\n\n";
+print "Do you want to install a share tree for all client platforms (y or n): ";
+eba:
+
+chomp($choice=<STDIN>);
+if ($choice eq "y")
+{
+	wva:
+	print "Which version would you like:\n";
+	print "\t1. 32bit\n";
+	print "\t2. 64bit\n";
+	print "Choose one (1 or 2): ";
+	chomp($choice=<STDIN>);
+	if (($choice<1)||($choice>2))
+	{
+		print "\aPlease choose a proper selection\n";
+		goto wva;
+	}
+	if ($choice==1)
+	{
+		pickallxxbit("32bit");
+	}
+	else
+	{
+		pickallxxbit("64bit");
+	}
+	goto done_selecting;
+
+}
+elsif ($choice eq "n")
+{
+	goto more_items;
+}
+else
+{
+	print "Please enter y or n: ";
+	goto eba;
+}
+more_items:
+
+# Get supported platform information for .dl_classes
+# It stores the array in an array of hashes
+
+print "\n";
+get_arch();
+pick_info();
+
+print "\nAre there more client classes using this share tree (y/n)? ";
+eb:
+chomp($choice=<STDIN>);
+if ($choice eq "y")
+{
+	splice(data,0,1);
+	goto more_items;
+}
+elsif ($choice eq "n")
+{
+	;
+}
+else
+{
+	print "Please enter y or n: ";
+	goto eb;
+}
+done_selecting:
+print "Storing share tree configuration file at \/var\/boot\/$filename\n\n";
+open (OUT,">$filename") || die "share_setup: $!\n";
+print OUT "# Created by share_setup script!\n#\n";
+print OUT "HOSTNAME=\"$HOSTNAME\"\n";
+print OUT "SHAREHOST=\"$SHAREHOST\"\n";
+print OUT "SERVER_NIS=\"$SERVER_NIS\"\n";
+print OUT "DISKLESS=\"$DISKLESS\"\n";
+print OUT "SHARE=\"$SHARE\"\n";
+print OUT "#Architecuture information\n";
+print OUT "CPUBOARD=\"$CPUBOARD\"\n";
+print OUT "CPUARCH=\"$CPUARCH\"\n";
+print OUT "GFXBOARD=\"$GFXBOARD\"\n";
+print OUT "VIDEO=\"$VIDEO\"\n";
+print OUT "MODE=\"$MODE\"\n";
+close OUT;

@@ -1,0 +1,44 @@
+The building of the ABI library is tricky - it consists of 2 parts -
+a .so(libc_32_abi.so) and a .a(libc_abiar_noso_32.a). These are  combined
+into an archive - ABIlibc.so.
+
+The contents of the .so are well defined - only those symbols defined in
+the MIPSABI can be present. However, the .so is only used for linking -
+it is NEVER used at runtime - so it can have lots of undefines, etc.
+
+The archive is more nebulous - it isn't defined by the ABI books - but
+the routines in their are somehow expected on the reference platform.
+The routines in the archice must NOT reference anything but
+legitimate ABI .so entry points (or other routines in the archive).
+
+Tricky part - 
+
+1) one trick to use for functions that are part of the ABI .so, but our
+	implementation requires lots other gunk, is to simply
+	define a null function in src/abi/xxx - since the .so portion
+	is only used for linking, not for runtime, this works.
+
+2) there can be many undefines in the .so portion EXCEPT if those
+	undefines happen to be defined in the archive portion!
+	For example, doprnt calls ecvt_r within the .so - but
+	ecvt is part of the archive and it calls ecvt_r also - this
+	means that when linking, the .so undefine will be resolved by
+	the archive define and will force all the ecvt gunk to be
+	loaded in even though the program really didn't call it - this
+	should be avoided ... The easies way to do this is to make sure
+	that the version in the archive only defines a strong non '_'
+	version of the symbol - that way the undefined in the .so,
+	which is always a reference to the '_' version won't get resolved
+	by the archive version.
+
+
+Checks:
+	There are some hand checks that can be made to make sure nothing
+	is busted:
+
+	1) run nm -Bvou on the archive portion and check for references to
+		any non-ABI routines
+	2) compile a simple hello.c program using the ABI library
+		(-abi -L/usr/lib/abi). Do an nm -Bvo and see if there
+		are any symbols defined from the archive - there really
+		shouldn't be any.

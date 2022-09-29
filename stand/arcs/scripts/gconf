@@ -1,0 +1,433 @@
+#!/bin/sh
+#
+# gconf - generate config table for ARCS standalone libsk programs.
+#
+# usage: gconf [filename] [targetdir]
+#
+# Gconf generates a configuration table for built-in devices, filesystems,
+# networks, and tuneable variables.  The major use is to convey the
+# inventory topology by listing device install routines, and their parent.
+#
+# Gconf will output filename.c (special case for file.cf -> file.c which
+# should be the norm for co-existance with make).  With no parameter it
+# operates on file 'conf'.
+#
+# Note that all gconf directives (X[:!]) must be grouped together.  Tables
+# are now generated during parsing in order to allow cpp directives to work
+# as expected.
+#
+# Gconf handles the following syntax (all commands start in column 0):
+#
+#   *[...]
+#
+#	This line is a comment.
+#
+#   #[...]
+#
+#	This line copied to the output file (to implement cpp directives).
+#
+#   node: name	[parent=nameofparent] [install=installname] 	\
+#		[gfxprobe=gfxprobename] [drvrinfo=drvriinfoname]
+#
+#	This includes driver "name".  Parent specifies the parent of
+#	this node.  With no install routine will be called, but will
+#	cause the driver to be linked in.  Gconf also takes the
+#	special parent of "root" to be a child of the system class.
+#	Install overides the default install routine of name_install().
+#	Gfxprobe is for graphics drivers who wish to interface with the
+#	textport.  Drvrinfo is for drivers that let the system probe
+#	for their existance.
+#
+#   node! name [rest of line is ignored]
+#
+#	This excludes driver "name".  It can be used as an alternative
+#	in some cases to commenting the line out with a '*'.  However
+#	this has the additional effect of defining NO_name and including
+#	<sys/skpick.h>.  This will allow drivers that export more than
+#	their install routine to be excluded.
+#
+#   fs: name [install=installname]
+#
+#	This includes filesystem "name".  Install overides the default
+#	install routine name_install().
+#
+#   fs! name [rest of line is ignored]
+#
+#	This excludes filesystem "name" in the same manner as node!.
+#
+#   if: nameprefix type description
+#
+#	This includes if driver by using the probe, init, open and close
+#	routines with nameprefix appended to them.  Type is usually IF_SGI
+#	(other values in stand/include/if.h).  Description is the interface
+#	description string: SGI Integral IP1000 Enet Controller.
+#
+#   if!	[rest of line is ignored]
+#
+#	Generate the necessary definitions such that linking can be done
+#	successfully even without an ethernet driver.  This line will be
+#	ignored if there is a 'if:' somewhere else in the file.
+#
+#   tune: [name value]
+#
+#	This produces a #define name value, which should correspond
+#	to an entry in <tune.h>.  The value given in the tune: statement
+#	will override the default value in <tune.h>.  The special case
+#	of tune: with no arguements will cause <tune.h> to be included
+#	in the generated .c file to get all the default values.
+#
+# "$Revision: 1.17 $"
+
+FILENAME=${1-conf}
+TARGETDIR=${2-.}"/"
+
+nawk -v TARGETDIR="$TARGETDIR" '
+BEGIN	{
+	# initialize flags and counters
+	tune = exclude = node = nodetouched = fstouched = iftouched = 0;
+
+	# Variables set when new context is done.
+	nodedone = 1; fsdone = 2; ifdone = 3
+	finished[nodedone] = finished[fsdone] =	finished[ifdone] = 0
+	donei = 0
+
+	# Do not need any trailers yet.
+	finish=""
+
+	# Have at least one 'if:' entry
+	if_entry = 0
+
+	# Figure out filename for .c file.  If the input filename ends in
+	# .cf, produce a .c file.  Otherwise, just append .c to the end
+	# of the filename.  Note .h file uses the same method.
+	cfile=TARGETDIR FILENAME
+	if (sub(".cf", ".c", cfile) != 1)
+		cfile = FILENAME ".c"
+	hfile=cfile
+	sub(".c$", ".h", hfile)
+
+	# Print header comment, and generate files
+	print "/* automatically generated config table */"		> cfile
+	print "/* from " FILENAME " */"					>>cfile
+	print "#include \"" hfile "\""					>>cfile
+	print "/* automatically generated config table header */"	> hfile
+	print "/* from " FILENAME " */\n"				>>hfile
+}
+
+/^\*.*$/	{
+	# skip comments (a comment must start in column 0).
+	continue
+}
+
+/^\#.*$/	{
+	# output lines starting with hash directly for cpp
+	print $0							>>cfile
+	continue
+}
+
+/^[ \t]*$/	{
+	# skip blank lines
+		continue
+}
+
+/^node:/	{
+	# matched a node: save nodename
+	nodes[node] = $2
+
+	# check if commands are grouped properly
+	if (finished[nodedone] == 1) {
+		print "error line " NR " -> node command " $2 " not grouped."
+		err = 1
+		continue
+	}
+
+	# look at rest of args to look for modifiers
+	gfx=drvr=parent=install=0
+	for (i=3; i <= NF; i++) {
+		if (match($i,"parent=") == 1)
+			parent = substr($i,RLENGTH+1,length($i)-RLENGTH)
+		else if (match($i,"install=") == 1)
+			install = substr($i,RLENGTH+1,length($i)-RLENGTH)
+		else if (match($i,"gfxprobe=") == 1)
+			gfx = substr($i,RLENGTH+1,length($i)-RLENGTH)
+		else if (match($i,"drvrinfo=") == 1)
+			drvr = substr($i,RLENGTH+1,length($i)-RLENGTH)
+		else {
+			print "error line " NR " -> " $i
+			err=1
+			continue
+		}
+	}
+
+	# If this is the first node, output the header.
+	if (nodetouched == 0) {
+		print finish						>>cfile
+		finished[donei] = 1
+		print "#include <sys/types.h>"				>>cfile
+		print "#include <standcfg.h>\n"				>>cfile
+		print "struct standcfg standcfg[] = {"			>>cfile
+
+		nodetouched=1
+		donei=nodedone
+		finish="\t0,0,0\n};\n"
+	}
+
+	if (install == 0)
+		routine = nodes[node] "_install"
+	else
+		routine = install
+
+	# output extern definition
+	print "extern int " routine "();"				>>hfile
+
+	# output table entry
+	printf	"\t%s,\t",routine					>>cfile
+	if (parent == "root")
+		printf "(struct standcfg *)(__psunsigned_t)1"		>>cfile
+	else if (parent == 0)
+		printf "(struct standcfg *)0"				>>cfile
+	else {
+		for (i=0; i < node ; i++) {
+			if (nodes[i] == parent) {
+				printf "\t&standcfg[%d]",i		>>cfile
+				break
+			}
+		}
+		if (i == node) {
+			print "parent " parent " not found."
+			err=1
+			continue
+		}
+	}
+	printf ",\t"							>>cfile
+	if (gfx != 0) {
+		printf "%s", gfx					>>cfile
+		print "extern void *" gfx "();"				>>hfile
+	}
+	else
+		printf "\t0"						>>cfile
+	printf ",\n#ifdef SLOTCONFIG\n\t"				>>cfile
+	if (drvr != 0) {
+		printf "&%s", drvr					>>cfile
+		print "extern struct drvrinfo_s " drvr ";"		>>hfile
+	}
+	else
+		printf "0"						>>cfile
+	printf ",\n#endif"						>>cfile
+	print "\t\t\t/* " nodes[node] " */"				>>cfile
+
+	node+=1
+
+	continue
+}
+
+/^node\!/	{
+	# check if commands are grouped properly
+	if (finished[nodedone] == 1) {
+		print "error line " NR " -> node command " $2 " not grouped."
+		err = 1
+		continue
+	}
+
+	# Node exclusion.  Output #define, and note exclusion is used.
+	print "#define NO_" $2						>>cfile
+
+	# If this is the first node, output the header.
+	if (nodetouched == 0) {
+		print finish						>>cfile
+		finished[donei] = 1
+		print "#include <standcfg.h>\n"				>>cfile
+		print "struct standcfg standcfg[] = {"			>>cfile
+
+		nodetouched=1
+		donei = nodedone
+		finish="\t0,0,0\n};\n"
+	}	exclude=1
+
+	continue
+}
+
+/^fs:/		{
+	if (finished[fsdone] == 1) {
+		print "error line " NR " -> fs command " $2 " not grouped."
+		err = 1
+		continue
+	}
+
+	# Include a filesystem.  Save Filesystem install
+	fs = $2 "_install"
+
+	# Look for modifiers (override install name)
+	for (i=3 ; i <= NF; i++) {
+		if (match($i,"install=") == 1)
+			fs = substr($i,RLENGTH+1,length($i)-RLENGTH)
+		else {
+			print "error line " NR " -> " $i
+			err=1
+			continue
+		}
+	}
+
+	# If this is the first fs, output the header.
+	if (fstouched == 0) {
+		print finish						>>cfile
+		finished[donei] = 1
+		print "int (*_fs_table[])() = {"			>>cfile
+
+		donei = fsdone;
+		fstouched=1
+		finish="\t0\n};\n"
+	}
+
+	# print the extern and then the filesystem entry
+	print "extern int " fs "();"					>>hfile
+	print "\t" fs ","						>>cfile
+
+	continue
+}
+
+/^fs\!/		{
+	# check if commands are grouped properly
+	if (finished[fsdone] == 1) {
+		print "error line " NR " -> fs command " $2 " not grouped."
+		err = 1
+		continue
+	}
+
+	# Exclude filesystem.  Output #define, and not exclusion is used.
+	print "#define NO_" $2						>>cfile
+
+	# If this is the first fs, output the header.
+	if (fstouched == 0) {
+		print finish						>>cfile
+		finished[donei] = 1
+		print "int (*_fs_table[])() = {"			>>cfile
+
+		donei = fsdone
+		fstouched=1
+		finish="\t0\n};\n"
+	}	exclude=1
+
+	continue
+}
+
+/^if:/		{
+	# check if commands are grouped properly
+	if (finished[ifdone] == 1) {
+		print "error line " NR " -> if command " $2 " not grouped."
+		err = 1
+		continue
+	}
+
+	# Network configuration.  Parse it, and save it.
+	ifprefix = $2
+	iftype = $3
+	if (iftype == 0)
+		iftype = "IF_SGI"
+	ifdesc = $4
+	for (i = 5; i < NF ; i++)
+		ifdesc = ifdesc " " $i
+	if (ifdesc == 0)
+		ifdesc == ""
+
+	# output if header
+	if (iftouched == 0) {
+		print finish						>>cfile
+		finished[donei] = 1
+
+		iftouched = 1;
+		donei = ifdone
+	}
+
+	if (if_entry == 0) {
+		print "#include <if.h>\n"				>>cfile
+		print "struct if_func _if_func[] = {"			>>cfile
+
+		finish = "};\n" \
+			"int _nifcs = " \
+			"(sizeof(_if_func)/sizeof(_if_func[0]));\n"
+		if_entry += 1;
+	}
+
+	# output extern definitions
+	print	"extern void " ifprefix "init();\n"\
+		"extern int " ifprefix "probe();\n"\
+		"extern int " ifprefix "open();\n"\
+		"extern int " ifprefix "close();\n"			>>hfile
+
+	# output current if
+	printf "\t{\n\t\t"						>>cfile
+	print ifprefix "init, " ifprefix "probe, " ifprefix "open, " \
+		ifprefix "close,"					>>cfile
+	printf "\t\t%s,\t\"%s\"\n\t},\n", iftype, ifdesc		>>cfile
+	
+	continue
+}
+
+/^if\!/		{
+	# check if commands are grouped properly
+	if (finished[ifdone] == 1) {
+		print "error line " NR " -> if command " $2 " not grouped."
+		err = 1
+		continue
+	}
+
+	# output if header
+	if (iftouched == 0) {
+		print finish						>>cfile
+		finished[donei] = 1
+
+		finish = "#include <if.h>\n" \
+			"struct if_func _if_func[1];\n" \
+			"int _nifcs = 0;\n"
+
+		iftouched = 1;
+		donei = ifdone
+	}
+
+	continue
+}
+
+/^tune:/	{
+	# tuning -- note that we are tuning.
+	tune = 1
+
+	# if no parameters just continue, since we already set the flag
+	if (NF == 1)
+		continue
+
+	# substitute tune: with #define.
+	sub("^tune:","#define",$0)
+
+	print $0							>>cfile
+	continue
+}
+
+
+		{
+	# No match above -> error.  Print message, set error
+	# flag to prevent .c generation at END, and let awk
+	# continue to look for more errors.
+	print "error line " NR " -> " $0
+	err=1
+}
+
+END	{
+	# If there was a error exit with correct error code.
+	if (err == 1) {
+		system("rm -f " cfile " " hfile)
+		exit 1
+	}
+
+	# print last finish string
+	print finish							>>cfile
+
+	# if exclusion is used, output #include
+	if (exclude != 0)
+		print "#include <sys/skpick.h>"				>>cfile
+
+	# if tune is used, output #include
+	if (tune != 0)	
+		print "#include <tune.h>"				>>cfile
+}
+' $FILENAME

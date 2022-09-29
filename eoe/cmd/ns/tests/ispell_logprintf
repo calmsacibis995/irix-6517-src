@@ -1,0 +1,70 @@
+#!/usr/bin/perl
+
+@DIRS=("eoe/cmd/nsd", "eoe/lib/ns/*");
+@EXCLUDE=("eoe/lib/ns/files/fam.c");
+chomp($pwd =`/bin/pwd`);
+$ispell = $pwd . "/.ispell_english";
+$out = $0 . ".out";
+
+unlink ($out, "${out}.bak" );
+
+open(ISPELL, ">$out") || die "cant open $out: $!\n";
+
+chdir "../../../..";
+
+foreach $dirs (@DIRS) {
+    foreach $dir (glob ($dirs)) {
+	foreach $file (glob("$dir/*.c")) {
+	    if (grep (/$file/, @EXCLUDE)) {
+		next;
+	    }
+	    if (!open(C, $file)) {
+		warn "Faied to open $file: $!\n"; 
+		next; 
+	    }
+	    $_ = join('',<C>);
+	    close(C);
+	    s/\n//;
+	    @lines=split(';',$_);
+	    foreach (grep /nsd_logprintf\([0-9N][^;]*$/,@lines ) {
+		s/^.*nsd_logprintf//s;
+		m/(NSD_LOG_[^,]*),/;
+		$loglevel = $1;
+		s/^[^"]*"//s;
+		s/([^\\])".*$/$1/s;
+		s/\\[nt]//gs;
+		print ISPELL "$file\t$loglevel\n\t$_\n\n";
+	    }
+
+	    $_=$file;
+	    s/\.c$//;
+	    foreach $word (split (/[\/\-\_]/,$_)) {
+		$words{$word}=1;
+	    }
+	}
+    }
+}
+close(ISPELL);
+
+chdir $pwd;
+
+open(ISPELL,"$ispell");
+while ($_ = <ISPELL>) {
+    chomp;
+    $words{$_} += 1;
+}
+close (ISPELL);
+
+chmod 0644, $ispell;
+open(ISPELL,">$ispell");
+foreach $_ (sort keys %words) {
+    printf ISPELL "$_\n";
+}
+close (ISPELL);
+
+system("ispell -p $ispell $out");
+
+if (-e "${out}.bak") {
+	system("diff -c -C1 $out ${out}.bak");
+}
+

@@ -1,0 +1,187 @@
+	MODULE	?BANK_SWITCHER_L09
+	TITL	'6801/6301/68HC11 - C - BANK-SWITCHER'
+	RSEG	RCODE	
+$defcpu.inc
+*---------------------------------------------------------------*
+*																*
+*			- L09.S07 -											*
+*																*
+*	Function(s):	Banked swiched CALL and RETURN				*
+*																*
+*	Must be tailored for actual bank-switching hardware.		*
+*	In the sample system a PIA-type of port was used.			*
+*																*
+*	The port is assumed to be readable but this is not			*
+*	needed if the current bank-number is also stored in			*
+*	RAM.	This solution is suitable for a 74HC374-type		*
+*	of port.													*
+*																*
+*	Note: A PIA type of port must be initialized in				*
+*	CSTARTUP.S07 to become an output device.					*
+*																*
+*	Version: 3.00 [A.R. 16/Nov/88]								*
+*																*
+*---------------------------------------------------------------*
+
+PORTA	EQU	$1000
+
+*---------------------------------------*
+*										*
+*	Call a non-local function			*
+*										*
+*	Input:								*
+*										*
+*	  X: 32-bit function-addr:			*
+*	     -------------------------		*
+*	X-> | ??? | bank | High | Low |		*
+*	     -------------------------		*
+*										*
+*---------------------------------------*
+
+*---------------------------------------*
+*										*
+*	System Controller Bank Assignments	*
+*	For 5 8K Banks						*
+*										*
+*	Bank Number				Port Setting*
+*	     0:	PA5_H, PA[3,4]_X 	or 0x20	*
+*	     1:	PA[3,4,5]_L			or 0x00	*
+*	     2:	PA3_H, PA[4,5]_L 	or 0x08	*
+*	     3:	PA4_H, PA[3,5]_L 	or 0x10	*
+*	     4:	PA[3,4]_H, PA5_L 	or 0x18	*
+*										*
+*---------------------------------------*
+
+
+
+	PUBLIC	?X_CALL_L09
+?X_CALL_L09:
+
+*===========================*
+*       Save old bank	    *
+*===========================*
+
+	LDAA	PORTA					Could be RAM
+	LDY		#PORTA					Store PORTA address in Y
+	ANDA	#$38					Mask out un-wanted bits
+	PSHA							Always stack port value
+
+*===============================*
+*       Get new bank number	    *
+*===============================*
+
+	LDAA	1,X						Get new bank-number
+	LDX		2,X						Get offset in bank
+
+*===========================*
+*       Bank-switch		    *
+*===========================*
+
+	BCLR	0,y,#$38				Clear Bank Switching bits from last setting
+
+	CMPA	#$00					Check for Bank Number Zero
+	BNE		Bank_1					Try the next bank
+	BSET	0,y,#$20				Enable Bank Zero
+	BRA		EXIT_SET				
+
+Bank_1:
+	CMPA	#$01					Check for Bank Number One
+	BNE		Bank_2					Try the next bank					
+	BSET	0,y,#$00				Enable Bank Two
+	BRA		EXIT_SET				
+
+Bank_2:
+	CMPA	#$02					Check for Bank Number Two
+	BNE		Bank_3					Try the next bank					
+	BSET	0,y,#$08				Enable Bank Two
+	BRA		EXIT_SET				
+
+Bank_3:
+	CMPA	#$03					Check for Bank Number Three
+	BNE		Bank_4					Try the next bank					
+	BSET	0,y,#$10				Enable Bank Three
+	BRA		EXIT_SET				
+
+Bank_4:
+	CMPA	#$04					Check for Bank Number Four
+	BRA		EXIT_SET				
+	BSET	0,y,#$18				Enable Bank Four
+
+*===========================*
+*	End of switch       *
+*===========================*
+
+EXIT_SET
+	JMP	0,X					Exectute that function!
+
+*---------------------------------------*
+*										*
+*	Leave current function				*
+*										*
+*---------------------------------------*
+*										*
+*	Input:								*
+*	  Stack TOP							*
+* 										*
+*										*
+*---------------------------------------*
+
+*---------------------------------------*
+*										*
+* Note: The return function check for	*
+*		the stacked banking settings,	*
+*		not the bank number as in,		*
+*		the X_CALL_L09.					*
+*										*
+*---------------------------------------*
+
+
+	PUBLIC	?X_RET_L09
+?X_RET_L09:
+	%XGDX							Save D (function return value)
+
+*===========================*
+*       Bank-switch	    *
+*===========================*
+
+	PULA							Get old bank port setting
+	LDY		#PORTA					Store PORTA address in Y
+	BCLR	0,y,#$38				Clear Bank Switching bits from last setting
+
+	CMPA	#$20					Check for Bank Zero Port Setting
+	BNE		R_Bank_1				Try the next bank
+	BSET	0,y,#$20				Enable Bank Zero
+	BRA		EXIT_RESTORE				
+
+R_Bank_1:
+	CMPA	#$00					Check for Bank One Port Setting
+	BNE		R_Bank_2				Try the next bank
+	BSET	0,y,#$00				Enable Bank Zero
+	BRA		EXIT_RESTORE				
+
+R_Bank_2:
+	CMPA	#$08					Check for Bank Two Port Setting
+	BNE		R_Bank_3				Try the next bank					
+	BSET	0,y,#$08				Enable Bank Two
+	BRA		EXIT_RESTORE				
+
+R_Bank_3:
+	CMPA	#$10					Check for Bank Three Port Setting
+	BNE		R_Bank_4				Try the next bank					
+	BSET	0,y,#$10				Enable Bank Three
+	BRA		EXIT_RESTORE				
+
+R_Bank_4:
+	CMPA	#$18					Check for Bank Four Port Setting
+	BRA		EXIT_RESTORE				
+	BSET	0,y,#$18				Enable Bank Four
+
+*===========================*
+*	End of switch       	*
+*===========================*
+
+EXIT_RESTORE
+	%XGDX							Restore D
+	RTS								Return to calling function
+
+	END

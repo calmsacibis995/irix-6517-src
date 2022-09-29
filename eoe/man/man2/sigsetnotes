@@ -1,0 +1,406 @@
+is assigned one of four values:
+.BR \s-1SIG_DFL\s+1 ,
+.BR \s-1SIG_IGN\s+1 ,
+or
+.BR \s-1SIG_HOLD\s+1 ,
+which are macros (defined in
+.IR <sys/signal.h> )
+that expand to constant expressions,
+or a
+.IR "function address" .
+.PP
+The actions prescribed by its value are as follows: 
+.RS 2
+.PP
+.SM
+.B SIG_DFL
+\&\-  terminate process upon receipt of a signal
+.RS 8
+Upon receipt of the signal
+.IR sig ,
+the receiving process is to be terminated with all of the consequences outlined
+in
+.IR exit (2).
+See \s-1SIGNAL NOTES [\s01\s-1]\s0 below.
+.RE
+.PP
+.SM
+.B SIG_IGN
+\&\-  ignore signal
+.RS 8
+The signal 
+.I sig\^
+is to be ignored.
+.PP
+Note: the signals
+.B
+.SM SIGKILL,
+.B
+.SM SIGSTOP
+and
+.B
+.SM SIGCONT
+cannot be ignored.
+.RE
+.PP
+.SM
+.B SIG_HOLD
+\&\- hold signal
+.RS 8
+The signal
+.I sig\^
+is to be held upon receipt.
+Any pending signal of this type remains held.
+Only one signal of each type is held.
+.RE
+.PP
+.I function address\^
+\&\-  catch signal
+.RS 8
+Upon receipt of the signal
+.IR sig ,
+the receiving process is to execute the signal-catching function whose
+address is specified via this parameter.
+The function will be invoked as follows:
+.PP
+.RS
+.nf
+.B "handler (int sig, int code, struct sigcontext \(**sc);"
+.fi
+.RE
+.PP
+Where
+.I handler
+is the specified function-name.
+.I code\^
+is valid only in the following cases:
+.PP
+.ta \w' Floating/decimal divide by zero 'u +\w'15* 'u +8n
+.nf
+Condition	Signal	Code
+
+User breakpoint	SIGTRAP	BRK_USERBP
+User breakpoint	SIGTRAP	BRK_SSTEPBP
+Integer overflow	SIGTRAP	BRK_OVERFLOW
+Divide by  zero	SIGTRAP	BRK_DIVZERO
+Multiply overflow	SIGTRAP	BRK_MULOVF
+Invalid virtual address	SIGSEGV	EFAULT
+Read-only address	SIGSEGV	EACCESS
+Read beyond mapped object	SIGSEGV	ENXIO
+.fi
+.PP
+The third argument
+.I sc\^
+is a pointer to a
+.I struct sigcontext
+(defined in <\f2sys/signal.h\f1>)
+that contains the processor context at the time of the signal.
+.Op f
+The FORTRAN arguments are defined in the same way except for
+the last argument 
+which can be defined either as an array of integers or as a record.
+.Op
+.PP
+Before the handler is invoked the signal action will be changed to
+.SM
+.BR SIG_HOLD .
+.PP
+The signal-catching function remains installed after it is invoked.
+During normal return from the signal-catching handler,
+the system signal action is restored to
+.I func\^
+and any held signal of this type released.
+If a non-local goto
+.RI ( longjmp )
+is taken, then
+.I sigrelse\^
+must be called to restore the system signal action
+and release any held signal of this type.
+.PP
+Upon return from the signal-catching function, the receiving process will
+resume execution at the point it was interrupted.
+See 
+.SM WARNINGS
+below.
+.PP
+When a signal that is to be caught occurs during a 
+.IR read "(2), a"  " write" (2),
+.RI an " open" "(2), or an " ioctl (2)\^
+system call on a slow device (like a terminal; but not a file), during a
+.IR pause (2)
+system call, or during a
+.IR wait (2)
+system call that does not return immediately due to the existence of a
+previously stopped or zombie
+process, the signal catching function will be executed and then the
+interrupted system call may return a \-1 to the calling process with
+.I errno\^
+set to
+.SM 
+.BR EINTR .
+.PP
+Note: The signals
+.B
+.SM SIGKILL
+and
+.B
+.SM SIGSTOP
+cannot be caught.
+.RE
+.RE
+.SH SIGNAL NOTES
+.TP 4
+.B [1]
+If
+.SM
+.B SIG_DFL
+is assigned for these signals, in addition to the process being terminated,
+a ``core image'' will be constructed in the current working directory of the process, if the following conditions are met:
+.RS 4
+.RS 8
+.PP
+The effective user
+.SM ID
+and the real user
+.SM ID
+of the receiving 
+process are equal.
+.PP
+An ordinary file named
+.B core
+exists and is writable or can be created.
+If the file must be created, it will have the following properties:
+.RS 8
+.PP
+a mode of 0666 modified by the file creation mask
+.RI [see  " umask" (2)]
+.PP
+a file owner
+.SM ID
+that is the same as the effective user
+.SM ID
+of the receiving process.
+.PP
+a file group
+.SM ID
+that is the same as the effective group
+.SM ID
+of the receiving process
+.RE
+.RE
+.RE
+.PP
+.SM
+.B NOTE:
+The core file may be truncated
+if the resultant file size would exceed either
+.I ulimit
+[see
+.IR ulimit (2)]
+or
+the process's maximum core file size [see
+.IR setrlimit (2)].
+.PP
+.TP 4
+.B [2]
+For the signals
+.B \s-1SIGCLD\s+1,
+.B \s-1SIGWINCH\s+1,
+.BR \s-1SIGPWR\s+1,
+.BR \s-1SIGURG\s+1,
+and
+.BR \s-1SIGIO\s+1,
+the handler parameter
+is assigned one of three values:
+.BR \s-1SIG_DFL\s+1,
+.BR \s-1SIG_IGN\s+1,
+or a
+.IR "function address".
+The actions prescribed by these values are: 
+.RS 4
+.RS 2
+.PP
+.SM
+.B SIG_DFL
+- ignore signal
+.RS 8
+The signal is to be ignored.
+.RE
+.PP
+.SM
+.B SIG_IGN
+- ignore signal
+.RS 8
+The signal is to be ignored.
+Also, if
+.I sig\^
+is
+.SM
+.BR SIGCLD ,
+the calling process's child processes will not create zombie processes when
+they terminate
+[see \f2exit\f1(2)].
+.RE
+.PP
+.I function address\^
+- catch signal
+.RS 8
+If the signal is
+.SM
+.B \f3SIGPWR\fP,
+.SM
+.B \f3SIGWINCH\fP,
+.SM
+.B \f3SIGURG\fP,
+or
+.SM
+.B \f3SIGIO\fP,
+the action to be taken is the same as that described above for
+a handler parameter
+equal to
+.IR "function address" .
+The same is true if the signal is
+.SM
+.B SIGCLD
+with one exception:
+while the process is executing the signal-catching function,
+all terminating child processes will be queued.
+The \f2wait\f1
+system call removes the first entry of the queue.
+To ensure that no \s-1\f3SIGCLD\s+1\fP's are
+missed while executing in a \s-1\f3SIGCLD\s+1\fP
+handler, it is necessary to call
+.I sigset
+to re-attach the handler before exiting 
+from it, and
+at that time--if the queue is not empty--\f3\s-1SIGCLD\s+1\fP
+is re-raised before \f2sigset\f1 returns.  See \f2wait\fP(2).
+If the signal handler is simply exited from, then
+.SM
+.B SIGCLD
+will
+.SM NOT
+be re-raised automatically.
+.RE
+.RE
+.PP
+In addition,
+.SM
+.B SIGCLD
+affects 
+the
+.IR wait " and " exit 
+system calls as follows:
+.RS 2
+.TP 8
+.I wait\^
+If the
+handler parameter of
+.SM
+.B SIGCLD
+is set to
+.SM
+.B SIG_IGN
+and a
+.I wait\^
+is executed, the
+.I wait\^
+will block until all of the calling process's child processes terminate;
+it will then return a value of \-1 with
+.I errno\^
+set to
+.SM 
+.B ECHILD.
+.TP 8
+.I exit\^
+If in the exiting process's parent process the
+handler parameter of
+.SM
+.B SIGCLD
+is set to
+.SM
+.BR SIG_IGN ,
+the exiting process will not create a zombie process.
+.PP
+When processing a pipeline, the shell
+makes the last process in the pipeline the parent of the proceeding processes.
+A process that may be piped into in this manner (and thus become the parent
+of other processes) should take care not to set
+.SM
+.B SIGCLD
+to be caught.
+.RE
+.RE
+.PP
+.TP 4
+.B [3]
+.B \s-1SIGPOLL\s+1
+is issued when a file descriptor corresponding
+to a \s-1STREAMS\s0 [see \f2intro\f1(2)] file has a "selectable" event pending.
+A process must specifically request that this signal be sent
+using the \f3\s-1I_SETSIG\s0\fP \f2ioctl\fP call.
+Otherwise, the process will never receive 
+.BR \s-1SIGPOLL\s+1 .
+.PP
+.TP 4
+.B [4]
+.B \s-1SIGEMT\s+1
+is never generated on an
+.B IRIS-4D
+system.
+.PP
+.TP 4
+.B [5]
+.B \s-1SIGTRAP\s+1
+is generated for breakpoint instructions, overflows, divide by zeros,
+range errors,
+and multiply overflows.
+The second argument
+.I code
+gives specific details of the cause of the signal.
+Possible values are described in <\f2sys/signal.h\f1>.
+.PP
+.TP 4
+.B [6]
+The signals \f3\s-1SIGSTOP\s+1\f1, \f3\s-1SIGTSTP\s+1\f1,
+\f3\s-1SIGTTIN\s+1\f1, \f3\s-1SIGTTOU\s+1\f1
+and \f3\s-1SIGCONT\s+1\f1 are used by command interpreters like the C shell
+[see \f2csh\f1(1)] to provide job control.
+The first four signals listed will cause the receiving process to be
+stopped, unless the signal is caught or ignored.
+\f3\s-1SIGCONT\s+1\f1 causes a stopped process to be resumed.
+\f3\s-1SIGTSTP\s+1\f1 is sent from the terminal driver in response
+to the 
+.SM 
+SWTCH
+character being entered from the keyboard [see \f2termio\f1(7)].
+\f3\s-1SIGTTIN\s+1\f1 is sent from the terminal driver when a background
+process attempts to read from its controlling terminal.
+If \f3\s-1SIGTTIN\s+1\f1 is ignored by the process, then the read will
+return \f3\s-1EIO\s+1\f1.
+\f3\s-1SIGTTOU\s+1\f1 is sent from the terminal driver when a background
+process attempts to write to its controlling terminal when the
+terminal is in \f3\s-1TOSTOP\s+1\f1 mode.
+If \f3\s-1SIGTTOU\s+1\f1 is ignored by the process, then the write will
+succeed regardless of the state of the controlling terminal.
+.Op f
+.SH EXAMPLES
+This is an example in FORTRAN:
+.nf
+
+    #include <sys/signal.h>
+
+    EXTERNAL FPROC
+    INTEGER SIGNAL
+    INTEGER CPADDR
+
+    I = SIGNAL(SIGTERM, FPROC, -1)
+    J = SIGNAL(SIGINT, 0, CPADDR)
+
+.fi
+The first call to \f2signal\f1 sets up the FORTRAN function
+\f2fproc\f1 as the signal-handling routine for \f3\s-1SIGTERM\s+1\f1.
+The second call sets up a C function whose address is in the variable
+\f2cpaddr\f1 as the signal-handling routine for \f3\s-1SIGINT\s+1\f1.
+.Op
+

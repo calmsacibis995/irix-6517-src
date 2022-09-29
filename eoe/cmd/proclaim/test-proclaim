@@ -1,0 +1,300 @@
+#!/usr/bin/perl5
+
+# command line options
+# Usage: test-proclaim -N times -D directory -i interface -d -f MACfile
+
+# To use a file containing a list of MAC addresses(fictitious or real)
+# should be place in the test directory with the name "testMAC"
+# or specified using the -f flag
+# The log of operations is placed in a file named testLog.<pid> where
+# <pid> is the process id of the this test program
+# The simulation begins with each MAC addres being uninitialized "u" state
+# continues to perform a number of lease renew, request address, lease
+# rebind, lease surender operations randomly choosing the next operation
+# and MAC address.
+# If the debug flag is on at the end the state of the MAC array is printed
+# to the LOG file
+
+# prototypes
+sub updateTestMAC(\@p, $r);
+
+$debug = 0;			# can be set by -d command-line option
+$cidon = 0;			# can be set by the -C option
+
+$TEST_DIR = ".";		# set by -D dir command-line option
+$PROGRAM_DIR = "/usr/etc";	# set by -p dir command-line option
+
+# indices in testMAC array
+$MAC = 0;			
+$NEXTOP = 1;
+$SERVER = 2;
+$LEASE = 3;
+$HOSTNAME= 4;
+$IPADDRESS = 5;
+
+$N = 1000;			# number of operations to do (-N option)
+$MIN_LEASE = 300;
+$MAX_LEASE = 3600;
+$INTERFACE = "ec0";		# -i option
+$MACFILE = "testMAC";
+$delay = 10;			# delay between transactions
+
+#process command line options
+while ($#ARGV > -1) {
+    if ($ARGV[0] eq "-N") {
+	shift(@ARGV);
+	$N = $ARGV[0];
+	shift(@ARGV) || &usage;
+    }
+    elsif ($ARGV[0] eq "-D") {
+	shift(@ARGV);
+	$TEST_DIR = $ARGV[0];
+	shift(@ARGV) || &usage;
+    }
+    elsif ($ARGV[0] eq "-p") {
+	shift(@ARGV);
+	$PROGRAM_DIR = $ARGV[0];
+	shift(@ARGV) || &usage;
+    }
+    elsif ($ARGV[0] eq "-d") {
+	shift(@ARGV);
+	$debug = 1;
+    }
+    elsif ($ARGV[0] eq "-i") {
+	shift(@ARGV);
+	$INTERFACE = $ARGV[0];
+	shift(@ARGV) || &usage;
+    }
+    elsif ($ARGV[0] eq "-f") {
+	shift(@ARGV);
+	$MACFILE = $ARGV[0];
+	shift(@ARGV) || &usage;
+    }
+    elsif ($ARGV[0] eq "-C") {
+	shift(@ARGV);
+	$cidon = 1;
+    }
+    elsif ($ARGV[0] eq "-T") {
+	shift(@ARGV);
+	$delay = $ARGV[0];
+	shift(@ARGV) || &usage;
+    }
+    else {
+	&usage;
+    }
+}
+
+sub usage {
+    print STDOUT "Usage: $0 -N times -D directory -i interface -f Macfile -d -T delay\n";
+    exit();
+}
+
+# used to ensure that a call to proclaim does not cause execessive
+# delay in the test program
+$alarmOn = 0;
+$SIG{ALRM} = 'alarmHandler';
+sub alarmHandler { 
+    $alarmOn = 1; 
+}
+
+# read from file of mac addresses to use and initialize testMAC array
+open(MAC, "$TEST_DIR/$MACFILE") ||  die "Cant open $TEST_DIR/$MACFILE: $!\n";
+$i = 0;
+%hashMAC = ();
+while ($line = <MAC>) {
+    # format is mac address, next operation, server address, lease end,
+    # hostname, ipaddress
+    # last operation is the character corresponding to the proclaim option used
+    # to begin with it is "u" uninitialized
+    chomp($line);
+    $macAddr = $line;
+    $testMAC[$i] = [ ( $macAddr, "u", "", "", "", "" ) ];
+    $i += 1;
+}
+close(MAC);
+
+open(LOG, ">$TEST_DIR/testLog.$$") || die "Can't open log file $TEST_DIR/testLog.$$: $!\n";
+use FileHandle;
+LOG->autoflush();
+if ($debug) {
+#    autoflush LOG 1;
+}
+
+srand (time() ^ ($$ + ($$ << 15))); # initialize seed
+
+for ($n = 0; $n < $N; $n++) {
+    # select a random MAC to operate on
+    $roll = int(rand $#testMAC);
+    $mac = $testMAC[$roll][$MAC];
+    if ($cidon) {
+#	$cid = "-C " . "1". $mac . " -x 12";
+	$cid = "-C " . "1". $mac;
+    }
+    $nextop = $testMAC[$roll][$NEXTOP];
+    $ipaddress = $testMAC[$roll][$IPADDRESS];
+    local(*PROCLAIM);
+    local(@proclaim);
+    alarm(20);
+    print LOG scalar localtime;
+
+    if ($nextop eq "u") {
+	$command = sprintf "%s", "$PROGRAM_DIR/proclaim -D 2 -M $mac $cid|";
+	open(PROCLAIM, $command);
+	print LOG "$n($testMAC[$roll][$IPADDRESS]): $command\n";
+    }
+    elsif ($nextop eq "U") {
+	$command = sprintf "%s", "$PROGRAM_DIR/proclaim -D 2 -M $mac $cid -H $mac|";
+	open(PROCLAIM, $command);
+	print LOG "$n($testMAC[$roll][$IPADDRESS]): $command\n";
+    }
+    elsif ($nextop eq "b") {
+	$rno = int(rand ($MAX_LEASE-$MIN_LEASE)) + $MIN_LEASE;
+	$command = sprintf "%s", "$PROGRAM_DIR/proclaim -D 2 -M $mac:$ipaddress -b $rno $cid|";
+	open(PROCLAIM, $command);
+	print LOG "$n($testMAC[$roll][$IPADDRESS]): $command\n";
+    }
+    elsif ($nextop eq "d") {
+	$command = sprintf "%s", "$PROGRAM_DIR/proclaim -D 2 -M $mac -d -s $testMAC[$roll][$SERVER] $cid|";
+	open(PROCLAIM, $command);
+	print LOG "$n($testMAC[$roll][$IPADDRESS]): $command\n";
+    }
+    elsif ($nextop eq "l") {
+	$rno = int(rand ($MAX_LEASE-$MIN_LEASE)) + $MIN_LEASE;
+	$command = sprintf "%s", "$PROGRAM_DIR/proclaim -D 2 -M $mac:$ipaddress -l $rno $cid|";
+	open(PROCLAIM, $command);
+	print LOG "$n($testMAC[$roll][$IPADDRESS]): $command\n";
+    }
+    elsif ($nextop eq "r") {
+	$rno = int(rand ($MAX_LEASE-$MIN_LEASE)) + $MIN_LEASE;
+	$command = sprintf "%s", "$PROGRAM_DIR/proclaim -D 2 -M $mac:$ipaddress -r $rno -s $testMAC[$roll][$SERVER] $cid|";
+	open(PROCLAIM, $command);
+	print LOG "$n($testMAC[$roll][$IPADDRESS]): $command\n";
+    }
+    elsif ($nextop eq "i") {
+	$command = sprintf "%s", "$PROGRAM_DIR/proclaim -D 2 -M $mac:$ipaddress -i $cid|";
+	open(PROCLAIM, $command);
+	print LOG "$n($testMAC[$roll][$IPADDRESS]): $command\n";
+    }
+    else {
+	$command = sprintf "%s", "$PROGRAM_DIR/proclaim -D 2 -M $mac:$ipaddress -A $testMAC[$roll][$IPADDRESS] $cid|";
+	open(PROCLAIM, $command);
+	print LOG "$n($testMAC[$roll][$IPADDRESS]): $command\n";
+    }	
+    @proclaim = <PROCLAIM>;
+    close (PROCLAIM);
+    alarm 0;
+    if ($alarmOn) {
+	print LOG "Alarm received\n";
+	$alarmOn = 0;
+	print STDOUT "Alarm OP $n $mac $testMAC[$roll][$NEXTOP]: $command\n";
+    }
+    else {
+	&updateTestMAC(\@proclaim, $roll);
+	&printTestMAC($roll) if ($debug);
+	$rno = int(rand $delay);
+	print STDOUT "OP $n $mac $testMAC[$roll][$NEXTOP]: $command : sleep $rno\n";
+	sleep $rno;
+    }
+}
+
+
+if ($debug) { 
+    for $i ( 0 .. $#testMAC ) {
+	print LOG "\nFinal State $i is: ";
+	for $j (0 .. $#{$testMAC[$i]} ) {
+	    print LOG "$testMAC[$i][$j]";
+	}
+    }
+    print LOG "\n";
+}
+
+# cleanup by releasing all leases
+for ($i = 0; $i < $#testMAC; $i++) {
+    $mac = $testMAC[$i][$MAC];
+    if ($cidon) {
+	$cid = "-C " . "1". $mac;
+    }
+    if (($testMAC[$i][$NEXTOP] ne "u") && ($testMAC[$i][$NEXTOP] ne "U")) {
+	$command = sprintf "%s", "$PROGRAM_DIR/proclaim -D 2 -M $mac -d -s $testMAC[$i][$SERVER] $cid|";
+	open(PROCLAIM, $command);
+	$n++;
+	print LOG "$n($testMAC[$i][$IPADDRESS]): $command\n";
+	print STDOUT "OP $n $mac $testMAC[$roll][$NEXTOP]: $command : sleep $rno\n";
+    }
+}
+
+print STDOUT "The log file is $TEST_DIR/testLog.$$\n";
+
+close(LOG);
+
+sub printTestMAC {
+    local($roll) = @_;
+    for $j (0 .. $#{$testMAC[$roll]} ) {
+	print STDOUT "element $roll $j is $testMAC[$roll][$j]\n";
+    }
+}
+    
+sub updateTestMAC {
+    local($proclaim, $roll) = @_;
+    local($line);
+    local($numlines);
+    $numlines = 0;
+    foreach $line (@$proclaim) {
+	$numlines++;
+	if ($line =~ /^Server Address:\s*([0-9.]+)/) {
+	    $testMAC[$roll][$SERVER] = $1;
+	    print LOG "Server=$1";
+	}
+	elsif ($line =~ /^Hostname:\s*([^ ]+)$/) {
+	    $testMAC[$roll][$HOSTNAME] = $1;
+	    $hname=$1;
+	    chomp($hname);
+	    print LOG ", Hostname=$hname";
+	}
+	elsif ($line =~ /^IP Address:\s*([0-9.]+)/) {
+	    $testMAC[$roll][$IPADDRESS] = $1;
+            print LOG ", IPAddress=$1";
+	}
+	elsif ($line =~ /^Lease Duration:\s*([0-9]+)/) {
+	    $testMAC[$roll][$LEASE] = $1;
+	    print LOG ", Lease=$1";
+	}
+    }
+    if ($numlines > 0) {
+        print LOG "\n";
+    }
+    if ($testMAC[$roll][$NEXTOP] eq "d") {
+	$testMAC[$roll][$NEXTOP] = "u";
+	$rno = rand;
+	if ($rno > 0.5) {
+	    $testMAC[$roll][$NEXTOP] = "U";
+	}
+    }
+    else {
+	if ($numlines == 0) {
+	    print LOG "No Reply From Server\n";
+    	    return $roll;
+	}
+	$rno = rand;
+	if ($rno > 0.95) {
+	    $testMAC[$roll][$NEXTOP] = "d";
+	} 
+	elsif ($rno > 0.75) {
+	    $testMAC[$roll][$NEXTOP] = "r";
+	}
+	elsif ($rno > 0.5) {
+	    $testMAC[$roll][$NEXTOP] = "l";
+	}
+	elsif ($rno > 0.25) {
+	    $testMAC[$roll][$NEXTOP] = "b";
+	}
+	elsif ($rno > 0.10) {
+	    $testMAC[$roll][$NEXTOP] = "i";
+	}
+	else {
+	    $testMAC[$roll][$NEXTOP] = "A";
+	}
+    }
+    $roll;
+}
+	

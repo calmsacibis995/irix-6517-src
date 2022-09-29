@@ -1,0 +1,556 @@
+<!-- Produced by version 3.14 (11/22/96) of SGI Frame/SGML translator -->
+<CHAPTER LBL="9"><TITLE><XREFTARGET ID="82892">Building and Installing a Driver</TITLE><PARAGRAPH>After a kernel-level driver has been designed and coded, it must be compiled, linked, and installed. The topics in this chapter describe the major steps of this process, as follows:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH><XREF IDREF="92358" TYPE="TITLE">&ldquo;Defining Device Numbers&rdquo;</XREF> covers the choice of major and minor device numbers.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="27470" TYPE="TITLE">&ldquo;Defining Device Special Files&rdquo;</XREF> describes options for creating the file or files controlled by the driver.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="66363" TYPE="TITLE">&ldquo;Compiling and Linking&rdquo;</XREF> covers the compiler and linker options used for driver modules.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="17503" TYPE="TITLE">&ldquo;Configuring a Nonloadable Driver&rdquo;</XREF> describes the configuration files used to set up a driver loaded at boot time.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="54976" TYPE="TITLE">&ldquo;Configuring a Loadable Driver&rdquo;</XREF> describes the additional configuration needed for a loadable driver.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="92358">Defining Device Numbers</TITLE><PARAGRAPH>The topics <XREF IDREF="67858" TYPE="TITLE">&ldquo;Major Device Number&rdquo;</XREF> and <XREF IDREF="13802" TYPE="TITLE">&ldquo;Minor Device Number&rdquo;</XREF> cover the purpose and use of the device numbers. Major and minor numbers were once very important in the device driver design because they were the primary input that distinguished a device to a device driver upper-half entry point. In current IRIX, this is only the case for legacy drivers in older machines. Contemporary drivers take their input from a vertex of the <FILENAME>hwgraph</FILENAME> (see <XREF IDREF="51581" TYPE="TITLE">&ldquo;Hardware Graph&rdquo;</XREF>).</PARAGRAPH>
+<PARAGRAPH>The historical use of device numbers can be summarized as follows:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>Both numbers are encoded in the inode of a device special file in <FILENAME>/dev</FILENAME>.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The major number selects the device driver.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The minor number specifies the logical unit, and can encode device features.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Both numbers are passed as a parameter to driver entry points.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>Part of creating and installing a device driver is the selection of device numbers and the definition of device special files.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="47103">Selecting a Major Number</TITLE><PARAGRAPH>If your driver does not use the hwgraph, you must select a major number to stand for your driver. The numbers that already exist are listed in <INDEXTARGET ID="10-drvrbuild1"><!-- POSTPROCESSDATA: 10-drvrbuild1|major device number:selecting --><FILENAME>sys/major.h</FILENAME>. However, the major number should not be coded into the driver. Typically the driver code does not need to know its major number, and if it does, the driver should discover its major number dynamically. A method of doing this is discussed under <XREF IDREF="54399" TYPE="TITLE">&ldquo;Variables Section&rdquo;</XREF>.</PARAGRAPH>
+<PARAGRAPH>A driver is associated with its major number in the <INDEXTARGET ID="10-drvrbuild2"><!-- POSTPROCESSDATA: 10-drvrbuild2|configuration files:<FILENAME>/var/sysgen/master.d</FILENAME> --><FILENAME>master.d</FILENAME> configuration file. When the driver discovers this number dynamically, the system administrator is free to change major numbers in <FILENAME>/var/sysgen/master.d</FILENAME> files to correct conflicts between one product and another.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Selecting Minor Numbers</TITLE><PARAGRAPH>When a driver is called to service a device special file defined only in <INDEXTARGET ID="10-drvrbuild3"><!-- POSTPROCESSDATA: 10-drvrbuild3|minor device number:selecting --><FILENAME>/dev</FILENAME>, it receives a device minor number comprising 18 bits of information. You design the content of these numbers to give your driver the information it needs about each device special file. Typically you encode a unique device unit number so the driver can index device information from an array. (When the hwgraph is used, a pointer to the device information is stored in the hwgraph vertex instead.)</PARAGRAPH>
+<PARAGRAPH>Examine the <FILENAME>/dev/MAKEDEV</FILENAME> script to see some techniques for assembling minor numbers dynamically based on the hardware inventory and other commands.</PARAGRAPH>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="27470">Defining Device Special Files</TITLE><PARAGRAPH>As described under <XREF IDREF="91187" TYPE="TITLE">&ldquo;Device Special Files&rdquo;</XREF>, the association between a device and a driver is established when a process opens a device special file in the <FILENAME>/hw</FILENAME> or <FILENAME>/dev</FILENAME> directory. Without at least one device special file, a device can never be opened.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>Static Definition of Device Special Files</TITLE><PARAGRAPH>The system administrator can create device special files using <INDEXTARGET ID="10-drvrbuild4"><!-- POSTPROCESSDATA: 10-drvrbuild4|IRIX commands:<COMMAND>install</COMMAND> --><INDEXTARGET ID="10-drvrbuild5"><!-- POSTPROCESSDATA: 10-drvrbuild5|IRIX commands:<COMMAND>mknod</COMMAND> --><INDEXTARGET ID="10-drvrbuild6"><!-- POSTPROCESSDATA: 10-drvrbuild6|device special file:defining --><COMMAND>mknod</COMMAND> or <COMMAND>install</COMMAND> (see <XREF IDREF="79593" TYPE="TITLE">&ldquo;Making Conventional Device Files&rdquo;</XREF>). This can be done manually, or through an installation script, or as an exit operation of the software manager program. The device special files can be created at any time&mdash;whether or not the device driver is installed, and whether or not the hardware exists. The special device files continue to exist until the administrator removes them.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Dynamic Definition of Device Special Files</TITLE><PARAGRAPH>A more sophisticated approach is to have the device special files created, or recreated, dynamically each time the system boots. This was the purpose for which <INDEXTARGET ID="10-drvrbuild7"><!-- POSTPROCESSDATA: 10-drvrbuild7|configuration files:<FILENAME>/dev/MAKEDEV</FILENAME> --><INDEXTARGET ID="10-drvrbuild8"><!-- POSTPROCESSDATA: 10-drvrbuild8|<FILENAME>/dev/MAKEDEV</FILENAME>MAKE --><FILENAME>/dev/MAKEDEV</FILENAME> (see <XREF IDREF="14628" TYPE="TITLE">&ldquo;The Script MAKEDEV&rdquo;</XREF>) was introduced&mdash;it removes and redefines device special files based on information in the hardware inventory. In current IRIX, all entries in the <FILENAME>/hw</FILENAME> filesystem are created dynamically by device drivers as devices are attached.</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE>Definition and Use of /hw Entries</TITLE><PARAGRAPH>The kernel creates the upper levels of the hardware graph to represent addressable units of hardware in the basic system&mdash;modules, buses, and slots. While probing buses, it finds devices, and calls upon device drivers to attach them (see <INDEXTARGET ID="10-drvrbuild9"><!-- POSTPROCESSDATA: 10-drvrbuild9|hwgraph:relation to driver --><XREF IDREF="54429" TYPE="TITLE">&ldquo;Entry Point attach()&rdquo;</XREF> and <XREF IDREF="14072" TYPE="TITLE">&ldquo;Entry Point edtinit()&rdquo;</XREF>). At these times, the driver has the responsibility of extending the hwgraph with vertexes that provide access to the device (see <XREF IDREF="65256" TYPE="TITLE">&ldquo;Extending the hwgraph&rdquo;</XREF>).</PARAGRAPH>
+<PARAGRAPH>Because hwgraph entries are always created dynamically, and can be created and destroyed while the system is running, the initial set of pathnames in <FILENAME>/hw</FILENAME> are not stable and should not be written into user scripts and source code. Your driver can create additional vertexes in the hwgraph (see <XREF IDREF="65256" TYPE="TITLE">&ldquo;Extending the hwgraph&rdquo;</XREF>), both when attaching a device and later, when <COMMAND>ioconfig</COMMAND> runs (see <XREF IDREF="83505" TYPE="TITLE">&ldquo;Using ioconfig for Global Controller Numbers&rdquo;</XREF>). </PARAGRAPH>
+</SECTION3>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="66363">Compiling and Linking</TITLE><PARAGRAPH>You compile a kernel device driver to an ELF binary using shared libraries. The compile options differ between 32-bit and 64-bit modules.<INDEXTARGET ID="10-drvrbuild10"><!-- POSTPROCESSDATA: 10-drvrbuild10|ELF object format --><INDEXTARGET ID="10-drvrbuild11"><!-- POSTPROCESSDATA: 10-drvrbuild11|COFF file format not supported --></PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="50884">Platform Support</TITLE><PARAGRAPH>If you are building a device driver that you wish to use on multiple platforms, you should build a different driver for each CPU board type (for example, IP22) that you want to run it on. You can use the <COMMAND>hinv</COMMAND> command to determine the host architecture (see <REFPAGE>hinv</REFPAGE>(1M)) and then specify the board type in the <FILENAME>Makefile</FILENAME> as described in the next section.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="61900">Using /var/sysgen/Makefile.kernio</TITLE><PARAGRAPH>The file <INDEXTARGET ID="10-drvrbuild12"><!-- POSTPROCESSDATA: 10-drvrbuild12|configuration files:<FILENAME>/var/sysgen/Makefile.kernio</FILENAME> --><FILENAME>/var/sysgen/Makefile.kernio</FILENAME> is a sample Makefile for compiling kernel modules. You can include it from a Makefile of your own to set the definitions of compiler variables and compiler options appropriately for different CPUs and module types.</PARAGRAPH>
+<PARAGRAPH>The <FILENAME>Makefile.kernio</FILENAME> file tests the following environment variables, which you set: </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="135"><PARAGRAPH>CPUBOARD </PARAGRAPH>
+</CELL>
+<CELL LEFT="140" WIDTH="252"><PARAGRAPH>Set to the type of CPU used in the target system, for 
+example IP19, IP22, IP27 (see the <FILENAME>sys/cpu.h</FILENAME> header file). </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="135"><PARAGRAPH>COMPILATION_MODEL </PARAGRAPH>
+</CELL>
+<CELL LEFT="140" WIDTH="252"><PARAGRAPH>Set to 64 for a 64-bit kernel module, or to 32 for a 32-bit 
+kernel module. </PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>The purpose of the rules in <FILENAME>Makefile.kernio</FILENAME> is to set numerous compiler variables appropriately for the CPU type and execution model. It also sets compiler options into a Make variable CFLAGS. Owing to the number of compiler variables and the importance of getting them right for each CPU type, Silicon Graphics strongly recommends that you invoke <FILENAME>Makefile.kernio</FILENAME> from your own makefile.</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX><FILENAME>Makefile.kernio</FILENAME> is designed for nonloadable drivers. In particular it sets the compiler option <CMDLINEOPT>-G8</CMDLINEOPT>, which is valid for nonloadable drivers. For loadable drivers, use the file <FILENAME>/var/sysgen/Makefile.kernloadio</FILENAME> as a sample Makefile. This sets the <CMDLINEOPT>-G0</CMDLINEOPT> flag and other options appropriate for loadable drivers.</NOTE>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="28510">Compiler Variables</TITLE><PARAGRAPH>The compiler variables listed in <INDEXTARGET ID="10-drvrbuild13"><!-- POSTPROCESSDATA: 10-drvrbuild13|driver:compiling --><INDEXTARGET ID="10-drvrbuild14"><!-- POSTPROCESSDATA: 10-drvrbuild14|compiler variables --><XREF IDREF="70112" TYPE="TABLE">Table&nbsp;9-1</XREF> are tested in system header files. They are usually defined on the compiler command line. The rules in <FILENAME>Makefile.kernio </FILENAME>set definitions of these variables appropriately for different CPU types. </PARAGRAPH>
+<TABLE COLUMNS="2"><CAPTION LBL="9-1"><PREFIX>Table 9-1 </PREFIX><XREFTARGET ID="70112">Compiler Variables Tested by System Header Files</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="144"><PARAGRAPH>Variable</PARAGRAPH>
+</CELL>
+<CELL LEFT="150" WIDTH="252"><PARAGRAPH>Meaning</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="144"><PARAGRAPH>_KERNEL </PARAGRAPH>
+</CELL>
+<CELL LEFT="150" WIDTH="252"><PARAGRAPH>Compile for a kernel module, not a user program. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="144"><PARAGRAPH>MP </PARAGRAPH>
+</CELL>
+<CELL LEFT="150" WIDTH="252"><PARAGRAPH>Compile for a multiprocessor. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="144"><PARAGRAPH>_MP_NETLOCKS </PARAGRAPH>
+</CELL>
+<CELL LEFT="150" WIDTH="252"><PARAGRAPH>Compile network driver (only) for multiprocessor TCP/IP. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="144"><PARAGRAPH>STATIC=static </PARAGRAPH>
+</CELL>
+<CELL LEFT="150" WIDTH="252"><PARAGRAPH>Use of pseudo-declarator STATIC is converted to real static. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="144"><PARAGRAPH>_PAGESZ=16384 </PARAGRAPH>
+</CELL>
+<CELL LEFT="150" WIDTH="252"><PARAGRAPH>Compile for a kernel using 16K memory pages. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="144"><PARAGRAPH>_PAGESZ=4096 </PARAGRAPH>
+</CELL>
+<CELL LEFT="150" WIDTH="252"><PARAGRAPH>Compile for a kernel using 4K memory pages. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="144"><PARAGRAPH>_MIPS3_ADDRSPACE </PARAGRAPH>
+</CELL>
+<CELL LEFT="150" WIDTH="252"><PARAGRAPH>Kernel for a MIPS3 machine. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="144"><PARAGRAPH>R10000 </PARAGRAPH>
+</CELL>
+<CELL LEFT="150" WIDTH="252"><PARAGRAPH>Target machine is the R10000. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="144"><PARAGRAPH>TFP </PARAGRAPH>
+</CELL>
+<CELL LEFT="150" WIDTH="252"><PARAGRAPH>Target machine is the R8000. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="144"><PARAGRAPH>R4000 </PARAGRAPH>
+</CELL>
+<CELL LEFT="150" WIDTH="252"><PARAGRAPH>Target machine is the R4000. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="144"><PARAGRAPH>IP<VARIABLE>nn</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="150" WIDTH="252"><PARAGRAPH>Target machine uses the IP<VARIABLE>nn</VARIABLE> CPU module, one of IP19, IP20, 
+IP21, IP22, IP25, IP26, IP27, IP28, and IP30 are currently 
+supported. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="144"><PARAGRAPH>EVEREST</PARAGRAPH>
+</CELL>
+<CELL LEFT="150" WIDTH="252"><PARAGRAPH>Compile for a Challenge or Onyx system. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="144"><PARAGRAPH>BADVA_WAR, JUMP_WAR, 
+PROBE_WAR </PARAGRAPH>
+</CELL>
+<CELL LEFT="150" WIDTH="252"><PARAGRAPH>Compile workaround code for bugs in certain R4x00 revisions. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="144"><PARAGRAPH>_IP26_SYNC_WAR, 
+_NO_UNCCHED_MEM_WAR </PARAGRAPH>
+</CELL>
+<CELL LEFT="150" WIDTH="252"><PARAGRAPH>Compile workaround code for IP26 bugs. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="144"><PARAGRAPH>R10000_SPECULATION_WAR </PARAGRAPH>
+</CELL>
+<CELL LEFT="150" WIDTH="252"><PARAGRAPH>Compile workaround code for bug in certain R10000 revisions. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="144"><PARAGRAPH>USE_PCI_PIO </PARAGRAPH>
+</CELL>
+<CELL LEFT="150" WIDTH="252"><PARAGRAPH>Compile workaround for IP32 PIO bug (see <FILENAME>sys/PCI/pciio.h</FILENAME>). </PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="98519"><XREFTARGET ID="29125">Compiler Options</TITLE><PARAGRAPH>Some of the <INDEXTARGET ID="10-drvrbuild15"><!-- POSTPROCESSDATA: 10-drvrbuild15|compiler options --><COMMAND>cc</COMMAND> and <COMMAND>ld</COMMAND> options needed to compile and link a kernel-level driver are shown in <XREF IDREF="83913" TYPE="TABLE">Table&nbsp;9-2</XREF>. The complete and most current set is defined in <FILENAME>Makefile.kernio</FILENAME>.</PARAGRAPH>
+<TABLE COLUMNS="2"><CAPTION LBL="9-2"><PREFIX>Table 9-2 </PREFIX><XREFTARGET ID="83913"> <EMPHASIS>(continued)        </EMPHASIS>Compiler Options Kernel Modules</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="180"><PARAGRAPH>Option</PARAGRAPH>
+</CELL>
+<CELL LEFT="185" WIDTH="208"><PARAGRAPH>Purpose</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="180"><PARAGRAPH><COMMAND>-non_shared</COMMAND>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="185" WIDTH="208"><PARAGRAPH>Do not compile for shared libraries (no dynamic 
+linking). </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="180"><PARAGRAPH><COMMAND>-elf</COMMAND>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="185" WIDTH="208"><PARAGRAPH>Compile and link an ELF binary. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="180"><PARAGRAPH><COMMAND>-64</COMMAND>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="185" WIDTH="208"><PARAGRAPH>Set for any kernel using the 64-bit execution model. 
+32-bit kernel does not set any specific flag. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="180"><PARAGRAPH><COMMAND>-mips4</COMMAND> , <COMMAND>-mips2</COMMAND>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="185" WIDTH="208"><PARAGRAPH>Select the MIPS4 instruction set only for the R10000 
+CPU. Use MIPS2 for others. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="180"><PARAGRAPH><COMMAND>-G 8</COMMAND>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="185" WIDTH="208"><PARAGRAPH>In a nonloadable driver, use the global table for 
+objects up to 8 bytes. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="180"><PARAGRAPH><COMMAND>-G 0</COMMAND>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="185" WIDTH="208"><PARAGRAPH>In a loadable driver, do not use the global table. 
+Refer to the <REFPAGE>gp_overflow(5)</REFPAGE> reference page for a 
+discussion of the global table. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="180"><PARAGRAPH><COMMAND>-r</COMMAND>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="185" WIDTH="208"><PARAGRAPH>Linker to retain symbols&mdash;for all drivers (required 
+by loadable drivers, and needed for <COMMAND>lboot</COMMAND>). </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="180"><PARAGRAPH><COMMAND>-d</COMMAND>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="185" WIDTH="208"><PARAGRAPH>Force definition of common storage even though <COMMAND>-r</COMMAND> 
+used. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="180"><PARAGRAPH><COMMAND>-Wc,-pic0</COMMAND>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="185" WIDTH="208"><PARAGRAPH>Do not allocate stack space used by shared objects. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="180"><PARAGRAPH><COMMAND>-jalr</COMMAND>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="185" WIDTH="208"><PARAGRAPH>In loadable drivers only, use <FUNCTION>jalr</FUNCTION> (jump-and-link 
+register) instead of <FUNCTION>jal</FUNCTION>, whose 26-bit operand may 
+not be enough for subroutine calls from a loaded 
+module to the kernel. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="180"><PARAGRAPH><COMMAND>-TARG:t5_no_spec_stores</COMMAND>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="185" WIDTH="208"><PARAGRAPH>Crucial setting for Indigo2 R10000 only; without it, 
+kernel memory corruption can occur. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="180"><PARAGRAPH><COMMAND>-TENV:kernel</COMMAND>&space;</PARAGRAPH>
+<PARAGRAPH><COMMAND>-TENV:misalignment=1</COMMAND>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="185" WIDTH="208"><PARAGRAPH>Execution environment options for 64-bit compiler. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="180"><PARAGRAPH><COMMAND>-OPT:space</COMMAND>&space;</PARAGRAPH>
+<PARAGRAPH><COMMAND>-OPT:quad_align_branch_targets=FALSE</COMMAND>&space;</PARAGRAPH>
+<PARAGRAPH><COMMAND>-OPT:quad_align_with_memops=FALSE</COMMAND>&space;</PARAGRAPH>
+<PARAGRAPH><COMMAND>-OPT:unroll_times=0</COMMAND>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="185" WIDTH="208"><PARAGRAPH>Specific optimization constraints for 64-bit 
+compiler. </PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH></PARAGRAPH>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="17503">Configuring a Nonloadable Driver</TITLE><PARAGRAPH>When the driver is not loadable, it is linked as part of the IRIX kernel. The following steps are needed to make the driver usable:<INDEXTARGET ID="10-drvrbuild16"><!-- POSTPROCESSDATA: 10-drvrbuild16|configuring a driver:nonloadable --><INDEXTARGET ID="10-drvrbuild17"><!-- POSTPROCESSDATA: 10-drvrbuild17|driver:configuring --></PARAGRAPH>
+<ORDEREDLIST><LIST><PARAGRAPH>Place the driver executable file in <FILENAME>/var/sysgen/boot</FILENAME>.<INDEXTARGET ID="10-drvrbuild18"><!-- POSTPROCESSDATA: 10-drvrbuild18|configuration files:<FILENAME>/var/sysgen/boot</FILENAME> --></PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Place a descriptive file in <FILENAME>/var/sysgen/master.d</FILENAME>. <INDEXTARGET ID="10-drvrbuild19"><!-- POSTPROCESSDATA: 10-drvrbuild19|configuration files:<FILENAME>/var/sysgen/master.d</FILENAME> --></PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Place a directive file in <FILENAME>/var/sysgen/system</FILENAME> (or simply add a line to <FILENAME>/var/sysgen/system/irix.sm</FILENAME>). <INDEXTARGET ID="10-drvrbuild20"><!-- POSTPROCESSDATA: 10-drvrbuild20|configuration files:<FILENAME>/var/sysgen/system</FILENAME> --></PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Run <COMMAND>autoconfig</COMMAND> to generate a new kernel.<INDEXTARGET ID="10-drvrbuild21"><!-- POSTPROCESSDATA: 10-drvrbuild21|IRIX commands:<COMMAND>autoconfig</COMMAND> --></PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Reboot the system.</PARAGRAPH>
+</LIST>
+</ORDEREDLIST>
+<PARAGRAPH>Some of these steps are elaborated in the following topics.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="69523">How Names Are Used in Configuration</TITLE><PARAGRAPH>The process of naming a kernel-level driver begins in a file in <FILENAME>/var/sysgen/system</FILENAME>, such as <FILENAME>/var/sysgen/system/irix.sm</FILENAME>. Names are used as follows:<INDEXTARGET ID="10-drvrbuild22"><!-- POSTPROCESSDATA: 10-drvrbuild22|configuration files:<FILENAME>/var/sysgen/system</FILENAME> --></PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>A USE, INCLUDE, or VECTOR statement in <FILENAME>/var/sysgen/system</FILENAME> specifies a name, for example</PARAGRAPH>
+<EXAMPLE>
+USE hypothetical
+</EXAMPLE>
+</BULLET>
+<BULLET><PARAGRAPH>This statement directs <COMMAND>lboot</COMMAND> to read a file of the same name in <FILENAME>/var/sysgen/master.d</FILENAME>. In this example, the file would be <FILENAME>/var/sysgen/master.d/hypothetical</FILENAME>.<INDEXTARGET ID="10-drvrbuild23"><!-- POSTPROCESSDATA: 10-drvrbuild23|configuration files:<FILENAME>/var/sysgen/master.d</FILENAME> --></PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The file in <FILENAME>/var/sysgen/master.d</FILENAME> specifies the prefix for driver entry points, for example <VARIABLE>hypo_</VARIABLE>.&space;<INDEXTARGET ID="10-drvrbuild24"><!-- POSTPROCESSDATA: 10-drvrbuild24|driver:prefix --><INDEXTARGET ID="10-drvrbuild25"><!-- POSTPROCESSDATA: 10-drvrbuild25|prefix --></PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The same name with the suffix <FILENAME>.o</FILENAME>, is searched for in <FILENAME>/var/sysgen/boot</FILENAME>&mdash;in this example, <FILENAME>/var/sysgen/boot/hypothetical.o</FILENAME>. This object file is linked with the kernel.<INDEXTARGET ID="10-drvrbuild26"><!-- POSTPROCESSDATA: 10-drvrbuild26|configuration files:<FILENAME>/var/sysgen/boot</FILENAME> --></PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The public symbols in the object file are searched for names that start with the prefix, for example <FUNCTION>hypo_attach()</FUNCTION>. These are noted in the kernel switch table so the driver can be called as needed. </PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Placing the Object File in /var/sysgen/boot</TITLE><PARAGRAPH>The <INDEXTARGET ID="10-drvrbuild27"><!-- POSTPROCESSDATA: 10-drvrbuild27|configuration files:<FILENAME>/usr/cpu/sysgen/IPnnboot</FILENAME> --><FILENAME>/var/sysgen/boot</FILENAME> directory, where the kernel object modules reside, is actually a symbolic link to one of the directories <FILENAME>/usr/cpu/sysgen/IP</FILENAME>nn<FILENAME>boot</FILENAME>, where <VARIABLE>nn</VARIABLE> is the number of one of the CPU modules supported by the current release of IRIX (see <XREF IDREF="38795" TYPE="TITLE">&ldquo;CPU Modules&rdquo;</XREF>). When you place the object file of a driver in <FILENAME>/var/sysgen/boot</FILENAME>, you actually place it in the CPU directory for the system in use.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="71839">Describing the Driver in /var/sysgen/master.d</TITLE><PARAGRAPH>You describe your driver in a file with the name of the driver in <INDEXTARGET ID="10-drvrbuild28"><!-- POSTPROCESSDATA: 10-drvrbuild28|configuration files:<FILENAME>/var/sysgen/master.d</FILENAME> --><FILENAME>/var/sysgen/master.d</FILENAME>. The format of these files is described in two places: the <REFPAGE>master(4)</REFPAGE> reference page, and in <FILENAME>/var/sysgen/master.d/README</FILENAME>. In addition, you can examine the many examples in the distributed system.</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="26103">Descriptive Line</TITLE><PARAGRAPH>The first noncomment line of the master file contains a series of fields, delimited by white space, to describe the driver. These fields are listed in <INDEXTARGET ID="10-drvrbuild29"><!-- POSTPROCESSDATA: 10-drvrbuild29|configuration files:<FILENAME>/var/sysgen/master.d</FILENAME>:format --><XREF IDREF="34829" TYPE="TABLE">Table&nbsp;9-3</XREF>.</PARAGRAPH>
+<TABLE COLUMNS="3"><CAPTION LBL="9-3"><PREFIX>Table 9-3 </PREFIX><XREFTARGET ID="34829"> <EMPHASIS>(continued)        </EMPHASIS>Fields of Descriptive Line in Master File</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="44"><PARAGRAPH>Field 
+Number</PARAGRAPH>
+</CELL>
+<CELL LEFT="50" WIDTH="72"><PARAGRAPH>&lbreak;Usage</PARAGRAPH>
+</CELL>
+<CELL LEFT="130" WIDTH="270"><PARAGRAPH>&lbreak;Details</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="44"><PARAGRAPH>1</PARAGRAPH>
+</CELL>
+<CELL LEFT="50" WIDTH="72"><PARAGRAPH>Flags </PARAGRAPH>
+</CELL>
+<CELL LEFT="130" WIDTH="270"><PARAGRAPH>See <XREF IDREF="85625" TYPE="TABLE">Table&nbsp;9-4</XREF>.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="44"><PARAGRAPH>2</PARAGRAPH>
+</CELL>
+<CELL LEFT="50" WIDTH="72"><PARAGRAPH>Prefix </PARAGRAPH>
+</CELL>
+<CELL LEFT="130" WIDTH="270"><PARAGRAPH>The string of 1-14 characters that identify the public symbols of 
+driver entry points. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="44"><PARAGRAPH>3</PARAGRAPH>
+</CELL>
+<CELL LEFT="50" WIDTH="72"><PARAGRAPH>Major number </PARAGRAPH>
+</CELL>
+<CELL LEFT="130" WIDTH="270"><PARAGRAPH>The major device number found in device special files managed by 
+this driver. When the driver uses the hwgraph, this field contains 
+only a hyphen (-).&space;<INDEXTARGET ID="10-drvrbuild30"><!-- POSTPROCESSDATA: 10-drvrbuild30|major device number:in master.d --></PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="44"><PARAGRAPH>4</PARAGRAPH>
+</CELL>
+<CELL LEFT="50" WIDTH="72"><PARAGRAPH>Number of 
+sub-devices </PARAGRAPH>
+</CELL>
+<CELL LEFT="130" WIDTH="270"><PARAGRAPH>Size of the driver's static arrays of device information, or given as 
+a hyphen &ldquo;-&rdquo; when the driver stores device information in the 
+hwgraph. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="44"><PARAGRAPH>5</PARAGRAPH>
+</CELL>
+<CELL LEFT="50" WIDTH="72"><PARAGRAPH>Dependencies </PARAGRAPH>
+</CELL>
+<CELL LEFT="130" WIDTH="270"><PARAGRAPH>A list of other modules that must be in the kernel for this driver to 
+work&mdash;usually omitted except for SCSI drivers. </PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>The important flag values for nonloadable drivers are listed in <INDEXTARGET ID="10-drvrbuild31"><!-- POSTPROCESSDATA: 10-drvrbuild31|configuration flags --><XREF IDREF="85625" TYPE="TABLE">Table&nbsp;9-4</XREF>. </PARAGRAPH>
+<TABLE COLUMNS="2"><CAPTION LBL="9-4"><PREFIX>Table 9-4 </PREFIX><XREFTARGET ID="85625"> <EMPHASIS>(continued)        </EMPHASIS>Flag Values for Nonloadable Drivers</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="36"><PARAGRAPH>Letter</PARAGRAPH>
+</CELL>
+<CELL LEFT="45" WIDTH="351"><PARAGRAPH>Meaning</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="36"><PARAGRAPH><COMMAND>b</COMMAND> or <COMMAND>c</COMMAND>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="45" WIDTH="351"><PARAGRAPH>Block (b) or character (c) device. One or the other is essential for any device driver. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="36"><PARAGRAPH><COMMAND>f</COMMAND> or <COMMAND>m</COMMAND></PARAGRAPH>
+</CELL>
+<CELL LEFT="45" WIDTH="351"><PARAGRAPH>STREAMS driver (f) or STREAMS module (m). Omit for device driver. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="36"><PARAGRAPH><COMMAND>s</COMMAND>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="45" WIDTH="351"><PARAGRAPH>Software driver, either a pseudo-device or a SCSI driver. </PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>The <COMMAND>s</COMMAND> (software-only) flag tells <COMMAND>lboot</COMMAND> not to attempt to probe for hardware. This is the case with software-only (pseudo-device) drivers, and with SCSI drivers. If <COMMAND>lboot</COMMAND> tries to probe for a SCSI device, it fails, and assumes that the device is not present, and does not include your SCSI device driver.</PARAGRAPH>
+<PARAGRAPH>Additional flags (d, r, D, N, R) for loadable drivers are discussed later in the section <XREF IDREF="54976" TYPE="TITLE">&ldquo;Configuring a Loadable Driver&rdquo;</XREF>.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="15136">Listing Dependencies</TITLE><PARAGRAPH>The descriptive line ends with a comma-separated list of other loadable kernel modules on which this driver depends. The <INDEXTARGET ID="10-drvrbuild32"><!-- POSTPROCESSDATA: 10-drvrbuild32|configuration files:<FILENAME>/var/sysgen/master.d</FILENAME>:dependencies --><COMMAND>lboot</COMMAND> command makes sure that it will not load this module if it fails to load a dependency.</PARAGRAPH>
+<PARAGRAPH>In most cases, an OEM driver does not have any dependencies. However, a SCSI driver (see <XREF IDREF="33977" TYPE="TITLE">Chapter&nbsp;16, &ldquo;SCSI Device Drivers&rdquo;</XREF>) should list the name <COMMAND>scsi</COMMAND>, since it depends on the inner SCSI driver. A STREAMS driver might list the name of a STREAMS support module such as <COMMAND>clone</COMMAND> (see <XREF IDREF="32390" TYPE="TITLE">&ldquo;Support for CLONE Drivers&rdquo;</XREF>).</PARAGRAPH>
+<PARAGRAPH>It is possible for you to design a driver in the form of multiple, loadable modules. In that case, you would name your support modules in this field.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Stubs Section</TITLE><PARAGRAPH>Noncomment lines that follow the descriptive line and precede a line beginning &ldquo;$&rdquo; are used by library modules&mdash;not by device drivers or STREAMS drivers. Each such line specifies an entry point that this module provides, and which is used by the kernel or some other loadable module. These lines instruct <INDEXTARGET ID="10-drvrbuild33"><!-- POSTPROCESSDATA: 10-drvrbuild33|configuration files:<FILENAME>/var/sysgen/master.d</FILENAME>:stubs --><FILENAME>lboot</FILENAME> in how to create a harmless &ldquo;stub&rdquo; function in the event that this driver is not included in the kernel&mdash;for example, because it is specified by an EXCLUDE line in the system file. The format is discussed in the <REFPAGE>master(4)</REFPAGE> reference page.</PARAGRAPH>
+<PARAGRAPH>Since a device or STREAMS driver provides only standard entry points that are accessed via the switch tables rather than by linking, drivers do not need to define any stubs.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="54399">Variables Section</TITLE><PARAGRAPH>Following the descriptive line (and the stubs section, if any), you can place a line that begins with &ldquo;$&rdquo; and, following this, you can write definitions of global variables using C syntax. This text is compiled into a module linked with the kernel. You refer to these variables as <INDEXTARGET ID="10-drvrbuild34"><!-- POSTPROCESSDATA: 10-drvrbuild34|variables in master.d --><INDEXTARGET ID="10-drvrbuild35"><!-- POSTPROCESSDATA: 10-drvrbuild35|configuration files:<FILENAME>/var/sysgen/master.d</FILENAME>:variables --><VARIABLE>extern</VARIABLE> in the driver source code.</PARAGRAPH>
+<PARAGRAPH>The advantage of defining global variables in the master file is that the initializing expressions for these variables can include values taken from the descriptive line. The following special symbols can be used: <INDEXTARGET ID="10-drvrbuild36"><!-- POSTPROCESSDATA: 10-drvrbuild36|major device number:in variables in master.d --></PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="45"><PARAGRAPH>##E </PARAGRAPH>
+</CELL>
+<CELL LEFT="50" WIDTH="342"><PARAGRAPH>The integer coded as the major number in the descriptive line. The first 
+integer, if a list of major numbers is given. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="45"><PARAGRAPH>##C </PARAGRAPH>
+</CELL>
+<CELL LEFT="50" WIDTH="342"><PARAGRAPH>The number of controllers (bus adapters) of this type. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="45"><PARAGRAPH>##D </PARAGRAPH>
+</CELL>
+<CELL LEFT="50" WIDTH="342"><PARAGRAPH>The number of sub-devices as coded in the fourth field of the descriptive line.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>You can use these symbols to compile run-time values for the major device number and the number of supported sub-devices, as specified in the descriptive line of the file, without coding them as constants in the driver. In the source code you can write</PARAGRAPH>
+<CODE>
+extern major_t myMajNum;
+extern int myDevLimit;
+</CODE>
+<PARAGRAPH>In the master file you can implement the variables using the code in <XREF IDREF="55463" TYPE="TEXT">Example&nbsp;9-1</XREF>. </PARAGRAPH>
+<CODE><CAPTION LBL="9-1"><PREFIX>Example 9-1 </PREFIX><XREFTARGET ID="55463">Defining Variables in Master Descriptive File</CAPTION>$$$
+major_t myMajNum = ##E;
+int myDevLimit = ##C;
+</CODE>
+<PARAGRAPH>(In a loadable driver this technique requires one additional step; see <XREF IDREF="36166" TYPE="TITLE">&ldquo;Master File for Loadable Drivers&rdquo;</XREF>.) </PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="98580">Configuring a Kernel</TITLE><PARAGRAPH>Once you have placed the binary in <INDEXTARGET ID="10-drvrbuild37"><!-- POSTPROCESSDATA: 10-drvrbuild37|IRIX commands:<COMMAND>autoconfig</COMMAND> --><FILENAME>/var/sysgen/boot</FILENAME> and the master file in <FILENAME>/var/sysgen/master.d</FILENAME>, you can configure and generate a new kernel. This is done using the <COMMAND>autoconfig</COMMAND> command, which in turn calls <COMMAND>lboot</COMMAND> to actually create a new bootable file.</PARAGRAPH>
+<PARAGRAPH>The <INDEXTARGET ID="10-drvrbuild38"><!-- POSTPROCESSDATA: 10-drvrbuild38|INCLUDE statement --><INDEXTARGET ID="10-drvrbuild39"><!-- POSTPROCESSDATA: 10-drvrbuild39|USE statement --><INDEXTARGET ID="10-drvrbuild40"><!-- POSTPROCESSDATA: 10-drvrbuild40|VECTOR statement --><COMMAND>lboot</COMMAND> program only loads modules that are specified in a file in <FILENAME>/var/sysgen/system</FILENAME>. One command is required to specify the new driver; the command is one of the following:&space;</PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>VECTOR </PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>To specify hardware details, to request a hardware probe at boot time, to 
+load the driver and invoke <VARIABLE>pfx</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>edtinit()</FUNCTION>.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>INCLUDE </PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>To load the driver and invoke <VARIABLE>pfx</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>init()</FUNCTION>.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="63"><PARAGRAPH>USE </PARAGRAPH>
+</CELL>
+<CELL LEFT="70" WIDTH="324"><PARAGRAPH>To load the driver and invoke <VARIABLE>pfx</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>init()</FUNCTION> only if the master file exists in 
+<FILENAME>master.d</FILENAME>.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>The form of these commands is detailed in the <REFPAGE>system(4)</REFPAGE> reference page. In addition, you should examine the distributed files in <FILENAME>/var/sysgen/system</FILENAME>, especial <FILENAME>irix.sm</FILENAME>, which contains many comments on the meaning and use of different entries. Specific uses of the VECTOR statement are discussed in the following topics: The form of VECTOR lines for VME devices is discussed under <XREF IDREF="22127" TYPE="TITLE">&ldquo;Configuring VME Devices&rdquo;</XREF>.</PARAGRAPH>
+<PARAGRAPH>You could place the VECTOR, USE, or INCLUDE line for your driver in <FILENAME>irix.sm</FILENAME>. However, since <FILENAME>lboot</FILENAME> treats all files in <FILENAME>/var/sysgen/system</FILENAME> as a single file, you can create a small file unique to your driver. The name of this file is not significant, but a good name is the driver name with the suffix <FILENAME>.sm</FILENAME>.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Generating a Kernel</TITLE><PARAGRAPH>The <COMMAND>autoconfig</COMMAND> script invokes <COMMAND>lboot</COMMAND> to read the system files, read the master files, and link all the kernel executables. Provided there are no errors, the output is a new file <FILENAME>/unix.install</FILENAME>. At boot time this file is moved to the name <FILENAME>/unix</FILENAME> and used as the kernel.</PARAGRAPH>
+<PARAGRAPH>During the testing period you may want to keep the original kernel file available as <FILENAME>/unix.original</FILENAME>. A simple way to retain this file is to create a link to it using the <COMMAND>ln</COMMAND> command.</PARAGRAPH>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="54976">Configuring a Loadable Driver</TITLE><PARAGRAPH>You compile and configure a loadable driver very much as you would a nonloadable driver (so you should read <INDEXTARGET ID="10-drvrbuild41"><!-- POSTPROCESSDATA: 10-drvrbuild41|loadable driver:configuring --><INDEXTARGET ID="10-drvrbuild42"><!-- POSTPROCESSDATA: 10-drvrbuild42|configuring a driver:loadable --><XREF IDREF="17503" TYPE="TITLE">&ldquo;Configuring a Nonloadable Driver&rdquo;</XREF> before reading this section). The differences are as follows:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>You provide an additional global variable with the public name <VARIABLE>pfx</VARIABLE><FUNCTION>mversion</FUNCTION>. <INDEXTARGET ID="10-drvrbuild43"><!-- POSTPROCESSDATA: 10-drvrbuild43|entry points:mversion --></PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>You use a few different compile options.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>You decide when the driver should be loaded, and use appropriate flags in the descriptive line in the master file.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>For more background on loadable modules, see the <REFPAGE>mload(4)</REFPAGE> and <REFPAGE>ml(1)</REFPAGE> reference pages.</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>You may not call <FUNCTION>sthread_create()</FUNCTION> in a loadable driver, because the stack must be in direct mapped (K0) space. The <FUNCTION>sthreads</FUNCTION> facility has been superseded by <REFPAGE>pthreads(5)</REFPAGE>.</NOTE>
+<SECTION2 LBL="" HELPID = ""><TITLE>Public Global Variables</TITLE><PARAGRAPH>To be loadable, a driver must specify a <INDEXTARGET ID="10-drvrbuild44"><!-- POSTPROCESSDATA: 10-drvrbuild44|loadable driver:mversion entry --><VARIABLE>pfx</VARIABLE><FUNCTION>devflag</FUNCTION> entry point containing the D_MP or D_MT flag (see <XREF IDREF="67704" TYPE="TITLE">&ldquo;Driver Flag Constant&rdquo;</XREF>). <INDEXTARGET ID="10-drvrbuild45"><!-- POSTPROCESSDATA: 10-drvrbuild45|driver:flag constant --><INDEXTARGET ID="10-drvrbuild46"><!-- POSTPROCESSDATA: 10-drvrbuild46|entry points:devflag --></PARAGRAPH>
+<PARAGRAPH>Any loadable module must define a public name <VARIABLE>pfx</VARIABLE><FUNCTION>mversion</FUNCTION>, declared as follows: <INDEXTARGET ID="10-drvrbuild47"><!-- POSTPROCESSDATA: 10-drvrbuild47|entry points:mversion --></PARAGRAPH>
+<CODE>
+#include &lt;sys/mload.h>
+char *<VARIABLE>pfx</VARIABLE>mversion = M_VERSION;
+</CODE>
+<PARAGRAPH>Note the exact spelling of the variable; it is easy to overlook the letter &ldquo;m&rdquo; after the prefix. If the variable does not exist or is incorrectly spelled, an attempt to load the driver will fail.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Compile Options for Loadable Drivers</TITLE><PARAGRAPH>Use the <INDEXTARGET ID="10-drvrbuild48"><!-- POSTPROCESSDATA: 10-drvrbuild48|loadable driver:compiler options --><INDEXTARGET ID="10-drvrbuild49"><!-- POSTPROCESSDATA: 10-drvrbuild49|compiler options:for loadable driver --><COMMAND>-G 0</COMMAND> option when compiling and linking a loadable driver, since the global option table is not available to a loadable driver. You must also use the <COMMAND>-jalr</COMMAND> option in a loadable driver (see <XREF IDREF="29125" TYPE="TITLE">&ldquo;Compiler Options&rdquo;</XREF> and <XREF IDREF="98519" TYPE="TITLE">&ldquo;Compiler Options&rdquo;</XREF>).</PARAGRAPH>
+<PARAGRAPH>In a loadable driver, link using the <COMMAND>-r</COMMAND> and <COMMAND>-d</COMMAND> options to retain the symbol table yet generate a bss segment.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="50333"><XREFTARGET ID="36166">Master File for Loadable Drivers</TITLE><PARAGRAPH>The file in <INDEXTARGET ID="10-drvrbuild50"><!-- POSTPROCESSDATA: 10-drvrbuild50|loadable driver:master.d --><FILENAME>/var/sysgen/master.d</FILENAME> for a loadable driver has different flags.</PARAGRAPH>
+<PARAGRAPH>In the flags field of the descriptive line of the master file (see <INDEXTARGET ID="10-drvrbuild51"><!-- POSTPROCESSDATA: 10-drvrbuild51|configuration files:<FILENAME>/var/sysgen/master.d</FILENAME>:format --><XREF IDREF="26103" TYPE="TITLE">&ldquo;Descriptive Line&rdquo;</XREF>), you specify that the driver is loadable, and when it should be loaded. The possible flags are listed in <XREF IDREF="84025" TYPE="TABLE">Table&nbsp;9-5</XREF>. </PARAGRAPH>
+<TABLE COLUMNS="2"><CAPTION LBL="9-5"><PREFIX>Table 9-5 </PREFIX>&space;<EMPHASIS>(continued)        </EMPHASIS><XREFTARGET ID="84025">Flag Values for Loadable Drivers</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="31"><PARAGRAPH>Letter</PARAGRAPH>
+</CELL>
+<CELL LEFT="40" WIDTH="355"><PARAGRAPH>Meaning</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="31"><PARAGRAPH><COMMAND>b</COMMAND> or <COMMAND>c</COMMAND>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="40" WIDTH="355"><PARAGRAPH>Block (b) or character (c) device. One or the other is essential for any device driver. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="31"><PARAGRAPH><COMMAND>f</COMMAND> or <COMMAND>m </COMMAND></PARAGRAPH>
+</CELL>
+<CELL LEFT="40" WIDTH="355"><PARAGRAPH>STREAMS driver (f) or STREAMS module (m). Omit for device driver. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="31"><PARAGRAPH><COMMAND>s</COMMAND>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="40" WIDTH="355"><PARAGRAPH>Software driver, either a pseudo-device or a SCSI driver. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="31"><PARAGRAPH><COMMAND>d</COMMAND>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="40" WIDTH="355"><PARAGRAPH>Specifies that this is a loadable driver. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="31"><PARAGRAPH><COMMAND>R</COMMAND>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="40" WIDTH="355"><PARAGRAPH>Auto-register the module (discussed in text). </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="31"><PARAGRAPH><COMMAND>D</COMMAND>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="40" WIDTH="355"><PARAGRAPH>Load, then unload, at boot time, in order to let the driver initialize the hardware 
+inventory. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="31"><PARAGRAPH><COMMAND>N</COMMAND>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="40" WIDTH="355"><PARAGRAPH>Prevent this module from being automatically unloaded even when it has a <VARIABLE>pfx</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>unload()</FUNCTION> 
+entry point. </PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>When the <COMMAND>d</COMMAND> flag is given for an included module, <COMMAND>lboot</COMMAND> parses the master file for the driver. Global variables defined in the variables section of the master file (see <XREF IDREF="54399" TYPE="TITLE">&ldquo;Variables Section&rdquo;</XREF>) are defined and included in the kernel. However, object code of the driver is not included in the kernel, and the names of its entry points are not entered into the kernel switch table.</PARAGRAPH>
+<PARAGRAPH>Such a driver has to be manually loaded with the <COMMAND>ml</COMMAND> or <COMMAND>lboot</COMMAND> command before it can be used; and it cannot be used from the miniroot.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="36255">Loading</TITLE><PARAGRAPH>A loadable driver can be loaded by the <INDEXTARGET ID="10-drvrbuild52"><!-- POSTPROCESSDATA: 10-drvrbuild52|loading a driver --><INDEXTARGET ID="10-drvrbuild53"><!-- POSTPROCESSDATA: 10-drvrbuild53|loadable driver:loading --><COMMAND>lboot</COMMAND> command at boot time, and by the <COMMAND>ml</COMMAND> command while the system is running. The following steps occur when a driver is loaded:</PARAGRAPH>
+<ORDEREDLIST><LIST><PARAGRAPH>The object file header is read.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Memory is allocated for the driver's text, data, and bss segments.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>The driver's text and data are read.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>The text and data are relocated. References to kernel names and to global variables named in the master file are resolved.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Entry points are noted in the appropriate kernel switch table.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>The <VARIABLE>pfx</VARIABLE><FUNCTION>init()</FUNCTION> entry point is called if one is defined.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>If the driver is named in a VECTOR statement and has a <VARIABLE>pfx</VARIABLE><FUNCTION>edtinit()</FUNCTION> entry point, that entry point is called for each VECTOR statement that names the driver.<INDEXTARGET ID="10-drvrbuild54"><!-- POSTPROCESSDATA: 10-drvrbuild54|entry points:edtinit --><INDEXTARGET ID="10-drvrbuild55"><!-- POSTPROCESSDATA: 10-drvrbuild55|entry points:init --><INDEXTARGET ID="10-drvrbuild56"><!-- POSTPROCESSDATA: 10-drvrbuild56|INCLUDE statement --><INDEXTARGET ID="10-drvrbuild57"><!-- POSTPROCESSDATA: 10-drvrbuild57|VECTOR statement --></PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>The <VARIABLE>pfx</VARIABLE><FUNCTION>start()</FUNCTION> entry point, if any, is called.<INDEXTARGET ID="10-drvrbuild58"><!-- POSTPROCESSDATA: 10-drvrbuild58|entry points:start --></PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>The <VARIABLE>pfx</VARIABLE><FUNCTION>reg()</FUNCTION> entry point, if any, is called. <INDEXTARGET ID="10-drvrbuild59"><!-- POSTPROCESSDATA: 10-drvrbuild59|entry points:reg --></PARAGRAPH>
+</LIST>
+</ORDEREDLIST>
+<PARAGRAPH>Space allocated for the module's text, data, and bss is located in node 0 of an Origin2000 system. Static buffers in loadable modules are not necessarily physically contiguous in memory.</PARAGRAPH>
+<PARAGRAPH>A variety of errors can occur when a module is loaded. See the <REFPAGE>mload(4)</REFPAGE> reference page for a list of possible causes.</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE>Effect of `D' Flag</TITLE><PARAGRAPH>Normally a loadable driver is not loaded at boot time. It must be loaded sometime after boot using the <COMMAND>ml</COMMAND> command. When the <COMMAND>D</COMMAND> flag is included in the descriptive line in the descriptive file, <COMMAND>lboot</COMMAND> loads the driver at boot time, and immediately after calling <VARIABLE>pfx</VARIABLE><FUNCTION>start()</FUNCTION>, unloads the driver. This permits the driver to test the hardware and set up the hwgraph and hardware inventory.</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="88940">Registration</TITLE><PARAGRAPH>A loadable module is &ldquo;registered&rdquo; by loading it, then placing a stub entry in the <INDEXTARGET ID="10-drvrbuild60"><!-- POSTPROCESSDATA: 10-drvrbuild60|register a driver:loadable driver for callback --><INDEXTARGET ID="10-drvrbuild61"><!-- POSTPROCESSDATA: 10-drvrbuild61|loadable driver:registration --><VARIABLE>pfx</VARIABLE><FUNCTION>open()</FUNCTION> and <VARIABLE>pfx</VARIABLE><FUNCTION>attach()</FUNCTION> column of its row of the switch table, and unloading it again. The stub entry points are invoked when the driver is needed, and the code of the entry points initiates a load of the driver.</PARAGRAPH>
+<PARAGRAPH>Registration of this kind can be done automatically during bootstrap, or later using the <COMMAND>ml</COMMAND> command. Once it has been registered, a driver is loaded automatically the first time the kernel needs to attach a device supported by this driver, or the first time a process attempts to open a device special file managed by this driver. You can also load a registered driver in advance of any use with the <COMMAND>ml</COMMAND> command&mdash;loading implies registration. </PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>Try not to confuse this &ldquo;registration&rdquo; with a driver's registration with the kernel to handle a particular type of device. </NOTE>
+<PARAGRAPH>Registration is done automatically for each master descriptive file that contains the <COMMAND>d</COMMAND> (loadable) and <COMMAND>R</COMMAND> (register) flags. Autoregistration is done at bootstrap phase 2. It is initiated by the script <INDEXTARGET ID="10-drvrbuild62"><!-- POSTPROCESSDATA: 10-drvrbuild62|configuration files:<FILENAME>/etc/rc2/S23autoconfig</FILENAME> --><FILENAME>/etc/rc2/S23autoconfig</FILENAME>. Registration can be initiated manually at any time after bootstrap by using the <COMMAND>ml</COMMAND> or <COMMAND>lboot</COMMAND> command with the <COMMAND>reg</COMMAND> option (see the <REFPAGE>ml(1M)</REFPAGE> and <REFPAGE>lboot(1M)</REFPAGE> reference pages).</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE>Reloading</TITLE><PARAGRAPH>When a registered driver is reloaded, the sequence of events listed under <XREF IDREF="36255" TYPE="TITLE">&ldquo;Loading&rdquo;</XREF> occurs again. There is one exception: the <VARIABLE>pfx</VARIABLE><FUNCTION>reg()</FUNCTION> entry point is not called when a registered driver is reloaded from a stub. (The complete sequence occurs when an unregistered driver is explicitly loaded by the <COMMAND>ml</COMMAND> command.)</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="53871">Unloading</TITLE><PARAGRAPH>A module can be unloaded only when it provides an <INDEXTARGET ID="10-drvrbuild63"><!-- POSTPROCESSDATA: 10-drvrbuild63|entry points:unload --><INDEXTARGET ID="10-drvrbuild64"><!-- POSTPROCESSDATA: 10-drvrbuild64|loadable driver:unloading --><INDEXTARGET ID="10-drvrbuild65"><!-- POSTPROCESSDATA: 10-drvrbuild65|unloading a driver --><VARIABLE>pfx</VARIABLE><FUNCTION>unload()</FUNCTION> entry point (see <XREF IDREF="57773" TYPE="TITLE">&ldquo;Entry Point unload()&rdquo;</XREF>). The <COMMAND>N</COMMAND> flag can be specified in the master file to prevent automatic unloading in any case.</PARAGRAPH>
+<PARAGRAPH>A loaded module is automatically unloaded following a delay after the last close of a device it supports. The delay is configurable using <INDEXTARGET ID="10-drvrbuild66"><!-- POSTPROCESSDATA: 10-drvrbuild66|IRIX commands:<COMMAND>systune</COMMAND> --><FILENAME>systune</FILENAME>, as the <VARIABLE>module_unld_delay</VARIABLE> variable (see the <REFPAGE>systune(1)</REFPAGE> reference page). You can use <COMMAND>ml</COMMAND> to specify an unloading delay for a particular module.</PARAGRAPH>
+<PARAGRAPH>The <FILENAME>lboot</FILENAME> or <FILENAME>ml</FILENAME> command can be used to unload a module before the delay expires, or to manually override the <COMMAND>N</COMMAND> flag.</PARAGRAPH>
+<PARAGRAPH>The unload sequence is as follows:</PARAGRAPH>
+<ORDEREDLIST><LIST><PARAGRAPH>The kernel verifies that all opens of the driver's devices have been closed. The driver cannot be unloaded if it has open devices or active mmaps.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>The <VARIABLE>pfx</VARIABLE><FUNCTION>unreg()</FUNCTION> entry point is called, if one exists. This gives the driver a chance to unregister as a provider of service for a particular device type. If <VARIABLE>pfx</VARIABLE><FUNCTION>unreg()</FUNCTION> returns nonzero, the process stops.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>The <VARIABLE>pfx</VARIABLE><FUNCTION>unload()</FUNCTION> entry point is called. If it returns nonzero, the process stops.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>The module is removed from memory. If it had been registered (R flag), stubs are again placed in the <VARIABLE>pfx</VARIABLE><FUNCTION>open()</FUNCTION> and <VARIABLE>pfx</VARIABLE><FUNCTION>attach()</FUNCTION> column of its row of the switch table.</PARAGRAPH>
+</LIST>
+</ORDEREDLIST>
+<PARAGRAPH>Experience has shown that most of the problems with loadable drivers arise from unloading and reloading. The precautions to take are described under <XREF IDREF="57773" TYPE="TITLE">&ldquo;Entry Point unload()&rdquo;</XREF>. </PARAGRAPH>
+</SECTION2>
+</SECTION1>
+</CHAPTER>

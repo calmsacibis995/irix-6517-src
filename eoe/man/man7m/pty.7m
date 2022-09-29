@@ -1,0 +1,122 @@
+'\"macro stdmacro
+.TH PTY 7M
+.UC 4
+.SH NAME
+pty, pts \- pseudo terminal driver
+.SH DESCRIPTION
+The
+.I pty
+driver provides a device-pair termed a
+.IR "pseudo terminal" .
+A pseudo terminal is a pair of character devices, a
+.I master
+device and a
+.I slave
+device.  The slave device provides processes
+an interface identical
+to that described in
+.IR termio (7).
+However, whereas all other devices which provide the 
+interface described in
+.IR termio (7)
+have a hardware device of some sort behind them, the slave
+device has, instead, another process manipulating
+it through the master half of the pseudo terminal.
+That is, anything written on the master device is
+given to the slave device as input and anything written
+on the slave device is presented as input on the master
+device.
+.PP
+The following 
+.I ioctl
+calls apply only to pseudo terminals:
+.TP
+TIOCPKT
+Enable/disable 
+.I packet
+mode.  Packet mode is enabled by specifying (by reference)
+a nonzero parameter and disabled by specifying (by reference)
+a zero parameter.  When applied to the master side of a pseudo
+terminal, each subsequent 
+.I read 
+from the terminal will return data written on the slave part of
+the pseudo terminal preceded by a zero byte (symbolically
+defined as TIOCPKT_DATA), or a single byte reflecting control
+status information.  In the latter case, the byte is an inclusive-or
+of zero or more of the bits:
+.RS
+.TP
+TIOCPKT_FLUSHREAD
+whenever the read queue for the terminal is flushed.
+.TP
+TIOCPKT_FLUSHWRITE
+whenever the write queue for the terminal is flushed.
+.TP
+TIOCPKT_STOP
+whenever output to the terminal is stopped a la ^S.
+.TP
+TIOCPKT_START
+whenever output to the terminal is restarted.
+.TP
+TIOCPKT_DOSTOP
+whenever 
+.I t_stopc
+is ^S
+and 
+.I t_startc
+is ^Q.
+.TP
+TIOCPKT_NOSTOP
+whenever the start and stop characters are not ^S/^Q.
+.RE
+.IP
+This mode is used by
+.IR rlogin (1C)
+and
+.IR rlogind (1M)
+to implement a remote-echoed, locally ^S/^Q flow-controlled
+remote login with proper back-flushing of output; it can be
+used by other similar programs.
+.SH ALLOCATION
+.PP
+The code sequence shown below demonstrates how to allocate
+pseudo terminals.  Pseudo terminals, like all files,
+must have the correct file permissions to be accessible.
+The \f3_getpty\fP(3) library function takes care of this problem.
+.PP
+.nf
+.ta 4m,+4m,+4m,+4m,+4m,+4m,+4m,+4m,+4m,+4m,+4m,+4m,+4m,+4m
+#include <fcntl.h>
+#include <unistd.h>
+
+/*
+ * Find a pseudo tty to use and open both sides.
+ *	filedes[0] receives the master file descriptor while filedes[1]
+ *	receives the slave.  The master is opened with O_NDELAY as commonly
+ *	needed in daemons such as rlogind and telnetd.
+ */
+int					/* -1 on failure */
+findPseudoTTY(int *filedes)
+{
+	char *line;
+
+	line = _getpty(&filedes[0], O_RDWR|O_NDELAY, 0600, 0);
+	if (0 == line)
+		return -1;
+	if (0 > (filedes[1] = open(line, O_RDWR))) {
+		(void)close(filedes[0]);
+		return -1;
+	}
+	return 0;
+}
+.ne 5v
+.fi
+.SH FILES
+.DT
+/dev/ptc					- master pseudo terminal
+.br
+/dev/tty[qrstuvwxyz][0-99]	- slave pseudo terminals
+.br
+/dev/pts					- equivalent to /dev/ttyq[0-9]
+.SH SEE ALSO
+getpty(3)

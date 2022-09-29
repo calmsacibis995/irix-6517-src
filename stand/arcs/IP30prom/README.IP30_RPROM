@@ -1,0 +1,248 @@
+***************
+Make procedures
+***************
+
+Recent updates to the IP30prom build procedure:
+
+- Build with PRODUCT=RACER from stand/arcs
+  with 'make IP30proms' will properly compile all IP30prom variants.
+
+
+- upgrade to nov10 root/toolroot or later it will have fixes
+  to RPROM relate builds
+  Incident #428130
+  Incident #434321
+
+
+RPROM related build info:
+
+#
+# RACER_RPROMdefs in $ROOT/include/make defines
+# COMPILATION_MODEL_SAOPT=IPA which is the
+# switch to turn on IPA compile option
+#		
+# compile flags
+#
+# FTEXTEXT	- flag for RPROM size/FPROM start, in RACERdefs
+# IP30_RPROM	- IP30_RPROM flag for libsk and IP30prom, in RACER_RPROMdefs
+#
+# TARGET summary
+#
+# rprom 	- rprom elf binary
+# drprom 	- debugging rprom ala dprom
+# IP30prom.bin	- flashable format with rprom header and
+#	 	  fprom.bin appended
+# IP30prom.hex  - IP30prom.bin in hex file format for
+#		  DATAIO style flash programming
+
+************************************************************
+Makefile changes
+************************************************************
+==========
+stand/arcs
+==========
+Makefile
+MIPSIPAdefs
+	Allow for IPA compiler/loader options defined 
+	if $(COMPILATION_MODEL_SAOPT) is defined as IPA
+	in $(PRODUCT)defs file, RACER_RPROMdefs for us.
+===================
+stand/arcs/IP30prom
+===================
+Makefile
+	new rules for making rprom and drprom
+	(enet bootable version of rprom ala dprom)
+	FTEXTADDR must sync up with sflash.h for size of
+	RPROM and start of FPROM
+	But still support current default NULL RPROM
+	until we're ready throw switch to 3 seg RPROM
+------------------------------------------------------------
+
+Makerules
+	Add *.[cs] -> *.u rule for drprom
+------------------------------------------------------------
+
+RACER_RPROM_localdefs
+	defines the RPROM assembler and C src files
+	and some Misc definitions
+
+************************************************************
+Src changes
+************************************************************
+===================
+stand/arcs/IP30prom
+===================
+
+csu_rprom.s
+	rprom bev and system exception handling code
+	logic for deciding rprom vs fprom exception handling
+
+	Exception handling for RPROM
+
+	If the src (ErrorEPC or EPC) is from RPROM
+	    there is no recovery, rprom just dumps some info
+	    via pon_handler if SR_BEV. If NMI or system
+	    exception handling on full reg dump in addition.
+	otherwise
+	    forward the exception to fprom as specified
+	    in FTEXTADDR from the Makefile
+
+	FTEXTADDR and SFLASH_FTEXT_ADDR (sflash.h) consistancy check
+------------------------------------------------------------
+
+csu.s
+
+  fcts/code ifdef'ed out
+	start, jump table start is renamed realstart
+	Halt
+	PowerDown
+	Restart
+	Reboot
+	EnterInteractiveMode
+	arcs_common
+	_exit
+	_init
+------------------------------------------------------------
+	
+IP30asm.s
+	allow pon_nmi_handler which dumps all the registers
+	to be shared with RPROM system exception handling
+	code to have the registers dumped
+
+------------------------------------------------------------
+
+IP30.c
+	check for good fprom and jump to it at start of sysinit
+	skip pon_caches, pon_scaches, pon_more
+
+  fcts/code ifdef'ed out
+	in sysinit calls to:
+	    setUpButtonAction
+	    domfgstartup
+	    startup
+
+	domfgstartup
+	halt
+	restart
+	reboot
+	enter_imode
+	dump_nic_info
+	system_cmd
+	able_stat
+	disable_cmd
+	enable_cmd
+
+====================
+stand/arcs/lib/libsk
+====================
+
+ml/IP30.c
+
+cpu_hardreset
+cpu_clearnofault
+	just move the fct to minimize IP30_RPROM insertion
+
+
+  fcts ifdef'ed out
+	cpu_install and related data
+	cpu_showfault
+	cpu_errputc		calls ns16550cons_errputc
+	cpu_errputs		calls ns16550cons_errputc
+
+removed
+
+DPRINTF definition 		unused
+------------------------------------------------------------
+
+ml/if_ef.c
+
+  fcts/code ifdef'ed out
+	call to ef_dump based on Verbose flag
+	dump_mbuf
+	dump_mbuf_data
+------------------------------------------------------------
+
+ml/xbow.c
+
+  fcts/code ifdef'ed out
+	xbow register dump fcts and related data desc's
+------------------------------------------------------------
+
+ml/heart.c
+
+	init_heart	only initialize baseIO Bridge widget
+
+fcts/code ifdef'ed out
+	heart register dump fcts and related data desc's
+
+------------------------------------------------------------
+
+ml/bridge.c
+
+	real_init_bridge		dont size ssram
+	pci_get_vendpart_nofault	dont use badaddr_val
+				get it w/o fault protection
+  assume we only have BASEIO bridge and avoid probing slots > 3
+	init_bridge_pci
+	bridge_install
+
+  assume we only have internal ssram's, ignore any external ssrams
+	size_bridge_ssram
+
+  fcts/code ifdef'ed out
+	bridge register dump fcts and related data desc's
+------------------------------------------------------------
+
+fs/bootp.c
+
+	minor cleanup, get rid of explicit extern Verbose and 
+	Debug, libsc.h which is included does this already
+------------------------------------------------------------
+
+lib/arcsio.c		XXXX stub GetTime
+
+modules ifdef'ed out completely due to .data/.rodata being
+pulled in even though the text was not being pulled in
+
+ml/nvram.c
+io/ns16550cons.c	XXXX maybe stubbed already
+------------------------------------------------------------
+
+consolidated Debug var dependent printfs so they can easily
+be ifdef'ed out if needed
+
+net/udpip.c
+net/arp.c
+
+====================
+stand/arcs/lib/libsc
+====================
+
+there are no RPROM specific code in libsc
+
+************************************************************
+new srcs
+************************************************************
+===================
+stand/arcs/IP30prom
+===================
+
+main_rprom.c
+	main line rprom code, and the rprom IO i/f (a very
+	condensed version of arcsio and fs)
+
+rprom_hook.c
+	rprom version of libsk/lib/hook.c
+	 
+rprom_nvram.c
+	rprom version of libsk/ml/nvram.c
+	 
+rprom_saio.c
+	rprom version of but essentially indentiacal
+	to libsk/lib/saio.c but w/ lots ifdef'ing out of
+	code
+
+rprom_stubs.c
+	misc stubs for libsk/libsc
+
+------------------------------------------------------------

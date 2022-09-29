@@ -1,0 +1,579 @@
+'\"macro stdmacro
+.\" Copyright (c) 1983 The Regents of the University of California.
+.\" All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms are permitted
+.\" provided that the above copyright notice and this paragraph are
+.\" duplicated in all such forms and that any documentation,
+.\" advertising materials, and other materials related to such
+.\" distribution and use acknowledge that the software was developed
+.\" by the University of California, Berkeley.  The name of the
+.\" University may not be used to endorse or promote products derived
+.\" from this software without specific prior written permission.
+.\" THIS SOFTWARE IS PROVIDED ``AS IS'' AND WITHOUT ANY EXPRESS OR
+.\" IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
+.\" WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.
+.\"
+.\"	@(#)routed.8	6.4 (Berkeley) 2/15/89
+.\"
+.TH ROUTED 1M
+.UC 5
+.SH NAME
+routed \- network RIP and router discovery routing daemon
+.SH SYNOPSIS
+.B /usr/etc/routed
+[\f3\-sqdghmpAtv\f1] [\f3\-T \f2tracefile\f1]
+     [\f3\-F \f2net\f1[\f2/mask\f1][,\f2metric\f1]] [\f3\-P\f1 \f2parms\f1]
+.SH DESCRIPTION
+\f3Routed\f1 is a dameon invoked at boot time to manage the network
+routing tables.
+It uses Routing Information Protocol, RIPv1 (RFC\ 1058),
+RIPv2 (RFC\ 1723),
+and Internet Router Discovery Protocol (RFC 1256)
+to maintain the kernel routing table.
+The RIPv1 protocol is based on the reference 4.3BSD daemon.
+.PP
+It listens on the
+.IR udp (7P)
+socket for the
+.I route
+service (see
+.IR services (4))
+for Routing Information Protocol packets.
+It also sends and receives multicast Router Discovery ICMP messages.
+If the host is a router, \f3routed\f1 periodically supplies copies
+of its routing tables to any directly connected hosts and networks.
+It also advertise or solicits default routes using Router Discovery
+ICMP messages.
+.PP
+When started (or when a network interface is later turned on),
+\f3routed\f1 uses an AF_ROUTE address family facility to find those
+directly connected interfaces configured into the
+system and marked "up".
+It adds necessary routes for the interfaces
+to the kernel routing table.
+Soon after being first started, and provided there is at least one
+interface on which RIP has not been disabled,
+\f3routed\f1 deletes all pre-existing
+non-static routes in kernel table.
+Static routes in the kernel table are preserved and
+included in RIP responses if they have a valid RIP metric
+(see \f3route\f1(1M)).
+.PP
+If more than one interface is present (not counting the loopback interface),
+it is assumed that the host should forward packets among the
+connected networks.
+After transmitting a RIP \f3request\f1 and
+Router Discovery Advertisements or Solicitations on a new interface,
+the daemon enters a loop, listening for
+RIP request and response and Router Discovery packets from other hosts.
+.PP
+When a
+.I request
+packet is received,
+.I routed
+formulates a reply based on the information maintained in its
+internal tables.
+The
+.I response
+packet generated contains a list of known routes, each marked
+with a "hop count" metric (a count of 16 or greater is
+considered "infinite").
+Advertised metrics reflect the metric associated with interface
+(see \f3ifconfig\f1(1M)), so setting the metric on an interface
+is an effective way to steer traffic.
+.PP
+Responses do not include routes with a first hop on the requesting
+network to implement in part \f2split-horizon\f1.
+Requests from query programs
+such as \f3rtquery\f1(1M) are answered with the complete table.
+.PP
+The routing table maintained by the daemon
+includes space for several gateways for each destination
+to speed recovery from a failing router.
+RIP
+.I response
+packets received are used to update the routing tables provided they are
+from one of the several currently recognized gateways or
+advertise a better metric than at least one of the existing
+gateways.
+.PP
+When an update is applied, \f3routed\f1
+records the change in its own tables and updates the kernel routing table
+if the best route to the destination changes.
+The change in the kernel routing table is reflected in the next batch of
+.I response
+packets sent.
+If the next response is not scheduled for a while, a \f2flash update\f1
+response containing only recently changed routes is sent.
+.PP
+In addition to processing incoming packets, \f3routed\f1
+also periodically checks the routing table entries.
+If an entry has not been updated for 3 minutes, the entry's metric
+is set to infinity and marked for deletion.
+Deletions are delayed until the route has been advertised with
+an infinite metric to insure the invalidation
+is propagated throughout the local internet.
+This is a form of \f2poison reverse\fP.
+.PP
+Routes in the kernel table that are added or changed as a result
+of ICMP Redirect messages are deleted after a while to minimize
+\f2black-holes\f1.
+When a TCP connection suffers a timeout,
+the kernel tells \f3routed\f1, which deletes all redirected routes
+through the gateway involved, advances the age of all RIP routes through
+the gateway to allow an alternate to be chosen, and advances of the
+age of any relevant Router Discovery Protocol default routes.
+.PP
+Hosts acting as internetwork routers gratuitously supply their
+routing tables every 30 seconds to all directly connected hosts
+and networks.
+These RIP responses are sent to the broadcast address on nets that support
+broadcasting,
+to the destination address on point-to-point links, and to the router's
+own address on other networks.
+If RIPv2 is enabled, multicast packets are sent on interfaces that
+support multicasting.
+.PP
+If no response is received on a remote interface, if there are errors
+while sending responses,
+or if there are more errors than input or output (see \f3netstat\f1(1M)),
+then the cable or some other part of the interface is assumed to be
+disconnected or broken, and routes are adjusted appropriately.
+.PP
+The \f2Internet Router Discovery Protocol\f1 is handled similarly.
+When the daemon is supplying RIP routes, it also listens for
+Router Discovery Solicitations and sends Advertisements.
+When it is quiet and listening to other RIP routers, it
+sends Solicitations and listens for Advertisements.
+If it receives
+a good Advertisement and it is not multi-homed,
+it stops listening for broadcast or multicast RIP responses.
+It tracks several advertising routers to speed recovery when the
+currently chosen router dies.
+If all discovered routers disappear,
+the daemon resumes listening to RIP responses.
+It continues listen to RIP while using Router Discovery
+if multi-homed to ensure all interfaces are used.
+.PP
+The Router Discovery standard requires that advertisements
+have a default "lifetime" of 30 minutes.  That means should
+something happen, a client can be without a good route for
+30 minutes.  It is a good idea to reduce the default to 45
+seconds using "\f3\-P\ \f2rdisc_interval=45\f1" on the
+command line or "\f3rdisc_interval=45\f1" in the
+\f2/etc/gateways\f1 file.
+.PP
+While using Router Discovery (which happens by default when
+the system has a single network interface and a Router Discovery Advertisement
+is received), there is a single default route and a variable number of
+redirected host routes in the kernel table.
+On a host with more than one network interface,
+this default route will be via only one of the interfaces.
+Thus, multi-homed hosts running with \f3\-q\f1 might need
+.B no_rdisc
+described below.
+.PP
+See the
+.B pm_rdisc
+facility described below to support "legacy" systems
+that can handle neither RIPv2 nor Router Discovery.
+.PP
+By default, neither Router Discovery advertisements nor solicitations
+are sent over point to point links (e.g. PPP).
+The netmask associated with point-to-point links (such as SLIP
+or PPP, with the IFF_POINTOPOINT flag) is used by \f3routed\f1
+to infer the netmask used by the remote system when RIPv1 is used.
+.PP
+\f3Routed\f1 is started during system initialization from
+.I /etc/init.d/network
+using site-dependent
+options and arguments
+in the file
+.IR /etc/config/routed.options .
+The options are:
+.TP
+.B \-s
+this option forces \f3routed\f1
+to supply routing information.
+This is the default if multiple network interfaces are present on which
+RIP or Router Discovery have not been disabled, and if the kernel switch
+ipforwarding=1.
+.TP
+.B \-q
+is the opposite of the
+.B \-s
+option.
+This is the default when only one interface is present.
+.TP
+.B \-d
+Do not run in the background.
+This option is meant for interactive use \(em do not put it in the
+.I routed.options
+file.
+.TP
+.B \-g
+This flag is used on internetwork routers to offer a route
+to the "default" destination.
+It is equivalent to "\f3\-F\ \f20/0,1\f1"
+and is present mostly for historical reasons.
+A better choice is "\f3\-P\ \f2pm_rdisc\f1"
+on the command line or \f3pm_rdisc\f1 in the \f2/etc/gateways\f1 file.
+since a larger metric
+will be used, reducing the spread of the potentially dangerous
+default route.
+This is typically used on a gateway to the Internet,
+or on a gateway that uses another routing protocol whose routes
+are not reported to other local routers.
+Notice that because a metric of 1 is used, this feature is
+dangerous.  It is more commonly accidentally used to create chaos with routing
+loop than to solve problems.
+.TP
+.B \-h
+This causes host or point-to-point routes to not be advertised,
+provided there is a network route going the same direction.
+That is a limited kind of aggregation.
+This option is useful on gateways to ethernets that have other gateway
+machines connected with point-to-point links such as SLIP.
+.TP
+.B \-m
+This causes the machine to advertise a host or point-to-point route to
+its primary interface.
+It is useful on multi-homed machines such as NFS servers.
+This option should not be used except when the cost of
+the host routes it generates is justified by the popularity of
+the server.
+It is effective only when the machine is supplying
+routing information, because there is more than one interface.
+The
+.B -m
+option overrides the
+.B \-q
+option to the limited extent of advertising the host route.
+.TP
+.B \-A
+do not ignore RIPv2 authentication if we do not care about RIPv2
+authentication.
+This option is required for conformance with RFC 1723,
+However, it makes no sense and breaks using RIP as a discovery protocol
+to ignore all RIPv2 packets that carry authentication when this machine
+does not care about authentication.
+.TP
+.B \-t
+increases the debugging level, which causes more information to be logged
+on the tracefile specified with \f3\-T\f1 or standard out.
+The debugging level can be increased or decreased
+with the \f3SIGUSR1\f1 or \f3SIGUSR2\f1 signals, or with the
+\f3rtquery\f1 command.
+.TP
+.B \-v
+displays and logs the version of daemon.
+.TP
+\f3\-T\f1 \f2tracefile\f1
+increases the debugging level to at least 1 and
+causes debugging information to be appended to the trace file.
+Note that because of security concerns, it is wisest to not run
+\f3routed\f1
+routinely with tracing directed to a file.
+.TP
+\f3\-F\f1 \f2net[/mask\f1][=\f2metric\f1]
+minimize routes in transmissions via interfaces with addresses that match
+\f2net/mask\f1,
+and synthesizes a default route to this machine with the \f2metric\f1.
+The intent is to reduce RIP traffic on slow, point-to-point links
+such as PPP links by replacing many large UDP packets of RIP information
+with a single, small packet containing a "fake" default route.
+If \f2metric\f1 is absent, a value of 14 is assumed to limit
+the spread of the "fake" default route.
+
+This is a dangerous feature that when used carelessly can cause routing
+loops.
+Notice also that more than one interface can match the specified network
+number and mask.
+See also \f3\-g\f1.
+.TP
+\f3\-P\f1 \f2parms\f1
+is equivalent to adding the parameter
+line \f2parms\f1 to the \f2/etc/gateways\f1 file.
+.PP
+Any other argument supplied is interpreted as the name
+of a file in which
+.IR routed 's
+actions should be logged.
+It is better to use \f3\-T\f1 instead of
+appending the name of the trace file to the command.
+.PP
+\f3routed\f1 also supports the notion of
+"distant" \f2passive\f1 or \f2active\f1 gateways.
+When \f3routed\f1
+is started, it reads the file
+.I /etc/gateways
+to find such distant gateways which may not be located using
+only information from a routing socket, to discover if some
+of the local gateways are \f2passive\f1, and to obtain other parameters.
+Gateways specified in this manner should be marked passive
+if they are not expected to exchange routing information,
+while gateways marked active
+should be willing to exchange RIP packets.
+Routes through \f2passive\f1 gateways are installed in the
+kernel's routing tables once upon startup and are not included in
+transmitted RIP responses.
+.PP
+Distant active gateways are treated like network interfaces.
+RIP responses are sent
+to the distant \f2active\f1 gateway.
+If no responses are received, the associated route is deleted from
+the kernel table and RIP responses advertised via other interfaces.
+If the distant gateway resumes sending RIP responses, the associated
+route is restored.
+.PP
+Such gateways can be useful on media that do not support broadcasts
+or multicasts but otherwise act like classic shared media like
+Ethernets such as some ATM networks.
+One can list all RIP routers reachable on the ATM network in
+.I /etc/gateways
+with a series of
+"host" lines.
+Note that it is usually desirable to use RIPv2 in such situations
+to avoid generating lists of inferred host routes.
+.PP
+Gateways marked
+.I external
+are also passive, but are not placed in the kernel
+routing table nor are they included in routing updates.
+The function of external entries is to indicate
+that another routing process
+will install such a route if necessary,
+and that alternate routes to that destination should not be installed
+by \f3routed\f1.
+Such entries are only required when both routers may learn of routes
+to the same destination.
+.PP
+The
+.I /etc/gateways
+file is comprised of a series of lines, each in
+one of the following two formats or consist of parameters described later.
+Blank lines and lines starting with '#' are comments.
+.PP
+.nf
+\s-1\f3net\f1 \f2Nname\f1[/\f2mask\f1] \f3gateway\f1 \f2Gname\f1 \f3metric\f1 \f2value\f1 {\f3passive\f1|\f3active\f1|\f3external\f1}\s0
+\s-1\f3host\f1 \f2Hname\f1       \f3gateway\f1 \f2Gname\f1 \f3metric\f1 \f2value\f1 {\f3passive\f1|\f3active\f1|\f3external\f1}\s0
+.fi
+.PP
+.IR Nname
+or
+.IR Hname
+is the name of the destination network or host.
+It may be a symbolic network name or an Internet address
+specified in "dot" notation (see
+.IR inet (3N)).
+(If it is a name, then it must either be defined in
+.I /etc/networks
+or
+.IR /etc/hosts ,
+or name service must have been started before \f3routed\f1.)
+.I mask
+is an optional number between 1 and 32 indicating the netmask associated
+with
+.IR Nname .
+.PP
+.I Gname
+is the name or address of the gateway to which RIP responses should
+be forwarded.
+.I Value
+is the hop count to the destination host or network.
+"\f3host\ \f2hname\f1" is equivalent to "\f3net\ \f2nname/32\f1".
+.PP
+One of the keywords
+.BR passive ,
+.B active
+or
+.B external
+must be present to indicate whether the gateway should be treated as
+.I passive
+or
+.I active
+(as described above),
+or whether the gateway is
+.I external
+to the scope of the RIP protocol.
+.PP
+As can be seen when debugging is turned on with
+.Fl t ,
+such lines create psuedo-interfaces.
+To set parameters for remote or external interfaces,
+a line starting with
+\f3if=alias(Hname)\f1,
+\f3if=remote(Hname)\f1,
+etc. should be used.
+.PP
+Lines that start with neither "net" nor "host" must consist of one
+or more of the following parameter settings, separated by commas or
+blanks:
+.TP 5
+.B if=\f2ifname\f1
+indicates that the other parameters on the line apply to the interface
+name \f2ifname\f1.
+.TP
+.B subnet=\f2nname\f1[\f2/mask\f1][\f2,metric\f1]
+advertises a route to network
+\f2nname\f1 with mask \f2mask\f1 and the supplied metric (default 1).
+This is useful for filling "holes" in CIDR allocations.
+This parameter must appear by itself on a line.
+The network number must specify a full, 32-bit value, as in 192.0.2.0
+instead of 192.0.2.
+
+Do not use this feature unless necessary.  It is dangerous.
+.TP
+.B ripv1_mask=\f2nname/mask1,mask2\f1
+specifies that netmask of the network of which \f2nname/mask1\f1 is
+a subnet should be \f2mask2\f1.
+For example \f2ripv1_mask=192.0.2.16/28,27\f1 marks 192.0.2.16/28
+as a subnet of 192.0.2.0/28 instead of 192.0.2.0/24.
+.TP
+.B passwd\f2=\f2XXX1\f1[\f2|KeyID\f1[\f2start|stop\f1]]
+specifies a RIPv2 cleartext password that will be included on
+all RIPv2 responses sent, and checked on all RIPv2 responses received.
+Any blanks, tab characters, commas, or '#', '|', or NULL characters in the
+password must be escaped with a backslash (\\).
+The common escape sequences \\n, \\r, \\t, \\b, and \\xxx have their
+usual meanings.
+The
+\f2KeyID\f1
+must be unique but is ignored for cleartext passwords.
+If present,
+\f2start\f1
+and
+\f2stop\f1
+are timestamps in the form year/month/day@hour:minute.
+They specify when the password is valid.
+The valid password with the most future is used on output packets, unless
+all passwords have expired, in which case the password that expired most
+recently is used, or unless no passwords are valid yet, in which case
+no password is output.
+Incoming packets can carry any password that is valid, will
+be valid within 24 hours, or that was valid within 24 hours.
+To protect the secrets, the password settings are valid only in the
+.I /etc/gateways
+file and only when that file is readable only by UID 0.
+.TP
+.B md5_passwd\f2=\f2XXX1\f1\f2|KeyID\f1[\f2start|stop\f1]
+specifes a RIPv2 MD5 password.
+Except that a
+\f2KeyID\f1
+is required, this keyword is similar to
+.BR passwd .
+.TP
+.B no_ag
+turns off aggregation of subnets in RIPv1 and RIPv2 responses.
+.TP
+.B no_super_ag
+turns off aggregation of networks into supernets in RIPv2 responses.
+.TP
+.B passive
+marks the interface to not be advertised in updates sent via other
+interfaces, and turns off all RIP and router discovery through the interface.
+.TP
+.B no_rip
+disables all RIP processing on the specified interface.
+If no interfaces are allowed to process RIP packets,
+\f3routed\f1 acts purely as a router discovery daemon.
+
+Note that turning off RIP without explicitly turning on router
+discovery advertisements with \f3rdisc_adv\f1 or \f3\-s\f1
+causes \f3routed\f1
+to act as a client router discovery daemon, not advertising.
+.TP
+.B no_rip_mcast
+causes RIPv2 packets to be broadcast instead of multicast.
+.TP
+.B no_ripv1_in
+causes RIPv1 received responses to be ignored.
+.TP
+.B no_ripv2_in
+causes RIPv2 received responses to be ignored.
+.TP
+.B ripv2_out
+turns off RIPv1 output and causes RIPv2 advertisements to be
+multicast when possible.
+.TP
+.B ripv2
+is equivalent to
+.BR no_ripv1_in
+and
+.BR no_ripv1_out .
+.TP
+.B no_rdisc
+disables the Internet Router Discovery Protocol.
+.TP
+.B no_solicit
+disables the transmission of Router Discovery Solicitations.
+.TP
+.B send_solicit
+specifies that Router Discovery solicitations should be sent,
+even on point-to-point links,
+which by default only listen to Router Discovery messages.
+.TP
+.B no_rdisc_adv
+disables the transmission of Router Discovery Advertisements
+.TP
+.B rdisc_adv
+specifies that Router Discovery Advertisements should be sent,
+even on point-to-point links,
+which by default only listen to Router Discovery messages
+.TP
+.B bcast_rdisc
+specifies that Router Discovery packets should be broadcast instead of
+multicast.
+.TP
+.B rdisc_pref\f2=N
+sets the preference in Router Discovery Advertisements to the optionally
+signed integer
+\f2N\f1.
+The default preference is 0.
+Default routes with smaller or more negative preferences are preferred by
+clients.
+.TP
+.B rdisc_interval\f2=N
+sets the nominal interval with which Router Discovery Advertisements
+are transmitted to \f2N\f1 seconds and their lifetime to 3*\f2N\f1.
+.TP
+.B fake_default=\f2metric
+has an identical effect to "\f3\-F\ \f1net/mask,\f2metric\f1"
+with the network and mask coming from the specified interface.
+.TP
+.B pm_rdisc
+is similar to
+.BR fake_default .
+When RIPv2 routes are multicast, so that RIPv1 listeners cannot
+receive them, this feature causes a RIPv1 default route to be
+broadcast to RIPv1 listeners.
+Unless modified with
+.BR fake_default ,
+the default route is broadcast with a metric of 14.
+That serves as a "poor man's router discovery" protocol.
+.TP
+.B trust_gateway\f2=rname[|net1/mask1|net2/mask2|...]\f1
+causes RIP packets from that router and other routers named in
+other
+.B trust_gateway
+keywords to be accepted, and packets from other routers to be ignored.
+If networks are specified, then routes to other networks will be ignored
+from that router.
+.TP
+.B redirect_ok
+causes RIP to allow ICMP Redirect messages when the system is acting
+as a router and forwarding packets.
+Otherwise, ICMP Redirect messages are overridden.
+.SH FILES
+.DT
+.ta \w'/etc/config/routed.optionsxx'u
+/etc/gateways	for distant gateways
+.br
+/etc/config/routed.options	Site-dependent options
+.SH "SEE ALSO"
+gated(1M), udp(7P), icmp(7P), rtquery(1M)
+.SH BUGS
+It does not always detect unidirectional failures in network interfaces
+(e.g., when the output side fails).
+'\".so /pubs/tools/origin.bsd

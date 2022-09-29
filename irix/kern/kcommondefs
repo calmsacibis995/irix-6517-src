@@ -1,0 +1,700 @@
+#
+# kcommondefs - contains basic common flags/locations for kernel builds
+# ALL makefiles should include this - so that builds may be done in any
+# directory
+#
+# DEPTH - should be set in the top of each Makefile - it spells the ".."
+# path up to top level directory
+#
+#ident "$Revision: 3.379 $"
+
+#if defined(PRODUCT) && ! empty(PRODUCT)
+PRODUCTDEFS= $(ROOT)/usr/include/make/$(PRODUCT)defs
+RELEASEDEFS= $(ROOT)/usr/include/make/releasedefs
+
+include $(PRODUCTDEFS)
+COMPILATION_MODEL?=32
+
+#
+# Set up OBJECT_STYLE - this could also be done in the PRODUCTDEFS file(s)
+#
+#if $(CPUBOARD) == "IP19"
+# EVEREST
+OBJECT_STYLE=64_M3
+
+#elif $(CPUBOARD) == "IP20"
+#if $(COMPILATION_MODEL) == "N32"
+OBJECT_STYLE=N32_M3
+#else
+OBJECT_STYLE=32_M2
+ASTYLE=-mips3 -32 -Wb,-diag
+#endif
+
+#elif $(CPUBOARD) == "IP21"
+OBJECT_STYLE=64_M4
+
+#elif $(CPUBOARD) == "IP22"
+#if $(COMPILATION_MODEL) == "64"
+OBJECT_STYLE=64_M3
+#elif $(COMPILATION_MODEL) == "N32"
+OBJECT_STYLE=N32_M3
+#else
+OBJECT_STYLE=32_M2
+ASTYLE=-mips3 -32 -Wb,-diag
+#endif
+
+#elif $(CPUBOARD) == "IP26"
+# TETON
+OBJECT_STYLE=64_M4
+#elif $(CPUBOARD) == "IP28"
+OBJECT_STYLE=64_M4
+#elif $(CPUBOARD) == "IP27"
+OBJECT_STYLE=64_M4
+#elif $(CPUBOARD) == "IP25"
+OBJECT_STYLE=64_M4
+
+#elif $(CPUBOARD) == "IP30"
+OBJECT_STYLE=64_M4
+
+#elif $(CPUBOARD) == "IP32" || $(CPUBOARD) == "IP32SIM"
+#if $(COMPILATION_MODEL) == "64"
+OBJECT_STYLE=64_M3
+#elif $(COMPILATION_MODEL) == "N32"
+OBJECT_STYLE=N32_M3
+#else
+OBJECT_STYLE=32_M2
+# ASTYLE=-triton_ucode -mips4 -32 -Wb,-diag
+ASTYLE=-mips3 -32 -Wb,-diag
+#endif
+
+#elif $(CPUBOARD) == "IPMHSIM" || $(CPUBOARD) == "BEAST"
+#if $(COMPILATION_MODEL) == "64"
+OBJECT_STYLE=64_M3
+#elif $(COMPILATION_MODEL) == "N32"
+OBJECT_STYLE=N32_M3
+#else
+OBJECT_STYLE=32_M2
+ASTYLE=-mips3 -32 -Wb,-diag
+#endif
+
+#elif $(CPUBOARD) == "IP33"
+OBJECT_STYLE=64_M4
+
+#else
+.BEGIN:
+	@echo "Unknown CPUBOARD!"
+	exit 1
+#endif
+#endif
+
+#
+# We don't want LD library searches ...
+#
+NO_LSRCH=yes
+
+include $(ROOT)/usr/include/make/commondefs
+
+EVERYPRODUCT=4D40 4DACE1 BB_EVEREST EVEREST TETON SN0 RACER T5_EVEREST T5I2 4DMH
+
+KCOMMONTARGS= $(COMMONTARGS) lint
+KCOMMONPREF=k
+
+#
+# We define a postop idb which should be used whenever we want to ensure 
+# that a reconfig will occur: it avoids any local system time problems
+# by changing the old kernel date back to the epoch.
+# XXX we should fix inst to sanity-check the mtime of /unix and other
+# XXX important files against current time.  FORCE exists seperately
+# so that it can be used in other makefiles that need to do more than
+# LBOOTPOSTOP
+#
+FORCEUNIXBUILD=touch -ct 197001010000 $$rbase/unix || true
+LBOOTPOSTOP=-idb 'postop("$(FORCEUNIXBUILD)")'
+# setsym information
+
+# for os/numa/Makefile, for now
+KMODEOPT?=
+
+#
+# Compile Time Options - use KCDEFS, KCINCS, and KCOPTS in makefiles which
+# include kcommondefs
+
+#
+# By default, all files are compiled -fullwarn.
+# To override, set FULLWARN to null in individual makefiles.
+#    1068 - integer conversion resulted in a change of sign
+#    1209 - controlling expression is constant
+#    1505 - implicit conversion from <type> to <type>:  rounding,
+#           sign extension, or loss of accuracy may result
+#    1506 - the v6.02 compiler changes 1505 to 1506.
+#           implicit conversion from <type> to <type>:  rounding,
+#           sign extension, or loss of accuracy may result
+#    1692 - prototyped function redeclared without prototype
+#
+# Some kernels:
+#    1552 - variable set but never used
+#
+FULLWARN=-fullwarn
+LWOFF=,1068,1209,1505,1506,1692$(PRODWOFF)$(KWOFF)
+
+# We promote many warnings to be errors in order to keep the kernel builds
+# clean and avoid stupid errors that the compiler is good at catching.  The
+# current warning to error promotions are:
+#
+#	1116: non-void function does not return a value
+#	1196: function declared implicitly
+#	1551: variable is used before it is set
+#	1413: source type of cast is too small to hold all pointers
+#	1498: no prototype for the call to <func> - this occurs
+#	      with prototypes such as void foo() - should be void foo(void)
+#	1009: nested comment is not allowed
+#	1047: macro redefined differently
+#	1110: statement is unreachable
+#	1171: expression has no effect
+#	1140: a value of type <type1> cannot be used to initialize an
+#	      entity of type <type2> (useful for lboot devsw mismatches)
+#	1164: argument of type <X> is incompatible with parameter of type <Y>
+#	1412: destination type of cast is too small to hold all pointers
+#	1069: integer conversion resulted in truncation
+#	1035: #error is fatal!
+#	1183: pointless comparison of unsigned integer with zero
+#
+# We also disallow certain normally legal language elements because they cause
+# problems of one sort or another:
+#
+#	-LANG:vla=off: disallow variable length arrays.  There's currently no
+#	      code that needs them and they cause all sorts of problems with
+#	      the stack backtrace code in idbg, icrash and the kernel
+#	      profiler.
+#
+# The WFATAL flag may be added to or overridden as necesary on a per
+# system basis.  So far, they are all the same, except for o32 kernels
+# which can't set it.
+WFATAL=-diag_error 1116,1196,1551,1413,1498,1009,1110,1171,1047,1140,1164,1412,1069,1035,1183 \
+	-LANG:vla=off
+
+#
+# The default compilation model is 32 bits.
+#
+COMPILATION_MODEL?=32
+
+#
+# The default virtual page size is 4KB for 32 bit kernels, 16kb for
+# 64 bit kernels.
+#
+#if $(COMPILATION_MODEL) == "64"
+PGSZOPT?=-D_PAGESZ=16384
+#else
+PGSZOPT?=-D_PAGESZ=4096
+#endif
+
+SABLE?=0
+COMPLEX?=SP
+LBOOTOPTS=-v
+
+#
+# kernidl stuff:
+#
+# The variable KERNIDLFILES should be set to a the list of IDL files to be
+# processed.  e.g. ``registry.idl ...''  For each IDL file foo.idl, the files
+# invk_foo_stubs.h, I_foo_stubs.h, and I_foo_stubs.c
+#
+KERNIDL=$(BOOTAREA)/kernidl
+KERNIDLFLAGS=$(CDEFS) $(CINCS) -I.. -MDupdate $(MKDEPFILE) -MDtarget $(.TARGET)
+KERNIDLHEADERS=$(KERNIDLFILES:S/^/invk_/g:.idl=_stubs.h)
+
+KERNIDLDIRT=$(KERNIDLHEADERS)
+KERNIDLDIRT+=$(KERNIDLFILES:S/^/I_/g:.idl=_stubs.h)
+KERNIDLDIRT+=$(KERNIDLFILES:S/^/I_/g:.idl=_stubs.c)
+
+#
+# Set up options specific to particular compiler suites
+#
+
+# Options common to all
+GNUMVAL=8
+OPTIMIZER=-O3
+
+#if $(VCC) == "RAGNAROK"
+
+PRODCOPTS= -TENV:kernel
+PRODCOPTS+=-TENV:misalignment=1
+PRODCOPTS+=-OPT:space
+PRODCOPTS+=-OPT:quad_align_branch_targets=FALSE
+PRODCOPTS+=-OPT:quad_align_with_memops=FALSE
+PRODCOPTS+=-OPT:unroll_times=0
+
+JALR=-jalr
+
+#elif $(VCC) == "CFE"
+
+PRODCOPTS=-Wc,-pic0
+JALR?=-Wc,-jalr
+ASTYLE+=-Wb,-pic0
+WFATAL=
+
+#elif $(VCC) == "MONGOOSE"
+
+PRODCOPTS= -TENV:kernel
+PRODCOPTS+=-OPT:space
+PRODCOPTS+=-OPT:Olimit=0
+PRODCOPTS+=-CG:unique_exit=on
+
+# This reduces the size of gp relative strings at the cost of some minor
+# text size increase and added time to access short strings (<= 8 character).
+# Since the kernel rarely needs to access strings this generally isn't a
+# problem.
+#
+PRODCOPTS+=-TENV:strings_not_gprelative=on
+
+# Options to change when going from -O2 to -O3.
+
+#if $(OPTIMIZER) == "-O3"
+PRODCOPTS+=-TENV:X=1
+PRODCOPTS+=-OPT:IEEE_arithmetic=1
+PRODCOPTS+=-OPT:roundoff=0
+PRODCOPTS+=-OPT:wrap_around_unsafe_opt=off
+# Will default to 80, but the use of -OPT:space which 
+# is implied in -TENV:kernel reduces the number to 20. 
+# We may remove "unroll_times" when going to -O3 or 
+# change the "default" from 20 -> ???.
+#PRODCOPTS+=-OPT:unroll_times=0
+#else
+PRODCOPTS+=-OPT:unroll_times=0
+#endif
+
+# These following options ONLY work on the 7.2+ compiler
+# and should NOT be used on the 7.2 compiler or many ugly
+# message will be spewed.  
+# 
+# These option are might be turned on for the 7.2+ compiler.
+# For now do NOT uncomment the mem_intrinsics option.
+#PRODCOPTS+= -OPT:mem_intrinsics=ON 
+
+JALR	  = -TARG:force_jalr
+
+#if defined(PRODUCT) && !empty(PRODUCT)
+#if $(CPUARCH) == "TFP"
+PRODCOPTS+= -TARG:processor=r8000
+#endif
+
+#if $(CPUARCH) == "R10000"
+PRODCOPTS+= -TARG:processor=r10000
+#endif
+#endif
+
+#if defined(MONGOOSE_IPA)
+LLDOPTS	 += -ipa
+PRODCOPTS+= -ipa
+PRODCOPTS+= -IPA:addressing=TRUE
+PRODCOPTS+= -IPA:aggr_cprop=TRUE
+PRODCOPTS+= -IPA:alias=TRUE
+PRODCOPTS+= -IPA:opt_alias=TRUE
+#endif
+
+#if defined(MONGOOSE_PREFETCH)
+# we shouldn't turn prefetch on for systems with 1 outstanding read like IP28.
+#
+# Need -O3 optimization for prefetch to work. Set to -O3 unless
+# it was changed in klocaldefs.
+#
+#if $(OPTIMIZER) == "-O2"
+OPTIMIZER=-O3
+#endif
+
+# try these later...
+#PRODCOPTS+= -CG:prefetch=on
+#PRODCOPTS+= -LNO:prefetch_ahead=2
+#PRODCOPTS+= -SWP:prune_prefetches=TRUE
+#endif
+
+#else
+.BEGIN:
+	@echo "Unknown VCC!"
+	exit 1
+#endif
+
+# turn off warnings that we "expect", so customers aren't worried
+# by them (these go into irix.sm LDOPTS).  39 was added because
+# the alignment we specify doesn't match up with the default 16KB
+# alignment in 7.3 linker (which we asked for!), and changing
+# the alignment may still result in the message; elspec is the
+# only longterm answer.  17 about different sizes for "same"
+# element is something we used to get a lot and was/is acceptable;
+# it may be obsolete now, but I don't want to be brave.
+LDWOFF=-woff 84,47,39,17
+
+LBOOT=$(TOOLROOTSAFE) $(TOOLROOT)/usr/sbin/lboot
+SETSYM=$(TOOLROOTSAFE) $(TOOLROOT)/usr/sbin/setsym
+
+#if defined(PRODUCT) && !empty(PRODUCT)
+PRODCDEFS=
+
+#if $(CPUBOARD) == "IP19"
+PRODCDEFS=-D_MIPS3_ADDRSPACE -DR4000_DADDIU_WAR -DFAST_LOCORE_TFAULT \
+	-DPTE_64BIT -DEVEREST -DBADVA_WAR -DMP_R4000_BADVA_WAR \
+	-DECC_RECOVER -DCLOCK_CTIME_IS_ABSOLUTE \
+	-DULI -DCKPT \
+	-DDELAY_CEL_WRITES -DNO_MFC_NOPS -DIDLESTACK_FASTINT \
+	-DSW_FAST_CACHE_SYNCH -DUSE_PTHREAD_RSA \
+	-DMC3_CFG_READ_WAR -DIO4_CFG_READ_WAR \
+	-D_SHAREII
+#endif
+
+#if $(CPUBOARD) == "IP25"
+T5WARS=-DR10000_MFHI_WAR -DR10K_LLSC_WAR -DT5TREX_IBE_WAR
+PRODCDEFS=-D_MIPS3_ADDRSPACE -DFAST_LOCORE_TFAULT -DPTE_64BIT \
+	-DEVEREST -DECC_RECOVER -DCLOCK_CTIME_IS_ABSOLUTE \
+	-DSCACHE_SET_ASSOC=2 -DMIPS4_ISA -DULI -DCKPT \
+	-DDELAY_CEL_WRITES -DIDLESTACK_FASTINT -DUSE_PTHREAD_RSA $(T5WARS) \
+	-DMULTIPLE_CFG_WRITE_WAR -DMC3_CFG_READ_WAR -DIO4_CFG_READ_WAR \
+	-D_SHAREII
+R10K_LLSC_WAR=True
+#endif
+
+#if $(CPUBOARD) == "IP20"
+PRODCDEFS=-DJUMP_WAR -DPROBE_WAR -DBADVA_WAR -D_MEM_PARITY_WAR \
+		-DSW_FAST_CACHE_SYNCH -DCKPT -DIDLESTACK_FASTINT
+#endif
+
+#if $(CPUBOARD) == "IP21"
+PRODCDEFS=-D_MIPS3_ADDRSPACE
+PRODCDEFS+=-DEVEREST -DNO_WIRED_SEGMENTS -DSCACHE_SET_ASSOC=4 \
+	-DTFP_MOVC_CPFAULT_FAST_WAR -DTFP_ADE_EBUS_WBACK_WAR \
+	-DTFP_CC_REGISTER_READ_WAR -DTFP_DMFC0_BADVA_WAR \
+	-DTFP_PREFETCH_WAR $(STATOPT) -DCLOCK_CTIME_IS_ABSOLUTE \
+	-DULI -DMIPS4_ISA -DCKPT -DIDLESTACK_FASTINT -DUSE_PTHREAD_RSA \
+	-DMC3_CFG_READ_WAR \
+	-D_SHAREII
+#endif
+
+#if $(CPUBOARD) == "IP27"
+T5WARS=-DR10000_MFHI_WAR -DR10K_LLSC_WAR -DT5TREX_IBE_WAR
+PRODCDEFS=-D_MIPS3_ADDRSPACE -DSN -DSN0 -DMIPS4_ISA \
+	-DCLOCK_CTIME_IS_ABSOLUTE -DFAST_LOCORE_TFAULT -DULI -DCKPT \
+	-DSCACHE_SET_ASSOC=2 -DIDLESTACK_FASTINT -DPTE_64BIT\
+	-DSW_FAST_CACHE_SYNCH -DUSE_PTHREAD_RSA \
+	-DAUDIO_TIMEOUT_IS_THREADED -DTSERIALIO_TIMEOUT_IS_THREADED \
+	$(T5WARS) -D_SHAREII -DCELL_PREPARE -DRT_SCALE
+PRODCOPTS+= -FE:pointer_readonly -use_readonly_const
+R10K_LLSC_WAR = True
+#endif
+
+#if $(CPUBOARD) == "IP22"
+PRODCDEFS=-DBADVA_WAR -DJUMP_WAR -DPROBE_WAR -D_MEM_PARITY_WAR \
+	-D_TLB_LOOP_LIMIT -DTLBMOD_BADVADDR_WAR \
+	-D_VCE_AVOIDANCE -D_R4600_CACHEOP_WAR -D_R4600_2_0_CACHEOP_WAR \
+	-D_VCE_AVOIDANCE_DEBUG \
+	-D_IRIX5_MIPS3 -D_IRIX5_MIPS4 -D_R5000_BADVADDR_WAR \
+	-DMIPS4_ISA -DIDLESTACK_FASTINT \
+	-DSW_FAST_CACHE_SYNCH -DCKPT \
+	-D_R5000_CVT_WAR=1 -D_MTEXT_VFS $(T5WARS) \
+	-DPOWER_DUMP
+#if $(COMPILATION_MODEL) == "N32"
+PRODCDEFS+=-DR4000_DADDIU_WAR
+#endif
+#endif
+
+#if $(CPUBOARD) == "IP26"
+PRODCDEFS=-D_MIPS3_ADDRSPACE
+PRODCDEFS+=-DNO_WIRED_SEGMENTS -DSCACHE_SET_ASSOC=4 \
+	-DTFP_MOVC_CPFAULT_FAST_WAR -DTFP_DMFC0_BADVA_WAR \
+	-D_NO_UNCACHED_MEM_WAR -DMIPS4_ISA -DTFP_PREFETCH_WAR $(STATOPT) \
+	-DCKPT -DIDLESTACK_FASTINT
+PRODCOPTS+=-TARG:sync=off
+PRODWOFF=,1552,1174
+#endif
+
+#if $(CPUBOARD) == "IP28"
+T5WARS=-DR10000_SPECULATION_WAR
+PRODCDEFS=-D_MIPS3_ADDRSPACE -DFAST_LOCORE_TFAULT -DSCACHE_SET_ASSOC=2 \
+	-D_NO_UNCACHED_MEM_WAR -DMIPS4_ISA $(STATOPT) $(T5WARS) \
+	 -DSW_FAST_CACHE_SYNCH -DCKPT -DIDLESTACK_FASTINT
+PRODCOPTS+=-Wb,-TARG:t5_no_spec_stores
+PRODASOPTS+=-Wa,-t5_no_spec_stores
+PRODWOFF=,1552,1174
+#endif
+
+#if $(CPUBOARD) == "IP30"
+T5WARS=-DR10000_MFHI_WAR -DR10K_LLSC_WAR -DT5TREX_IBE_WAR
+PRODCDEFS=-D_MIPS3_ADDRSPACE -DFAST_LOCORE_TFAULT -DCLOCK_CTIME_IS_ABSOLUTE
+PRODCDEFS+=-DECC_RECOVER -DSCACHE_SET_ASSOC=2 -DMIPS4_ISA  \
+	   -DCKPT -DSW_FAST_CACHE_SYNCH -DIDLESTACK_FASTINT \
+	   -DULI $(T5WARS) -DPTE_64BIT -DCELL_PREPARE \
+	   -DAUDIO_TIMEOUT_IS_THREADED -DTSERIALIO_TIMEOUT_IS_THREADED \
+	   -DRT_SCALE
+R10K_LLSC_WAR = True
+#endif
+
+#if $(CPUBOARD) == "IPMHSIM"
+T5WARS=-DR10000_SPECULATION_WAR -DMH_R10000_SPECULATION_WAR
+#if $(CPUARCH) == "R10000"
+PRODCDEFS=-D_IRIX_MIPS4 -D_IRIX_MIPS3 -D_SYSTEM_SIMULATION -D_SABLE_SYNC_IO \
+	-DMIPS4_ISA \
+	-DSCACHE_SET_ASSOC=2 \
+	$(STATOPT) $(WART523) $(T5WARS)
+#else
+PRODCDEFS= -D_TLB_LOOP_LIMIT -D_VCE_AVOIDANCE -D_SYSTEM_SIMULATION \
+	-D_SABLE_SYNC_IO -DSABLE_SYMMON -DSABLE_SYMMON_INITPC=0xa0007120 \
+	-D_VCE_AVOIDANCE_DEBUG \
+	-D_IRIX5_MIPS4 -D_IRIX5_MIPS3 \
+	-D_R5000_BADVADDR_WAR -DMIPS4_ISA -DSW_FAST_CACHE_SYNCH \
+	-DSCACHE_SET_ASSOC=2 \
+	-D_R5000_CVT_WAR=1 -D_MTEXT_VFS $(T5WARS)
+#	XXX Not Yet
+#	-DTILE_DATA -DSWASH
+#endif
+# PRODASOPTS=-triton_ucode -mips4 -32 -Wb,-diag
+#endif
+
+#if $(CPUBOARD) == "IP32"
+T5WARS=-DR10000_SPECULATION_WAR -DMH_R10000_SPECULATION_WAR -DR10000_MFHI_WAR -DT5TREX_IBE_WAR
+PRODCDEFS=-D_VCE_AVOIDANCE \
+	-DTLBMOD_BADVADDR_WAR \
+	-D_VCE_AVOIDANCE_DEBUG \
+	-D_TLB_LOOP_LIMIT \
+	-DP0_WAR -D_IRIX5_MIPS4 -D_IRIX5_MIPS3 -DIDLESTACK_FASTINT \
+	-D_R5000_BADVADDR_WAR \
+	-DMIPS4_ISA -DSW_FAST_CACHE_SYNCH \
+	-DSCACHE_SET_ASSOC=2 \
+	-DTILES_TO_LPAGES $(T5WARS) \
+	-DCKPT \
+	-D_R5000_CVT_WAR=1 -D_MTEXT_VFS \
+	-DPOWER_DUMP \
+	-D_DISABLE_CDX \
+	-D_PIO_EXTRA_SAFE \
+	-DUSE_PCI_PIO
+#	XXX Not Yet
+#	-DTILE_DATA -DSWASH
+# PRODASOPTS=-triton_ucode -mips4 -32 -Wb,-diag
+#endif
+
+#if $(CPUBOARD) == "IP32SIM"
+T5WARS=-DR10000_SPECULATION_WAR -DMH_R10000_SPECULATION_WAR
+PRODCDEFS=-D_VCE_AVOIDANCE -D_SABLE_SYNC_IO \
+	-D_VCE_AVOIDANCE_DEBUG \
+	-D_TLB_LOOP_LIMIT \
+	-DIP32 -D_IRIX5_MIPS4 -D_IRIX5_MIPS3 \
+	-D_R5000_BADVADDR_WAR \
+	-DMIPS4_ISA -DSW_FAST_CACHE_SYNCH \
+	-DSCACHE_SET_ASSOC=2 \
+	-D_R5000_CVT_WAR=1 -D_MTEXT_VFS $(T5WARS)
+#	XXX Not Yet
+#	-DTILE_DATA -DSWASH
+# PRODASOPTS=-triton_ucode -mips4 -32 -Wb,-diag
+#endif
+
+#if $(CPUBOARD) == "IP33"
+PRODCDEFS=-D_MIPS3_ADDRSPACE -DSN -DSN1 -DMIPS4_ISA \
+	-DCLOCK_CTIME_IS_ABSOLUTE -DFAST_LOCORE_TFAULT -DULI -DCKPT \
+	-DIDLESTACK_FASTINT -DPTE_64BIT
+
+#	-DSW_FAST_CACHE_SYNCH
+PRODCOPTS+= -FE:pointer_readonly -use_readonly_const
+#endif
+
+#
+# Flags supported on all machines
+#
+PRODCDEFS+=-D_MP_NETLOCKS -DMP_STREAMS=1
+
+#endif /* defined(PRODUCT) && !empty(PRODUCT) */
+
+
+#if $(SABLE) == "1"
+PRODCDEFS+=-DSABLE
+SABLE_BOOT=SABLE
+#endif
+
+#
+# CELL definitions
+#
+#if defined(CELL)
+PRODCDEFS+=-DCELL -DBHV_SYNCH
+#endif
+
+#if defined(CELL_IRIX)
+PRODCDEFS+=-DCELL_IRIX
+#endif
+
+#if defined(CELL_ARRAY)
+PRODCDEFS+=-DCELL_ARRAY
+#endif
+
+#if defined(CELL_IRIX) && defined(CELL_ARRAY)
+.BEGIN:
+	@echo "Invalid combination of CELL options"
+	exit 1
+#endif
+
+#
+# When the environment variable KDEBUG is set, we build a debug kernel in
+# a boot area with the string "DEBUG" added into the name.  Debug kernels
+# are built with -DDEBUG and a number of common subsystem specific debug
+# flags.  We also load debug and metered locks by default.
+#
+#if defined(KDEBUG) && ! empty(KDEBUG)
+KDEBUG=DEBUG
+DBOPTS+= -DDEBUG -DDEBUG_BUFTRACE
+SYSCONFIGDEFS+= -DDEBUG_LOCKS -DDEBUG_SEMAMETER
+
+#
+# Keep optimizer on for n32 kernels to keep kernel
+# text small enough to load properly.
+#
+#if $(COMPILATION_MODEL) != "N32"
+OPTIMIZER=
+#else
+OPTIMIZER=-O2 -g3
+#endif
+#endif
+
+#
+# When the environment variable TRIX_BUILD is set, we build a
+# Trusted Irix kernel.  The kernel includes Mandatory Access
+# Control and TSIX trusted networking.
+#if defined(TRIX_BUILD)
+SYSCONFIGDEFS+= -Dmac_enabled -Dsesmgr_enabled
+#endif
+
+#
+# When the environment variable PERF_BUILD is set, we build a ``performance
+# kernel'' that's useful for doing performance analysis.  Mostly this is
+# used to exclude certain optional subsystems from unix.kdebug -- most of
+# those being security subsystems of one sort or another.  Note that
+# PERF_BUILD and KDEBUG are mutually exclusive but we don't test for that
+# here.
+#
+#if defined(PERF_BUILD)
+SYSCONFIGDEFS+= -DPERF_BUILD
+#endif
+
+#if !defined(PERF_BUILD)
+#
+# DEBUG_CONPOLL will allow polling the serial console port for
+# ctrl-A char to break into the debugger incase of code hangs/loops
+# during splhi. DEBUG_CONPOLL only compiles in the check of dbgconpoll
+# variable along with kdebug, the cmd conpoll in the debugger will
+# enable the fastclock which will enable profiling clock interrupts.
+# Currently only the IP22 and IP32 desktop platforms has the CONPOLL
+# code active. Compiling with DEBUG will enable CONPOLL code.
+#
+#if defined(PRODUCT) && ! empty(PRODUCT)
+#if $(CPUBOARD) == "IP32" || $(CPUBOARD) == "IP22"
+DBOPTS+=-DDEBUG_CONPOLL
+#endif
+#endif
+
+#endif
+
+GKDEFS= $(KMODEOPT) $(PGSZOPT) -D_KERNEL -DSTATIC=static $(DBOPTS) $(PRODCDEFS) -D$(COMPLEX) -D$(CPUBOARD) -D$(CPUARCH) $(CPUARCH_PRODDEFS) 
+GKOPTS= -G $(GNUMVAL) $(PRODOBJECT)
+GKCOPTS=$(PRODCOPTS) $(FULLWARN) $(WFATAL) -non_shared
+GKASOPTS=$(PRODASOPTS) -non_shared
+
+LCDEFS= $(KCDEFS) $(GKDEFS)
+LCINCS= $(KCINCS) -I$(DEPTH) -I. -I$(BOOTAREA)
+LCOPTS= $(KCOPTS) $(GKOPTS) $(GKCOPTS)
+
+LASDEFS=$(KASDEFS) $(GKDEFS)
+LASINCS=$(KASINCS) -I$(DEPTH) -I. -I$(BOOTAREA)
+LASOPTS=$(KASOPTS) $(GKOPTS) $(GKASOPTS)
+
+#if defined(INET6_BUILD)
+LCDEFS+= -DINET6 -DMROUTING6
+#endif
+
+#
+# Kernel wants to shut off most standard LD stuff..
+#
+LD_QUICKSTART_INFO=
+LDLIBS=
+LLDOPTS=$(KLDFLAGS) $(GKOPTS) $(LDWOFF)
+
+MKDEPFILE=$(KPATH)/Makedepend.$(CPUBOARD)$(SUBPRODUCT)$(KDEBUG)$(ITHREAD)$(SABLE_BOOT)
+LMKDEPFILE=Makedepend.$(CPUBOARD)$(SUBPRODUCT)$(KDEBUG)$(ITHREAD)$(SABLE_BOOT)
+
+#
+# Lint options
+#
+LINTCFLAGS= $(CVERSION) $(ENDIAN) $(CDEFS) $(CINCS) -u -n -woff 91,102,302,307
+LINTLDFLAGS= -u -n -woff 91,102
+
+
+#
+# Pathnames for lboot/objects
+#
+SYSGENDIR=/usr/sysgen
+BOOTAREA=$(DEPTH)/$(CPUBOARD)$(SUBPRODUCT)$(KDEBUG)$(ITHREAD)$(SABLE_BOOT)bootarea
+CPUINSTDIR=$(SYSGENDIR)/$(CPUBOARD)$(SUBPRODUCT)$(KDEBUG)$(ITHREAD)$(SABLE_BOOT)boot
+BOOTDIR=$(SYSGENDIR)/boot
+MASTERDIR=$(SYSGENDIR)/master.d
+MTUNEDIR=$(SYSGENDIR)/mtune
+
+SHIP_SYSGENDIR=/var/sysgen
+
+SHIP_CPUINSTDIR=/usr/cpu/sysgen/$(CPUBOARD)boot
+
+SHIP_MASTERDIR=$(SHIP_SYSGENDIR)/master.d
+SHIP_MTUNEDIR=$(SHIP_SYSGENDIR)/mtune
+
+# full path here so can override in klocaldefs
+STUNEFILE=$(ROOT)/$(SYSGENDIR)/stune
+SHIP_STUNEFILE=$(ROOT)/$(SHIP_SYSGENDIR)/stune
+
+# lint object area
+LINTBOOTAREA=$(DEPTH)/lintbootarea
+
+#
+# relative level from BOOTAREA to top of source
+#
+TOP=..
+
+#
+# Kernel install rule for production (shipped) objects
+#
+#if $(COMPILATION_MODEL) == "N32"
+MODETAG=32bit
+#else
+MODETAG=$(COMPILATION_MODEL)bit
+#endif
+
+KINSTALL=$(INSTALL) -F $(SHIP_CPUINSTDIR) -m 444 -idb "nostrip mach($(CPUBOARD)$(SUBPRODUCT) MODE=$(MODETAG))"
+KNOMODEINSTALL=$(INSTALL) -F $(SHIP_CPUINSTDIR) -idb "nostrip mach($(CPUBOARD)$(SUBPRODUCT) MODE=$(MODETAG))"
+
+#
+# Kernel install rule for developer objects
+#
+KDEVINSTALL=$(INSTALL) -F $(CPUINSTDIR) -m 444 -idb nostrip
+KNOMODEDEVINSTALL=$(INSTALL) -F $(CPUINSTDIR) -idb nostrip
+
+#
+# Kernel install rule for putting object into $(ROOT)/$(CPUINSTDIR)
+#	this needs to NEVER have RAWIDB set
+#
+KLINKINSTALL=RAWIDB= $(INSTALL) -F $(CPUINSTDIR) -m 444 -idb nostrip
+
+#
+# All low level makefiles will execute this rule for the default build case
+#
+TARGETRULE= \
+	cd $(BOOTAREA); \
+	exec $(MAKE) -f $(KPATH)/Makefile targets DEPTH=$(TOP)
+
+#
+# SUBDIRS_MAKERULE that can handle a unset SUBDIRS variable
+# and an arbitrary RULE
+#
+KSUBDIRS_MAKERULE= \
+	if [ -n "${SUBDIRS}" ]; then \
+		SUBD="${SUBDIRS}" ;\
+		for d in $${SUBD}; do $(SUBDIR_MAKERULE); done; \
+	fi
+
+#
+# default is ALWAYS the MAIN target - by specifying it here we need not
+# worry about ordering in the makefile
+#
+.MAIN:default
+
+sinclude $(DEPTH)/klocaldefs

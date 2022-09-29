@@ -1,0 +1,77 @@
+#! /sbin/sh
+#Tag 0x00000f00
+
+# Check for devices that should exist after a reboot; to catch
+# devices installed (or removed) since the last system boot.
+# Must follow autoconfig, as the devices may have loadable drivers.
+# "$Revision: 1.23 $"
+
+case "$1" in
+  'start')
+
+	cd /dev
+  	
+	# create plp devices before running ioconfig in case permissions
+	# are changed in /etc/ioperms
+	
+	if [ -d "/hw/parallel" -a ! -L /dev/plp ]; then
+		/sbin/suattr -C CAP_DEVICE_MGT+ipe -c "./MAKEDEV plp" 2>&1 | logger -t MAKEDEV_plp &
+	fi
+	#
+	# Before generating any devices, run ioconfig.
+	# -2 option tells ioconfig to prune down the hwgraph file tree walk.
+	# 
+	/sbin/suattr -C CAP_MAC_READ,CAP_MAC_WRITE,CAP_MKNOD+ipe -c "/sbin/ioconfig -f /hw"
+
+	# we always do this now, so that all the tape devices get made, automatically
+	# not just the first one on the system.  It also removes any tape 
+	# devices that are no longer present.  Tape devices that are OK aren't modified
+	/sbin/suattr -C CAP_DEVICE_MGT+ipe -c "./MAKEDEV tape" 2>&1 | logger -t MAKEDEV_tape &
+
+	# Create tty and input device symlinks
+	/sbin/suattr -C CAP_DEVICE_MGT+ipe -c "./MAKEDEV ttys" 2>&1 | logger -t MAKEDEV_ttys &
+
+	# same for floppies, since we now make /dev/rdsk/fds* only for
+	# actually installed floppies.
+	hinv -c disk | ( IFS="$IFS:" ; while read d dr s r m u targ o s c ctlr rest; do 
+	if [ "$d" = Disk -a "$dr" = drive -a "$r" = removable -a "$m" = media -a "$s" = SCSI ] ; then
+		if [ ! -c /dev/rdsk/fds${ctlr}d${targ}.3.5 ] ; then
+			echo Creating floppy devices
+			/sbin/suattr -C CAP_DEVICE_MGT+ipe -c "./MAKEDEV fds"  2>&1 | logger -t MAKEDEV_fds &
+			break
+		fi
+	fi
+	done )
+
+	# if a diskless inst is done, we need to make audio devices here
+	# since kdsp is loadable now and does not show up in hinv when
+	# MAKEDEV is run out of /etc/bcheckrc after a diskless inst.
+	case "`hinv -c audio`" {
+	*Audio*) if [ ! -c /dev/hdsp/hdsp0control ] ; then
+			echo Creating audio devices
+			/sbin/suattr -C CAP_DEVICE_MGT+ipe -c "./MAKEDEV hdsp" 2>&1 | logger -t MAKEDEV_hdsp &
+		fi
+		;;
+	}
+
+      # DIVO video has audio capability, but hinv -c audio doesn't
+      # show it...
+      case "`hinv -c video`" {
+      *"DIVO Video"*) if [ ! -c /dev/hdsp/hdsp0control ] ; then
+	       echo Creating audio devices
+	       /sbin/suattr -C CAP_DEVICE_MGT+ipe -c "./MAKEDEV hdsp" 2>&1 | logger -t MAKEDEV_hdsp &
+       fi
+       ;;
+      }
+
+	;;
+
+  'stop') # nothing to do on stop
+
+	;;
+
+  *)
+	echo "usage: $0 {start|stop}"
+
+	;;
+esac

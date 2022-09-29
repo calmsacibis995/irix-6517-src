@@ -1,0 +1,124 @@
+#! /sbin/sh
+#Tag 0x00000f00
+
+# (u)mount file systems
+# "$Revision: 1.50 $"
+
+cd /
+
+case $1 in
+'start')
+	# The /usr filesystem MAY HAVE BEEN mounted earlier earlier so
+	# that unbundled products would have a chance to execute any
+	# initialization code after mounting /usr but before mounting
+	# the rest of /etc/fstab.
+	#
+	# Mount any filesystems listed in /etc/fstab that we haven't
+	# yet mounted.  Note that this may include /usr if we haven't
+	# already mounted it.
+	#
+	if /sbin/chkconfig verbose
+	then
+		echo "Mounting filesystems:"
+	fi
+
+	# Mount file systems according to file system table /etc/fstab.
+	# check all filesystems if necessary, in parallel.
+	if [ -x /sbin/fsck ] ; then
+		/sbin/fsck -m -c -y | grep -v 'mounted file system, ignored'
+	fi
+
+	if /sbin/suattr -C CAP_MOUNT_MGT+ip -c "/sbin/mount -a -T efs,xfs"
+	then
+	    if test -s /etc/kernel_config2; then
+		 /etc/kernel_config2
+	    fi
+	else
+	    lfmt -G 1 'Some filesystems failed to mount; may be unable to reach multiuser state\n'
+	    sleep 5
+	fi
+
+	# mv /tmp to /.oldtmp and create a new /tmp unless the existing
+	# /tmp or any of its subdirectories is a mount point, or unless /tmp
+	# is a symbolic link.  In these cases, just leave /tmp alone.
+
+	chkconfig nocleantmp
+	if test $? = 1 -a -d /tmp -a ! -L /tmp ; then
+	    # 2 tests because we don't want to run the command part, and
+	    # the shell does the command substitution stuff before running
+	    # test, and we don't want to get "/tmp: No such file or directory"
+	    # when /tmp doesn't exist (as is the case in the miniroot.
+	    if test -z "`/sbin/mount | grep ' on /tmp[/ ]'`" \
+		-a "`ls -la /tmp | wc -l`" -gt 3; then
+
+		# Any existing /.oldtmp means we somehow didn't remove
+		# it in rmtmpfiles or perhaps never even ran rmtmpfiles
+		# last time we booted.  It might contain good stuff.
+
+		if test -d /.oldtmp; then
+		    ls -a1 /tmp | sed -e '/^\.$/d' -e '/^\.\.$/d' | xargs -i rm -rf /.oldtmp/{}
+		    ls -a1 /tmp | sed -e '/^\.$/d' -e '/^\.\.$/d' | xargs -i mv /tmp/{} /.oldtmp
+		else
+		    /sbin/suattr -m -C CAP_MAC_WRITE,CAP_MAC_READ+ipe -c "rm -rf /.oldtmp"
+		    /sbin/suattr -m -c "mv /tmp /.oldtmp"
+		    mkdir /tmp
+		    if test "`sysconf MAC`" -eq 1; then
+			chlabel -m /tmp
+		    fi
+		fi
+		# do same as rmtmpfiles, for consistency
+		if chkconfig nostickytmp; then 
+		    /sbin/suattr -m  -C CAP_FOWNER+eip -c "chmod 777 /tmp /var/tmp"
+		else
+		    /sbin/suattr -m  -C CAP_FOWNER+eip -c "chmod 1777 /tmp /var/tmp"
+		fi
+		/sbin/suattr -m -C CAP_FOWNER+eip -c "chown sys.sys /tmp /var/tmp"
+	    fi
+	fi
+
+	# Clear nsd cache files
+	# DO NOT use su to invoke capabilites.  
+
+	chkconfig noclearnsd
+	if test $? = 1 -a -x /sbin/mdbm_remove -a -d /var/ns/cache ; then
+	    /sbin/mdbm_remove /var/ns/cache/* 2>/dev/null
+	fi
+
+	# Apply extended attributes to any newly installed files.
+
+	if test -x /sbin/attrinit; then
+		NOW=`date +%y%m%d%H%M`
+		if test -r /etc/irix.mac.install ; then
+        		echo "Initializing XFS MAC attributes."
+        		cd  /
+        		/sbin/suattr -C CAP_MAC_READ,CAP_DAC_READ_SEARCH,CAP_DAC_WRITE,CAP_MAC_WRITE,CAP_DEVICE_MGT+ip -c "/sbin/attrinit -script=/etc/irix.mac.install -verbose"
+			mv /etc/irix.mac.install /etc/irix.mac.$NOW
+		fi
+		if test -r /etc/irix.cap.install ; then
+        		echo "Initializing XFS CAP attributes."
+			cd  /
+        		/sbin/suattr -C CAP_MAC_READ,CAP_DAC_READ_SEARCH,CAP_DAC_WRITE,CAP_MAC_WRITE,CAP_DEVICE_MGT+ip -c "/sbin/attrinit -script=/etc/irix.cap.install -verbose"
+			mv /etc/irix.cap.install /etc/irix.cap.$NOW
+		fi
+	fi
+
+	;;
+
+'stop')
+	if /sbin/chkconfig verbose
+	then
+		echo "Unmounting filesystems:"
+	fi
+	sync
+	_DLMNTS=""
+	if [ "`/sbin/nvram diskless 2> /dev/null`" -eq 1 ] ; then
+		_DLMNTS=",/swap,/sbin"
+	fi
+	/sbin/suattr -C CAP_MOUNT_MGT+ip -c "/sbin/umount -ak -b /var,/usr,/debug,/proc,/hw,/dev/fd${_DLMNTS}"
+	sync
+	;;
+
+*)
+	echo "usage: /etc/init.d/filesystems {start|stop}"
+	;;
+esac

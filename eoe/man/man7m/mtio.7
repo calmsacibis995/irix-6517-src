@@ -1,0 +1,372 @@
+.TH mtio 7
+.SH NAME
+mtio \- magnetic tape interface
+.SH DESCRIPTION
+\f2mtio\f1 describes the generic interface provided for dealing with
+the various types of magnetic tape drives supported on Silicon Graphics systems.
+1/4" (QIC) cartridge tapes,
+1/2" nine-track tapes, 8 mm video tapes, IBM 3590, STK 9490, STK SD3,
+Sony GY-10 and GY-2120, Ampex DST-310,
+DAT (digital audio tapes), and DLT are currently supported.
+(Not
+all systems support all tapedrives.)
+.PP
+Tape drives are accessed through special device files in the
+.I /dev/mt/*
+and
+.I /dev/rmt/*
+directories.
+The
+.I mt
+directory is a link to the
+.I rmt
+directory for ease of porting; the block interface sometimes associated
+with the devices in
+.I mt
+is not supported under IRIX.
+Refer to \f2intro\f1(7) for a general description of the naming
+conventions for device files in these subdirectories.
+Naming
+conventions for the specific devices are listed under
+\f2tps\f1(7M).
+.PP
+Normally the device specific name is linked to a user-friendly
+synonym for ease of use.
+Many commands that manipulate magnetic tape
+refer to these synonyms rather than device specific names.
+There are up to four user-friendly device synonyms:
+.TP 16
+.B /dev/tape
+This is the tape unit that is the default
+system tape drive.
+It is linked to one of the specific device names
+in
+.IR /dev/rmt .
+This device rewinds the tape when closed.
+For QIC tapes, the devices linked to
+.B /dev/tape
+do software byte swapping to be compatible
+with the IRIS 2000 and 3000 series systems; the non-byte
+swapping device is also available, and should almost always be used
+for all tape types other than QIC.
+.TP
+.B /dev/nrtape
+Same as
+.BR /dev/tape ,
+except the tape is not rewound when closed.
+.TP
+.B /dev/tapens
+Same as
+.BR /dev/tape ,
+except no byte swapping is done; normally created only for QIC tapes.
+.TP
+.B /dev/nrtapens
+Same as
+.BR /dev/nrtape ,
+except no byte swapping is done; normally created only for QIC tapes.
+.PP
+See the (unfortunately somewhat confusing) script
+.I /dev/MAKEDEV
+for details of which devices are linked to \f3/dev/tape\f1 for each tape type.
+In particular, look at the
+.B tapelinks
+target for the default links.
+Also be aware that if a \f3/dev/tape\f1 exists as a
+link to a valid tape device, it is left as is, in order to preserve local
+changes.
+.PP
+Note that even the norewind tape devices can be rewound by the system,
+in some cases.
+In particular, all tapes are rewound on first use after
+a system boot, and when detected by the driver, are rewound after the
+tape has been changed.
+DAT drives are also rewound when the drive is
+switched between audio and data modes.
+This means that if you wish to append a new
+dataset to a tape that already contains datasets, you should always
+issue the \f3mt feom\f1 command AFTER loading the tape, just prior to
+using the program that will append to the tape.
+Do not count
+on a tape remaining at EOD, just because that is where it was before
+it was removed.
+.PP
+The system makes it possible to treat the tape similar to any other
+file, with some restrictions on data alignment and request sizes.
+Seeks do not have their usual meaning (that is, they are ignored)
+and it is not possible
+to read or write other than a multiple of the fixed block size when
+using the fixed block device.
+Writing in very small blocks
+(less than 4096 bytes) is inadvisable because this tends to consume more
+tape (create large
+record gaps verses data for 9-track and may pad to a device specific
+boundary for others, such as 8mm, if the drive isn't kept streaming);
+it may also cause the tape to stop its streaming motion, increasing wear on the
+drive and decreasing throughput.
+.PP
+The standard QIC tape consists of a series of 512-byte records
+terminated by an end-of-file.
+Other tape devices (such as
+9-track, 8 mm, and DAT) typically
+support both fixed size block format and variable size blocks
+format.
+.PP
+When using the variable format, there is an upper limit to the size of
+a single read or write, typically the size of the RAM buffer on the drive.
+At this time, the upper limit is 64K bytes on 9-track and 240K bytes
+on the 8 mm drives.
+This information can be obtained by use of
+the
+.B MTIOCGETBLKINFO
+ioctl (for SCSI tape drives only).
+The main use of this format is to allow
+small header blocks at the beginning of a tape file, while the
+rest are typically the same (larger) size.
+.PP
+When the fixed block size device is used,
+the size of a single read or write request
+is limited only by physical memory.
+Currently the default size
+is 1024 bytes on 8mm, and 512 bytes for all others.
+This size can be
+reset with the
+.B MTSCSI_SETFIXED
+ioctl or the \f3mt setblksz XXX\f1 command;
+the value remains set until
+the next boot or reset via ioctl.
+If the variable blocksize
+device is used, the block size reverts to the default on
+the next use of the fixed blocksize device.
+The default fixed blocksize
+for the \f2tps\fP driver is set from the table in the
+.I /var/sysgen/master.d/scsi
+file, as are the drive types, based on the inquiry data returned by
+the drive.
+.PP
+A tape is normally open for reading and/or writing, but a tape cannot
+be read and written simultaneously.
+After a rewind, a space, an unload, or an
+.B MTAFILE
+ioctl, writes can follow reads and vice-versa, otherwise
+only reads, or only writes can be done unless the tape is first
+closed; performing an
+.B MTWEOF
+ioctl is considered to be a write
+operation in this sense; after reading, an
+.B MTWEOF
+is not
+allowed unless one of the operations above is first executed,
+or the tapedrive is closed and reopened.
+.PP
+Whenever the tape is closed after being written to, a file-mark is
+written (2 on 9-track tapes) unless the tape has been unloaded or
+rewound just prior to the close; if the last operation before the
+close is an
+.BR MTWEOF ,
+no additional filemarks are written at close.
+.PP
+Some tape drives support more than one speed; for SCSI 9-track tape
+drives, the default is 100 ips (streaming mode); this can be set
+to 50 ips by using the
+.B MTSCSI_SPEED
+ioctl.
+Some tape drives such
+as the Kennedy 96XX models do auto density select when reading; this
+can be disabled only by using the drive's front panel setup mode.
+.PP
+The
+.B MTSCSIINQ
+ioctl returns the inquiry data for SCSI tape drives.  The buffer
+supplied in the 3rd argument must be at least
+.B MTSCSI_INQUIRY_LEN
+bytes long.  It returns all the information returned by the inquiry
+command, with the identification string starting at offset 8 in the
+buffer.
+.PP
+The
+.B MTSCSI_SENSE
+ioctl returns the most recent request sense data for SCSI tape drives.
+The buffer must be at least MTSCSI_SENSE_LEN long, although less data
+may be returned.  The data is from the most recent request sense SCSI
+command issued, and may not be directly related to the most recent
+system call to the tape driver, since at open, and for some ioctl's,
+multiple SCSI commands are issued.  The buffer is never cleared.  The
+data is as returned by the tape drive, and the returned data must be
+examined to return the valid length.  Currently at most 64 bytes will
+be returned, but callers must not assume this will remain true in the
+future.
+.PP
+The
+.B MTANSI
+ioctl allows writing of ANSI 3.27 style labels after the
+early warning point (naturally, drives that don't support variable
+sized blocks won't support 80 byte labels).
+It is currently
+implemented only for SCSI tape drives.
+It remains set until the next close, or reset with a 0 argument.
+If used, standard Silicon Graphics EOT handling for \f2tar\f1,
+\f2bru\f1, and \f2cpio\f1 won't
+work correctly while set.
+An arg of 1 enables, 0 disables.
+NOTE: When the EOT
+marker is encountered, the current I/O operation returns either
+a short count (if any I/O completed), or \-1 (if no I/O
+completed); it is the programmers responsibility to determine if
+EOT has been encountered by using
+.B MTIOCGET
+or logic internal to
+the program.
+This ioctl should
+be issued AFTER encountering EOT, if ANSI 3.27 EOT
+handling is desired.
+Subsequent I/Os are then allowed and
+return the count actually transferred or \-1 if the drive was
+unable to transfer any data.
+The standard calls for writing
+a FM before the label.
+If this is not done, the drive may
+return label info as data.
+.PP
+The 
+.B MTBUFFMMODE
+ioctl can be used to enable/disable the writing of buffered
+filemarks. An arg of 1 enables, 0 disables. Normally, commands which
+result in the writing of filemarks will not complete until write data
+and subsequent filemarks are actually written to tape. By enabling
+buffered filemark writing, on those devices which support it, one can
+achieve higher performance.
+.PP
+The 
+.B MTGETATTR
+ioctl can be used to obtain functional attributes of a tape
+device. The arg will be a pointer to an instance of the structure
+mt_attr. (See /usr/include/sys/mtio.h) The attribute whose value is
+to be determined must be specified in ma_name, space for the return
+value must be allocated, and a pointer to it and its size must be
+specified in ma_value and ma_vlen respectively. Currently available attributes are
+.TP 5
+\f2MT_ATTR_NAME_REWIND\fP
+MT_ATTR_VALUE_TRUE or MT_ATTR_VALUE_FALSE is returned depending on
+whether the device is a rewind-on-close device.
+.TP
+\f2MT_ATTR_NAME_VARIABLE\fP
+MT_ATTR_VALUE_TRUE or MT_ATTR_VALUE_FALSE is returned depending on
+whether the device is a variable block device.
+.TP
+\f2MT_ATTR_NAME_SWAP\fP
+MT_ATTR_VALUE_TRUE or MT_ATTR_VALUE_FALSE is returned depending on
+whether the device is a swap device.
+.TP
+\f2MT_ATTR_NAME_COMPRESS_DENS\fP
+For devices which don't support multiple densities but do support a
+compression mode, "compress" or "uncompress" is returned depending on
+whether the device is a compression device. For devices which do
+support multiple densities, the device specific density/compression
+value is returned.
+.TP
+\f2MT_ATTR_NAME_DEVSCSI\fP
+The full pathname of the associated devscsi device is returned.
+.PP
+The 
+.B MTFPMESSAGE
+ioctl can be used to display an ASCII message on the device's diagnostic
+panel, if the device supports such a feature. The arg will be a
+pointer to an instance of the structure mt_fpmsg. (See
+/usr/include/sys/mtio.h) The ASCII message and it's length will be
+specified in mm_msg and mm_mlen respectively.
+.PP
+Two flags, returned in the mt_dposn field of the mtset struct after a call to 
+.B MTIOCGET, 
+are provided for the purpose of determining whether a
+logical-end-of-tape (LEOT, encountered at the early-warning point) or
+a physical-end-of-tape (PEOT) has been encountered; MT_EW and
+MT_EOT. With MTANSI reset, writing is permitted from BOT to LEOT at
+which point both MT_EW and MT_EOT and set. If MTANSI is now set,
+MT_EOT is reset (MT_EW remains set) and writing is permitted until
+PEOT is encountered, at which point MT_EOT is again set and remains
+set until the tape is repositioned backward.
+
+.SH IOCTL OPERATIONS
+Different drivers and drives support different tape commands, in the
+form of ioctl's.
+These operations and their structures are
+defined in the file
+.IR /usr/include/sys/mtio.h ,
+which has fairly extensive comments.
+All drivers support some common
+definitions of tape status via the
+.B MTIOCGET
+ioctl; in particular, the bits defined for the
+.I mt_dposn
+field of the
+.I mtget
+structure are the same for all the IRIX devices.
+other fields
+are driver specific, and the appropriate header files should be
+consulted for the meaning of these fields.
+.PP
+Those ioctls that are not supported for a particular drive or driver
+normally return EINVAL.
+For example, the
+.B MTAFILE
+ioctl returns EINVAL if the tape drive is
+not a device that supports overwrite (currently only 9-track and DAT),
+since QIC and 8mm drives only allow appending at EOD
+and, for 8mm, from the BOT side of a FM.
+.SH NOTES
+When a tape device is opened, the tape is rewound if
+there has been a media change, or the drive has gone offline,
+or there has been a bus reset (normally only after a reboot or powerup);
+otherwise the tape remains at the same position as at the previous
+close.
+See the specific driver manual pages for more details.
+.SH EXAMPLE
+The following code fragment opens the default no rewind tape device,
+positions it to the 2nd filemark, and then rewinds it.
+This is typical
+of the use of most of the op codes for the
+.B MTIOCTOP
+and
+.B ABI_MTIOCTOP
+ioctls; the latter is for use by programs compliant with the
+MIPS ABI and, other than the name, functions identically to the
+former.
+.Ex
+#include <sys/types.h>
+#include <sys/mtio.h>
+main()
+{
+	struct mtop op;
+	int fd;
+.sp .8v
+	if((fd = open("/dev/nrtape", 0)) == -1)
+		perror("can't open /dev/tape");
+.sp .8v
+	op.mt_op = MTFSF;
+	op.mt_count = 2; /* number of fmk's to skip */
+	if(ioctl(fd, MTIOCTOP, &op) == -1)
+		perror("ioctl to skip 2 FMs fails");
+.sp .8v
+	op.mt_op = MTREW; /* mt_count field is ignored for MTREW */
+	if(ioctl(fd, MTIOCTOP, &op) == -1)
+		perror("ioctl to rewind fails");
+}
+.Ee
+.SH FILES
+.nf
+/dev/tape
+/dev/nrtape
+/dev/tapens
+/dev/nrtapens
+/dev/rmt/*
+.fi
+.SH "SEE ALSO"
+MAKEDEV(1M),
+bru(1),
+cpio(1),
+mt(1),
+tar(1),
+dataudio(3),
+rmtops(3),
+datframe(4),
+tps(7M).

@@ -1,0 +1,958 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	vmSrchPtDlg
+# Version:	$Revision: 1.7 $
+# Synopsis:	Encapsulates the dialog that allows the user to search for
+#		partitions on a host.
+# Functions:	ptSrch:realize
+#		ptSrch:manage
+#		ptSrch:unmanage
+#		ptSrch:markPartsInUse
+#		ptSrch:markRawPartsAvail
+#		ptSrch:markPartsAvail
+#		ptSrch:newPartList
+#		ptSrch:getItems
+#		ptSrch:getNamedItems
+#		ptSrch:getItemCount
+#		ptSrch:getFmt
+#		ptSrch:getPartsSize
+#		ptSrch:registerSearchExecute
+#		ptSrch:registerStateChange
+#		ptSrch:_create
+#		ptSrch:_createSearchArea
+#		ptSrch:_dialogCb
+#		ptSrch:_accept
+#		ptSrch:_cancel
+#		ptSrch:_categoryCb
+#		ptSrch:_activateCb
+#		ptSrch:_optCb
+#		ptSrch:_searchCb
+#		ptSrch:_search
+#%COMMENT_END
+
+#########################################
+#		Public			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	ptSrch:realize
+# Synopsis:	Initializes any class-wide data and creates an instance of the
+#		dialog.  If an instance of this dialog already exists for the
+#		given handle, no action is taken.
+# Arguments:	- handle	An identifier that is used as a key for storing
+#				(and later retrieving) the created widgets and
+#				any instance specific data.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc ptSrch:realize { handle parent } \
+{
+	global		_GW_ptSrch _GD_ptSrch
+
+	####    One time initialization
+	if {! [info exists _GD_ptSrch(initialized)]} {
+	    ####    Make sure we don't go through this again
+	    set _GD_ptSrch(initialized)	true
+	    set _GD_ptSrch(buttons)	{accept apply cancel help}
+
+	    set _GD_ptSrch(categories)	{NAME SIZE TYPE USED}
+	    set _GD_ptSrch(texts)	{NAME SIZE}
+	    set _GD_ptSrch(SIZE,opts)	{EQUAL GREATER LESS}
+	    set _GD_ptSrch(TYPE,opts)	{xlv efs xfs xfslog sysv bsd raw}
+	}
+
+	####	Per instance initialization / creation
+	if {! [info exists _GW_ptSrch($handle,dialog)]} {
+	    lappend _GD_ptSrch(handles) $handle
+
+	    ####	scaction:	State Change Action
+	    ####	seaction:	Search Execute Action
+	    set _GD_ptSrch($handle,scaction) ""
+	    set _GD_ptSrch($handle,seaction) ""
+	    set _GD_ptSrch($handle,result) ""
+	    set _GD_ptSrch($handle,hip) ""
+	    set _GD_ptSrch($handle,FLUSH_CACHE) false
+	    set _GD_ptSrch($handle,USED) false
+
+	    ####	Create the widget(s)
+	    set _GW_ptSrch($handle,dialog) [ptSrch:_create $handle $parent]
+
+	    ####    This must happen after the dialog is realized
+	    $_GW_ptSrch($handle,dialog) realizeWidget
+	    $_GW_ptSrch($handle,dialog) getValues \
+				-height height \
+				-width width
+	    [$_GW_ptSrch($handle,dialog) parent] setValues \
+				-minWidth $width \
+				-minHeight $height \
+				-maxHeight $height
+
+	    $_GW_ptSrch($handle,buttons) getValues -height height
+	    $_GW_ptSrch($handle,buttons) setValues \
+			-paneMinimum $height \
+			-paneMaximum $height
+	}
+}
+
+#########################################
+#	Public: State Changes		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	ptSrch:manage
+# Synopsis:	Manages an instance of the dialog and sets the "Flush Cache"
+#		option to its default value of false.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc ptSrch:manage { handle } \
+{
+	global		_GW_ptSrch
+
+	if {[info exists _GW_ptSrch($handle,dialog)]} {
+		$_GW_ptSrch($handle,dialog) manageChild
+		$_GW_ptSrch($handle,FLUSH_CACHE) setValues -set false
+		set _GD_ptSrch($handle,FLUSH_CACHE) false
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	ptSrch:unmanage
+# Synopsis:	Unmanages an instance of the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc ptSrch:unmanage { handle } \
+{
+	global		_GW_ptSrch
+
+	if {[info exists _GW_ptSrch($handle,dialog)]} {
+		$_GW_ptSrch($handle,dialog) unmanageChild
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	ptSrch:markPartsInUse
+# Synopsis:	Mark a list of partitions as either "inuse" or "used".  Calls
+#		any procedures registered for "State Change" action with
+#		the new state and the list of partitions.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- parts		A list of partitions to mark as used.
+#		- state		An optional argument that lets the caller
+#				define the state to set the parts to.
+#				Acceptable values are "inuse" and "used".
+#				inuse defines a temporary condition.  For
+#				example, the user has chosen to use a partition
+#				but has not yet committed the action.
+#				A state of "used" indicates that the partition
+#				is currently used by the system.  The default
+#				value is "inuse".
+#%COMMENT_END
+proc ptSrch:markPartsInUse { handle parts {state inuse} } \
+{
+	global	_GD_ptSrch
+
+	if {$state == "inuse"} {
+		set ch +
+	} elseif {$state == "used"} {
+		set ch *
+	}
+	set hip $_GD_ptSrch($handle,hip)
+	foreach item $parts {
+		set item [string trimright [string trimleft $item "\"*+ "] "\""]
+		set idx [lsearch -glob $_GD_ptSrch($hip,parts) "*$item*"]
+		if {$idx == -1} {
+			continue
+		}
+		lvarpop _GD_ptSrch($hip,parts) $idx "\"$ch $item\""
+	}
+
+	foreach item $_GD_ptSrch(handles) {
+		if {$_GD_ptSrch($item,hip) == $hip} {
+			foreach action $_GD_ptSrch($item,scaction) {
+				$action $item $state $parts
+			}
+		}
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	ptSrch:markRawPartsAvail
+# Synopsis:	Mark a list of partition names as available for use.  Calls
+#		any procedures registered for "State Change" action with
+#		the new state and the list of partitions.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- host		A hostname that is used to get the key
+#				for the cache of partitions.
+#		- parts		A list of partition names to mark as
+#				available for use.
+#%COMMENT_END
+proc ptSrch:markRawPartsAvail { handle host parts } \
+{
+	global	_GD_ptSrch _GD_resources
+
+	if {! [info exists _GD_ptSrch(initialized)]} {
+		return 1
+	}
+
+	if {! [hu:getIpAddress $host hfn hpd hip $_GD_resources(hostsFile)]} {
+		return 0
+	}
+
+	foreach item $parts {
+	    set item [file tail $item]
+	    set idx [lsearch -glob $_GD_ptSrch($hip,parts) "*$item*"]
+	    if {$idx == -1} {
+		continue
+	    }
+	    set item [string trim [lindex $_GD_ptSrch($hip,parts) $idx] "\""]
+	    set item [string trimleft $item "*+ "]
+	    lappend nparts "  $item"
+	    lvarpop _GD_ptSrch($hip,parts) $idx "\"  $item\""
+	}
+
+	foreach item $_GD_ptSrch(handles) {
+	    if {$_GD_ptSrch($item,hip) == $hip} {
+		foreach action $_GD_ptSrch($item,scaction) {
+		    $action $item avail $nparts
+		}
+	    }
+	}
+
+	return 1
+}
+
+#%COMMENT_BEGIN
+# Function:	ptSrch:markPartsAvail
+# Synopsis:	Mark a list of partitions as available for use.  Calls any
+#		procedures registered for "State Change" action with the new
+#		state and the list of partitions.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- host		A hostname that is used to get the key
+#				for the cache of partitions.
+#		- parts		A list of partition names to mark as
+#				available for use.
+#%COMMENT_END
+proc ptSrch:markPartsAvail { handle parts } \
+{
+	global	_GD_ptSrch
+
+	set hip $_GD_ptSrch($handle,hip)
+	foreach item $parts {
+		set item [string trimleft $item "\"*+ "]
+		set idx [lsearch -glob $_GD_ptSrch($hip,parts) "*$item*"]
+		if {$idx == -1} {
+			continue
+		}
+		lvarpop _GD_ptSrch($hip,parts) $idx "\"  $item\""
+	}
+
+	foreach item $_GD_ptSrch(handles) {
+		if {$_GD_ptSrch($item,hip) == $hip} {
+			foreach action $_GD_ptSrch($item,scaction) {
+				$action $item avail $parts
+			}
+		}
+	}
+}
+
+#########################################
+#	Public: Data In Routines	#
+#########################################
+#%COMMENT_BEGIN
+# Function:	ptSrch:newPartList
+# Synopsis:	Executes a search for partitions on the given host.  If
+#		possible, use the cache of partitions.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- host		The name of the host on which to search
+#				for partitions.
+#		- force		An optional parameter that, if true, indicates
+#				that the cache should be flushed.
+#%COMMENT_END
+proc ptSrch:newPartList { handle host {force false} } \
+{
+	global		_GD_ptSrch _GD_resources
+
+	if {! [hu:getIpAddress $host hfn hpd hip $_GD_resources(hostsFile)]} {
+		return 0
+	}
+	set cur_hip $_GD_ptSrch($handle,hip)
+	set _GD_ptSrch($handle,hip) $hip
+	set _GD_ptSrch($handle,hfn) $hfn
+	if {[info exists _GD_ptSrch($hip,parts)]} {
+	    set marked [lmatch -regexp $_GD_ptSrch($hip,parts) "^\"\[+\] .*"]
+	}
+
+	if {$hip != $cur_hip} {
+		if {[info exists _GD_ptSrch($cur_hip,refcnt)]} {
+			incr _GD_ptSrch($cur_hip,refcnt) -1
+			if {$_GD_ptSrch($cur_hip,refcnt) == 0} {
+				unset _GD_ptSrch($cur_hip,parts)
+				unset _GD_ptSrch($cur_hip,inuse)
+				unset _GD_ptSrch($cur_hip,raw)
+				unset _GD_ptSrch($cur_hip,kb)
+				unset _GD_ptSrch($cur_hip,fmt)
+			}
+		}
+		if {! [info exists _GD_ptSrch($hip,refcnt)]} {
+			set _GD_ptSrch($hip,refcnt) 0
+		}
+		incr _GD_ptSrch($hip,refcnt)
+	}
+
+	if {$force == "false" && \
+	    ($_GD_ptSrch($hip,refcnt) > 1 || $cur_hip == $hip)} {
+		return 1
+	}
+
+	if {! [ou:getObjsOnHost objects $hfn DISK] || \
+	      [llength $objects] == 0} {
+		return 0
+	}
+
+	set names ""; set sizes ""; set types ""
+	foreach obj $objects {
+		set o_nm [obj:getName $obj]
+
+		if {[catch {set data [xfsInfo $obj]} err]} {
+			em:storeMsg $handle error \
+			    "Unable to get partitions for disk $o_nm:\n\t$err"
+			continue
+		}
+		set elem [lmatch [split $data "\n"] "DISK_SEC_LEN:*"]
+		if {$elem == ""} {
+			em:storeMsg $handle error \
+			    "Unable to get partitions for disk $o_nm."
+			continue
+		}
+		set kpb [expr [lindex [split $elem ":"] 1] / 1024.0]
+
+		set part_list [ou:getPartsOnDisk $hfn $o_nm {name size type}]
+		foreach part $part_list {
+			lappend _GD_ptSrch($hip,raw) $part
+			lassign $part pt_nm pt_blk pt_tp
+			set pt_kb [expr $pt_blk * $kpb]
+			lappend _GD_ptSrch($hip,kb) [list $pt_nm $pt_kb $pt_tp]
+
+			lappend names $pt_nm
+			lappend types $pt_tp
+			lappend sizes [format "%.2f" [expr $pt_kb / 1024.0]]
+		}
+	}
+
+	set list_list [list $names $sizes $types]
+	set sep_list {"  " " " " " ""}
+	set justify_list {left right left}
+	set _GD_ptSrch($hip,fmt) [lu:getFormatString list_list justify_list]
+	set _GD_ptSrch($hip,parts) [xfsmSort partNames \
+		[lu:format $_GD_ptSrch($hip,fmt) list_list sep_list]]
+
+	set obj [obj:unparse VOL $hfn none VOL]
+	set _GD_ptSrch($hip,inuse) ""
+	if {[catch {set piu_list [xfsGetPartsInUse $obj]} err]} {
+	    em:storeMsg $handle warning \
+		"Unable to list of used partitions for $hfn:\n\t$err"
+	} else {
+	    foreach item $piu_list {
+		lappend _GD_ptSrch($hip,inuse) [file tail [lindex $item 0]]
+	    }
+	    ptSrch:markPartsInUse $handle \
+		[ptSrch:getNamedItems $handle $_GD_ptSrch($hip,inuse)] used
+
+	    if {[info exists marked]} {
+		regsub -all -- "\[+\]" "$marked" " " marked
+		ptSrch:markPartsInUse $handle $marked inuse
+	    }
+	}
+
+	return 1
+}
+
+#########################################
+#	Public: Data Out Routines	#
+#########################################
+#%COMMENT_BEGIN
+# Function:	ptSrch:getItems
+# Synopsis:	Return the list of partitions that were the result of the
+#		most recent search.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc ptSrch:getItems { handle } \
+{
+	global	_GD_ptSrch; return $_GD_ptSrch($handle,result)
+}
+
+#%COMMENT_BEGIN
+# Function:	ptSrch:getNamedItems
+# Synopsis:	Given a list of partition names, return the list of partitions
+#		lists for those named partitions.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- name_list	A list of paritition names.
+#%COMMENT_END
+proc ptSrch:getNamedItems { handle name_list } \
+{
+	global	_GD_ptSrch
+
+	set hip $_GD_ptSrch($handle,hip)
+	set items ""
+	foreach part $name_list {
+		set idx [lsearch -glob $_GD_ptSrch($hip,parts) "*$part *"]
+		lappend items [lindex $_GD_ptSrch($hip,parts) $idx]
+	}
+	return $items
+}
+
+#%COMMENT_BEGIN
+# Function:	ptSrch:getItemCount
+# Synopsis:	Return a count of the partitions that were the result of the
+#		most recent search.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc ptSrch:getItemCount { handle } \
+{
+	global	_GD_ptSrch; return [llength $_GD_ptSrch($handle,result)]
+}
+
+#%COMMENT_BEGIN
+# Function:	ptSrch:getFmt
+# Synopsis:	Return the format string used to format the partition data
+#		for display in a scrolled list.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc ptSrch:getFmt { handle } \
+{
+	global	_GD_ptSrch; return $_GD_ptSrch($_GD_ptSrch($handle,hip),fmt)
+}
+
+#%COMMENT_BEGIN
+# Function:	ptSrch:getPartsSize
+# Synopsis:	Returns the total size of the given partitions in the
+#		specified unit.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- part_list	The list of partitions to total.
+#		- unit		An optional parameter that allows the caller
+#				to specify the desired unit into which to
+#				convert the total.  Valid values for this
+#				parameter are: kb, mb, and gb.
+#%COMMENT_END
+proc ptSrch:getPartsSize { handle part_list {unit mb} } \
+{
+	global		_GW_ptSrch _GD_ptSrch
+
+	set hip $_GD_ptSrch($handle,hip)
+
+	set size 0
+	if {$unit == "blocks"} {
+	    foreach item $part_list {
+		set entry [lmatch $_GD_ptSrch($hip,raw) "*$item *"]
+		if {$entry != ""} {
+		    lappend size [lindex [lindex $entry 0] 1]
+		}
+	    }
+	    set size [expr [join $size "+"]]
+
+	} else {
+	    foreach item $part_list {
+		set entry [lmatch $_GD_ptSrch($hip,kb) "\"*$item *"]
+		if {$entry != ""} {
+		    lappend size [lindex [lindex [lindex $entry 0] 0] 1]
+		}
+	    }
+	    set size [expr [join $size "+"]]
+
+	    switch $unit {
+		mb { set size [expr $size / 1024.0] }
+		gb { set size [expr $size / 1048576.0] }
+	    }
+	}
+
+	return $size
+}
+
+#########################################
+#	Public: Register for Actions	#
+#########################################
+####	Calls $action with the following parameters:
+####
+####		$handle
+#%COMMENT_BEGIN
+# Function:	ptSrch:registerSearchExecute
+# Synopsis:	This provides a way for other procedures to register a function
+#		to be called whenever a search has been completed.
+#		The called function is passed one argument, the handle.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- action	The name of the function to be called.
+#%COMMENT_END
+proc ptSrch:registerSearchExecute { handle action } \
+{
+	global	_GD_ptSrch; lappend _GD_ptSrch($handle,seaction) $action
+}
+
+#%COMMENT_BEGIN
+# Function:	ptSrch:registerStateChange
+# Synopsis:	This provides a way for other procedures to register a function
+#		to be called whenever the the state of partition(s) changes.
+#		The called function is passed three arguments, the handle,
+#		the new state of the partitions, an a list of the partitions.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- action	The name of the function to be called.
+#%COMMENT_END
+proc ptSrch:registerStateChange { handle action } \
+{
+	global	_GD_ptSrch; lappend _GD_ptSrch($handle,scaction) $action
+}
+
+#########################################
+#		Private			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	ptSrch:_create
+# Synopsis:	Creates an instance of the dialog and defines callbacks for
+#		the dialog buttons.
+# Arguments:	- handle	The identifier for the new instance.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc ptSrch:_create { handle parent } \
+{
+	global		_GW_ptSrch _GD_ptSrch
+	set name	ptSrch
+
+	set dialog [xmFormDialog $parent.$name]
+	set pane [xmPanedWindow $dialog.$handle \
+			-sashWidth 1 \
+			-sashHeight 1 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none]
+
+	set sa [ptSrch:_createSearchArea $handle $pane]
+
+	set _GW_ptSrch($handle,buttons) \
+		[xfs:createDialogButtons $pane $_GD_ptSrch(buttons) 20]
+	foreach i $_GD_ptSrch(buttons) {
+		$_GW_ptSrch($handle,buttons).$i activateCallback \
+				"ptSrch:_dialogCb $handle $i"
+	}
+
+	$sa manageChild
+	$_GW_ptSrch($handle,buttons) manageChild
+	$pane manageChild
+
+	return $dialog
+}
+
+#%COMMENT_BEGIN
+# Function:	ptSrch:_createSearchArea
+# Synopsis:	Creates the search input fields.
+# Arguments:	- handle	The identifier for the new instance.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc ptSrch:_createSearchArea { handle parent } \
+{
+	global		_GW_ptSrch _GD_ptSrch
+
+	set container [xmForm $parent.sa]
+
+	set label [xmLabel $container.part_search-label managed \
+			-alignment alignment_beginning \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_none]
+	set grid [sgiGrid $container.grid managed -numRows 6 -numColumns 2 \
+			-defaultSpacing 2 \
+			-topAttachment attach_widget \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none \
+			-topWidget $label \
+			-topOffset 5]
+
+	set item TYPE
+	set _GW_ptSrch($handle,$item-tb) [xmToggleButton $grid.$item-tb \
+			managed \
+			-row 0 -column 0 \
+			-resizeVertical false \
+			-set true]
+	set rc [xmRowColumn $grid.types_rc managed \
+			-row 0 -column 1 \
+			-resizeHorizontal false \
+			-orientation horizontal \
+			-spacing 3 \
+			-packing pack_column \
+			-numColumns 2]
+	foreach item $_GD_ptSrch(TYPE,opts) {
+		set _GW_ptSrch($handle,$item) [xmToggleButton $rc.$item \
+				managed -spacing 2 -marginHeight 1]
+	}
+	$_GW_ptSrch($handle,xlv) setValues -set true
+
+	set item NAME
+	set _GW_ptSrch($handle,$item-tb) [xmToggleButton $grid.$item-tb \
+			 managed -row 1 -column 0 -set true]
+	set _GW_ptSrch($handle,$item) [xmTextField $grid.$item managed \
+			-row 1 -column 1 -columns 16 -value "*"]
+
+	set item SIZE
+	set rc [xmRowColumn $grid.rc managed -row 2 -column 0 \
+			-orientation horizontal -marginWidth 0]
+	set _GW_ptSrch($handle,$item-tb) [xmToggleButton $rc.$item-tb managed]
+	set _GW_ptSrch($handle,$item-pd) [xmPulldownMenu $rc.$item-pd]
+	foreach opt $_GD_ptSrch(SIZE,opts) {
+		set pb [xmPushButton $_GW_ptSrch($handle,$item-pd).$opt-pb \
+				 managed \
+				-marginWidth 0 \
+				-marginHeight 0]
+		$pb activateCallback "ptSrch:_optCb $handle $opt"
+	}
+	set _GD_ptSrch($handle,metric) EQUAL
+
+	set _GW_ptSrch($handle,$item-om) [xmOptionMenu $rc.$item-om \
+			 managed \
+			-row 2 -column 1 \
+			-spacing 0 \
+			-marginWidth 0 \
+			-marginHeight 0 \
+			-subMenuId $_GW_ptSrch($handle,$item-pd)]
+	set _GW_ptSrch($handle,$item) [xmTextField $grid.$item managed \
+			-row 2 -column 1 \
+			-maxLength 9 \
+			-columns 16]
+	$_GW_ptSrch($handle,$item) modifyVerifyCallback \
+				"tfu:onlyRealsCb %w %ptr %length %doit"
+
+	foreach item $_GD_ptSrch(texts) {
+		$_GW_ptSrch($handle,$item) activateCallback \
+				"ptSrch:_activateCb $handle $item"
+	}
+
+	set item USED
+	set _GW_ptSrch($handle,$item) [xmToggleButton $grid.$item-tb managed \
+			-row 3 -column 0 \
+			-resizeHorizontal false]
+	$_GW_ptSrch($handle,$item) valueChangedCallback \
+			"set _GD_ptSrch($handle,$item) %set"
+
+	set item FLUSH_CACHE
+	set _GW_ptSrch($handle,$item) [xmToggleButton $grid.$item-tb managed \
+			-row 5 -column 0 \
+			-resizeHorizontal false]
+	$_GW_ptSrch($handle,$item) valueChangedCallback \
+			"set _GD_ptSrch($handle,$item) %set"
+
+        foreach item {NAME SIZE TYPE} {
+                $_GW_ptSrch($handle,$item-tb) valueChangedCallback \
+                                "ptSrch:_categoryCb $handle $item %set"
+        }
+
+			
+
+	$grid columnResizable 0 false
+	$grid rowMargin 4 8
+	return $container
+}
+
+#################################
+#	Dialog Callbacks	#
+#################################
+#%COMMENT_BEGIN
+# Function:	ptSrch:_dialogCb
+# Synopsis:	The callback function defined on the dialog buttons.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- op		Indicates which button the user selected.
+#%COMMENT_END
+proc ptSrch:_dialogCb { handle op } \
+{
+	global	_GW_ptSrch
+
+	switch $op {
+		accept {
+			if {[ptSrch:_accept $handle]} {
+				ptSrch:_cancel $handle
+			}
+		}
+		apply	{ ptSrch:_accept $handle }
+		cancel	{ ptSrch:_cancel $handle }
+		help    { sgiHelpMsg $_GW_ptSrch($handle,dialog) }
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	ptSrch:_accept
+# Synopsis:	This is called when the user presses the "Accept" dialog
+#		button.  It executes a search and then calls all actions
+#		registered with ptSrch:registerSearchExecute().
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc ptSrch:_accept { handle } \
+{
+	global	_GW_ptSrch _GD_ptSrch
+
+	$_GW_ptSrch($handle,dialog) defineCursor watch
+
+	if {[ptSrch:_searchCb $handle]} {
+		foreach item $_GD_ptSrch($handle,seaction) {
+			$item $handle
+		}
+		set rval 1
+	} else {
+		set rval 0
+	}
+
+	$_GW_ptSrch($handle,dialog) defineCursor ""
+	return $rval
+}
+
+#%COMMENT_BEGIN
+# Function:	ptSrch:_cancel
+# Synopsis:	This is called when the user presses the "Cancel" dialog
+#		button.  It unmanages the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc ptSrch:_cancel { handle } \
+{
+	global	_GW_ptSrch; $_GW_ptSrch($handle,dialog) unmanageChild
+}
+
+
+#################################
+#	Other Callbacks		#
+#################################
+#%COMMENT_BEGIN
+# Function:	ptSrch:_categoryCb
+# Synopsis:	This is the XmNvalueChangedCallback for the xmToggleButton
+#		widgets representing the "Type", "Name" and the "Size"
+#		criteria.  If none of these are set, then the Accept/Apply
+#		buttons are insensitized.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- item		Indicates which toggle button was changed.
+#		- set		The value of the XmNset resource.
+#%COMMENT_END
+proc ptSrch:_categoryCb { handle {item ""} {set false} } \
+{
+	global		_GW_ptSrch _GD_ptSrch
+
+	if {$item != ""} {
+		set _GD_ptSrch($handle,$item) $set
+	}
+
+	set sensitive "false"
+        foreach item {NAME SIZE TYPE} {
+		$_GW_ptSrch($handle,$item-tb) getValues -set isSet
+		if {$isSet} {
+			set sensitive "true"
+		}
+	}
+
+	foreach item {accept apply} {
+		$_GW_ptSrch($handle,buttons).$item setSensitive $sensitive
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	ptSrch:_activateCb
+# Synopsis:	This is the XmNactivateCallback for the xmTextField widgets
+#		representing the "Name" and the "Size" criteria.  If the
+#		corresponding toggle button indicates that this is one of
+#		the search criteria (e.g., the toggle button is set), then
+#		a search is executed.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- item		Indicates in which text field the <CR> occurred.
+#%COMMENT_END
+proc ptSrch:_activateCb { handle item } \
+{
+	global		_GW_ptSrch _GD_ptSrch
+
+	$_GW_ptSrch($handle,$item-tb) getValues -set set
+	if {[cequal $set "false"]} {
+		return
+	}
+
+	if {[cequal $item "SIZE"] && \
+	    [cequal [$_GW_ptSrch($handle,SIZE) getString] ""]} {
+		return
+	}
+
+	ptSrch:_accept $handle
+}
+
+#%COMMENT_BEGIN
+# Function:	ptSrch:_optCb
+# Synopsis:	This is the callback for the "Size" option menu.  If "Size"
+#		is one of the search criteria (e.g., the "Size" toggle button
+#		is set), then a search is executed.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- opt		The value of the option menu.
+#%COMMENT_END
+proc ptSrch:_optCb { handle opt } \
+{
+	global		_GW_ptSrch _GD_ptSrch
+
+	set _GD_ptSrch($handle,metric) $opt
+
+	$_GW_ptSrch($handle,SIZE-tb) getValues -set set
+
+	if {[cequal $set "true"] && \
+	   ! [cequal [$_GW_ptSrch($handle,SIZE) getString] ""]} {
+		ptSrch:_accept $handle
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	ptSrch:_searchCb
+# Synopsis:	This gathers the data from the dialog, checks to make sure
+#		that there is at least one search criteria chosen, and
+#		calls ptSrch:_search() to applies the criteria to the set of
+#		partitions.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc ptSrch:_searchCb { handle } \
+{
+	global		_GW_ptSrch _GD_ptSrch
+
+	$_GW_ptSrch($handle,NAME-tb) getValues -set match_name
+	$_GW_ptSrch($handle,SIZE-tb) getValues -set match_size
+	$_GW_ptSrch($handle,TYPE-tb) getValues -set match_type
+	if {$match_name == "false" && \
+	    $match_size == "false" && \
+	    $match_type == "false"} {
+		return 0
+	}
+
+	if {$match_name == "true"} {
+	    set m_name [string trim [$_GW_ptSrch($handle,NAME) getString]]
+	    if {$m_name == ""} {
+		$_GW_ptSrch($handle,NAME-tb) getValues -labelString lbl
+		lappend errstr "No value given for $lbl."
+	    }
+	} else {
+		set m_name ""
+	}
+
+	if {$match_size == "true"} {
+	    set m_size [string trim [$_GW_ptSrch($handle,SIZE) getString]]
+	    if {$m_size == ""} {
+		$_GW_ptSrch($handle,SIZE-tb) getValues -labelString lbl
+		lappend errstr "No value given for $lbl."
+	    }
+	} else {
+		set m_size ""
+	}
+
+	if {$match_type == "true"} {
+		foreach item $_GD_ptSrch(TYPE,opts) {
+			$_GW_ptSrch($handle,$item) getValues -set set
+			if {$set == "true"} {
+				lappend m_types $item
+			}
+		}
+		if {! [info exists m_types]} {
+		    $_GW_ptSrch($handle,TYPE-tb) getValues -labelString lbl
+		    lappend errstr "No type(s) specified for $lbl."
+		}
+	} else {
+		set m_types ""
+	}
+
+	if {[info exists errstr]} {
+	    lvarpush errstr "Unable to execute search: @n"
+	    em:simpleMsg $handle information [join $errstr " @n "]
+	    return 0
+	}
+
+	if {$_GD_ptSrch($handle,FLUSH_CACHE) == "true"} {
+		ptSrch:newPartList $handle $_GD_ptSrch($handle,hfn) true
+		$_GW_ptSrch($handle,FLUSH_CACHE) setValues -set false
+		set _GD_ptSrch($handle,FLUSH_CACHE) false
+	}
+
+	lappend criteria $_GD_ptSrch($handle,USED)
+	lappend criteria $m_name
+	lappend criteria [list $m_size $_GD_ptSrch($handle,metric)]
+	lappend criteria $m_types
+	set _GD_ptSrch($handle,result) [ptSrch:_search $handle $criteria]
+
+	return 1
+}
+
+#%COMMENT_BEGIN
+# Function:	ptSrch:_search
+# Synopsis:	Applies the given search criteria to the list of partitions.
+#		It returns the list of partitions matching the criteria.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- criteria	A list of the values for the available search
+#				criteria.
+#%COMMENT_END
+proc ptSrch:_search { handle criteria } \
+{
+	global		_GD_ptSrch
+
+	set hip $_GD_ptSrch($handle,hip)
+	lassign $criteria m_used m_name size m_types
+	lassign $size m_size m_metric
+
+	if {$m_used == "true"} {
+		set result $_GD_ptSrch($hip,parts)
+	} else {
+	    set result [lmatch -regexp $_GD_ptSrch($hip,parts) "^\"\[+ \] .*"]
+	}
+
+	if {$m_name != "" && $m_name != "*"} {
+		set result [lmatch $result "*$m_name *"]
+	}
+
+	if {$m_types != ""} {
+		set result [lmatch -regexp $result ".* ([join $m_types |])"]
+	}
+
+	if {$m_size != ""} {
+		set new_items ""
+		switch $m_metric {
+			EQUAL {
+				foreach item $result {
+					if {[llength [lindex $item 0]] == 3} {
+					    lassign [lindex $item 0] name size
+					} else {
+					    lassign [lindex $item 0] j name size
+					}
+					if {$size == $m_size} {
+						lappend new_items $item
+					}
+				}
+			}
+			LESS {
+				foreach item $result {
+					if {[llength [lindex $item 0]] == 3} {
+					    lassign [lindex $item 0] name size
+					} else {
+					    lassign [lindex $item 0] j name size
+					}
+					if {[expr $size - $m_size] < 0} {
+						lappend new_items $item
+					}
+				}
+			}
+			GREATER {
+				foreach item $result {
+					if {[llength [lindex $item 0]] == 3} {
+					    lassign [lindex $item 0] name size
+					} else {
+					    lassign [lindex $item 0] j name size
+					}
+					if {[expr $size - $m_size] > 0} {
+						lappend new_items $item
+					}
+				}
+			}
+		}
+		set result $new_items
+	}
+
+	return $result
+}

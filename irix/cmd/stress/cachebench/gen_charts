@@ -1,0 +1,71 @@
+#! /bin/ksh
+
+##
+## FILE: gen_charts
+## DESC: generate ASCII charts from benchmark data
+##
+
+if [ -z "$BENCH" ]; then
+	BENCH=`dirname $0`
+fi
+
+echo Generating charts...
+
+gen=$BENCH/procs_vs_workload
+
+## User or wall-clock time
+##      (some IRIX timers are more reliable than others ;-)
+time_op=user_op
+# time_op=wall_op
+
+## Fairness metric
+fairness="max_vs_min"
+# fairness="var"
+# fairness="stddev"
+
+## XXX kludge to deal with starvation and infinite time per op.
+clamp_max="1.0e7"
+
+charts="$1"
+if [ "x$charts" = "x" ]; then
+	charts="charts"
+else
+	shift
+fi
+
+dirs="$*"
+if [ "x$dirs" = "x" ]; then
+	dirs="ip*"
+fi
+
+if [ ! -d $charts ]; then
+	mkdir $charts || exit 1
+fi
+
+for dir in $dirs
+do
+	. $dir/config
+	dirbase=`basename $dir`
+
+	for test in $ops
+	do
+		## METRICS FOR VISUALIZATION
+
+		$gen -t "$dirbase $test absolute" -d $dir/*/$test \
+			-M $clamp_max $time_op avg \
+			> $charts/${dirbase}_${test}_absolute.txt
+		$gen -t "$dirbase $test failed ops" -d $dir/*/$test -p 2- \
+			fops avg \
+			> $charts/${dirbase}_${test}_failed.txt
+		$gen -n -t "$dirbase $test slowdown" -d $dir/*/$test -p 2- \
+			-M $clamp_max $time_op avg \
+			> $charts/${dirbase}_${test}_slowdown.txt
+		$gen -a -t "$dirbase $test fairness" \
+			-d $dir/*/$test -p 2- -M $clamp_max \
+			$time_op $fairness \
+			> $charts/${dirbase}_${test}_fairness_progress.txt
+	done
+done
+
+## Remove store_failed, since this *should* always be zero.
+rm $charts/*_store_failed.*

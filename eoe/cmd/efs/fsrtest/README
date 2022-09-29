@@ -1,0 +1,182 @@
+
+Some fsr/fsctl (reorganizer) verification and stress stuff.
+
+Both of the following tests unearthed bugs during development.
+Both of the following could use more polishing and more comprehensive
+test cases.
+Both tests must be run as root and require that the running kernel
+be lbooted with 'fsctl' and that /dev/fsctl exist.
+Both take an argument specifying the directory holding the unshipped
+programs used in the scripts.
+Both take an argument specifiying a directory in which to work.
+Both will give a usage if invoked with no arguments.
+
+fsrverify:
+	A brief test of reorganizer functionality for a subset
+	of efs and reorganizer corner cases.
+
+fsrstress:
+	A more involved test which reorganizes a file system under
+	heavy usage.  If this runs for 24 hours without the kernel crashing
+	or assert failing or fail in a way it itself detects.SHIP IT! :-)
+	(My scsi based IP4.5 machine does a tad worse than one pass per minute
+	on a file system with 6MB free).
+
+exop.c:		various ops at the extent level
+fop.c:		various ops at the file level
+indir.c:	reorganize indirect extents as specified
+random.c:	random range generator
+rsf.c:		disorganize a file into extents of a specified size
+testfsctl.c:	test the most critical /dev/fsctl entry points
+
+assfail.c:
+	A distillation of a problem uncovered running fsrstress.
+
+----------------------------------------------------------------------
+The following are some notes on verifying and excercising the
+reoganizer.  The above tests represent a subset of these notes:
+
+
+
+File System Reorganizer Test Plan
+
+	fsctl	the driver
+	fsr	the reorganizer utility program
+
+A) testing fsctl
+
+	open
+		-verify exclusive open
+		-uid==0 only
+	close
+		-verify cleanup of
+			-inode (unlocked)
+				-file system can unmount
+				-other processes can use inode
+			-device (next open will succeed)
+			-unused BALLOC'ed extents
+	ioctl
+		ILOCK
+			-inode is locked
+			-should fail if another inode already locked
+		ICOMMIT
+			-inode is the one locked by ILOCK
+			-proper extents and indirect extents:
+				-valid data blocks
+				-data blocks allocated
+				-proper number of indirect extents
+				-valid offsets
+				-valid magic number
+			-total bbs in extents consistent with file size
+		BALLOC
+			-bn+len saved for bugout-close
+		BFREE
+			-arguments valid data blocks
+			-extent previously free/alloc (as appropriate)
+			-should fail if no active "ILOCK"
+			-should fail if in different dev than ILOCK'ed inode
+		TSTALLOC
+		TSTFREE
+			-args valid data blocks
+
+B) testing fsr
+
+	"better" file system organization
+
+	file data correct
+		-fsr responsible for copying data blocks
+
+	file meta-data correct
+		-same times, size, mode (type,perms), uid, gid
+		-movex paths
+		    -direct extents
+			-proper blending
+			-proper length
+			-proper offset
+		    -indirect extents
+			-indirect to direct extents
+			-#direct stays <= EFS_DIRECTEXTENTS
+			-#direct decreased enough to free indirect block(s)
+			-#direct increased above EFS_DIRECTEXTENTS
+			-#direct increased to an indirect block(s)
+		    -blocks
+			-should properly allocate direct blocks before ICOMMIT
+			-should properly free old blocks after ICOMMIT
+			-properly free any disused indirect blocks after ICMT
+
+	file system consistent
+		-on-disk:
+		-in-core:
+			fs->fs_tfree
+			fs->fs_fmod
+			cg->cg_dfree
+			cg->cg_firstdfree
+	
+
+
+Some numbers:
+
+    EFS constants
+
+	12 	direct extents
+	64 	extents per block (indirect extents)
+	248 	maximum extent size
+	32 	maximum indirect extent size
+	24576	maximum number of extents
+
+    file system parameters
+
+	firstcg
+	cgisize
+	cgfsize
+	ncg
+
+	
+Some tests:
+
+	-gun down user level process
+		-should leave:
+			-device open-able (cleaned up)
+			-inode unlocked and unchanged
+			-data valid
+			-file system valid
+		
+	-reset system (hard)
+		-should leave data intact
+
+	-organize files with the following number of extents:
+		11,12,13
+		63,64,65
+		127,128,129
+		24575,24576
+		24576+		should fail
+
+	-verify the following changes in number of extents:
+	 (checks out the bottom half of 'fsr')
+		11->12
+		12->13		0->1 indirbbs
+		13->12		1->0 indirbbs
+		12->1
+		13->1		1->0 indirbbs
+		63->64		
+		64->65		1->2 indirbbs
+		65->64		2->1 indirbbs
+		128->129	2->3 indirbbs
+		129->1		3->0 indirbbs
+
+	-run a job mix on the file system being reorganized:
+		make clobber, make all
+
+	can you reorganize a running executible?  the reorganizer itself?
+
+	-(artificially) organize a file system (or part of it) as follows:
+		-single extent file with 1st block at cg's first dbn
+		-multi extent file with 1st block at cg's first dbn
+		-multi extent file with middle extent ending at cg's last dbn
+		-multi extent file with middle extent ending at fs's last dbn
+		-non-linear sequence multi extent file
+
+More things to test/verify/stress
+	-recycled/non-recycled inodes
+	(assfail.c tests fsctl's preparation of an in-core inode which
+	will be recycled by the inode cache and presented to EFS)

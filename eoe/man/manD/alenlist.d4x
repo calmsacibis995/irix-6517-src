@@ -1,0 +1,184 @@
+.TH alenlist D4X
+.SH NAME
+alenlist \- overview of Address/Length Lists
+.SH DESCRIPTION
+An Address/Length List or
+.I alenlist
+is an abstract object containing a sequential list of address/length pairs.
+.P
+All addresses in the list belong to the same address space,
+for example kernel virtual address space,
+physical memory address space,
+PCI DMA space,
+VME DMA space,
+and so on.
+All lengths are byte counts.
+Each address/length pair added to a list describes one contiguous
+segment in the relevant address space.
+Together, all the pairs in the list describe a region of memory,
+typically an I/O buffer,
+that is logically, but not necessarily physically, contiguous.
+.P
+When a driver receives a request for I/O,
+the request may be specified in one of several forms, for example
+a buf structure page list (see
+.IR buf (D4)),
+a kernel virtual address,
+a user virtual address,
+or a vector of addresses from a device register array.
+The driver can convert any of these forms into a single alenlist
+for easy management.
+.P
+Other kernel layers (notably, the PCI infrastructure, see
+.IR pciio (D3))
+accept alenlists.
+Translation from one address space to another,
+a constant challenge for device drivers,
+can be performed on an entire alenlist in a single operation,
+avoiding repeated bouncing up and down through layers
+of software for each segment.
+.P
+An alenlist is created by the driver when needed.
+It expands automatically as address/length pairs are added to the list.
+Its memory can easily be released for recycling,
+or a list can be cleared and re-used.
+There are operations to append a new pair to a list,
+and to load a list based on a buf structure or based on a
+user or kernel virtual buffer address and size.
+.P
+Address/length pairs can be read out from a list in sequence,
+and in length units different from the units that were initially loaded
+(for example, load the list based on a user-space buffer,
+then read out pairs in 512-byte segments).
+.P
+A
+.I cursor
+marks a position within an alenlist,
+and is used to scan through the pairs in the list.
+A cursor can point to the beginning of its list,
+any number of bytes into the list,
+or at the end of the list.
+Every alenlist contains an
+.I implicit
+cursor for simple management,
+but there are operations to create, destroy, and initialize
+additional cursors, so multiple positions can be maintained at once.
+.SS Usage
+In order to use any of the Address/Length types or interfaces, a driver
+should include these header files in this order:
+.Ex
+#include <sys/types.h>
+#include <sys/alenlist.h>
+#include <sys/ddi.h>
+.Ee
+.SS Types
+The following abstract types are used and returned by alenlist functions.
+.P
+.IP "\f2alenaddr_t\fP" 12n
+An abstract address in some address space.
+This is the type of any address added to a list.
+It is guaranteed to be big enough to hold an address in
+any supported address space (currently 64 bits).
+.IP "\f2size_t\fP" 12n
+The standard byte-count type.
+Every address/length pair in a list comprises one
+.I alenaddr_t
+and one
+.IR size_t .
+.IP "\f2alenlist_t\fP" 12n
+A handle to an alenlist.
+.IP "\f2alenlist_cursor_t\fP" 12n
+A handle to a cursor,
+an object that designates a position within an alenlist.
+An
+.I alenlist_cursor_t
+value of NULL always designates the implicit cursor of a list.
+Non-null values designate cursor objects allocated separate from
+their lists.
+.SS Operations
+The functions that operate on alenlists are detailed in
+.IR alenlist_ops (D3X).
+Operations to allocate and destroy alenlists are as follows:
+.IP \(bu 4n
+.IR alenlist_create ()
+creates a new, empty list.
+.IP \(bu 4n
+.IR alenlist_destroy ()
+recycles the storage used by an alenlist.
+.IP \(bu 4n
+.IR alenlist_cursor_create ()
+creates a new cursor object.
+.IP \(bu 4n
+.IR alenlist_cursor_destroy ()
+recycles the storage used by a cursor.
+.P
+Operations to clear and load pairs into an alenlist are as follows:
+.IP \(bu 4n
+.IR alenlist_clear ()
+empties a list.
+.IP \(bu 4n
+.IR alenlist_append ()
+appends one address/length pair to a list.
+.IP \(bu 4n
+.IR kvaddr_to_alenlist ()
+converts a kernel virtual address and length into
+physical memory address/length pairs
+and appends the pairs to a list.
+.IP \(bu 4n
+.IR uvaddr_to_alenlist ()
+converts a user process virtual address into
+physical memory address/length pairs
+and appends the pairs to a list.
+.IP \(bu 4n
+.IR buf_to_alenlist ()
+examines a buf structure (see
+.IR buf (D4))
+and appends physical memory address/length pairs to describe
+the buffer to a list.
+.P
+In addition,
+.IR pciio_dma (D3)
+documents
+.IR pciio_dmamap_list (),
+a function that
+translates an alenlist of physical memory addresses into
+an alenlist of PCI bus addresses for DMA use.
+.P
+Operations to read out address/length pairs from an alenlist are
+as follows:
+.IP \(bu 4n
+.IR alenlist_get ()
+returns an address/length pair from a list,
+based on the implicit cursor or on a specified cursor,
+and optionally advances the cursor.
+.IP \(bu 4n
+.IR alenlist_cursor_init ()
+initializes a specific cursor or an implicit cursor to a specified offset.
+.IP \(bu 4n
+.IR alenlist_cursor_offset ()
+returns the current offset of a cursor.
+.SS Flags
+The following flag values are used with alenlist functions:
+.IP AL_NOSLEEP 12n
+Indicates that the caller does not wish to be put to sleep while
+waiting for resources such as memory.
+If an operation would entail sleeping, the function returns failure.
+.IP AL_NOCOMPACT 12n
+Indicates that adjacent address/length pairs that happen to be
+contiguous in their address space should not be compacted and treated
+as a single unit (which is the default behavior).
+Rather, they should be treated as if there is a discontiguity.
+This flag is not needed by most drivers.
+.IP AL_LEAVE_CURSOR 12n
+Indicates that the operation should not affect the position
+of the internal cursor.
+.SS Error Codes
+The following error codes are used by all alenlist functions:
+.IP ALENLIST_SUCCESS 12n
+Indicates a successful operation.
+.IP ALENLIST_FAILURE 12n
+Indicates a failed operation.
+.SH SEE ALSO
+alenlist_ops(D3X),
+pciio_dma(D3),
+IRIX Device Driver Programmer's Guide

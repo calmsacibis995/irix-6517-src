@@ -1,0 +1,543 @@
+<!-- Produced by version 3.14 (11/22/96) of SGI Frame/SGML translator -->
+<CHAPTER LBL="7"><TITLE><XREFTARGET ID="13812">Managing User-Level Interrupts</TITLE><PARAGRAPH>The user-level interrupt (ULI) facility allows a hardware interrupt to be handled by a user process. The ULI facility is intended to simplify and streamline the response to external events. ULIs can be written to respond to interrupts initiated from the VME bus, the PCI bus, or external interrupt ports. ULIs are essentially Interrupt Service Routines (ISRs) that reside in the address space of a user process. As shown in <XREF IDREF="13795" TYPE="GRAPHIC">Figure&nbsp;7-1</XREF>, when an interrupt is received that has been registered to a ULI, it calls the user function from the interrupt level. For function prototypes and other details, see the <REFPAGE>uli(3)</REFPAGE> reference page. <INDEXTARGET ID="RPPG_ch071"><!-- POSTPROCESSDATA: RPPG_ch071|user-level interrupt (ULI) --><INDEXTARGET ID="RPPG_ch072"><!-- POSTPROCESSDATA: RPPG_ch072|interrupt:<ITALICS>See also</ITALICS> user-level interrupt (ULI)interrupt:ZZZ --></PARAGRAPH>
+<!-- RASTERCONVERT: RPPG_ch07.cgm -->
+<PARAGRAPH><FIGURE><GRAPHIC FILE="RPPG_ch07-1.gif" POSITION="INLINE" SCALE="FALSE"><CAPTION LBL="7-1"><PREFIX>Figure 7-1 </PREFIX><XREFTARGET ID="13795">ULI Functional Overview</CAPTION>
+</FIGURE>
+</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>The <REFPAGE>uli(3)</REFPAGE> reference page and the libuli library are installed as part of the REACT/Pro package. The features described in this chapter are supported in REACT/Pro version 3.2, which must be installed in order to use them.</NOTE>
+<SECTION1 LBL="" HELPID = ""><TITLE>Overview of ULI</TITLE><PARAGRAPH>In the past, PIO could be only synchronous: the program wrote to a device register, then polled the device until the operation was complete. With ULI, the program can manage a device that causes interrupts on the VME or PCI bus. You set up a handler function within your program. The handler is called whenever the device causes an interrupt.</PARAGRAPH>
+<PARAGRAPH>In IRIX 6.2, user-level interrupts were introduced for VME bus devices and for external interrupts on the CHALLENGE and Onyx systems. In IRIX 6.5, user-level interrupts are also supported for PCI devices, and for external interrupts on Origin2000, Origin200, and Onyx2 systems.</PARAGRAPH>
+<PARAGRAPH>When using ULI with a VME or PCI device, you use PIO to initiate device actions and to transfer data to and from device registers. When using ULI to trap external interrupts, you enable the interrupts with <FUNCTION>ioctl()</FUNCTION> calls to the external interrupt handler. All these points are covered in much greater detail in the <DOCTITLE>IRIX Device Driver Programmer's Guide</DOCTITLE> (see <XREF IDREF="96700" TYPE="TITLE">&ldquo;Other Useful Books&rdquo;</XREF>).</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>The ULI Handler </TITLE><PARAGRAPH>The ULI handler is a function within your program. It is entered asynchronously from the IRIX kernel's interrupt-handling code. The kernel transfers from the kernel address space into the user process address space, and makes the call in user (not privileged kernel) execution mode. Despite this more complicated linkage, you can think of the ULI handler as a subroutine of the kernel's interrupt handler. As such, the performance of the ULI handler has a direct bearing on the system's interrupt response time.&space;<INDEXTARGET ID="RPPG_ch073"><!-- POSTPROCESSDATA: RPPG_ch073|user-level interrupt (ULI):interrupt handler function --></PARAGRAPH>
+<PARAGRAPH>Like the kernel's interrupt handler, the ULI handler can be entered at almost any time, regardless of what code is being executed by the CPU&mdash;a process of your program or a process of another program, executing in user space or in a system function. In fact, the ULI handler can be entered from one CPU while the your program executes concurrently in another CPU. Your normal code and your ULI function can execute in true concurrency, accessing the same global variables.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Restrictions on the ULI Handler</TITLE><PARAGRAPH>Because the ULI handler is called in a special context of the kernel's interrupt handler, it is severely restricted in the system facilities it can use. The list of features the ULI handler may not use includes the following:&space;<INDEXTARGET ID="RPPG_ch074"><!-- POSTPROCESSDATA: RPPG_ch074|user-level interrupt (ULI):restrictions on handler --></PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>Any use of floating-point calculations. The kernel does not take time to save floating-point registers during an interrupt trap. The floating-point coprocessor is turned off, and an attempt to use it in the ULI handler causes a SIGILL (illegal instruction) exception.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Any use of IRIX system functions. Because most of the IRIX kernel runs with interrupts enabled, the ULI handler could be entered while a system function was already in progress. System functions do not support reentrant calls. In addition, many system functions can sleep, which an interrupt handler may not do.</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>Elsewhere in this book you will read that interrupt handlers in IRIX 6.5 run as &ldquo;threads&rdquo; and can sleep. While true, this privilege has not yet been extended to user-level interrupt handlers, which are still required never to sleep.</NOTE>
+</BULLET>
+<BULLET><PARAGRAPH>Any storage reference that causes a page fault. The kernel cannot suspend the ULI handler for page I/O. Reference to an unmapped page causes a SIGSEGV (memory fault) exception.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Any calls to C library functions that might violate the preceding restrictions.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>There are very few library functions that you can be sure use no floating point, make no system calls, and do not cause a page fault. Unfortunately, library functions such as <FUNCTION>sprintf()</FUNCTION>, often used in debugging, must be avoided.</PARAGRAPH>
+<PARAGRAPH>In essence, the ULI handler should do only these things, as shown in <XREF IDREF="40812" TYPE="GRAPHIC">Figure&nbsp;7-2</XREF>:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>Store data in program variables in locked pages, to record the interrupt event.</PARAGRAPH>
+<PARAGRAPH>For example, a ring buffer is a data structure that is suitable for concurrent access.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Program the device as required to clear the interrupt or acknowledge it.</PARAGRAPH>
+<PARAGRAPH>The ULI handler has access to the whole program address space, including any mapped-in devices, so it can perform PIO loads and stores.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Post a semaphore to wake up the main process.</PARAGRAPH>
+<PARAGRAPH>This must be done using a ULI function.</PARAGRAPH>
+<!-- RASTERCONVERT: RPPG_ch07.cgm2 -->
+<PARAGRAPH><FIGURE><GRAPHIC FILE="RPPG_ch07-2.gif" POSITION="INLINE" SCALE="FALSE"><CAPTION LBL="7-2"><PREFIX>Figure 7-2 </PREFIX><XREFTARGET ID="40812">ULI Handler Functions</CAPTION>
+</FIGURE>
+</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Planning for Concurrency</TITLE><PARAGRAPH>Since the ULI handler can interrupt the program at any point, or run concurrently with it, the program must be prepared for concurrent execution. There are two areas to consider: global variables, and library routines.</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE>Debugging With Interrupts</TITLE><PARAGRAPH>The asynchronous, possibly concurrent entry to the ULI handler can confuse a debugging monitor such as <COMMAND>dbx</COMMAND>. Some strategies for dealing with this are covered in the <REFPAGE>uli(3)</REFPAGE> reference page.&space;<INDEXTARGET ID="RPPG_ch075"><!-- POSTPROCESSDATA: RPPG_ch075|user-level interrupt (ULI):and debugging --></PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Declaring Global Variables</TITLE><PARAGRAPH>When variables can be modified by both the main process and the ULI handler, you must take special care to avoid race conditions.</PARAGRAPH>
+<PARAGRAPH>An important step is to specify -D_SGI_REENTRANT_FUNCTIONS to the compiler, so as to get the reentrant versions of the C library functions. This ensures that, if the main process and the ULI handler both enter the C library, there is no collision over global variables.&space;<INDEXTARGET ID="RPPG_ch076"><!-- POSTPROCESSDATA: RPPG_ch076|reentrant C librarylibc reentrant version --></PARAGRAPH>
+<PARAGRAPH>You can declare the global variables that are shared with the ULI handler with the keyword &ldquo;volatile,&rdquo; so that the compiler generates code to load the variables from memory on each reference. However, the compiler never holds global values in registers over a function call, and you almost always have a function call (such as <FUNCTION>ULI_block_intr()</FUNCTION>) preceding a test of a shared global variable.&space;<INDEXTARGET ID="RPPG_ch077"><!-- POSTPROCESSDATA: RPPG_ch077|volatile keyword --></PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Using Multiple Devices</TITLE><PARAGRAPH>The ULI feature allows a program to open more than one interrupting device. You register a handler for each device. However, the program can only wait for a specific interrupt to occur; that is, the <FUNCTION>ULI_sleep()</FUNCTION> function specifies the handle of one particular ULI handler. This does not mean that the main program must sleep until that particular interrupt handler is entered, however. Any ULI handler can waken the main program, as discussed under <XREF IDREF="99742" TYPE="TITLE">&ldquo;Interacting With the Handler&rdquo;</XREF>.&space;<INDEXTARGET ID="RPPG_ch078"><!-- POSTPROCESSDATA: RPPG_ch078|user-level interrupt (ULI):<FUNCTION>ULI_sleep</FUNCTION>() function --><INDEXTARGET ID="RPPG_ch079"><!-- POSTPROCESSDATA: RPPG_ch079|IRIX functions:<FUNCTION>ULI_sleep()</FUNCTION> --></PARAGRAPH>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE>Setting Up</TITLE><PARAGRAPH>A program initializes for ULI in the following major steps:&space;<INDEXTARGET ID="RPPG_ch0710"><!-- POSTPROCESSDATA: RPPG_ch0710|user-level interrupt (ULI):initializing --></PARAGRAPH>
+<ORDEREDLIST><LIST><PARAGRAPH>Open the device special file for the device.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>For a PCI or VME device, map the device addresses into process memory (see the <DOCTITLE>IRIX Device Driver Programmer's Guide</DOCTITLE> (see <XREF IDREF="96700" TYPE="TITLE">&ldquo;Other Useful Books&rdquo;</XREF>).</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Lock the program address space in memory.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Initialize any data structures used by the interrupt handler.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Register the interrupt handler.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Interact with the device and the interrupt handler.</PARAGRAPH>
+</LIST>
+</ORDEREDLIST>
+<PARAGRAPH>Any time after the handler has been registered, an interrupt can occur, causing entry to the ULI handler.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>Opening the Device Special File</TITLE><PARAGRAPH>Devices are represented by device special files (see the <DOCTITLE>IRIX Device Driver Programmer's Guide</DOCTITLE> (see <XREF IDREF="96700" TYPE="TITLE">&ldquo;Other Useful Books&rdquo;</XREF>)). In order to gain access to a device, you open the device special file that represents it. The device special files that can generate user-level interrupts include:&space;<INDEXTARGET ID="RPPG_ch0711"><!-- POSTPROCESSDATA: RPPG_ch0711|device special file:for user-level interrupt --></PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>The external interrupt line on a CHALLENGE/ Onyx or Origin200 system, or the base module's external interrupt in an Origin2000 or Onyx2 system is <FILENAME>/dev/ei</FILENAME>. Other external interrupt source devices in an Origin2000 or Onyx2 system are mentioned in the <DOCTITLE>IRIX Device Driver Programmer's Guide</DOCTITLE>.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The files that represent PCI bus address spaces are summarized in the <REFPAGE>pciba(7)</REFPAGE> reference page and the <DOCTITLE>IRIX Device Driver Programmer's Guide</DOCTITLE>.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The files that represent VME control units are summarized in the <DOCTITLE>IRIX Device Driver Programmer's Guide</DOCTITLE>.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>The program should open the device and verify that the device exists and is active before proceeding.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Locking the Program Address Space</TITLE><PARAGRAPH>The ULI handler must not reference a page of program text or data that is not present in memory. You prevent this by locking the pages of the program address space in memory. The simplest way to do this is to call the <INDEXTARGET ID="RPPG_ch0712"><!-- POSTPROCESSDATA: RPPG_ch0712|address space:locking in memorylocking memory --><FUNCTION>mlockall()</FUNCTION> system function:&space;<INDEXTARGET ID="RPPG_ch0713"><!-- POSTPROCESSDATA: RPPG_ch0713|IRIX functions:<FUNCTION>mlockall()</FUNCTION> --></PARAGRAPH>
+<CODE>
+if (mlockall(MCL_CURRENT|MCL_FUTURE)&lt;0) perror (&ldquo;mlockall&rdquo;);
+</CODE>
+<PARAGRAPH>The <FUNCTION>mlockall()</FUNCTION> function has two possible difficulties. One is that the calling process must have either superuser privilege or CAP_MEMORY_MGT capability (see the <REFPAGE>mlockall(3C)</REFPAGE> reference page). This may not pose a problem if the program needs superuser privilege in any case, for example, to open a device special file. The second difficulty is that <FUNCTION>mlockall()</FUNCTION> locks all text and data pages. In a very large program, this may be so much memory that system performance is harmed.</PARAGRAPH>
+<PARAGRAPH>The <FUNCTION>mlock()</FUNCTION> or <FUNCTION>mpin()</FUNCTION> functions can be used by unprivileged programs to lock a limited number of pages. The limit is set by the tunable system parameter <VARIABLE>maxlkmem</VARIABLE>. (Check its value&mdash;typically 2000&mdash;in <FILENAME>/var/sysgen/mtune/kernel</FILENAME>. See the <REFPAGE>systune(1)</REFPAGE> reference page for instructions on changing a tunable parameter.) <INDEXTARGET ID="RPPG_ch0714"><!-- POSTPROCESSDATA: RPPG_ch0714|IRIX functions:<FUNCTION>mpin()</FUNCTION>IRIX functions:<FUNCTION>mlock()</FUNCTION> --></PARAGRAPH>
+<PARAGRAPH>In order to use <FUNCTION>mlock()</FUNCTION> or <FUNCTION>mpin()</FUNCTION>, you must specify the exact address ranges to be locked. Provided that the ULI handler refers only to global data and its own code, it is relatively simple to derive address ranges that encompass the needed pages. If the ULI handler calls any library functions, the library DSO needs to be locked as well. The smaller and simpler the code of the ULI handler, the easier it is to use <FUNCTION>mlock()</FUNCTION> or <FUNCTION>mpin()</FUNCTION>.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Registering the Interrupt Handler</TITLE><PARAGRAPH>When the program is ready to start operations, it registers its ULI handler. The ULI handler is a function that matches the prototype&space;<INDEXTARGET ID="RPPG_ch0715"><!-- POSTPROCESSDATA: RPPG_ch0715|user-level interrupt (ULI):registration --></PARAGRAPH>
+<EXAMPLE>
+void function_name(void *arg);
+</EXAMPLE>
+<PARAGRAPH>The registration function takes arguments with the following purposes:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>The file descriptor of the device special file.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The address of the handler function.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>An argument value to be passed to the handler on each interrupt. This is typically a pointer to a work area that is unique to the interrupting device (supposing the program is using more than one device).</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>A count of semaphores to be allocated for use with this interrupt.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>An optional address, and the size, of memory to be used as stack space when calling the handler.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Additional arguments for VME and PCI devices.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>You can ask the ULI support to allocate a stack space by passing a null pointer for the stack argument. When the ULI handler is as simple a function as it normally is, the default stack size of 1024 bytes is ample.</PARAGRAPH>
+<PARAGRAPH>The semaphores are allocated and maintained by the ULI support. They are used to coordinate between the program process and the interrupt handler, as discussed under <XREF IDREF="99742" TYPE="TITLE">&ldquo;Interacting With the Handler&rdquo;</XREF>. You should specify one semaphore for each independent process that can wait for interrupts from this handler. Normally one semaphore is sufficient.</PARAGRAPH>
+<PARAGRAPH>The value returned by the registration function is a handle that is used to identify this interrupt in other functions. Once registered, the ULI handler remains registered until the program terminates (there is no function for un-registration).</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="53522">Registering an External Interrupt Handler</TITLE><PARAGRAPH>&space;The <INDEXTARGET ID="RPPG_ch0716"><!-- POSTPROCESSDATA: RPPG_ch0716|user-level interrupt (ULI):<FUNCTION>ULI_register_ei</FUNCTION>() function --><INDEXTARGET ID="RPPG_ch0717"><!-- POSTPROCESSDATA: RPPG_ch0717|IRIX functions:<FUNCTION>ULI_register_ei()</FUNCTION> --><INDEXTARGET ID="RPPG_ch0718"><!-- POSTPROCESSDATA: RPPG_ch0718|external interrupt:user-level handler --><INDEXTARGET ID="RPPG_ch0719"><!-- POSTPROCESSDATA: RPPG_ch0719|user-level interrupt (ULI):external interrupt with --><FUNCTION>ULI_register_ei()</FUNCTION> function takes the arguments described in the preceding topic. Once it has successfully registered your handler, all external interrupts are directed to that handler.</PARAGRAPH>
+<PARAGRAPH>It is important to realize that, so long as a ULI handler is registered, none of the other interrupt-reporting features supported by the external interrupt device driver operate any more (see the <DOCTITLE>IRIX Device Driver Programmer's Guide</DOCTITLE> and the <REFPAGE>ei(7)</REFPAGE> reference page). These restrictions include the facts that:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>The per-process external interrupt queues are not updated.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Signals requested by <FUNCTION>ioctl(</FUNCTION>EIIOCSETSIG<FUNCTION>)</FUNCTION> are not sent.&space;<INDEXTARGET ID="RPPG_ch0720"><!-- POSTPROCESSDATA: RPPG_ch0720|IRIX functions:<FUNCTION>ioctl()</FUNCTION> --></PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Calls to <FUNCTION>ioctl(</FUNCTION>EIIOCRECV<FUNCTION>)</FUNCTION> sleep until they are interrupted by a timeout, a signal, or because the program using ULI terminated and an interrupt arrived.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Calls to the library function <FUNCTION>eicbusywait_f()</FUNCTION> do not terminate.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>Clearly you should not use ULI for external interrupts when there are other programs running that also use them.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Registering a VME Interrupt Handler</TITLE><PARAGRAPH>The <FUNCTION>ULI_register_vme()</FUNCTION> function takes two additional arguments:&space;<INDEXTARGET ID="RPPG_ch0721"><!-- POSTPROCESSDATA: RPPG_ch0721|VME bus:user-level interrupt handler for --><INDEXTARGET ID="RPPG_ch0722"><!-- POSTPROCESSDATA: RPPG_ch0722|user-level interrupt (ULI):<FUNCTION>ULI_register_vme</FUNCTION>() function --><INDEXTARGET ID="RPPG_ch0723"><!-- POSTPROCESSDATA: RPPG_ch0723|IRIX functions:<FUNCTION>ULI_register_vme()</FUNCTION> --><INDEXTARGET ID="RPPG_ch0724"><!-- POSTPROCESSDATA: RPPG_ch0724|user-level interrupt (ULI):VME interrupt with --></PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>the interrupt level that the device uses.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>a word that contains, or receives, an interrupt vector number (sometimes referred to as the status or ID).</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>The interrupt level used by a device is normally set by hardware and documented in the VECTOR line that defines the device (see the <DOCTITLE>IRIX Device Driver Programmer's Guide</DOCTITLE>).</PARAGRAPH>
+<PARAGRAPH>Some VME devices have a fixed interrupt vector number; others are programmable. You pass a fixed vector number to the function. If the number is programmable, you pass 0, and the function allocates a number. You must then use PIO to program the vector number into the device.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Registering a PCI Interrupt Handler</TITLE><PARAGRAPH>The <FUNCTION>ULI_register_pci()</FUNCTION> function takes one argument in addition to those already described: the number of the interrupt line(s) to attach to. Lines is a bitmask with bits 0, 1, 2, and 3 corresponding to lines A, B, C, and D, respectively.&space;<INDEXTARGET ID="RPPG_ch0725"><!-- POSTPROCESSDATA: RPPG_ch0725|PCI bus:user-level interrupt handler for --><INDEXTARGET ID="RPPG_ch0726"><!-- POSTPROCESSDATA: RPPG_ch0726|user-level interrupt (ULI):<FUNCTION>ULI_register_pci()</FUNCTION> function --><INDEXTARGET ID="RPPG_ch0727"><!-- POSTPROCESSDATA: RPPG_ch0727|IRIX functions:<FUNCTION>ULI_register_pci()</FUNCTION> --><INDEXTARGET ID="RPPG_ch0728"><!-- POSTPROCESSDATA: RPPG_ch0728|user-level interrupt (ULI):PCI interrupt with --></PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="99742">Interacting With the Handler</TITLE><PARAGRAPH>The program process and the ULI handler synchronize their actions using two functions.</PARAGRAPH>
+<PARAGRAPH>When the program cannot proceed without an interrupt, it calls <FUNCTION>ULI_sleep()</FUNCTION>, specifying</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>the handle of the interrupt for which to wait</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>the number of the semaphore to use for waiting</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>Typically only one process ever calls <FUNCTION>ULI_sleep()</FUNCTION> and it specifies waiting on semaphore 0. However, it is possible to have two or more processes that wait. For example, if the device can produce two distinct kinds of interrupts&mdash;normal and high-priority, perhaps&mdash;you could set up an independent process for each interrupt type. One would sleep on semaphore 0, the other on semaphore 1.&space;<INDEXTARGET ID="RPPG_ch0729"><!-- POSTPROCESSDATA: RPPG_ch0729|user-level interrupt (ULI):<FUNCTION>ULI_sleep</FUNCTION>() function --><INDEXTARGET ID="RPPG_ch0730"><!-- POSTPROCESSDATA: RPPG_ch0730|IRIX functions:<FUNCTION>ULI_sleep()</FUNCTION> --><INDEXTARGET ID="RPPG_ch0731"><!-- POSTPROCESSDATA: RPPG_ch0731|user-level interrupt (ULI):<FUNCTION>ULI_wakeup</FUNCTION>() function --><INDEXTARGET ID="RPPG_ch0732"><!-- POSTPROCESSDATA: RPPG_ch0732|IRIX functions:<FUNCTION>ULI_wakeup()</FUNCTION> --></PARAGRAPH>
+<PARAGRAPH>When an ULI handler is entered, it wakes up a program process by calling <FUNCTION>ULI_wakeup()</FUNCTION>, specifying the semaphore number to be posted. The handler must know which semaphore to post, based on the values it can read from the device or from program variables.</PARAGRAPH>
+<PARAGRAPH>The <FUNCTION>ULI_sleep()</FUNCTION> call can terminate early, for example if a signal is sent to the process. The process that calls <FUNCTION>ULI_sleep()</FUNCTION> must test to find the reason the call returned&mdash;it is not necessarily because of an interrupt.</PARAGRAPH>
+<PARAGRAPH>The <FUNCTION>ULI_wakeup()</FUNCTION> function can be called from normal code as well as from a ULI handler function. It could be used within any type of asynchronous callback function to wake up the program process.</PARAGRAPH>
+<PARAGRAPH>The <FUNCTION>ULI_wakeup()</FUNCTION> call also specifies the handle of the interrupt. When you have multiple interrupting devices, you have the following design choices:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>You can have one child process waiting on the handler for each device. In this case, each ULI handler specifies its own handle to <FUNCTION>ULI_wakeup()</FUNCTION>.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>You can have a single process that waits on any interrupt. In this case, the main program specifies the handle of one particular interrupt to <FUNCTION>ULI_sleep()</FUNCTION>, and every ULI handler specifies that same handle to <FUNCTION>ULI_wakeup()</FUNCTION>.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<SECTION3 LBL="" HELPID = ""><TITLE>Achieving Mutual Exclusion</TITLE><PARAGRAPH>The program can gain exclusive use of global variables with a call to <INDEXTARGET ID="RPPG_ch0733"><!-- POSTPROCESSDATA: RPPG_ch0733|user-level interrupt (ULI):<FUNCTION>ULI_block_intr() function</FUNCTION> --><INDEXTARGET ID="RPPG_ch0734"><!-- POSTPROCESSDATA: RPPG_ch0734|IRIX functions:<FUNCTION>ULI_block_intr()</FUNCTION> --><FUNCTION>ULI_block_intr()</FUNCTION>. This function does not block receipt of the hardware interrupt, but does block the call to the ULI handler. Until the program process calls <FUNCTION>ULI_unblock_intr()</FUNCTION>, it can test and update global variables without danger of a race condition. This period of time should be as short as possible, because it extends the interrupt latency time. If more than one hardware interrupt occurs while the ULI handler is blocked, it is called for only the last-received interrupt.</PARAGRAPH>
+<PARAGRAPH>There are other techniques for safe handling of shared global variables besides blocking interrupts. One important, and little-known, set of tools is the <FUNCTION>test_and_set()</FUNCTION> group of functions documented in the <REFPAGE>test_and_set(3)</REFPAGE> reference page. These instructions use the Load Linked and Store Conditional instructions of the MIPS instruction set to safely update global variables in various ways.<INDEXTARGET ID="RPPG_ch0735"><!-- POSTPROCESSDATA: RPPG_ch0735|IRIX functions:<FUNCTION>test_and_set()</FUNCTION> --></PARAGRAPH>
+</SECTION3>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE>Sample Programs</TITLE><PARAGRAPH>This section contains two programs to show how user-level interrupts are used. </PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>The program listed in <XREF IDREF="16544" TYPE="TEXT">Example&nbsp;7-1</XREF> is a hypothetical example of how user-level interrupts can be used to handle interrupts from the PCI bus in an Onyx2/Origin2000 system</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The program listed in <XREF IDREF="26046" TYPE="TEXT">Example&nbsp;7-2</XREF> is a hypothetical example of how user-level interrupts can be used to handle external interrupts in a CHALLENGE and Onyx system.</PARAGRAPH>
+
+<!-- WARNING: (47) Example captions should come at end of Example - detected on page 119 -->
+<!-- WARNINGLOCATION: PAGE = "119" SRC = "RPPG_ch07.mif" TAGTYPE = "PARA" TAG = "ExampleTitle" TAGCOUNT = "1" UID = "623886" TEXT = " is a hypothetical exampl"-->
+<EXAMPLE><CAPTION LBL="7-1"><PREFIX>Example 7-1 </PREFIX><XREFTARGET ID="16544">Hypothetical PCI ULI Program</CAPTION></EXAMPLE>
+<CODE>
+/*
+* pci40_uli.c - PCI User Level Interrupt (ULI) test using the
+&space;*               Greenspring PCI40 IP carrier card to generate
+&space;*               interrupts.
+&space;*
+&space;* This version for Onyx2/Origin2000 systems (Origin200 systems
+&space;* will have a different hwgraph path.)
+&space;*
+&space;* link with -luli
+&space;*
+&space;* Make sure that the latest 6.5 REACT/pro, PCI and kernel
+&space;* roll-up patches are installed.
+&space;*
+&space;*/
+#include &lt;sys/types.h>
+#include &lt;sys/mman.h>
+#include &lt;sys/fcntl.h>
+#include &lt;sys/prctl.h>
+#include &lt;unistd.h>
+#include &lt;stdio.h>
+#include &lt;sys/syssgi.h>
+#include &lt;sys/sysmp.h>
+#include &lt;sched.h>
+#include &lt;sys/uli.h>
+#define     INTRPATH   "/hw/module/1/slot/io2/pci_xio/pci/2/intr"
+#define     PCI40_PATH "/hw/module/1/slot/io2/pci_xio/pci/2/base/2"
+#define     PLX_PATH   "/hw/module/1/slot/io2/pci_xio/pci/2/base/0"
+#define     PCI40_SIZE (1024*1024)
+#define     PLX_SIZE   128
+#define PCI_INTA   0x01
+#define NUM_INTS   1000000
+#define BAD_RESPONSE  30
+#define PROC       0
+extern int errno;
+int intr;
+static void *ULIid;
+volatile uchar_t *pci40_addr;
+/* definitions for timer */
+typedef unsigned long long iotimer_t;
+__psunsigned_t phys_addr, raddr;
+unsigned int cycleval;
+volatile iotimer_t begin_time, end_time, *timer_addr;
+int timer_fd, poffmask;
+float usec_time;
+int bad_responses = 0;
+float longest_response = 0.0;
+float average_response = 0.0;
+static void
+intrfunc(void *arg)
+{
+&space;   end_time   = *timer_addr;
+&space;   /* Set the global flag indicating to the main thread that an
+&space;    * interrupt has occurred, and wake it up
+&space;    */
+&space;   intr++;
+&space;   /*
+&space;    * clear the interrupt on the mothercard by clearing CNTRL0
+&space;    * adding 1 to offset for big endian access
+&space;    */
+&space;   *(unsigned char *)(pci40_addr+0x501) = 0x00;
+}
+main(int argc, char *argv[])
+{
+&space;   int     fd;
+&space;   int     pci_fd;
+&space;   int     plx_fd;
+&space;   int     cpu;
+&space;   int multi_cpus = 0;
+&space;   volatile uint_t *plx_addr;
+&space;   volatile uint_t x;
+&space;   float fres;
+&space;   double total = 0;
+&space;   struct sched_param sparams;
+&space;   struct timespec wait_time;
+&space;   /*
+&space;    * do the appropriate real-time things
+&space;    */
+&space;   sparams.sched_priority = sched_get_priority_max(SCHED_FIFO);
+&space;   if (sched_setscheduler(0, SCHED_FIFO, &amp;sparams) &lt; 0) {
+&space;       perror("psched: ERROR - sched_setscheduler");
+&space;       exit(1);
+&space;   }
+&space;   if (mlockall( MCL_CURRENT | MCL_FUTURE )){
+&space;       perror ("mlockall");
+&space;   }
+&space;  /*
+&space;   * be sure there are multiple cpus present before
+&space;   * attempting to run on an isolated cpu - once
+&space;   * verified, isolate and make non-preemptive
+&space;   * the cpu, then force the process to execute there
+&space;   *
+&space;   */
+&space;  cpu = sysmp(MP_NPROCS) - 1;
+&space;  if (cpu>0) {
+&space;     multi_cpus = 1;
+&space;     if (sysmp(MP_ISOLATE,cpu)) {
+&space;        perror("sysmp-MP_ISOLATE");
+&space;        exit(1);
+&space;     }
+&space;     if (sysmp(MP_NONPREEMPTIVE,cpu)) {
+&space;        perror("sysmp-MP_NONPREEMPTIVE");
+&space;        exit(1);
+&space;     }
+&space;     if (sysmp(MP_MUSTRUN,cpu)) {
+&space;        perror("sysmp-MP_MUSTRUN");
+&space;        exit(1);
+&space;     }
+&space;   }
+&space;   /*
+&space;    * memory map the hardware cycle-counter
+&space;    */
+&space;   poffmask = getpagesize() - 1;
+&space;   phys_addr = syssgi(SGI_QUERY_CYCLECNTR, &amp;cycleval);
+&space;   raddr = phys_addr &amp; ~poffmask;
+&space;   timer_fd = open("/dev/mmem", O_RDONLY);
+&space;   timer_addr = (volatile iotimer_t *)mmap(0, poffmask, PROT_READ,
+&space;                 MAP_PRIVATE, timer_fd, (off_t)raddr);
+&space;   timer_addr = (iotimer_t *)((__psunsigned_t)timer_addr +
+&space;                                (phys_addr &amp; poffmask));
+&space;   fres = ((float)cycleval)/1000000.0;
+&space;   /*
+&space;    * open the PCI user interrupt device/vertex
+&space;    */
+&space;   fd = open(INTRPATH, O_RDWR);
+&space;   if (fd &lt; 0 ) {
+&space;    perror(INTRPATH);
+&space;    exit (1);
+&space;   }
+&space;   /*
+&space;    * open the PLX register space on the PCI40 card
+&space;    */
+&space;   plx_fd = open(PLX_PATH, O_RDWR);
+&space;   if (plx_fd &lt; 0 ) {
+&space;    perror(PLX_PATH);
+&space;    exit (1);
+&space;   }
+&space;   /*
+&space;    * open the PCI40 memory space for device registers
+&space;    */
+&space;   pci_fd = open(PCI40_PATH, O_RDWR);
+&space;   if (pci_fd &lt; 0 ) {
+&space;    perror(PCI40_PATH);
+&space;    exit (1);
+&space;   }
+&space;   /*
+&space;    * map in the PLX register space on the PCI40 card
+&space;    */
+&space;   plx_addr = (volatile uint_t *) mmap(0, PLX_SIZE, PROT_READ|PROT_WRITE,
+&space;                                        MAP_SHARED, plx_fd, 0);
+&space;   if (plx_addr == (uint_t *) MAP_FAILED) {
+&space;    perror("mmap plx_addr");
+&space;    exit (1);
+&space;   }
+&space;   /*
+&space;    * set up the PLX register to pass through the interrupt
+&space;    */
+&space;   x = *(volatile uint_t *)(plx_addr + 0x1a);
+&space;   *(volatile uint_t *)(plx_addr + 0x1a) = x | 0x00030f00;
+&space;   /*
+&space;    * map in the PCI40 memory space for device registers
+&space;    */
+&space;   pci40_addr = (volatile uchar_t *) mmap(0, PCI40_SIZE, PROT_READ|PROT_WRITE,
+&space;                                        MAP_SHARED, pci_fd, 0);
+&space;   if (pci40_addr == (uchar_t *) MAP_FAILED) {
+&space;    perror("mmap");
+&space;    exit (1);
+&space;   }
+&space;   /*
+&space;    * clear the interrupt on the mothercard by clearing CNTRL0
+&space;    * adding 1 to offset for big endian access
+&space;    */
+&space;   *(unsigned char *)(pci40_addr+0x501) = 0x00;
+&space;   /*
+&space;    * Register the pci interrupt as a ULI source.
+&space;    */
+&space;   ULIid = (int *)ULI_register_pci(fd,           /* the pci interrupt device */
+&space;                       intrfunc, /* the handler function pointer */
+&space;                       0,        /* the argument to the handler */
+&space;                       0,        /* the # of semaphores needed  */
+&space;                       0,        /* the stack to use */
+&space;                       0,        /* the stack size to use */
+&space;                       PCI_INTA);/* PCI interrrupt line */
+&space;   if (ULIid == 0) {
+&space;    perror("register uli");
+&space;    exit(1);
+&space;   }
+&space;   printf ("Registered successfully for PCI INTA - Sending interrupts\n");
+&space;   /*
+&space;    * Ask for 200 usec wait time - resolution on Origin is
+&space;    * really only ~1.5 ms instead
+&space;    */
+&space;   wait_time.tv_sec = 0;
+&space;   wait_time.tv_nsec = 200000;
+&space;   while(intr &lt; NUM_INTS) {
+&space;           /*
+&space;            * then, enable the interrupt on the PCI carrier
+&space;            * card - adding 1 to offset for big endian access
+&space;            */
+&space;           begin_time = *timer_addr;
+&space;           *(unsigned char *)(pci40_addr+0x501) = 0xc0;
+&space;           nanosleep(&amp;wait_time,NULL);
+&space;           usec_time = (end_time-begin_time)*fres;
+&space;           if (usec_time > BAD_RESPONSE) {
+&space;              bad_responses++;
+&space;           }
+&space;           if ((usec_time > longest_response) &amp;&amp; (intr > 5))
+&space;              longest_response = usec_time;
+&space;           total += usec_time;
+&space;           average_response = total/(float)intr;
+&space;           if (!(intr % 1000)&amp;&amp;(intr>0)) {
+&space;               printf(" Average ULI Response (%d interrupts):\t %4.2f usecs\n",
+&space;                        intr,average_response);
+&space;               printf(" Number of Interrupts > %d usecs:\t\t %d \n",
+&space;                        BAD_RESPONSE,bad_responses);
+&space;           }
+&space;   }
+&space;  printf(" Average ULI Response (%d interrupts):\t %4.2f usecs \n",
+&space;           intr,average_response);
+&space;  printf(" Number of Interrupts > %d usecs:\t\t %d \n",
+&space;           BAD_RESPONSE,bad_responses);
+&space;  printf(" Longest ULI Response:\t\t\t\t\t %4.2f \n", longest_response);
+&space;  if (multi_cpus) {
+&space;    sysmp( MP_PREEMPTIVE, cpu );
+&space;    sysmp( MP_UNISOLATE, cpu );
+&space;  }
+}
+
+<!-- WARNING: (47) Example captions should come at end of Example - detected on page 124 -->
+<!-- WARNINGLOCATION: PAGE = "124" SRC = "RPPG_ch07.mif" TAGTYPE = "PARA" TAG = "ExampleTitle" TAGCOUNT = "1" UID = "614369" TEXT = "}"-->
+</CODE>
+<EXAMPLE><CAPTION LBL="7-2"><PREFIX>Example 7-2 </PREFIX><XREFTARGET ID="26046">Hypothetical External Interrupt ULI Program</CAPTION></EXAMPLE>
+<CODE>
+/* This program demonstrates use of the External Interrupt source
+&space;* to drive a User Level Interrupt.
+&space;*
+&space;* The program requires the presence of an external interrupt cable looped
+&space;* back between output number 0 and one of the inputs on the machine on
+&space;* which the program is run.
+&nbsp;*/
+#include &lt;sys/ei.h>
+#include &lt;sys/uli.h>
+#include &lt;sys/lock.h>
+#include &lt;unistd.h>
+#include &lt;stdlib.h>
+#include &lt;stdio.h>
+#include &lt;fcntl.h>
+/* The external interrupt device file is used to access the EI hardware */
+#define EIDEV "/dev/ei"
+static int eifd;
+/* The user level interrupt id. This is returned by the ULI registration
+&space;* routine and is used thereafter to refer to that instance of ULI
+&space;*/
+static void *ULIid;
+/* Variables which are shared between the main process thread and the ULI
+&space;* thread may have to be declared as volatile in some situations. For
+&space;* example, if this program were modified to wait for an interrupt with
+&space;* an empty while() statement, e.g.
+&nbsp;*&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;while(!intr);
+&nbsp;* the value of intr would be loaded on the first pass and if intr is
+&space;* false, the while loop will continue forever since only the register
+&space;* value, which never changes, is being examined. Declaring the variable
+&space;* intr as volatile causes it to be reloaded from memory on each iteration.
+&space;* In this code however, the volatile declaration is not necessary since
+&space;* the while() loop contains a function call, e.g.
+&nbsp;*&nbsp;&nbsp;&nbsp;while(!intr)
+&space;*&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ULI_sleep(ULIid, 0);
+&nbsp;* The function call forces the variable intr to be reloaded from memory
+&space;* since the compiler cannot determine if the function modified the value
+&space;* of intr. Thus the volatile declaration is not necessary in this case.
+&space;* When in doubt, declare your globals as volatile.
+&space;*/
+static int intr;
+/* This is the actual interrupt service routine. It runs 
+&space;* asynchronously with respect to the remainder of this program, possibly
+&space;* simultaneously, on an MP machine. This function must obey the ULI mode
+&space;* restrictions, meaning that it may not use floating point or make
+&space;* any system calls. (Try doing so and see what happens.) 
+&space;*/
+static void
+intrfunc(void *arg)
+{
+&nbsp;&nbsp;&nbsp;/* Set the global flag indicating to the main thread that an
+&nbsp;&nbsp;&nbsp; * interrupt has occurred, and wake it up
+&nbsp;&nbsp;&nbsp; */
+&nbsp;&nbsp;&nbsp;intr = 1;
+&nbsp;&nbsp;&nbsp;ULI_wakeup(ULIid, 0);
+}
+/* This function creates a new process and from it, generates a
+&nbsp;* periodic external interrupt.
+&space;*/
+static void
+signaler(void)
+{
+&nbsp;&nbsp;&nbsp;int pid;
+&nbsp;&nbsp;&nbsp;if ((pid = fork()) &lt; 0) {
+&nbsp;&nbsp;&nbsp;perror("fork");
+&nbsp;&nbsp;&nbsp;exit(1);
+&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;if (pid == 0) {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;while(1) {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if (ioctl(eifd, EIIOCSTROBE, 1) &lt; 0) {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("EIIOCSTROBE");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;exit(1);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;sleep(1);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;}
+}
+/* The main routine sets everything up, then sleeps waiting for the
+&space;* interrupt to wake it up.
+&space;*/
+int
+main()
+{
+&nbsp;&nbsp;&nbsp;/* open the external interrupt device */
+&nbsp;&nbsp;&nbsp;if ((eifd = open(EIDEV, O_RDONLY)) &lt; 0) {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror(EIDEV);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;exit(1);
+&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;/* Set the target cpu to which the external interrupt will be
+&nbsp;&nbsp;&nbsp; * directed. This is the cpu on which the ULI handler function above
+&nbsp;&nbsp;&nbsp; * will be called. Note that this is entirely optional, but if
+&nbsp;&nbsp;&nbsp; * you do set the interrupt cpu, it must be done before the
+&nbsp;&nbsp;&nbsp; * registration call below. Once a ULI is registered, it is illegal
+&nbsp;&nbsp;&nbsp; * to modify the target cpu for the external interrupt.
+&nbsp;&nbsp;&nbsp; */
+&nbsp;&nbsp;&nbsp;if (ioctl(eifd, EIIOCSETINTRCPU, 1) &lt; 0) {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("EIIOCSETINTRCPU");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;exit(1);
+&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;/* Lock the process image into memory. Any text or data accessed
+&nbsp;&nbsp;&nbsp; * by the ULI handler function must be pinned into memory since
+&nbsp;&nbsp;&nbsp; * the ULI handler cannot sleep waiting for paging from secondary
+&nbsp;&nbsp;&nbsp; * storage. This must be done before the first time the ULI handler
+&nbsp;&nbsp;&nbsp; * is called. In the case of this program, that means before the
+&nbsp;&nbsp;&nbsp; * first EIIOCSTROBE is done to generate the interrupt, but in
+&nbsp;&nbsp;&nbsp; * general it is a good idea to do this before ULI registration 
+&nbsp;&nbsp;&nbsp; * since with some devices an interrupt may occur at any time
+&nbsp;&nbsp;&nbsp; * once registration is complete
+&nbsp;&nbsp;&nbsp; */
+&nbsp;&nbsp;&nbsp;if (plock(PROCLOCK) &lt; 0) {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("plock");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;exit(1);
+&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;/* Register the external interrupt as a ULI source. */
+&nbsp;&nbsp;&nbsp;ULIid = ULI_register_ei(&nbsp;eifd,   /* the external interrupt device */
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;intrfunc,   /* the handler function pointer */
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;0,&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/* the argument to the handler */
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;1,&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/* the number of semaphores needed */
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;NULL,&nbsp;&nbsp;&nbsp;/* the stack to use (supply one) */
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;0);&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/* the stack size to use (default) */
+&nbsp;&nbsp;&nbsp;if (ULIid == 0) {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("register ei");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;exit(1);
+&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;/* Enable the external interrupt. */
+&nbsp;&nbsp;&nbsp;if (ioctl(eifd, EIIOCENABLE) &lt; 0) {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("EIIOCENABLE");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;exit(1);
+&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;/* Start creating incoming interrupts. */
+&nbsp;&nbsp;&nbsp;signaler();
+&nbsp;&nbsp;&nbsp;/* Wait for the incoming interrupts and report them. Continue
+&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;until the program is terminated by ^C or kill.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;while (1) {
+&nbsp;&nbsp;&nbsp;intr = 0;
+&nbsp;&nbsp;&nbsp;while(!intr) {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if (ULI_sleep(ULIid, 0) &lt; 0) {
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("ULI_sleep");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;exit(1);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;printf("sleeper woke up\n");
+&nbsp;&nbsp;&nbsp;}
+}
+</CODE>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>&space;</PARAGRAPH>
+</SECTION1>
+</CHAPTER>

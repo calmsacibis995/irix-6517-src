@@ -1,0 +1,156 @@
+*#ident "$Revision: 1.24 $"
+*
+* wd95 - wd95a fast/wide SCSI controller
+*
+*FLAG	PREFIX	SOFT	#DEV	DEPENDENCIES
+ns	wd95	-	-	io,scsi
+
++thread_class	scsi
+				wd95intr(){true}
+				wd95_earlyinit(){true}
+$$$
+
+/* this is needed to pull in a routine in a library linked before wd95.o */
+extern int tpsctapetype(ct_g0inq_data_t *, struct tpsc_types *);
+int (*__masterd_wd95_dummy)() = tpsctapetype;
+
+#if defined(EVEREST) || defined(IP22)
+#include "sys/dmamap.h"
+
+#include "sys/scsi.h"
+#include "sys/wd95a.h"
+#include "sys/wd95a_struct.h"
+
+int			wd95block = 0;
+
+#define	WD95_CTLRS	8
+#define	EV_SLOTS	16
+#define WCC		(EV_SLOTS * WD95_CTLRS)
+
+uint			wd95_numctlr = WCC;
+
+/*
+ * The following variable sets the host adapter id for all of the wd95
+ * SCSI buses on the system.  For maximum throughput, set the host
+ * adapter id to 7.  For maximum fairness, set it to 0.  In reality,
+ * though, it doesn't really matter, unless there are multiple host
+ * adapters on the bus.
+ *
+ * If there are SCSI devices with target ID's that are a lower priority
+ * than the host ID priority, they may suffer from starvation if they
+ * are slower than the host adapter, or there are multiple host
+ * adapters.  When this occurs, there may be command timeouts.
+ *
+ * For example if there are two host adapters at ID's 6 and 7, some
+ * targets may not be able to get the bus in order to reconnect to
+ * the host.  If this persists for a longer period than the timeout
+ * period, a timeout will occur.  For this reason, it is recommended
+ * that the host ID be lower than all of the targets.
+ *
+ * If there is a device with the same address as the host adapter, nothing
+ * on that SCSI bus will work.  Often, that device will show up at every
+ * target ID, because of how selection works in SCSI.
+ */
+uint                    wd95_hostid = 0;
+
+/*
+ * if non-zero, the minimum number of seconds
+ * for any SCSI timeout (i.e., timeouts shorter than this value will
+ * be increased to this value.  If zero, whatever timeout the various
+ * upper level drivers specified is used.  This may be useful when
+ * disconnects are enabled, but some devices hold the bus for a very
+ * long period, and devices that had started commands are therefore
+ * not able to reconnect to complete;  that is, it may be an alternative
+ * to changing the disconnect flag in wd95_bus_flags
+ */
+uint wd95mintimeout = 0;
+
+/*
+ * This is the default synchronous transfer period factor for each bus.
+ * If the value is less than 25, then the factor will be autoconfigured
+ * to 50 for external single ended buses and 25 for internal single ended
+ * and all differential buses.  This value corresponds to the synchronous
+ * transfer period factor in the SCSI synchronous negotiation extended
+ * message.  A value of 25 means 10 megatransfers per second; 50 gives 5,
+ * etc.
+ */
+u_char wd95_syncperiod[WCC] = {
+	 0,  0,  0,  0,  0,  0,  0,  0,		/* busses   0 -   7 */
+	 0,  0,  0,  0,  0,  0,  0,  0,		/* busses  10 -  17 */
+	 0,  0,  0,  0,  0,  0,  0,  0,		/* busses  20 -  27 */
+	 0,  0,  0,  0,  0,  0,  0,  0,		/* busses  30 -  37 */
+
+	 0,  0,  0,  0,  0,  0,  0,  0,		/* busses  40 -  47 */
+	 0,  0,  0,  0,  0,  0,  0,  0,		/* busses  50 -  57 */
+	 0,  0,  0,  0,  0,  0,  0,  0,		/* busses  60 -  67 */
+	 0,  0,  0,  0,  0,  0,  0,  0,		/* busses  70 -  77 */
+
+	 0,  0,  0,  0,  0,  0,  0,  0,		/* busses  80 -  87 */
+	 0,  0,  0,  0,  0,  0,  0,  0,		/* busses  90 -  97 */
+	 0,  0,  0,  0,  0,  0,  0,  0,		/* busses 100 - 107 */
+	 0,  0,  0,  0,  0,  0,  0,  0,		/* busses 110 - 117 */
+
+	 0,  0,  0,  0,  0,  0,  0,  0,		/* busses 120 - 127 */
+	 0,  0,  0,  0,  0,  0,  0,  0,		/* busses 130 - 137 */
+	 0,  0,  0,  0,  0,  0,  0,  0,		/* busses 140 - 147 */
+	 0,  0,  0,  0,  0,  0,  0,  0,		/* busses 150 - 157 */
+};
+
+u_char wd95_sync_off[WCC] = {
+	 32, 32, 32, 32, 32, 32, 32, 32,	/* busses   0 -   7 */
+	 32, 32, 32, 32, 32, 32, 32, 32,	/* busses  10 -  17 */
+	 32, 32, 32, 32, 32, 32, 32, 32,	/* busses  20 -  27 */
+	 32, 32, 32, 32, 32, 32, 32, 32,	/* busses  30 -  37 */
+
+	 32, 32, 32, 32, 32, 32, 32, 32,	/* busses  40 -  47 */
+	 32, 32, 32, 32, 32, 32, 32, 32,	/* busses  50 -  57 */
+	 32, 32, 32, 32, 32, 32, 32, 32,	/* busses  60 -  67 */
+	 32, 32, 32, 32, 32, 32, 32, 32,	/* busses  70 -  77 */
+
+	 32, 32, 32, 32, 32, 32, 32, 32,	/* busses  80 -  87 */
+	 32, 32, 32, 32, 32, 32, 32, 32,	/* busses  90 -  97 */
+	 32, 32, 32, 32, 32, 32, 32, 32,	/* busses 100 - 107 */
+	 32, 32, 32, 32, 32, 32, 32, 32,	/* busses 110 - 117 */
+
+	 32, 32, 32, 32, 32, 32, 32, 32,	/* busses 120 - 127 */
+	 32, 32, 32, 32, 32, 32, 32, 32,	/* busses 130 - 137 */
+	 32, 32, 32, 32, 32, 32, 32, 32,	/* busses 140 - 147 */
+	 32, 32, 32, 32, 32, 32, 32, 32,	/* busses 150 - 157 */
+};
+
+
+/*
+ * These are the flags associated with each bus as to what they are
+ * enabled to do (defined in sys/wd95a_struct.h)
+ *	0x01	Synchronous enable
+ *	0x02	Disconnect enable
+ *	0x04	Wide enable (in case of Differential to SE converter[8 bit])
+ *	0x10	Enable Command Tag Queueing for this bus
+ */
+#define	W95BDF	(WD95BUS_SYNC | WD95BUS_WIDE | WD95BUS_DISC | WD95BUS_CTQ)
+#define W95NARROW (WD95BUS_SYNC | WD95BUS_DISC)
+#define W95ASYNC (WD95BUS_WIDE | WD95BUS_DISC)
+#define W95BDF_WOCTQ (WD95BUS_SYNC | WD95BUS_WIDE | WD95BUS_DISC)
+u_char wd95_bus_flags[WCC] = {
+/* bus 0 - 37 */
+	W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF,
+	W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF,
+	W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF,
+	W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF,
+/* bus 40 - 77 */
+	W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF,
+	W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF,
+	W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF,
+	W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF,
+/* bus 80 - 117 */
+	W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF,
+	W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF,
+	W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF,
+	W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF,
+/* bus 120 - 157 */
+	W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF,
+	W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF,
+	W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF,
+	W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF, W95BDF,
+};
+#endif /* EVEREST || IP22 */

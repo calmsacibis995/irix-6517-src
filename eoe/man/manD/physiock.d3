@@ -1,0 +1,113 @@
+.if n .pH ddi.rm/d3/gen/physiock @(#)physiock	43.18 of 3/25/93
+.\" Copyright 1992, 1991 UNIX System Laboratories, Inc.
+.TH physiock D3
+.IX "\f4physiock\fP(D3)"
+.SH NAME
+\f4physiock\f1 \- validate and issue a raw I/O request
+.SH SYNOPSIS
+.nf
+.na
+.ft 4
+#include <sys/types.h>
+#include <sys/buf.h>
+#include <sys/uio.h>
+#include <sys/ddi.h>
+.sp 0.4
+int physiock(void (*\f2strat\fP)(), buf_t *\f2bp\fP, dev_t \f2dev\fP, int \f2rwflag\fP,
+	daddr_t \f2nblocks\fP, uio_t *\f2uiop\fP);
+.ft 1
+.ad
+.fi
+.SS Arguments
+.PD .15
+.RS 0
+.IP "\f2strat\f1" 10n
+Address of the driver \f4strategy\f1(D2) routine,
+or similar function.
+.IP "\f2bp\f1" 10n
+Pointer to the \f4buf\f1(D4) structure describing the I/O request.
+.IP "\f2dev\f1" 10n
+External device number.
+.IP "\f2rwflag\f1" 10n
+Flag indicating whether the access is a read or a write.
+.IP "\f2nblocks\f1" 10n
+Number of blocks that the logical device \f2dev\fP can support.
+.IP "\f2uiop\f1" 10n
+Pointer to the \f4uio\f1(D4) structure
+that defines the user space of the I/O request.
+.RE
+.PD
+.SH DESCRIPTION
+\f4physiock\f1 is called by the character interface
+\f4ioctl\fP(D2), \f4read\fP(D2), and \f4write\fP(D2)
+routines of block drivers to help perform unbuffered I/O
+while maintaining the buffer header as the interface structure.
+.SS "Return Values"
+\f4physiock\f1 returns 0 if the result is successful,
+or the appropriate error number on failure.
+If a partial transfer occurs, the \f4uio\fP structure is
+updated to indicate the amount not transferred and an error is returned.
+\f4physiock\f1 returns the \f4ZNOPC\f1 
+error if an attempt is made to read beyond the end of the device.
+If a read is performed at the end of the device, 0 is returned.
+\f4ZNOSPC\f1 is also returned
+if an attempt is made to write at or beyond the end of a the device.
+\f4EFAULT\f1 is returned if user memory is not valid.
+\f4EAGAIN\f1 is returned if \f4physiock\f1 could not lock all of the pages.
+.SH USAGE
+\f4physiock\f1 performs the following functions:
+.RS 0
+.IP
+verifies the requested transfer is valid by checking if the offset is at
+or past the end of the device
+(this check is bypassed if the size parameter argument
+\f4nblocks\fP is zero) and that the offset is a multiple of 512
+.IP
+sets up a buffer header describing the transfer
+.IP
+faults pages in and locks the pages impacted by the
+I/O transfer so they can't be swapped out
+.IP
+calls the driver \f4strategy\f1 routine passed to it (\f2strat\fP)
+.IP
+sleeps until the transfer is complete and is awakened by a call to
+\f4biodone\f1(D3) from the driver's I/O completion handler
+.IP
+performs the necessary cleanup and updates, then returns to the driver routine
+.RE
+.P
+A transfer using \f4physiock\f1 is considered valid
+if the specified data location exists on the device,
+and the user has specified a storage area large enough
+that exists in user memory space.
+.P
+If \f2bp\fP is set to \f4NULL\f1,
+a buffer is allocated temporarily and freed after the transfer completes.
+.P
+If \f2rwflag\f1 is set to \f4B_READ\f1,
+the direction of the data transfer will be from the kernel to the user's buffer.
+If \f2rwflag\f1 is set to \f4B_WRITE\f1,
+the direction of the data transfer will be from the user's buffer to the kernel.
+.P
+One block is equal to \f4NBPSCTR\fP bytes.
+\f4NBPSCTR\fP is defined in \f4sys/param.h\fP.
+.SS Level
+Base only.
+.SS "Synchronization Constraints"
+Can sleep.
+.P
+Driver-defined basic locks and read/write locks
+may not be held across calls to this function.
+.P
+Driver-defined sleep locks
+may be held across calls to this function.
+.SH REFERENCES
+.na
+\f4buf\fP(D4),
+\f4ioctl\fP(D2),
+\f4read\fP(D2),
+\f4strategy\fP(D2),
+\f4uio\fP(D4),
+\f4write\fP(D2),
+\f4uiophysio\fP(D3X)
+.ad

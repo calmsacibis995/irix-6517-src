@@ -1,0 +1,547 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	exportDlg
+# Version:	$Revision: 1.6 $
+# Synopsis:	Encapsulates the dialog that allows the user to export a
+#		file system.
+# Functions:	expDlg:realize
+#		expDlg:manage
+#		expDlg:fill
+#		expDlg:getData
+#		expDlg:_create
+#		expDlg:_createGeneralArea
+#		expDlg:_dialogCb
+#		expDlg:_comboActivateCb
+#		expDlg:_comboSelectCb
+#		expDlg:_comboAction
+#		expDlg:_accept
+#		expDlg:_cancel
+#		expDlg:_reset
+#		expDlg:_newHostName
+#		expDlg:_newFsName
+#		expDlg:_fetchExportFS
+#%COMMENT_END
+
+
+global	G_data
+if {! [info exists G_data(source,exportPnl)]} {
+	source $G_data(sourcedir)/exportPnl
+	set G_data(source,exportPnl) true
+}
+
+#########################################
+#		Public			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	expDlg:realize
+# Synopsis:	Creates an instance of the dialog.  On the first call, any
+#		class-wide data is initialized.  If an instance of this
+#		dialog already exists for the given handle, no action is taken.
+# Arguments:	- handle	An identifier that is used as a key for storing
+#				(and later retrieving) the created widgets and
+#				any instance specific data.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc expDlg:realize { handle parent } \
+{
+	global		_GW_exp _GD_exp
+
+	if {! [info exists _GW_exp($handle,dialog)]} {
+		set _GD_exp(buttons)	{accept reset cancel help}
+		set _GD_exp(labels)	{XFS_FS_HOST}
+		set _GD_exp(combos)	{XFS_FS_NAME}
+
+		set _GW_exp($handle,dialog) [expDlg:_create $handle $parent]
+
+		####	This must happen after the dialog is realized
+		$_GW_exp($handle,dialog) realizeWidget
+		$_GW_exp($handle,dialog) getValues -width width -height height
+		.$_GW_exp($handle,dialog) setValues \
+				-minWidth $width \
+				-minHeight $height
+
+		####	Panes
+		$_GW_exp($handle,ga) getValues -height height
+		$_GW_exp($handle,ga) setValues \
+				-paneMinimum $height \
+				-paneMaximum $height
+		$_GW_exp($handle,buttons) getValues -height height
+		$_GW_exp($handle,buttons) setValues \
+				-paneMinimum $height \
+				-paneMaximum $height
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	expDlg:manage
+# Synopsis:	Manages an instance of the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc expDlg:manage { handle } \
+{
+	global	_GW_exp
+	if {[info exists _GW_exp($handle,dialog)]} {
+		$_GW_exp($handle,dialog) manageChild
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	expDlg:fill
+# Synopsis:	Given an object signature, retrieve the export information
+#		for that object and fill the dialog
+# Arguments:	- handle	The identifier for the desired instance.
+#		- obj		The object signature for the icon that was
+#				selected in the icon panel when the dialog
+#				was managed.
+#%COMMENT_END
+proc expDlg:fill { handle obj } \
+{
+	global		_GW_exp _GD_exp
+
+	if {[llength $obj] == 1} {
+		set obj [lindex $obj 0]
+		obj:parse $obj o_class o_host o_nm o_type
+	} else {
+		set o_host [fsSrch:getHost fs]
+		set o_nm ""
+	}
+	expDlg:_newHostName $handle $o_host
+
+	if {[clength $o_nm] == 0} {
+	    set o_nm [lindex [combo:getItems $_GW_exp($handle,XFS_FS_NAME)] 0]
+	} else {
+		set hfn $_GD_exp($handle,hfn)
+		set x_obj "* $o_class $o_nm $o_type *"
+		set idx [lsearch $_GD_exp($handle,$hfn,raw) $x_obj]
+		if {$idx != -1} {
+			set o_nm [lindex $_GD_exp($handle,$hfn,mntpts) $idx]
+		} else {
+			####	Cover the case where the file system is
+			####	mounted but not in /etc/fstab.
+			set query "MOUNT_POINT:$o_nm"
+			if {! [catch {set mp [fsInfoCmd simple $obj $query]} error]} {
+				set o_nm $mp
+			}
+		}
+	}
+
+	combo:selectItem $_GW_exp($handle,XFS_FS_NAME) $o_nm
+
+	exPnl:setData export "XFS_EXPOPTS_RO:true"
+	expDlg:_newFsName $handle $o_nm
+}
+
+#%COMMENT_BEGIN
+# Function:	expDlg:getData
+# Synopsis:	Reads the data from the dialog and stores it in keyword/value
+#		pair format.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- data		A reference to a variable in which to store
+#				the data.
+#		- object	A reference to a variable in which to store
+#				the object signature for the directory to
+#				be exported.
+#%COMMENT_END
+proc expDlg:getData { handle data object } \
+{
+	global		_GW_exp _GD_exp
+	upvar $data	dat
+	upvar $object	obj
+
+	set o_nm [string trim [combo:getValue $_GW_exp($handle,XFS_FS_NAME)]]
+	if {$o_nm == ""} {
+		return 0
+	}
+	lappend dat "XFS_FS_NAME:$o_nm"
+	lappend dat "XFS_FS_HOST:$_GD_exp($handle,XFS_FS_HOST)"
+
+	####	TODO:	Need a UI interface for this
+	lappend dat "XFS_UPDATE_EXPORTS:true"
+
+	####	TODO:	Does the type matter here?
+	set o_type efs
+	set obj [list "$_GD_exp($handle,XFS_FS_HOST) FS $o_nm $o_type"]
+
+	####	Get Mount Point data
+	exPnl:getData export dat
+
+	return 1
+}
+
+#########################################
+#		Private			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	expDlg:_create
+# Synopsis:	Creates an instance of the dialog.
+# Arguments:	- handle	The identifier for the new instance.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc expDlg:_create { handle parent } \
+{
+	global		_GW_exp _GD_exp
+	set name	expDlg
+
+	set dialog [xmFormDialog $parent.$name]
+	set pane [xmPanedWindow $dialog.$handle \
+			-sashWidth 1 \
+			-sashHeight 1 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form]
+
+	set _GW_exp($handle,ga) [$name:_createGeneralArea $handle $pane]
+	set _GW_exp($handle,ex) [exPnl:realize export $pane]
+	set _GW_exp($handle,buttons) \
+		[xfs:createDialogButtons $pane $_GD_exp(buttons)]
+
+	foreach i $_GD_exp(buttons) {
+		$_GW_exp($handle,buttons).$i \
+				activateCallback "$name:_dialogCb $handle $i"
+	}
+
+	$_GW_exp($handle,ga) manageChild
+	$_GW_exp($handle,ex) manageChild
+	$_GW_exp($handle,buttons) manageChild
+	$pane manageChild
+
+	return $dialog
+}
+
+#%COMMENT_BEGIN
+# Function:	expDlg:_createGeneralArea
+# Synopsis:	Creates the hostname label/value and file system name/combo
+#		widgets for the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- parent	The parent for the created widgets.
+#%COMMENT_END
+proc expDlg:_createGeneralArea { handle parent } \
+{
+	global          _GW_exp _GD_exp
+
+	set container [xmForm $parent.ga]
+	set grid [sgiGrid $container.grid -numRows 1 -numColumns 5 \
+			-defaultSpacing 2 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none]
+
+	set col 0; set item XFS_FS_HOST
+	xmLabel $grid.$item-label managed -row 0 -column $col; incr col
+	set _GW_exp($handle,$item) [xmLabel $grid.$item managed \
+			-row 0 -column $col -alignment alignment_beginning]
+
+
+	set col 3; set item XFS_FS_NAME
+	xmLabel $grid.$item-label managed -row 0 -column $col; incr col
+	set _GW_exp($handle,$item) [dtDropDownComboBox $grid.$item managed \
+			-row 0 -column $col]
+	$_GW_exp($handle,$item) selectionCallback \
+			"expDlg:_comboSelectCb $handle $item %w %item_or_text"
+	$_GW_exp($handle,$item) activateCallback \
+			"expDlg:_comboActivateCb $handle $item %w"
+
+	$grid columnMargin 2 20
+	$grid columnResizable 0 false
+	$grid columnResizable 1 false
+	$grid columnResizable 2 false
+	$grid columnResizable 3 false
+	$grid manageChild
+
+	return $container
+}
+
+#########################################
+#	Dialog Callbacks		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	expDlg:_dialogCb
+# Synopsis:	The callback function defined on the dialog buttons.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- op		Indicates which button the user selected.
+#%COMMENT_END
+proc expDlg:_dialogCb { handle op } \
+{
+	global		_GW_exp _GD_exp
+
+	switch $op {
+		accept { expDlg:_accept $handle }
+		cancel { expDlg:_cancel $handle }
+		reset  { expDlg:_reset $handle }
+		help   { sgiHelpMsg $_GW_exp($handle,dialog) }
+	}
+}
+
+#########################################
+#	Other Callbacks			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	expDlg:_comboActivateCb
+# Synopsis:	This is called when the user enters a <CR> in the combo-box.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- item		A key that identifies the combo-box.
+#		- w		The widget id for the combo-box.
+#%COMMENT_END
+proc expDlg:_comboActivateCb { handle item w } \
+{
+	set value [string trim [combo:getValue $w]]
+	if {$value != ""} {
+		expDlg:_comboAction $handle $item $w $value
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	expDlg:_comboSelectCb
+# Synopsis:	This is called when the user selects an item in the
+#		combo-box list.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- item		A key that identifies the combo-box.
+#		- w		The widget id for the combo-box.
+#		- value		The selected value.
+#%COMMENT_END
+proc expDlg:_comboSelectCb { handle item w value } \
+{
+	expDlg:_comboAction $handle $item $w $value
+}
+
+#%COMMENT_BEGIN
+# Function:	expDlg:_comboAction
+# Synopsis:	This is called by both expDlg:_comboActivateCb() and
+#		expDlg:_comboSelectCb().  It provides a central place from
+#		which to deal with changes to the combo-box.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- item		A key that identifies the combo-box.
+#		- w		The widget id for the combo-box.
+#		- value		The current value of the combo-box.
+#%COMMENT_END
+proc expDlg:_comboAction { handle item w value } \
+{
+	global		_GD_exp
+
+	if {[info exists _GD_exp($handle,cvalue,$item)] &&
+	    $value == $_GD_exp($handle,cvalue,$item)} {
+		return
+	}
+	set _GD_exp($handle,cvalue,$item) $value
+
+	if {$item == "XFS_FS_NAME"} {
+		expDlg:_newFsName $handle $value
+	}
+}
+
+#########################################
+#	Callback Utilities		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	expDlg:_accept
+# Synopsis:	This is called when the user presses the "Accept" dialog
+#		button.  It gets the data from the dialog and then calls
+#		the server to perform the appropriate action.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc expDlg:_accept { handle } \
+{
+	global		_GW_exp _GD_exp
+
+	if {! [expDlg:getData $handle data object]} {
+		return false
+	}
+
+	obj:parse [lindex $object 0] o_class o_host o_nm o_type
+	if {[catch {set ec [fsCmd export $object [join $data \n]]} error]} {
+		regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		em:setMessageString fs \
+		    "An error occured while exporting $o_nm."
+		em:storeMsg fs error "Unable to export $o_nm:\n\t$nerror"
+	} else {
+	    set hfn $_GD_exp($handle,hfn)
+
+	    set idx [lsearch $_GD_exp($handle,$hfn,data) "$o_nm *"]
+	    if {$idx == -1} {
+		lappend _GD_exp($handle,$hfn,data) "$o_nm $data"
+	    } else {
+		lvarpop _GD_exp($handle,$hfn,data) $idx "$o_nm $data"
+	    }
+
+	    if {[lsearch -exact $_GD_exp($handle,$hfn,mntpts) $o_nm] == -1} {
+		lappend _GD_exp($handle,$hfn,mntpts) $o_nm
+		combo:setItems $_GW_exp($handle,XFS_FS_NAME) \
+				$_GD_exp($handle,$hfn,mntpts)
+		combo:selectItem $_GW_exp($handle,XFS_FS_NAME) $o_nm
+	        set _GD_exp($handle,cvalue,XFS_FS_NAME) $o_nm
+	    }
+	    expDlg:_cancel $handle
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	expDlg:_cancel
+# Synopsis:	This is called when the user presses the "Cancel" dialog
+#		button.  It currently unmanages the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc expDlg:_cancel { handle } \
+{
+	global	_GW_exp
+	$_GW_exp($handle,dialog) unmanageChild
+}
+
+#%COMMENT_BEGIN
+# Function:	expDlg:_reset
+# Synopsis:	This is called when the user presses the "Reset" dialog
+#		button.  It resets the dialog contain the original data
+#		for the selected file system.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc expDlg:_reset { handle } \
+{
+	global		_GD_exp
+
+	expDlg:_newFsName $handle $_GD_exp($handle,cvalue,XFS_FS_NAME)
+}
+
+#########################################
+#		Utilities		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	expDlg:_newHostName
+# Synopsis:	Sets the current hostname XmNlabelString resource to the
+#		given value.  It then gets and displays in the combo-box
+#		the list of entries in /etc/exports from the target host.
+# Arguments:	- handle	The identifier for the desired instance.
+# Arguments:	- host		The target host.
+#%COMMENT_END
+proc expDlg:_newHostName { handle host } \
+{
+	global		_GW_exp _GD_exp _GD_resources
+
+	if {$host == ""} {
+		set hfn [fsSrch:getHost fs]
+	} else {
+		hu:getIpAddress $host hfn hpd hip $_GD_resources(hostsFile)
+	}
+	set _GD_exp($handle,XFS_FS_HOST) $hfn
+	$_GW_exp($handle,XFS_FS_HOST) setValues -labelString $hpd
+
+	exPnl:setData export "XFS_FS_HOST:$hfn"
+
+	expDlg:_fetchExportFS $handle $hfn
+	combo:setItems $_GW_exp($handle,XFS_FS_NAME) \
+			$_GD_exp($handle,$hfn,mntpts)
+}
+
+#%COMMENT_BEGIN
+# Function:	expDlg:_newFsName
+# Synopsis:	Sets the data in the dialog to the export options for the
+#		given file system.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- fsname	The file system name.
+#%COMMENT_END
+proc expDlg:_newFsName { handle fsname } \
+{
+	global		_GD_exp
+
+	set hfn $_GD_exp($handle,hfn)
+	set _GD_exp($handle,cvalue,XFS_FS_NAME) $fsname
+
+	if {[set d [lmatch $_GD_exp($handle,$hfn,data) "$fsname *"]] != ""} {
+		set data ""
+		foreach item $d {
+			lvarpop item
+			lappend data $item
+		}
+		exPnl:setData export $data
+	} else {
+		exPnl:reset export
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	expDlg:_fetchExportFs
+# Synopsis:	Gets the list of exported file systems/directories from
+#		a given host.  For each item retrieved, it gets the export
+#		options.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- hfn		Hostname
+#		- state		An optional parameter that allows the caller
+#				to restrict the query to file systems that
+#				are in the given state (any, mounted,
+#				unmounted).
+#		- force		An optional parameter that indicates whether
+#				or not to use the cache for the given host
+#				(if it exists).  The default value is "false"
+#				which means: use the cache.
+#%COMMENT_END
+proc expDlg:_fetchExportFS { handle hfn {state any} {force false} } \
+{
+	global		_GD_exp
+
+	####	TODO:	For now turn off caching
+	set force true
+
+	if {$force == "false" && \
+	    [info exists _GD_exp($handle,$hfn,mntpts)]} {
+		return
+	}
+
+	####	Initialize
+	set _GD_exp($handle,hfn) $hfn
+	set _GD_exp($handle,$hfn,names) ""
+	set _GD_exp($handle,$hfn,mntpts) ""
+	set _GD_exp($handle,$hfn,data) ""
+
+	####	Get the list of remote/exported filesystems
+	set _GD_exp($handle,$hfn,raw) [fsu:getLocalObjs $hfn $state]
+	if {$_GD_exp($handle,$hfn,raw) != ""} {
+	    foreach obj $_GD_exp($handle,$hfn,raw) {
+		obj:parse $obj o_class o_host o_nm o_type
+		regsub -- "^/dev/dsk/" $o_nm "" nm
+		lappend _GD_exp($handle,$hfn,names) $nm
+
+		set query "MOUNT_POINT:$o_nm"
+		if {[catch {set mp [fsInfoCmd simple $obj $query]} error]} {
+			lappend _GD_exp($handle,$hfn,mntpts) -
+		} else {
+			lappend _GD_exp($handle,$hfn,mntpts) $mp
+		}
+	    }
+	}
+
+	if {[catch {set data [fsInfoCmd export "XFS_HOST:$hfn"]} error]} {
+		regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		em:setMessageString fs "Unable to get export data."
+		em:storeMsg fs error \
+			"Unable to get export data from $hfn.\n\t$nerror"
+	} else {
+	    set data [split [string trimright $data] \n]
+	    foreach item $data {
+		set val [join [lassign [split $item :] key] :]
+		if {$key != "XFS_MNT_DIR"} {
+			lappend _GD_exp($handle,$hfn,data) "$mntpt $item"
+			continue
+		} else {
+			set mntpt $val
+		}
+		if {[lsearch -exact $_GD_exp($handle,$hfn,mntpts) $val] == -1} {
+
+			lappend _GD_exp($handle,$hfn,mntpts) $val
+			lappend _GD_exp($handle,$hfn,names) $val
+			lappend _GD_exp($handle,$hfn,raw) $val
+		}
+		
+	    }
+	}
+}

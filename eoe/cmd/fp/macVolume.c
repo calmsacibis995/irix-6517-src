@@ -1,0 +1,1079 @@
+/* 
+   (C) Copyright Digital Instrumentation Technology, Inc., 1990 - 1993 
+       All Rights Reserved
+*/
+
+
+/* DIT TransferPro  --  MacVolume.c */
+
+/* includes: */
+
+#include <assert.h>
+#include <bstring.h>
+#include <sys/types.h>
+#include <malloc.h>
+#include <sys/param.h>
+#include "macLibrary.h"
+#include "macPort.h"
+#include "Device.h"
+#include "fpdevice.h"
+#include "dm.h"
+
+extern int debug_flag;
+
+static char *Module = "MacInit";
+static struct m_volume *VolumeTable[MAX_MAC_VOLUMES];
+
+/*----------------------macNewVolume --------------------------------
+  Inits a new volume.
+--------------------------------------------------------------------*/
+
+int macNewVolume ( path, volume )
+char *path;
+struct m_volume **volume;
+   {
+    int retval = E_NONE;
+    int i=0;
+    int newVolume = -1;
+
+    while ( retval == E_NONE && i < MAX_MAC_VOLUMES )
+       {
+        if ( VolumeTable[i] && !strcmp (VolumeTable[i]->mountPoint, path) )
+           {
+            retval = set_error (E_MOUNT, Module, "macNewVolume",
+                     "Volume already mounted.");
+           }
+        else if ( VolumeTable[i] == (struct m_volume *)0 && newVolume < 0 )
+           {
+            newVolume = i;
+           }
+        i++;
+       }
+    if ( retval == E_NONE )
+       {
+        if ( newVolume >= 0 )
+           {
+            VolumeTable[newVolume] =  (struct m_volume *)malloc (sizeof (struct
+                                                                  m_volume));
+            if ( VolumeTable[newVolume] == (struct m_volume *)0 )
+               {
+                retval = set_error (E_MEMORY, Module, "macNewVolume",
+                                    "Insufficent memory.");
+               }
+            else
+               {
+                *volume = VolumeTable[newVolume];
+               }
+           }
+        else
+           {
+            retval = set_error (E_MOUNT, Module, "macNewVolume",
+                                "Maximum number of volumes open.");
+           }
+       }
+
+    return (retval);
+   }
+ 
+/*----------------------macFreeVolume ------------------------------
+  Frees a volume.
+-------------------------------------------------------------------*/
+
+int macFreeVolume ( path )
+char *path;
+   {
+    int retval = E_NONE;
+    int i=0;
+    int volume = -1;
+    struct m_volume *macVolume = (struct m_volume *)0;
+
+    while ( volume < 0 && i < MAX_MAC_VOLUMES )
+       {
+        if ( VolumeTable[i] && !strcmp (VolumeTable[i]->mountPoint, path) )
+           {
+            volume = i;
+           }
+        i++;
+       }
+    
+    if ( volume < 0 )
+       {
+        retval = set_error (E_MOUNT, Module, "macFreeVolume",
+                            "Mac volume not mounted.");
+       }
+    else
+       {
+        macVolume = VolumeTable[volume];
+
+        if ( macVolume->catalog )
+           {
+            macFreeTree( &macVolume->catalog, CATALOG_TREE, macVolume->vib );
+           }
+        if ( macVolume->extents )
+           {
+            macFreeTree( &macVolume->extents, EXTENTS_TREE, macVolume->vib );
+           }
+        if ( macVolume->vib )
+           {
+            free( (char *)macVolume->vib );
+           }
+        if ( macVolume->vbm )
+           {
+            free( (char *)macVolume->vbm );
+           }
+        free ( (char *)macVolume );
+        VolumeTable[volume] = (struct m_volume *)0;
+       }
+
+    return (retval);
+   }
+
+/*-----------------------macGetVolume ------------------------------
+   Finds the volume supporting the given path
+-------------------------------------------------------------------*/
+ 
+struct m_volume *macGetVolume ( path )
+char *path;
+   {
+    struct m_volume *volume = (struct m_volume *)0;
+    int i=0;
+    size_t len = 0;
+    int match = -1;
+
+    while ( i < MAX_MAC_VOLUMES )
+       {
+        if ( VolumeTable[i] && !strncmp (VolumeTable[i]->mountPoint, path,
+              strlen(VolumeTable[i]->mountPoint)) && 
+              len < strlen(VolumeTable[i]->mountPoint) )
+           {
+            match = i;
+            len = strlen(VolumeTable[i]->mountPoint);
+           }
+        i++;
+       }
+
+    if ( match >= 0 )
+       {
+        volume = VolumeTable[match];
+       }
+
+    return (volume);
+   }
+
+/*--- macInit ---------------------
+ *   reads info from mac diskette necessary to access its data
+ *   returns:  error status
+ */
+int macInit( volume )
+    struct m_volume *volume;
+   {
+    int retval = E_NONE;
+    int vbmSize;
+    char *funcname = "macInit";
+    int count;
+    int a;
+
+    /* allocate the buffer for the vib */
+    volume->vib = (struct m_VIB *)0;
+    volume->vbm = (struct m_VBM *)0;
+
+  
+    if ( (volume->vib = (struct m_VIB *)malloc((unsigned)NODE_SIZE)) == 0 )
+       {
+        retval = set_error( E_MEMORY, Module, funcname, "" );
+       }
+    else if( (retval = macReadVIB(volume)) != E_NONE )
+       {
+        ;
+       }
+    else
+       {
+        volume->maxNodes = volume->vib->drNmAlblks/4;
+        vbmSize = (volume->vib->drAlBlSt - volume->vib->drVBMSt);
+
+        if ( (volume->vbm = (struct m_VBM *)malloc((unsigned)(vbmSize * NODE_SIZE))) == 0 )
+           {
+            retval = set_error( E_MEMORY, Module, funcname, "" );
+           }
+        else
+           {
+            retval = macReadBitmap (volume, vbmSize );
+           }
+       }
+  
+    if ( retval == E_NONE )
+       {
+        /* These pointers never need to be extended when a new extent is
+           added to either of the trees because this calculation always assumes
+           the maximum tree size you could possibly get for the volume
+           allocate (*catalog) and (*extents) pointers */
+
+        if ( (volume->extents = (struct BtreeNode **)malloc((unsigned)
+            ((volume->maxNodes)*sizeof(struct BtreeNode *)))) == 0 )
+           {
+            retval = set_error( E_MEMORY, Module, funcname, "" );
+           }
+        else
+           {
+            for ( a = 0; a < volume->maxNodes; a++ )
+               {
+                volume->extents[a] = 0;
+               }
+           }
+        if ( retval != E_NONE )
+           {
+            ;
+           }
+        else if ( (volume->catalog = (struct BtreeNode **)malloc((unsigned)
+            (volume->maxNodes*sizeof(struct BtreeNode *)))) == 0 )
+           {
+            retval = set_error( E_MEMORY, Module, funcname, "" );
+           }
+        else
+           {
+            for ( a = 0; a < volume->maxNodes; a++ )
+               {
+                volume->catalog[a] = 0;
+               }
+           }
+       }
+
+    if (retval == E_NONE)
+       {
+        retval = macReadExtentsTree ( volume );  
+       }
+
+    if (retval == E_NONE)
+       {
+        retval = macReadCatalog ( volume );
+       }
+
+    if ( retval != E_NONE )
+       {
+        if ( volume->vib )
+           {
+            free( (char *) volume->vib );
+            volume->vib = 0;
+           }
+        if ( volume->vbm )
+           {
+            free( (char *) volume->vbm );
+            volume->vbm = 0;
+           }
+        for( count = 0; count < volume->maxNodes; count++ )
+           {
+            if( volume->catalog &&  volume->catalog[count] )
+               {
+                free( (char *) volume->catalog[count] );
+                volume->catalog[count] = (struct BtreeNode *)0;
+               }
+            if( volume->extents && volume->extents[count] )
+               {
+                free( (char *) volume->extents[count] );
+                volume->extents[count] = (struct BtreeNode *)0;
+               }
+           }
+        if ( volume->catalog )
+           {
+            free( (char *) volume->catalog );
+            volume->catalog = 0;
+           }
+
+        if ( volume->extents )
+           {
+            free( (char *) volume->extents );
+            volume->extents = 0;
+           }
+       }
+
+    return(retval);
+   }
+
+/*--- macUpdateDisk ----------------------------------
+ *  updates catalog tree file and extents tree file on disk
+ */
+int macUpdateDisk( volume )
+    struct m_volume *volume;
+   {
+    int retval = E_NONE;
+
+    retval = macWriteCatalog( volume );
+
+    if( retval == E_NONE )
+       { 
+        retval = macWriteExtentsTree( volume ); 
+       }
+    if( retval == E_NONE )
+       { 
+        retval = macWriteVIB( volume );
+       }
+    if( retval == E_NONE )
+       { 
+        retval = macWriteBitmap( volume );
+      }   
+
+    return(retval);
+   }
+
+/*--------------- macResetVolume -------------------------------------------
+   Reset entities in memory so that any changes will not persist.
+------------------------------------------------------------------------*/
+
+int macResetVolume( volume )
+    struct m_volume *volume;
+   {
+    int retval = E_NONE;
+
+    if ( volume)
+       {
+        macFreeTree( &volume->catalog, CATALOG_TREE, volume->vib );
+        macFreeTree( &volume->extents, EXTENTS_TREE, volume->vib );
+        if (volume->vib )
+           {
+            free( (char *) volume->vib );
+            volume->vib = (struct m_VIB *)0;
+           }
+        if (volume->vbm )
+           {
+            free( (char *) volume->vbm );
+            volume->vbm = (struct m_VBM *)0;
+           }
+
+        retval = macInit( volume );
+       }
+
+    return( retval );
+   }
+  
+/*-- DISK FORMATTING SUBROUTINES ---------------------------
+ *
+ */
+
+static unsigned char Extent_data[] =
+   {
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x02, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x16, 0x00, 0x00, 0x00, 0x15, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xf8, 0x00, 0xf8, 0x00, 0x78, 0x00, 0x0e
+   };
+
+static unsigned char Catalog_data[] =
+   {
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+    0x02, 0x00, 0x00, 0x25, 0x00, 0x00, 0x00, 0x16, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xf8, 0x00, 0xf8, 0x00, 0x78, 0x00, 0x0e,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x01, 0x00, 0x03, 0x00, 0x00, 0x0f, 0x00,
+    0x00, 0x00, 0x00, 0x01, 0x08, 0x54, 0x65, 0x73, 0x74, 0x44, 0x69, 0x73, 0x6b, 0x00, 0x01, 0x00,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0xa2, 0xf7, 0x3b, 0xd9, 0xa2, 0xf7, 0x3b, 0xdc,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x08, 0x54, 0x65, 0x73, 0x74, 0x44,
+    0x69, 0x73, 0x6b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0x00, 0x00, 0x00, 0x00, 0x02,
+    0x07, 0x44, 0x65, 0x73, 0x6b, 0x74, 0x6f, 0x70, 0x02, 0x00, 0x00, 0x00, 0x46, 0x4e, 0x44, 0x52,
+    0x45, 0x52, 0x49, 0x4b, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x41,
+    0x00, 0x00, 0x2e, 0x00, 0xa2, 0xf7, 0x3b, 0xdc, 0xa2, 0xf7, 0x3b, 0xdc, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2c,
+    0x00, 0x17, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x0e, 0x00, 0x9a, 0x00, 0x64, 0x00, 0x0e
+   };
+
+static unsigned char Desktop_data[] =
+   {
+    0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0f, 0x00, 0x00, 0x00, 0x0f, 0x00, 0x00, 0x00, 0x32,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0x07, 0x44, 0x65, 0x73, 0x6b, 0x74, 0x6f, 0x70, 0x02, 0x00, 0x00, 0x00, 0x46, 0x4e, 0x44, 0x52,
+    0x45, 0x52, 0x49, 0x4b, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+    0x00, 0x00, 0x46, 0x4e, 0x44, 0x52, 0x45, 0x52, 0x49, 0x4b, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0xa2, 0xf7, 0x3b, 0xdc, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x41, 0xff, 0xff,
+    0x40, 0x00, 0x00, 0x01, 0x40, 0x00, 0x08, 0x81, 0x4f, 0xc0, 0x11, 0x01, 0x48, 0x60, 0x22, 0x21,
+    0x48, 0x50, 0x44, 0x41, 0x48, 0x78, 0x00, 0x81, 0x48, 0x3e, 0x01, 0x01, 0x48, 0x55, 0x00, 0x01,
+    0x48, 0x88, 0xfe, 0x01, 0x49, 0x00, 0x43, 0x01, 0x48, 0x80, 0x42, 0x81, 0x48, 0x40, 0x43, 0xc1,
+    0x48, 0x20, 0x40, 0x41, 0x48, 0x10, 0x40, 0x41, 0x4f, 0xf8, 0x40, 0x41, 0x40, 0x04, 0x40, 0x41,
+    0x40, 0x02, 0xc0, 0x41, 0x40, 0x01, 0x40, 0x41, 0x40, 0x00, 0x40, 0x41, 0x40, 0x00, 0x7f, 0xc1,
+    0x40, 0x00, 0x00, 0x01, 0x40, 0x00, 0x00, 0x01, 0x40, 0x00, 0x0f, 0xf9, 0x40, 0x00, 0x07, 0xf1,
+    0x40, 0x00, 0x03, 0xe1, 0x40, 0x00, 0x01, 0xc1, 0x40, 0x00, 0x00, 0x81, 0x40, 0x00, 0x00, 0x01,
+    0x40, 0x00, 0x00, 0x01, 0x7f, 0xff, 0xff, 0xff, 0x00, 0x00, 0x07, 0xb6, 0x00, 0x00, 0x00, 0x01,
+    0x00, 0x00, 0x00, 0x0b, 0x0a, 0x46, 0x69, 0x6e, 0x64, 0x65, 0x72, 0x20, 0x31, 0x2e, 0x30, 0x00,
+    0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0f, 0x00, 0x00, 0x00, 0x0f, 0x00, 0x00, 0x00, 0x32, 0x00,
+    0x02, 0xc8, 0x7a, 0x03, 0x50, 0x00, 0x00, 0x00, 0x1c, 0x00, 0x32, 0x00, 0x00, 0x53, 0x54, 0x52,
+    0x20, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x00, 0xff, 0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x20, 0x51,
+    0xea, 0xc0, 0x33, 0x00, 0x30, 0x30, 0x30, 0x03, 0x30, 0xc0, 0x3f, 0xc0, 0x00, 0x00, 0xc0, 0x03,
+    0x30, 0xc0, 0x0f, 0xfc, 0x00, 0x03, 0x00, 0x03, 0x30, 0xc0, 0x33, 0x33, 0x00, 0x00, 0x00, 0x03,
+    0x30, 0xc0, 0xc0, 0xc0, 0xff, 0xfc, 0x00, 0x03, 0x30, 0xc3, 0x00, 0x00, 0x30, 0x0f, 0x00, 0x03,
+    0x30, 0xc0, 0xc0, 0x00, 0x30, 0x0c, 0xc0, 0x03, 0x30, 0xc0, 0x30, 0x00, 0x30, 0x0f, 0xf0, 0x03,
+    0x30, 0xc0, 0x0c, 0x00, 0x30, 0x00, 0x30, 0x03, 0x30, 0xc0, 0x03, 0x00, 0x30, 0x00, 0x30, 0x03,
+    0x30, 0xff, 0xff, 0xc0, 0x30, 0x00, 0x30, 0x03, 0x30, 0x00, 0x00, 0x30, 0x30, 0x00, 0x30, 0x03,
+    0x30, 0x00, 0x00, 0x0c, 0xf0, 0x00, 0x30, 0x03, 0x30, 0x00, 0x00, 0x03, 0x30, 0x00, 0x30, 0x03,
+    0x30, 0x00, 0x00, 0x00, 0x30, 0x00, 0x30, 0x03, 0x30, 0x00, 0x00, 0x00, 0x3f, 0xff, 0xf0, 0x03,
+    0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03,
+    0x30, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xc3, 0x30, 0x00, 0x00, 0x00, 0x00, 0x3f, 0xff, 0x03,
+    0x30, 0x00, 0x00, 0x00, 0x00, 0x0f, 0xfc, 0x03, 0x30, 0x00, 0x00, 0x00, 0x00, 0x03, 0xf0, 0x03,
+    0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc0, 0x03, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03
+   };
+
+
+/*-- mac_block0_init -------
+ *
+ * Write the block 0 data structure for a partitioned disk.
+ */
+
+int mac_block0_init(void *aDevice)
+{
+    struct m_DriverMap block0;
+    char buf[512];
+    struct DsDevice *dp = aDevice;
+    const int devsize = dp->diskdevice.capacityReplyData.cr_lastlba + 1;
+
+    bzero(&buf, sizeof buf);
+    bzero(&block0, sizeof block0);
+    block0.sbSig = PT_DEVSIGVAL;
+    block0.sbBlockSize = 512;
+    block0.sbBlkCount = devsize;
+
+    macPackDriverMap(&block0, buf);
+
+    return macWriteBlockDevice(dp, buf, 0, 1);
+}
+
+/*-- mac_partition_init -------
+ *
+ * The partition map has two entries.
+ *
+ *	entry 0 is the partition map itself.
+ *	entry 1 is the HFS partition.
+ *
+ * The partition map is two blocks (1024 bytes) long.
+ */
+
+int mac_partition_init(void *aDevice)
+{
+    struct m_PartitionMap map[2];
+    char buf[512 * 2];
+    struct DsDevice *dp = aDevice;
+    const int mapsize = 2;		/* two blocks used for map */
+    const int devsize = dp->diskdevice.capacityReplyData.cr_lastlba + 1;
+    int i;
+    
+    /* Common fields in all partition map entries */
+
+    bzero(buf, sizeof buf);
+    bzero(map, sizeof map);
+    for (i = 0; i < 2; i++)
+    {   map[i].pmSig = PT_PMAPSIGVAL;
+	map[i].pmMapBlkCnt = mapsize;
+    }
+
+    /* Partition map entry 0: partition map. */
+
+    map[0].pmPyPartStart = 1;
+    map[0].pmPartBlkCnt = mapsize;
+    strcpy(map[0].pmPartName, "SGI mkfp partition map");
+    strcpy(map[0].pmPartType, PT_PARTTYPEPMAP);
+
+    /* Partition map entry 1: HFS partition. */
+
+    map[1].pmPyPartStart = mapsize + 1;
+    map[1].pmPartBlkCnt = devsize - mapsize - 1;
+    strcpy(map[1].pmPartName, "HFS Volume");
+    strcpy(map[1].pmPartType, PT_PARTTYPEHFS);
+
+    /* Pack it up and write it out. */
+
+    macPackPartitionMap(&map[0], buf);
+    macPackPartitionMap(&map[1], buf + 512);
+    return macWriteBlockDevice(dp, buf, 1, 2);
+}
+
+/*-- mac_boot_init -------
+ *
+ */
+
+int mac_boot_init( aDevice )
+    void * aDevice;
+   {
+    int retval = E_NONE;
+    char bootData[ 1024 ];
+    int a;
+
+    bzero(bootData, sizeof bootData);
+    retval = macWriteBlockDevice ((struct Device *)aDevice, bootData, 0, 2);
+    return( retval );
+   }
+
+/*-- mac_vib_init -------
+ *
+ */
+
+int mac_vib_init( volume, diskname, mediatype, Iflag )
+    struct m_volume *volume;
+    char *diskname;
+    int mediatype;
+    int Iflag;
+   {
+    int retval = E_NONE;
+    int desktopBytes;
+    int desktopBlocks;
+    int namelen = strlen( diskname );
+    char *funcname = "mac_vib_init";
+    int alBlkFactor;
+    int sizeDisk;
+    int a;
+    struct m_VIB *vibPtr = volume->vib;
+
+    sizeDisk = volume->vblksize - 1;
+    alBlkFactor = ((sizeDisk + 1) / 0x10000) + 1;
+    
+    for ( a = 0; a < NODE_SIZE; a++ )
+       {
+        *((char *)vibPtr+a) = 0;
+       }
+
+    vibPtr->drSigWord = 0x4244;
+
+    vibPtr->drCrDate = vibPtr->drLsMod = macDate();
+    vibPtr->drAtrb = 256;
+
+    vibPtr->drNmFls = 1; /* desktop */
+
+    vibPtr->drVBMSt = 3;
+    vibPtr->drAllocPtr = 0;
+    vibPtr->drWrCnt = 0;
+
+    assert(Iflag == 0);	     /* volume size now determined via READCAPACITY */
+
+    /* allocation blocks = available blocks minus blocks used for boot, vib,
+       and vbm. Start it out as all alblocks on volume (-2 for boot blocks) */
+    if ( Iflag == 1 )  /* It is a Bernoulli 90MB Drive */
+       {
+        vibPtr->drNmAlblks = 58550+18;
+
+        /* set some stuff */
+        vibPtr->drAlBlkSiz = SCSI_BLOCK_SIZE * alBlkFactor;
+        vibPtr->drClpSiz = vibPtr->drAlBlkSiz * 2;        
+
+        /* set vbm size
+           total alblks / number that can be addressed by one vbm block, +1 */
+        vibPtr->drAlBlSt = (int)(vibPtr->drNmAlblks/4096+1) + vibPtr->drVBMSt;
+
+        vibPtr->drNmAlblks = 58550;
+
+        vibPtr->drNxtCNID = 17;
+
+        /* start free blocks out equal to all blocks */
+        vibPtr->drFreeBks = vibPtr->drNmAlblks;
+
+        /* volname */
+        vibPtr->drVolNameLen =
+            (namelen > MAX_MAC_VOL_NAME)? MAX_MAC_VOL_NAME : namelen;
+        strncpy( (char *)vibPtr->drVolName, diskname, (int)vibPtr->drVolNameLen );
+
+        /* clump size */
+        vibPtr->drXTClpSiz = 703488;
+       }
+    else if ( Iflag == 3 )   /* It is a Bernoulli 150MB Drive */
+       {
+        if (sizeDisk < 80000) /* 35MB disk*/
+		    vibPtr->drNmAlblks = 34729+18;
+	else if (sizeDisk < 140000) /* 65MB disk */
+		    vibPtr->drNmAlblks = 64443+18;
+	else if (sizeDisk < 185000) /* 90MB disk */
+            retval = set_error( E_NOTSUPPORTED, Module, funcname, 
+                            "Format not supported by the driver" );
+	else if (sizeDisk < 220000) /* 105MB disk */
+		    vibPtr->drNmAlblks = 51663+18;
+	else if (sizeDisk < 310000) /* 150MB disk */
+		    vibPtr->drNmAlblks = 58942+18;
+	else 
+            retval = set_error( E_NOTSUPPORTED, Module, funcname, 
+                            "Format not supported by the driver" );
+        
+	if (retval == E_NONE)
+	   {
+            /* set some stuff */
+            vibPtr->drAlBlkSiz = SCSI_BLOCK_SIZE * alBlkFactor;
+            vibPtr->drClpSiz = vibPtr->drAlBlkSiz * 2;        
+
+            /* set vbm size
+               total alblks / number that can be addressed by one vbm block, +1 */
+            vibPtr->drAlBlSt = (int)(vibPtr->drNmAlblks/4096+1) + vibPtr->drVBMSt;
+
+	    if (sizeDisk < 80000) /* 35MB disk*/
+		vibPtr->drNmAlblks = 34729;
+            else if (sizeDisk < 140000) /* 65MB disk */
+		vibPtr->drNmAlblks = 64443;
+            else if (sizeDisk < 220000) /* 105MB disk */
+		vibPtr->drNmAlblks = 51663;
+            else  /* 150MB disk */
+		vibPtr->drNmAlblks = 58942;
+
+            vibPtr->drNxtCNID = 17;
+
+           /* start free blocks out equal to all blocks */
+           vibPtr->drFreeBks = vibPtr->drNmAlblks;
+
+           /* volname */
+           vibPtr->drVolNameLen =
+               (namelen > MAX_MAC_VOL_NAME)? MAX_MAC_VOL_NAME : namelen;
+           strncpy( (char *)vibPtr->drVolName, diskname, (int)vibPtr->drVolNameLen );
+
+           /* clump size */
+           if (sizeDisk < 80000) /* 35MB disk*/
+		vibPtr->drXTClpSiz = 277504;
+	   else if (sizeDisk < 140000) /* 65MB disk */
+		vibPtr->drXTClpSiz = 516096;
+           else if (sizeDisk < 220000) /* 105MB disk */
+		vibPtr->drXTClpSiz = 827392;
+           else  /* 150MB disk */
+		vibPtr->drXTClpSiz = 1047040;
+	  }
+       }
+    else if ( Iflag == 2 )   /* It is a SyQuest Drive */
+       {
+        if ( sizeDisk < 87000 )   /* SyQuest44 */
+           {
+            vibPtr->drNmAlblks = 43309;
+           }
+        else
+           {
+            vibPtr->drNmAlblks = 57769;
+           }
+
+        /* set some stuff */
+        vibPtr->drAlBlkSiz = SCSI_BLOCK_SIZE * alBlkFactor;
+        vibPtr->drClpSiz = (SCSI_BLOCK_SIZE*4) * alBlkFactor;
+
+        /* set vbm size
+           total alblks / number that can be addressed by one vbm block, +1 */
+        vibPtr->drAlBlSt = (int)(vibPtr->drNmAlblks/4096+1) + vibPtr->drVBMSt;
+
+        vibPtr->drNmAlblks = vibPtr->drNmAlblks - 18;
+
+        vibPtr->drNxtCNID = 17;
+
+        /* start free blocks out equal to all blocks */
+        vibPtr->drFreeBks = vibPtr->drNmAlblks;
+
+        /* volname */
+        vibPtr->drVolNameLen =
+            (namelen > MAX_MAC_VOL_NAME)? MAX_MAC_VOL_NAME : namelen;
+        strncpy( (char *)vibPtr->drVolName, diskname, (int)vibPtr->drVolNameLen );
+
+        /* clump size */
+        if ( sizeDisk < 87000 )   /* SyQuest44 */
+           {
+            vibPtr->drXTClpSiz = 346112;
+           }
+        else
+           {
+            vibPtr->drXTClpSiz = 692736;
+           }
+       }
+     else if ( Iflag == 4 )  /* It is a Pinnacle Optical Drive */
+       {
+        vibPtr->drNmAlblks = 64078+18;
+
+        /* set some stuff */
+        vibPtr->drAlBlkSiz = SCSI_BLOCK_SIZE * alBlkFactor;
+        vibPtr->drClpSiz = vibPtr->drAlBlkSiz * 4;        
+
+        /* set vbm size
+           total alblks / number that can be addressed by one vbm block, +1 */
+        vibPtr->drAlBlSt = (int)(vibPtr->drNmAlblks/4096+1) + vibPtr->drVBMSt;
+
+        vibPtr->drNmAlblks = 64096;
+
+        vibPtr->drNxtCNID = 17;
+
+        /* start free blocks out equal to all blocks */
+        vibPtr->drFreeBks = vibPtr->drNmAlblks;
+
+        /* volname */
+        vibPtr->drVolNameLen =
+            (namelen > MAX_MAC_VOL_NAME)? MAX_MAC_VOL_NAME : namelen;
+        strncpy( (char *)vibPtr->drVolName, diskname, (int)vibPtr->drVolNameLen );
+
+        /* clump size */
+        vibPtr->drXTClpSiz = 1046016;
+       }
+    else
+       {
+        /* set some stuff */
+        vibPtr->drAlBlkSiz = SCSI_BLOCK_SIZE * alBlkFactor;
+        vibPtr->drClpSiz = (SCSI_BLOCK_SIZE*4) * alBlkFactor;
+	vibPtr->drNmAlblks = ((sizeDisk+1-2) / alBlkFactor);
+
+
+        /* set vbm size
+           total alblks / number that can be addressed by one vbm block, +1 */
+        vibPtr->drAlBlSt = (int)(vibPtr->drNmAlblks/4096+1) + vibPtr->drVBMSt;
+
+	  /* set final value for alBlks */
+	vibPtr->drNmAlblks -= (vibPtr->drAlBlSt/(unsigned short)alBlkFactor);
+
+        vibPtr->drNxtCNID = 17;
+
+        /* start free blocks out equal to all blocks */
+        vibPtr->drFreeBks = vibPtr->drNmAlblks;
+
+        /* volname */
+        vibPtr->drVolNameLen =
+            (namelen > MAX_MAC_VOL_NAME)? MAX_MAC_VOL_NAME : namelen;
+        strncpy( (char *)vibPtr->drVolName, diskname, (int)vibPtr->drVolNameLen );
+
+        /* clump size */
+        vibPtr->drXTClpSiz = ((int)(vibPtr->drNmAlblks/128) * vibPtr->drAlBlkSiz);
+       }
+
+	if (retval == E_NONE)  /* if the 150MB drive can do the formatting */
+	   {
+		vibPtr->drCTClpSiz = vibPtr->drXTClpSiz;
+	
+		/* filCnt */
+		vibPtr->drFilCnt = 1;
+	
+		/* catalog and extents */
+		vibPtr->drXTFlSize = vibPtr->drXTClpSiz;
+		vibPtr->drCTFlSize = vibPtr->drCTClpSiz;
+	
+		vibPtr->drXTExtRec[0].ed_start = 0;
+		vibPtr->drXTExtRec[0].ed_length = vibPtr->drXTClpSiz/vibPtr->drAlBlkSiz;
+	
+		vibPtr->drCTExtRec[0].ed_start = vibPtr->drXTClpSiz/vibPtr->drAlBlkSiz;
+		vibPtr->drCTExtRec[0].ed_length = vibPtr->drCTClpSiz/vibPtr->drAlBlkSiz;
+	
+		/* desktop (should never be more than 32k) */
+		if ( (desktopBytes = vibPtr->drCTClpSiz) < 0x8000 )
+			{
+			desktopBlocks = (desktopBytes / vibPtr->drAlBlkSiz) + 1;
+			}
+		else
+			{
+			desktopBlocks = 0x8000/vibPtr->drAlBlkSiz;
+			}
+	
+		/* set free blocks to final value */
+		vibPtr->drFreeBks -= vibPtr->drXTExtRec[0].ed_length +
+			vibPtr->drCTExtRec[0].ed_length + desktopBlocks;
+	
+		retval = macWriteVIB ( volume );
+	   }
+
+    if (debug_flag)
+       {
+	printf("mac_vib_init: drSigWord==0x%x\n", vibPtr->drSigWord);
+	printf("mac_vib_init: drCrDate==0x%x\n", vibPtr->drCrDate);
+	printf("mac_vib_init: drLsMod==0x%x\n", vibPtr->drLsMod);
+	printf("mac_vib_init: drAtrb==0x%x\n", vibPtr->drAtrb);
+	printf("mac_vib_init: drNmFls==0x%x\n", vibPtr->drNmFls);
+	printf("mac_vib_init: drVBMSt==0x%x\n", vibPtr->drVBMSt);
+	printf("mac_vib_init: drAllocPtr==0x%x\n", vibPtr->drAllocPtr);
+	printf("mac_vib_init: drNmAlblks==0x%x\n", vibPtr->drNmAlblks);
+	printf("mac_vib_init: drAlBlkSiz==0x%x\n", vibPtr->drAlBlkSiz);
+	printf("mac_vib_init: drClpSiz==0x%x\n", vibPtr->drClpSiz);
+	printf("mac_vib_init: drAlBlSt==0x%x\n", vibPtr->drAlBlSt);
+	printf("mac_vib_init: drNxtCNID==0x%x\n", vibPtr->drNxtCNID);
+	printf("mac_vib_init: drFreeBks==0x%x\n", vibPtr->drFreeBks);
+	printf("mac_vib_init: drVolNameLen==0x%x\n", vibPtr->drVolNameLen);
+	printf("mac_vib_init: drVolName==%s\n", vibPtr->drVolName);
+	printf("mac_vib_init: drVolBkUp==0x%x\n", vibPtr->drVolBkUp);
+	printf("mac_vib_init: drVSeqNum==0x%x\n", vibPtr->drVSeqNum);
+	printf("mac_vib_init: drWrCnt==0x%x\n", vibPtr->drWrCnt);
+	printf("mac_vib_init: drXTClpSiz==0x%x\n", vibPtr->drXTClpSiz);
+	printf("mac_vib_init: drCTClpSiz==0x%x\n", vibPtr->drCTClpSiz);
+	printf("mac_vib_init: drNmRtDirs==0x%x\n", vibPtr->drNmRtDirs);
+	printf("mac_vib_init: drFilCnt==0x%x\n", vibPtr->drFilCnt);
+	printf("mac_vib_init: drDirCnt==0x%x\n", vibPtr->drDirCnt);
+	printf("mac_vib_init: drFndrInfo==0x%x\n", vibPtr->drFndrInfo);
+	printf("mac_vib_init: drVCSiz==0x%x\n", vibPtr->drVCSiz);
+	printf("mac_vib_init: drVBMSiz==0x%x\n", vibPtr->drVBMSiz);
+	printf("mac_vib_init: drCtlCSiz==0x%x\n", vibPtr->drCtlCSiz);
+	printf("mac_vib_init: drXTFlSize==0x%x\n", vibPtr->drXTFlSize);
+	printf("mac_vib_init: drXTExtRec==0x%x\n", vibPtr->drXTExtRec);
+	printf("mac_vib_init: drCTFlSize==0x%x\n", vibPtr->drCTFlSize);
+	printf("mac_vib_init: drCTExtRec==0x%x\n", vibPtr->drCTExtRec);
+       }
+
+    return( retval );
+   }
+
+/*-- mac_vbm_init -------
+ *
+ */
+
+int mac_vbm_init( volume )
+    struct m_volume *volume;
+   {
+    int retval = E_NONE;
+    char *vbm;
+    int a, b;
+    struct m_VIB *vibptr = volume->vib;
+    int vbmBlockCount = (vibptr->drAlBlSt - vibptr->drVBMSt);
+    int vbmSize = vbmBlockCount * SCSI_BLOCK_SIZE;
+    char *funcname = "mac_vbm_init";
+
+    if ( (vbm = malloc((unsigned)vbmSize)) == 0 )
+       {
+        retval = set_error( E_MEMORY, Module, funcname, "" );
+       }
+
+    else
+       {
+        for ( a = 0; a < vbmSize; a++ )
+           {
+            *(vbm+a) = 0;
+           }
+
+        /* mark off the extent tree */
+        for ( a = 0, b = (vibptr->drXTFlSize/vibptr->drAlBlkSiz); a < b; a++ )
+           {
+            macSetBit( vbm, a );
+           }
+
+        /* mark off the catalog tree */
+        for ( b = a + (vibptr->drCTFlSize/vibptr->drAlBlkSiz); a < b; a++ )
+           {
+            macSetBit( vbm, a );
+           }
+
+        /* mark off the Desktop file */
+        for ( b = a + (vibptr->drNmAlblks-vibptr->drFreeBks-a); a < b; a++ )
+           {
+            macSetBit( vbm, a );
+           }
+
+        volume->vbm = (struct m_VBM *)vbm;
+
+        retval = macWriteBitmap (volume);
+       }
+
+    if ( vbm )
+       {
+        free( vbm );
+       }
+
+    return( retval );
+   }
+
+/*-- mac_extent_init -------
+ *
+ */
+
+int mac_extent_init( volume )
+    struct m_volume *volume;
+   {
+    int retval = E_NONE;
+    int a, b;
+    struct m_VIB *vibptr = volume->vib;
+    unsigned int esize = vibptr->drXTFlSize;
+    char *extents = malloc( (unsigned)(esize) );
+    struct header_node extentptr;
+    char *funcname = "mac_extent_init";
+
+    if ( extents )
+       {
+        for ( a = 0, b = esize;
+            a < b;
+            a++ )
+           {
+            *(extents+a) = 0;
+           }
+        macUnPackHeaderNode (&extentptr, (char *)Extent_data);
+        extentptr.hnHdrRec.hrTotalNodes = esize/NODE_SIZE;
+        extentptr.hnHdrRec.hrFreeNodes = esize/NODE_SIZE-1;
+        macPackHeaderNode ((char *) Extent_data, &extentptr);
+        memcpy( extents, Extent_data, NODE_SIZE );
+        retval = macWriteBlockDevice (volume->device, extents,
+                 au_to_partition_block(vibptr,vibptr->drXTExtRec[0].ed_start,
+                                  volume->vstartblk), esize/SCSI_BLOCK_SIZE);
+        free( extents );
+       }
+    else
+       {
+        retval = set_error( E_MEMORY, Module, funcname, "" );
+       }
+
+    return( retval );
+   }
+
+/*-- mac_catalog_init -------
+ *
+ */
+
+int mac_catalog_init( volume, diskname )
+    struct m_volume *volume;
+    char *diskname;
+   {
+    int retval = E_NONE;
+    int a, b;
+    struct m_VIB *vibptr = volume->vib;
+    unsigned int csize = vibptr->drCTFlSize;
+    char *catalog = malloc( (unsigned)(csize) );
+    char *funcname = "mac_catalog_init";
+    struct leaf_node catleaf;
+    int namelen = strlen( diskname );
+    struct header_node catptr;
+
+    if ( namelen > MAX_MAC_VOL_NAME )
+       {
+        namelen = MAX_MAC_VOL_NAME;
+       }
+
+    if ( catalog )
+       {
+        for ( a = 0, b = csize;
+            a < b;
+            a++ )
+           {
+            *(catalog+a) = 0;
+           }
+        macUnPackLeafNode( LEAF_NODE, &catleaf, (char *) Catalog_data+NODE_SIZE );
+
+    /* ROOT DIR DIRECTORY RECORD */
+    /* 1 for reserved byte, 4 for parent ID, 1 for name length */
+        ((struct dir_record *)
+        catleaf.lnRecList[0])->dirRecKey.key.ckr.ckrKeyLen = namelen+6;
+        ((struct dir_record *)
+        catleaf.lnRecList[0])->dirRecKey.key.ckr.ckrNameLen = namelen;
+        strncpy( ((struct dir_record *)
+            catleaf.lnRecList[0])->dirRecKey.key.ckr.ckrCName,
+            diskname, namelen );
+        *(((struct dir_record *)
+        catleaf.lnRecList[0])->dirRecKey.key.ckr.ckrCName+namelen) = 0;
+        ((struct dir_record *)catleaf.lnRecList[0])->dirCrDat = 
+        ((struct dir_record *)catleaf.lnRecList[0])->dirMdDat = macDate();
+   
+        /* ROOT DIR THREAD RECORD */
+        ((struct thread_record *)catleaf.lnRecList[1])->thdCNameLen = 
+                                  namelen;
+        strncpy( ((struct thread_record *)catleaf.lnRecList[1])->thdCName, 
+                                  diskname, MAXMACNAME );
+    /* DESKTOP FILE RECORD */
+        ((struct file_record *)catleaf.lnRecList[2])->filCrDat =
+        ((struct file_record *)catleaf.lnRecList[2])->filMdDat = macDate();
+        ((struct file_record *)
+             catleaf.lnRecList[2])->filRExtRec[0].ed_start =
+             vibptr->drCTExtRec[0].ed_start+vibptr->drCTExtRec[0].ed_length;
+        ((struct file_record *)
+             catleaf.lnRecList[2])->filRExtRec[0].ed_length =
+             vibptr->drNmAlblks-vibptr->drFreeBks-
+             ((struct file_record *)catleaf.lnRecList[2])->
+             filRExtRec[0].ed_start;
+        ((struct file_record *)catleaf.lnRecList[2])->filRPyLen =
+             ((struct file_record *)catleaf.lnRecList[2])->
+             filRExtRec[0].ed_length * vibptr->drAlBlkSiz;
+
+        macPackLeafNode( CATALOG_TREE, (char *) Catalog_data+NODE_SIZE, &catleaf );
+
+        macUnPackHeaderNode (&catptr, (char *) Catalog_data);
+        catptr.hnHdrRec.hrTotalNodes = csize/NODE_SIZE;
+        catptr.hnHdrRec.hrFreeNodes = csize/NODE_SIZE-2;
+        macPackHeaderNode((char *) Catalog_data, &catptr);
+        memcpy( catalog, Catalog_data, NODE_SIZE*2 );
+        retval = macWriteBlockDevice (volume->device, catalog,
+                 au_to_partition_block(vibptr,vibptr->drCTExtRec[0].ed_start,
+                                   volume->vstartblk), csize/SCSI_BLOCK_SIZE);
+        free( catalog );
+       }
+    else
+       {
+        retval = set_error( E_MEMORY, Module, funcname, "" );
+       }
+
+    return( retval );
+   }
+
+/*-- mac_desktop_init -------
+ *
+ */
+
+int mac_desktop_init( volume )
+    struct m_volume *volume;
+   {
+    int retval = E_NONE;
+    struct m_VIB *vibptr = volume->vib;
+
+    retval = macWriteBlockDevice (volume->device, (char *) Desktop_data,
+             au_to_partition_block(vibptr,vibptr->drCTExtRec[0].ed_length+
+                   vibptr->drXTExtRec[0].ed_length, volume->vstartblk), 1);
+
+    return( retval );
+   }
+

@@ -1,0 +1,140 @@
+#!/bin/ksh
+#
+# This program determines the number of network boards on a system
+# and starts the runttcp stress test on them.
+#
+# Arguments:
+# -c	Number of iterations, or 0 to loop forever. Default is 1.
+# -i	Interface to be tested. This should be the interface reported by
+#	"netstat -i" without the unit number (e.g. fxp, ipg, hip)
+# -r	Number of concurrent runttcp's per interface during each interation.
+#	Default is 1.
+# -t	Test mode. Print commands rather than executing them. 
+#
+
+DIAGDIR=${DIAGDIR:-/usr/diags/os/scripts}
+LOGDIR=${LOGDIR:-/usr/tmp}
+RUNTTCP=${RUNTTCP:-$DIAGDIR/runttcp}
+
+# process args
+MAX_ITERATION=1
+ECHO=
+IFTYPE=
+NUMRUNS=1
+QUIET=/dev/null
+while getopts "c:i:r:t" FLAG ; do
+	case $FLAG in 
+		c) MAX_ITERATION=$OPTARG;;
+		i) IFTYPE=$OPTARG;;
+		r) NUMRUNS=$OPTARG;;
+		t) ECHO=echo;
+		   QUIET=/dev/tty;;
+		*) echo "usage:" $0 "[-c #loops] [-i iftype] [-r #runs] [-t]"
+		   exit 1;;
+	esac
+done
+
+# process interface type
+if [[ "$IFTYPE" = "" ]]; then
+	echo "The -i option is required"
+	exit 1
+fi
+case $IFTYPE in
+	fxp)	IFNAME=EFast
+		SUBNET=1;;
+	ipg)	IFNAME=FDDIXPress
+		SUBNET=2;;
+	hip)	IFNAME=HIPPI
+		SUBNET=3;;
+	*)  	echo "don't know interface type \"$IFTYPE\""
+		exit 1;;
+esac
+
+# look for interfaces
+hinv | grep $IFNAME | wc | read IFCNT EXTRA;
+echo $IFCNT "$IFNAME boards found"
+if [[ $IFCNT -le 1 ]] ; then
+	echo "Not enough $IFNAME boards for test"
+	exit 0
+fi
+
+# initialize pairs of interfaces
+NETADDR=1
+DEVIND=0;
+CNT=$IFCNT
+while [[ $CNT -gt 1 ]] ; do
+
+	# generate network addresses
+	NETIF1=192.0.$SUBNET.$NETADDR
+	NETADDR=`expr $NETADDR + 1`;
+	NETIF2=192.0.$SUBNET.$NETADDR
+	NETADDR=`expr $NETADDR + 1`;
+
+	DEVIF1=$IFTYPE$DEVIND ;
+	DEVIND=`expr $DEVIND + 1`;
+	DEVIF2=$IFTYPE$DEVIND ;
+	DEVIND=`expr $DEVIND + 1`;
+
+	# configure the hippimap if necessary
+	if [[ $IFTYPE = hip ]]; then
+		$ECHO hipmap -d $NETIF1 > $QUIET 2>&1;
+		$ECHO hipmap -d $NETIF2 > $QUIET 2>&1;
+		$ECHO hipmap $NETIF1 0 > $QUIET 2>&1;
+		$ECHO hipmap $NETIF2 0 > $QUIET 2>&1;
+	fi
+
+	# configure the routes and interfaces
+	$ECHO ifconfig $DEVIF1 $NETIF1 > $QUIET 2>&1
+	$ECHO ifconfig $DEVIF2 $NETIF2 > $QUIET 2>&1
+	$ECHO route delete host $NETIF1 $NETIF2 > $QUIET 2>&1
+	$ECHO route delete host $NETIF2 $NETIF1 > $QUIET 2>&1
+	$ECHO route add host $NETIF1 $NETIF2 0 > $QUIET 2>&1
+	$ECHO route add host $NETIF2 $NETIF1 0 > $QUIET 2>&1
+
+	# purge old logs if present
+	$ECHO rm -f $LOGDIR/net-$IFTYPE.*
+
+	echo "Starting $IFNAME loopback tests between $DEVIF1 and $DEVIF2"
+	if [[ $NUMRUNS -gt 1 ]]; then
+		echo "($NUMRUNS runs in each direction)"
+	fi
+
+	CNT=`expr $CNT - 2`
+done
+
+# iterate as often as desired
+ITERATION=0
+while [[ ($MAX_ITERATION -eq 0) || ($ITERATION -lt $MAX_ITERATION) ]] ; do
+
+	# start tests on pairs of interfaces
+	NETADDR=1
+	RUNTAG=`expr $SUBNET \* 100 - 100`
+	CNT=$IFCNT
+
+	while [[ $CNT -gt 1 ]] ; do
+
+		NETIF1=192.0.$SUBNET.$NETADDR
+		NETADDR=`expr $NETADDR + 1`;
+		NETIF2=192.0.$SUBNET.$NETADDR
+		NETADDR=`expr $NETADDR + 1`;
+
+		RUN=1
+		while [[ $RUN -le $NUMRUNS ]]; do	
+#			$ECHO $RUNTTCP -p tcp -r $RUNTAG -R $NETIF2 -L $NETIF1 -q -a -o $LOGDIR/net-$IFTYPE. & 
+			$ECHO $RUNTTCP -p tcp -r $RUNTAG -d $NETIF1 -q -a -o $LOGDIR/net-$IFTYPE. & 
+			RUNTAG=`expr $RUNTAG + 1`;
+#			$ECHO $RUNTTCP -p tcp -r $RUNTAG -R $NETIF1 -L $NETIF2 -q -a -o $LOGDIR/net-$IFTYPE. &
+			$ECHO $RUNTTCP -p tcp -r $RUNTAG -d $NETIF2 -q -a -o $LOGDIR/net-$IFTYPE. &
+			RUNTAG=`expr $RUNTAG + 1`;
+			RUN=`expr $RUN + 1`
+		done
+
+		CNT=`expr $CNT - 2`;
+	done
+
+	# wait for children to complete, then reiterate
+	wait
+	ITERATION=`expr $ITERATION + 1`
+done
+
+exit

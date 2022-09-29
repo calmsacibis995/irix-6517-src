@@ -1,0 +1,154 @@
+'\"macro stdmacro
+.nr X
+.if \nX=0 .ds x} TRUSTED_NETWORKING 7 "Trusted Networking" "\&"
+.if \nX=1 .ds x} TRUSTED_NETWORKING 7 "Trusted Networking"
+.if \nX=2 .ds x} TRUSTED_NETWORKING 7 "" "\&"
+.if \nX=3 .ds x} TRUSTED_NETWORKING "" "" "\&"
+.TH \*(x}
+.SH NAME
+trusted_networking \- Trusted IRIX network administration: basic concepts.
+.SH PURPOSE
+The purpose of trusted networking is to properly associate 
+security attributes with data that is
+imported to or exported from the system, and to enforce system security
+policy on that data.
+.SH POLICIES
+In the current release of Trusted IRIX, the policies enforced by
+the trusted networking code are as follows.
+.PP
+.RS 5
+Received packet labels must fall within the label range of the
+interface and the host or network.
+.PP
+Delivered data must have a label dominated by the label of the
+receiving process.  The uid of the delivered
+data must be permitted by the socket ACL.
+.PP
+Trusted process that have set the extended attributes
+mode do not have delivery policy enforced, but
+must enforce appropriate policy based on the attributes
+available through the TSIX API. 
+.RE 
+.SH TSIX 
+Trusted IRIX employs the Trusted Security Information Exchange (TSIX)
+standard, which was created by the Trusted Systems Interoperability Group
+(TSIG) to address to shortcomings of IP labeling in a way that would let
+various vendors interoperate with one another.  TSIX is a specification of
+a session layer protocol for passing all the attributes needed to enforce
+policy between two systems.  For more information, see
+http://ftp.sterling.com:80/tsig.
+.PP
+In previous releases of Trusted IRIX, network access control
+decisions were based on information contained in the Security Option in the
+IP header of each datagram.  While the IP Security Option is adequate for
+many applications, it is limited to 40 bytes of information, so it 
+cannot contain all of the security attributes of the remote user.
+.SH SAMP 
+The protocol TSIX uses to communicate the attributes between
+systems is the Security Attribute Modulation Protocol (SAMP).  This
+consists of a header and a list of attributes that are prepended to
+outgoing data as if it were user data.  The TCB at one end puts the headers
+on and the TCB at the other end pulls them off before the data gets passed
+to the user process.
+.SH SATMP
+To improve performance, attributes are represented by 32 bit tokens.  The
+Security Attribute Token Mapping Protocol (SATMP) protocol is used to
+convert security attributes in the format native to the local system into
+tokens useful to the destination system.  
+.SH DOT
+A Domain of Translation (DOT) identifies a set of translation tables a
+system uses when converting security attributes between its native format
+and the network representation understood in that domain. 
+.SH "IP Security Options"
+The following IP Security Options are recognized by the trusted
+networking software.
+.SS RIPSO
+The Revised IP Security Option was proposed by the US Department of
+Defense.  RIPSO includes two types of security options. The Basic Security
+Option (BSO), accommodates sixteen security classifications and a variable
+number of handling restrictions. The Extended Security Option (ESO), used
+in conjunction with the BSO, encodes security compartments and other
+security information. RIPSO is described by RFC 1108, U.S. Department of
+Defense Security Options for the Internet Protocol.  For more information,
+see Internet RFC 1108 or http://ftp.sterling.com:80/tsig/references/ripso.
+.SS CIPSO
+The Commercial IP Security Option was proposed by the Trusted Systems
+Interoperability Group with the intent of meeting trusted networking
+requirements for the commercial trusted systems market place. CIPSO is
+capable of supporting multiple security policies, although the CIPSO draft
+as of this writing only defines the formats and procedures required to
+support mandatory access control.  For more information, see
+http://ftp.sterling.com:80/tsig/tsix/tsix1.1/cipso/cipso.html.
+.SS SGIPSO
+This is CIPSO with additional vendor tag types
+for administrative labels, integrity labels and uids.  This will only
+interoperate with other SGI systems and is required by SGI systems to
+enforce security policy in the evaluated configuration.  
+
+.SH "Processing at Network and Host Levels"
+Under Trusted IRIX, processing of imported and exported security labels
+occurs at two levels.  At the Network
+Level, IP Security Options are used to route traffic.  At the Session
+Manager Level, SAMP and SATMP are used to send all the Security Attributes
+required to enforce securty policy between network components.
+.SS "Host Categories"
+There are three categories of host from which Trusted IRIX can receive
+packets: another TSIX host, a non-TSIX host that puts a security option in
+the IP header and an unlabelled host.  Policy is enforced as follows.
+.TP 16
+TSIX Host
+Policy is enforced at both the network level and the
+SAMP level.  At the network level, a check is made to determine whether
+the IP security option information is within the range of the interface.   
+At the SAMP level, a check is made to determine whether the data should 
+be delivered to the process for which it is intended.
+.TP 16
+IP-Option Host
+Only the interface level check is performed,
+based on the information in the security option and the range of the interface.
+.TP 16
+Unlabelled Host
+Access decisions are based on defaults for that
+interface and that host.  
+.SS "Network Level Access Decisions"
+A received packet either has a SGIPSO, CIPSO, or RIPSO option, or is
+unlabelled.  In the first case, the sensitivity label is extracted and, if it
+is not within the label range of the interface, it is dropped.  In the case
+of an unlabelled packet, the sensitivity label is obtained from the default
+label of the interface if present, otherwise from the host or network entry
+in the rhost database is used.  If the default label is not within the 
+range of the interface the packet is dropped.
+.PP
+An integrity label range may be specified for the interface.  If present,
+the integrity from the SGIPSO Tag will be used for the label range
+comparison, otherwise the default integrity for either the interface
+or host will be used as for unlabeled packet processing.
+.PP
+For packets that are routed, or that are replied to by the TCB, for
+example ICMP, the outgoing packets will have the same label as the
+received packet.  That label will be used for a label range check
+against the outgoing interface, and the packet will be dropped if
+not within range.
+.PP
+For TSIX hosts, the IP header label is not used further for
+policy.  For unlabled hosts, and for non-TSIX hosts the IP
+label is used for any further policy decisions.
+.SS "Host Level Access Decisions"
+For TSIX hosts, the security attributes are provided in the SAMP header.
+Attributes identified as mandatory that are not present in SAMP header are
+first supplied from the interface, and then from the rhost database default
+entry.  If all mandatory attributes are not present, the packet is dropped
+in the case of UDP, or the connection is closed for TCP.  The session
+manager maintains a composite set of attributes for the socket that
+consists of the last modulated attributes and any defaults.  Theae
+composite attributes are the attributes used to enforce policy on delivery
+to applications, and are available to trusted applications via the TSIX
+API.
+.SH "SEE ALSO"
+libt6(3N),
+iflabel(1m),
+rhost(1m),
+satmpd(1m),
+satmp(7p),
+samp(7p),
+tsix(7p)

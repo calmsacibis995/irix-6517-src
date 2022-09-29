@@ -1,0 +1,340 @@
+<!-- Produced by version 3.14 (11/22/96) of SGI Frame/SGML translator -->
+<CHAPTER LBL="9"><TITLE><XREFTARGET ID="12688">High-Performance File I/O</TITLE><PARAGRAPH>This chapter describes three special modes of disk I/O:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH><XREF IDREF="78623" TYPE="TITLE">&ldquo;Using Synchronous Output&rdquo;</XREF> describes the effect of the O_SYNC file option.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="29205" TYPE="TITLE">&ldquo;Using Direct I/O&rdquo;</XREF> compares the use of direct-to-disk output with normal (buffered) output.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="14806" TYPE="TITLE">&ldquo;Using Guaranteed-Rate I/O&rdquo;</XREF> describes a special mode of I/O used with real-time XFS volumes.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="78623">Using Synchronous Output</TITLE><PARAGRAPH>You use synchronous disk output to prevent the IRIX kernel scheme from deferring disk output.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>About Buffered Output</TITLE><PARAGRAPH>When you open a disk file and do not specify the O_SYNC flag (see the <INDEXTARGET ID="TIP_3c.fcntl1"><!-- POSTPROCESSDATA: TIP_3c.fcntl1|<FUNCTION>write()</FUNCTION>:synchronous --><INDEXTARGET ID="TIP_3c.fcntl2"><!-- POSTPROCESSDATA: TIP_3c.fcntl2|synchronous disk output --><INDEXTARGET ID="TIP_3c.fcntl3"><!-- POSTPROCESSDATA: TIP_3c.fcntl3|disk output:synchronous --><REFPAGE>open(2)</REFPAGE> reference page), a call to <FUNCTION>write()</FUNCTION> for that file descriptor returns as soon as the data has been copied to a buffer in the kernel address space.</PARAGRAPH>
+<PARAGRAPH>The actual disk write may not take place until considerable time has passed. A common pool of disk buffers is used for all disk files. (The size of the pool is set by the <VARIABLE>nbuf</VARIABLE> system configuration variable, and defaults to approximately 2.5% of all physical memory.) Disk buffer management is integrated with the virtual memory paging mechanism. A daemon executes periodically and initiates output of buffered blocks according to the age of the data and the needs of the system.</PARAGRAPH>
+<PARAGRAPH>The default management of disk output improves performance for the system in general but has three drawbacks:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>All output data must be copied from the buffer in process address space to a buffer in the kernel address space. For small or infrequent writes, the copy time is negligible, but for large quantities of data it adds up.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>You do not know when the written data is actually safe on disk. A system crash could prevent the output of a large amount of buffered data.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>When the system does decide to flush output buffers to disk, it can generate a large quantity of I/O that monopolizes the disk channel for a long time, delaying other I/O operations.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>You can force the writing of all pending output for a file by calling <FUNCTION>fsync()</FUNCTION> (see the <REFPAGE>fsync(2)</REFPAGE> reference page). This gives you a way of creating a known checkpoint of a file. However, <FUNCTION>fsync()</FUNCTION> blocks until all buffered writes are complete, possibly a long time. When using asynchronous I/O, you can make file synchronization asynchronous also (see <XREF IDREF="63791" TYPE="TITLE">&ldquo;Assuring Data Integrity&rdquo;</XREF>).</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Requesting Synchronous Output</TITLE><PARAGRAPH>When you open a disk file specifying O_SYNC, each call to <FUNCTION>write()</FUNCTION> blocks until the data has been written to disk. This gives you a way of ensuring that all output is complete as it is created. If you combine O_SYNC access with asynchronous I/O, you can let the asynchronous process suffer the delay (see <XREF IDREF="73732" TYPE="TITLE">&ldquo;About Asynchronous I/O&rdquo;</XREF>).</PARAGRAPH>
+<PARAGRAPH>Synchronous output is still buffered output&mdash;data is copied to a kernel buffer before writing. The meaning of O_SYNC is that the file data is all present even if the system crashes. For this reason, each write to an O_SYNC file can cause a write of file metadata as well as the file data itself. These extra writes can make synchronous output quite slow.</PARAGRAPH>
+<PARAGRAPH>The O_SYNC option takes effect even when the amount of data you write is less than the physical blocksize of the disk, or when the output does not align with the physical boundaries of disk blocks. In order to guarantee writing of misaligned data, the kernel has to read disk blocks, update them, and write them back. If you write using incomplete disk blocks (512 bytes) on block boundaries, synchronous output is slower.</PARAGRAPH>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="29205">Using Direct I/O</TITLE><PARAGRAPH>You can bypass the kernel's buffer cache completely by using the option O_DIRECT. Under this option, writes to the file take place directly from your program's buffer to the device&mdash;the data is not copied to a buffer in the kernel first. In order to use O_DIRECT you are required to transfer data in quantities that are multiples of the disk blocksize, aligned on blocksize boundaries. (The requirements for O_DIRECT use are documented in the <INDEXTARGET ID="TIP_3c.fcntl4"><!-- POSTPROCESSDATA: TIP_3c.fcntl4|direct disk output --><INDEXTARGET ID="TIP_3c.fcntl5"><!-- POSTPROCESSDATA: TIP_3c.fcntl5|<FUNCTION>write()</FUNCTION>:direct --><INDEXTARGET ID="TIP_3c.fcntl6"><!-- POSTPROCESSDATA: TIP_3c.fcntl6|disk output:synchronous direct --><REFPAGE>open(2)</REFPAGE> and <REFPAGE>fcntl(2)</REFPAGE> reference pages.)</PARAGRAPH>
+<PARAGRAPH>An O_DIRECT <FUNCTION>read()</FUNCTION> or <FUNCTION>write()</FUNCTION> is synchronous&mdash;control does not return until the disk operation is complete. Also, an O_DIRECT <FUNCTION>read()</FUNCTION> call always causes disk input&mdash;there is input cache. However, you can open a file O_DIRECT and use the file descriptor for asynchronous I/O, so that the delays are taken by an asynchronous thread (see <XREF IDREF="73732" TYPE="TITLE">&ldquo;About Asynchronous I/O&rdquo;</XREF>).</PARAGRAPH>
+<PARAGRAPH>Direct I/O is required when you use guaranteed-rate I/O (see <XREF IDREF="14806" TYPE="TITLE">&ldquo;Using Guaranteed-Rate I/O&rdquo;</XREF>).</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>Direct I/O Example</TITLE><PARAGRAPH>The program in <XREF IDREF="31069" TYPE="TEXT">Example&nbsp;9-1</XREF> allows you to experiment and compare buffered output, synchronized output, and direct output. An example of using it might resemble this:</PARAGRAPH>
+<CODE>
+> timex dirio -o /var/tmp/dout -m b -b 4096 -n 100
+real        0.10
+user        0.01
+sys         0.02
+> timex dirio -o /var/tmp/dout -m d -b 4096 -n 100
+real        1.35
+user        0.01
+sys         0.06
+> timex dirio -o /var/tmp/dout -m s -b 4096 -n 100
+real        3.43
+user        0.01
+sys         0.09
+</CODE>
+<PARAGRAPH>&nbsp;</PARAGRAPH>
+<CODE><CAPTION LBL="9-1"><PREFIX>Example 9-1 </PREFIX><XREFTARGET ID="31069">Source of Direct I/O Example</CAPTION>/*
+||&nbsp;dirio:&nbsp;program&nbsp;to&nbsp;test&nbsp;and&nbsp;demonstrate&nbsp;direct&nbsp;I/O.
+||
+||&nbsp;dirio&nbsp;&nbsp;[-o&nbsp;outfile]&nbsp;[&nbsp;-m&nbsp;{b|s|d}&nbsp;]&nbsp;[&nbsp;-b&nbsp;bsize&nbsp;]&nbsp;[&nbsp;-n&nbsp;recs&nbsp;]&nbsp;[&nbsp;-i&nbsp;]
+||
+||&nbsp;&nbsp;-o&nbsp;outfile&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;output&nbsp;file&nbsp;pathname,&nbsp;default&nbsp;$TEMPDIR/dirio.out
+||
+||&nbsp;&nbsp;-m&nbsp;{b|s|d}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;file&nbsp;mode:&nbsp;buffered&nbsp;(default),&nbsp;synchronous,&nbsp;or&nbsp;direct
+||
+||&nbsp;&nbsp;-b&nbsp;bsize&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;blocksize&nbsp;for&nbsp;each&nbsp;write,&nbsp;default&nbsp;512
+||
+||&nbsp;&nbsp;-n&nbsp;recs&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;how&nbsp;many&nbsp;writes&nbsp;to&nbsp;do,&nbsp;default&nbsp;1000
+||
+||&nbsp;&nbsp;-i&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;display&nbsp;info&nbsp;from&nbsp;fcntl(F_DIOINFO)
+||
+*/
+#include&nbsp;&lt;errno.h>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;for&nbsp;perror()&nbsp;*/
+#include&nbsp;&lt;stdio.h>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;for&nbsp;printf()&nbsp;*/
+#include&nbsp;&lt;stdlib.h>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;for&nbsp;getenv(),&nbsp;malloc(3c)&nbsp;*/
+#include&nbsp;&lt;sys/types.h>&nbsp;&nbsp;/*&nbsp;required&nbsp;by&nbsp;open()&nbsp;*/
+#include&nbsp;&lt;unistd.h>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;getopt(),&nbsp;open(),&nbsp;write()&nbsp;*/
+#include&nbsp;&lt;sys/stat.h>&nbsp;&nbsp;&nbsp;/*&nbsp;ditto&nbsp;*/
+#include&nbsp;&lt;fcntl.h>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;open()&nbsp;and&nbsp;fcntl()&nbsp;*/
+
+int&nbsp;main(int&nbsp;argc,&nbsp;char&nbsp;**argv)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;char*&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;tmpdir;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;->name&nbsp;string&nbsp;of&nbsp;temp&nbsp;dir&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;char*&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ofile&nbsp;=&nbsp;NULL;&nbsp;/*&nbsp;argument&nbsp;name&nbsp;of&nbsp;file&nbsp;path&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;oflag&nbsp;=&nbsp;0;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;-m&nbsp;b/s/d&nbsp;result&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;size_t&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;bsize&nbsp;=&nbsp;512;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;blocksize&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;void*&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;buffer;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;aligned&nbsp;buffer&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;nwrites&nbsp;=&nbsp;1000;&nbsp;/*&nbsp;number&nbsp;of&nbsp;writes&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ofd;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;file&nbsp;descriptor&nbsp;from&nbsp;open()&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;info&nbsp;=&nbsp;0;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;-i&nbsp;option&nbsp;default&nbsp;0&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;c;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;scratch&nbsp;var&nbsp;for&nbsp;getopt&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;char&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;outpath[128];&nbsp;&nbsp;&nbsp;/*&nbsp;build&nbsp;area&nbsp;for&nbsp;output&nbsp;pathname&nbsp;*/&nbsp;&nbsp;&nbsp;&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;struct&nbsp;dioattr&nbsp;dio;
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Get&nbsp;the&nbsp;options
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;while&nbsp;(&nbsp;-1&nbsp;!=&nbsp;(c&nbsp;=&nbsp;getopt(argc,argv,"o:m:b:n:i"))&nbsp;)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;switch&nbsp;(c)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'o':&nbsp;/*&nbsp;-o&nbsp;outfile&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ofile&nbsp;=&nbsp;optarg;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'m':&nbsp;/*&nbsp;-m&nbsp;mode&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;switch&nbsp;(*optarg)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'b'&nbsp;:&nbsp;/*&nbsp;-m&nbsp;b&nbsp;buffered&nbsp;i.e.&nbsp;normal&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;oflag&nbsp;=&nbsp;0;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'s'&nbsp;:&nbsp;/*&nbsp;-m&nbsp;s&nbsp;synchronous&nbsp;(but&nbsp;not&nbsp;direct)&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;oflag&nbsp;=&nbsp;O_SYNC;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'d'&nbsp;:&nbsp;/*&nbsp;-m&nbsp;d&nbsp;direct&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;oflag&nbsp;=&nbsp;O_DIRECT;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;default:
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;fprintf(stderr,"?&nbsp;-m&nbsp;%c\n",*optarg);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;-1;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'b'&nbsp;:&nbsp;/*&nbsp;blocksize&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;bsize&nbsp;=&nbsp;strtol(optarg,&nbsp;NULL,&nbsp;0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'n'&nbsp;:&nbsp;/*&nbsp;number&nbsp;of&nbsp;writes&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;nwrites&nbsp;=&nbsp;strtol(optarg,&nbsp;NULL,&nbsp;0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'i'&nbsp;:&nbsp;/*&nbsp;-i&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;info&nbsp;=&nbsp;1;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;default:
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;-1;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}&nbsp;/*&nbsp;end&nbsp;switch&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;}&nbsp;/*&nbsp;end&nbsp;while&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Ensure&nbsp;a&nbsp;file&nbsp;path
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(ofile)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;strcpy(outpath,ofile);
+&nbsp;&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;tmpdir&nbsp;=&nbsp;getenv("TMPDIR");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!tmpdir)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;tmpdir&nbsp;=&nbsp;"/var/tmp";
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;strcpy(outpath,tmpdir);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;strcat(outpath,"/dirio.out");
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Open&nbsp;the&nbsp;file&nbsp;for&nbsp;output,&nbsp;truncating&nbsp;or&nbsp;creating&nbsp;it
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;oflag&nbsp;|=&nbsp;O_WRONLY&nbsp;|&nbsp;O_CREAT&nbsp;|&nbsp;O_TRUNC;
+&nbsp;&nbsp;&nbsp;&nbsp;ofd&nbsp;=&nbsp;open(outpath,oflag,0644);
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(-1&nbsp;==&nbsp;ofd)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;char&nbsp;msg[256];
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;sprintf(msg,"open(%s,0x%x,0644)",outpath,oflag);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror(msg);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;-1;
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;If&nbsp;applicable&nbsp;(-m&nbsp;d)&nbsp;get&nbsp;the&nbsp;DIOINFO&nbsp;for&nbsp;the&nbsp;file&nbsp;and&nbsp;display.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(oflag&nbsp;&amp;&nbsp;O_DIRECT)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(void)fcntl(ofd,F_DIOINFO,&amp;dio);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(info)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;printf("dioattr.d_mem&nbsp;&nbsp;&nbsp;&nbsp;:&nbsp;%8d&nbsp;(0x%08x)\n",dio.d_mem,dio.d_mem);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;printf("dioattr.d_miniosz:&nbsp;%8d&nbsp;(0x%08x)\n",dio.d_miniosz,dio.d_miniosz);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;printf("dioattr.d_maxiosz:&nbsp;%8d&nbsp;(0x%08x)\n",dio.d_maxiosz,dio.d_maxiosz);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(bsize&nbsp;&lt;&nbsp;dio.d_miniosz)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;fprintf(stderr,"bsize&nbsp;%d&nbsp;too&nbsp;small\n",bsize);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;-2;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(bsize&nbsp;%&nbsp;dio.d_miniosz)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;fprintf(stderr,"bsize&nbsp;%d&nbsp;is&nbsp;not&nbsp;a&nbsp;miniosz-multiple\n",bsize);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;-3;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(bsize&nbsp;>&nbsp;dio.d_maxiosz)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;fprintf(stderr,"bsize&nbsp;%d&nbsp;too&nbsp;large\n",bsize);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;-4;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;{&nbsp;/*&nbsp;set&nbsp;a&nbsp;default&nbsp;alignment&nbsp;rule&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;dio.d_mem&nbsp;=&nbsp;8;
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Get&nbsp;a&nbsp;buffer&nbsp;aligned&nbsp;the&nbsp;way&nbsp;we&nbsp;need&nbsp;it.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;buffer&nbsp;=&nbsp;memalign(dio.d_mem,bsize);
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!buffer)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;fprintf(stderr,"could&nbsp;not&nbsp;allocate&nbsp;buffer\n");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;-5;
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;bzero(buffer,bsize);
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Write&nbsp;the&nbsp;number&nbsp;of&nbsp;records&nbsp;requested&nbsp;as&nbsp;fast&nbsp;as&nbsp;we&nbsp;can.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;for(c=0;&nbsp;c&lt;nwrites;&nbsp;++c)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(&nbsp;bsize&nbsp;!=&nbsp;(write(ofd,buffer,bsize))&nbsp;)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;char&nbsp;msg[80];
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;sprintf(msg,"%d&nbsp;th&nbsp;write(%d,buffer,%d)",c+1,ofd,bsize);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror(msg);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;To&nbsp;level&nbsp;the&nbsp;playing&nbsp;field,&nbsp;sync&nbsp;the&nbsp;file&nbsp;if&nbsp;not&nbsp;sync'd&nbsp;already.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(0==(oflag&nbsp;&amp;&nbsp;(O_DIRECT|O_SYNC)))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;fdatasync(ofd);
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;close(ofd);
+&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;0;
+}
+</CODE>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE>Using a Delayed System Buffer Flush</TITLE><PARAGRAPH>When your application has both clearly defined times when all unplanned disk activity should be prevented, and clearly defined times when disk activity can be tolerated, you can use the <INDEXTARGET ID="TIP_3c.fcntl7"><!-- POSTPROCESSDATA: TIP_3c.fcntl7|<FUNCTION>syssgi()</FUNCTION>:set flush interval --><FUNCTION>syssgi()</FUNCTION> function to control the kernel's automatic disk writes.</PARAGRAPH>
+<PARAGRAPH>Prior to a critical section of length <VARIABLE>s</VARIABLE> seconds that must not be interrupted by unplanned disk writes, use <FUNCTION>syssgi()</FUNCTION> as follows:</PARAGRAPH>
+<EXAMPLE>
+syssgi(SGI_BDFLUSHCNT,<VARIABLE>s</VARIABLE>);
+</EXAMPLE>
+<PARAGRAPH>The kernel will not initiate any deferred disk writes for <VARIABLE>s</VARIABLE> seconds. At the start of a period when disk activity can be tolerated, initiate a flush of the kernel's buffered writes with <FUNCTION>syssgi()</FUNCTION> as follows:</PARAGRAPH>
+<EXAMPLE>
+syssgi(SGI_SSYNC);
+</EXAMPLE>
+<NOTE><PREFIX>Note</PREFIX>This technique is meant for use in a uniprocessor. Code executing in an isolated CPU of a multiprocessor is not affected by kernel disk writes (unless a large buffer flush monopolizes a needed bus or disk controller).</NOTE>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="14806">Using Guaranteed-Rate I/O</TITLE><PARAGRAPH>Under specific conditions, your program can demand a guaranteed rate of data transfer. You would use this feature, for example, to ensure input of data for a real-time video display, or to ensure adequate disk bandwidth for high-speed telemetry capture.<INDEXTARGET ID="TIP_3c.fcntl8"><!-- POSTPROCESSDATA: TIP_3c.fcntl8|guaranteed-rate I/O --></PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>About Guaranteed-Rate I/O</TITLE><PARAGRAPH>Guaranteed-rate I/O (GRIO) allows a program to request a specific data bandwidth to or from a filesystem. The GRIO subsystem grants the request if that much requested bandwidth is available from the hardware. For the duration of the grant, the application is assured of being able to move the requested amount of data per second. Assurance of this kind is essential to real-time data capture and digital media programming.</PARAGRAPH>
+<PARAGRAPH>GRIO is a feature of the XFS filesystem support&mdash;EFS, the older IRIX file system, does not support GRIO. In addition, the optional subsystem <FILENAME>eoe.sw.xfsrt</FILENAME> must be installed.With IRIX       6.5, GRIO is supported on XLV volumes over disks or RAID systems.</PARAGRAPH>
+<PARAGRAPH>GRIO is available only to programs that use direct I/O (see <XREF IDREF="29205" TYPE="TITLE">&ldquo;Using Direct I/O&rdquo;</XREF>).</PARAGRAPH>
+<PARAGRAPH>The concepts of GRIO are covered in sources you should examine:</PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="117"><PARAGRAPH><DOCTITLE>IRIX Admin:Disks and 
+Filesystems</DOCTITLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="125" WIDTH="279"><PARAGRAPH>Documents the administration of XFS and XLV in general, and 
+GRIO volumes in particular.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="117"><PARAGRAPH><REFPAGE>grio(5)</REFPAGE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="125" WIDTH="279"><PARAGRAPH>Reference page giving an overview of GRIO use.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="117"><PARAGRAPH><REFPAGE>grio(1M)</REFPAGE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="125" WIDTH="279"><PARAGRAPH>Reference page for the administrator command for querying 
+the state of the GRIO system.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="117"><PARAGRAPH><REFPAGE>ggd(1M)</REFPAGE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="125" WIDTH="279"><PARAGRAPH>Reference page for the GRIO grant daemon.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="117"><PARAGRAPH><REFPAGE>grio_disks(4</REFPAGE>) </PARAGRAPH>
+</CELL>
+<CELL LEFT="125" WIDTH="279"><PARAGRAPH>Reference page for the configuration files prepared by the 
+administrator to name GRIO devices.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<SECTION3 LBL="" HELPID = ""><TITLE>About Types of Guarantees</TITLE><PARAGRAPH>GRIO offers two types of guarantee: a real-time (sometimes called &ldquo;hard&rdquo;) guarantee, and a non-real-time (or &ldquo;soft&rdquo;) guarantee. The real-time guarantee promises to subordinate every other consideration, including especially data integrity, to on-time delivery.</PARAGRAPH>
+<PARAGRAPH>The two types of guarantee are effectively the same as long as no I/O read errors occur. When a read error occurs under a real-time guarantee, no error recovery is attempted&mdash;the <FUNCTION>read()</FUNCTION> function simply returns an error indication. Under a non-real-time guarantee, I/O error recovery is attempted, and this can cause a temporary failure to keep up to the guaranteed bandwidth.</PARAGRAPH>
+<PARAGRAPH>You can qualify either type of guarantee as being Rotor scheduling, also known as Video On Demand (VOD). This indicates a particular, special use of a striped volume. These three types of guarantee, and several other options, are described in detail in <DOCTITLE>IRIX Admin:Disks and Filesystems</DOCTITLE> and in the <REFPAGE>grio(5)</REFPAGE> reference page.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>About Device Configuration</TITLE><PARAGRAPH>GRIO is permitted on a device managed by XFS. A real-time guarantee can only be supported on the real-time subvolume of a logical volume created by XLV. The real-time subvolume differs from the more common data subvolume in that it contains only data, no file system management data such as directories or inodes. The real-time subvolume of an XLV volume can span multiple disk partitions, and can be striped.</PARAGRAPH>
+<PARAGRAPH>In addition, the predictive failure analysis feature and the thermal recalibration feature of the drive firmware must be disabled, as these can make device access times unpredictable. For other requirements see <DOCTITLE>IRIX Admin:Disks and Filesystems</DOCTITLE> and the <REFPAGE>grio(5)</REFPAGE> reference page.</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Creating a Real-time File</TITLE><PARAGRAPH>You can only request a hard guaranteed rate against a real-time disk file. A real-time disk file is identified by the fact that it is stored within the real-time subvolume of an XFS logical volume.</PARAGRAPH>
+<PARAGRAPH>The file management information for all files in a volume (the directories as well as XFS management records) are stored in the data subvolume. A real-time subvolume contains only the data of real-time files. A real-time subvolume comprises an entire disk device or partition and uses a separate SCSI controller from the data subvolume. Because of these constraints, the GRIO facility can predict the data rate at which it can transfer the data of a real-time file.</PARAGRAPH>
+<PARAGRAPH>You create a real-time file in the following steps, which are illustrated in <INDEXTARGET ID="TIP_3c.fcntl9"><!-- POSTPROCESSDATA: TIP_3c.fcntl9|guaranteed-rate I/O:creating a real-time file --><XREF IDREF="63224" TYPE="TEXT">Example&nbsp;9-2</XREF>.</PARAGRAPH>
+<ORDEREDLIST><LIST><PARAGRAPH>Open the file with the options O_CREAT, O_EXCL, and O_DIRECT. That is, the file must not exist at this point, and must be opened for direct I/O (see <XREF IDREF="29205" TYPE="TITLE">&ldquo;Using Direct I/O&rdquo;</XREF>).</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Modify the file descriptor to set its extent size, which is the minimum amount by which the file will be extended when new space is allocated to it, and also to establish that the new file is a real-time file. This is done using <FUNCTION>fcntl()</FUNCTION> with the FS_FSSETXATTR command. Check the value returned by <FUNCTION>fcntl()</FUNCTION> as several errors can be detected at this point.</PARAGRAPH>
+<PARAGRAPH>The extent size must be chosen to match the characteristics of the disk; for example it might be the &ldquo;stripe width&rdquo; of a striped disk.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Write any amount of data to the new file. Space will be allocated in the real-time subvolume instead of the data subvolume because of step (2). Check the result of the first <INDEXTARGET ID="TIP_3c.fcntl10"><!-- POSTPROCESSDATA: TIP_3c.fcntl10|<FUNCTION>write()</FUNCTION>:with guaranteed-rate I/O --><FUNCTION>write()</FUNCTION> call carefully, since this is another point at which errors could be detected.</PARAGRAPH>
+</LIST>
+</ORDEREDLIST>
+<PARAGRAPH>Once created, you can read and write a real-time file the same as any other file, except that it must always be opened with O_DIRECT. You can use a real-time file with asynchronous I/O, provided it is created with the PROC_SHARE_GUAR option.</PARAGRAPH>
+<CODE><CAPTION LBL="9-2"><PREFIX>Example 9-2 </PREFIX><XREFTARGET ID="63224">Function to Create a Real-time File <INDEXTARGET ID="TIP_3c.fcntl11"><!-- POSTPROCESSDATA: TIP_3c.fcntl11|<FUNCTION>open()</FUNCTION>:example code --><INDEXTARGET ID="TIP_3c.fcntl12"><!-- POSTPROCESSDATA: TIP_3c.fcntl12|<FUNCTION>fcntl()</FUNCTION>:example code --></CAPTION>#include &lt;sys/fcntl.h>
+#include &lt;sys/fs/xfs_itable.h>
+int createRealTimeFile(char *path, __uint32_t esize)
+{
+&nbsp;&nbsp;&nbsp;struct fsxattr attr;
+&nbsp;&nbsp;&nbsp;bzero((void*)&amp;attr,sizeof(attr));
+&nbsp;&nbsp;&nbsp;attr.fsx_xflags = XFS_XFLAG_REALTIME;
+&nbsp;&nbsp;&nbsp;attr.fsx_extsize = esize;
+&nbsp;&nbsp;&nbsp;int rtfd = open(path, O_CREAT + O_EXCL + O_DIRECT );
+&nbsp;&nbsp;&nbsp;if (-1 == rtfd)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{perror("open new file"); return -1; }
+&nbsp;&nbsp;&nbsp;if (-1 == fcntl(rtfd, F_FSSETXATTR, &amp;attr) )
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{perror("fcntl set rt &amp; extent"); return -1; }
+&nbsp;&nbsp;&nbsp;return rtfd; /* first write to it creates file*/
+}
+</CODE>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Requesting a Guarantee</TITLE><PARAGRAPH>To obtain a guaranteed rate, a program places a reservation for a specified part of the I/O capacity of a file or a filesystem. In the request, the program specifies<INDEXTARGET ID="TIP_3c.fcntl13"><!-- POSTPROCESSDATA: TIP_3c.fcntl13|guaranteed-rate I/O:requesting a guarantee --></PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>the file or filesystem to be used</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>the start time and duration of the reservation</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>the time unit of interest, typically 1 second</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>the amount of data required in any one unit of time</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>For example, a reservation might specify: starting now, for 90 minutes, 1 megabyte per second. A process places a reservation by calling either <FUNCTION>grio_request_file()</FUNCTION> or <FUNCTION>grio_request_fs()</FUNCTION> (refer to the <REFPAGE>grio_request_file(3X)</REFPAGE> and <REFPAGE>grio_request_fs(3X)</REFPAGE> reference pages).</PARAGRAPH>
+<PARAGRAPH>The GRIO daemon <FILENAME>ggd</FILENAME> keeps information on the transfer capacity of all XFS volumes, as well as the capacity of the controllers and busses to which they are attached. When you request a reservation, XFS tests whether it is possible to transfer data at that rate, from that file, during that time period.</PARAGRAPH>
+<PARAGRAPH>This test considers the capacity of the hardware as well as any other reservations that apply during the same time period to the same subvolume, drives, or controllers. Each reservation consumes some part of the total capacity.</PARAGRAPH>
+<PARAGRAPH>When XFS predicts that the guaranteed rate can be met, it accepts the reservation. Over the reservation period, the available bandwidth from the disk is reduced by the promised rate. Other processes can place reservations against any capacity that remains.</PARAGRAPH>
+<PARAGRAPH>If XFS predicts that the guaranteed rate cannot be met at some time in the reservation period, XFS returns the maximum data rate it could supply. The program can reissue the request for that available rate. However, this is a new request that is evaluated afresh.</PARAGRAPH>
+<PARAGRAPH>During the reservation period, the process can use <INDEXTARGET ID="TIP_3c.fcntl14"><!-- POSTPROCESSDATA: TIP_3c.fcntl14|<FUNCTION>write()</FUNCTION>:with guaranteed-rate I/O --><INDEXTARGET ID="TIP_3c.fcntl15"><!-- POSTPROCESSDATA: TIP_3c.fcntl15|<FUNCTION>read()</FUNCTION>:with guaranteed-rate I/O --><FUNCTION>read()</FUNCTION> and <FUNCTION>write()</FUNCTION> to transfer up to the guaranteed number of bytes in each time unit. XFS raises the priority of requests as needed in order to ensure that the transfers take place. However, a request that would transfer more than the promised number of bytes within a 1-second unit is blocked until the start of the next time unit.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Releasing a Guarantee</TITLE><PARAGRAPH>A guarantee ends under three circumstances,</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>when the process calls <FUNCTION>grio_unreserve_bw()</FUNCTION> (see the <REFPAGE>grio_unreserve_bw(3X)</REFPAGE> reference page)</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>when the requested duration expires</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>when all file descriptors held by the requesting process that refer to the guaranteed file are closed (an exception is discussed in the next topic)</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>When a guarantee ends, the guaranteed transfer capacity becomes available for other processes to reserve. When a guarantee expires but the file is not closed, the file remains usable for ordinary I/O, with no guarantee of rate.</PARAGRAPH>
+<PARAGRAPH></PARAGRAPH>
+</SECTION2>
+</SECTION1>
+</CHAPTER>

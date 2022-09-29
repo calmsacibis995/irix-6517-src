@@ -1,0 +1,196 @@
+
+How all this iconv stuff works.
+------------------------------		Gianni Mariani  5-May-1997
+
+Warning: the format of this README is more like a brain dump that
+         a structured document.
+
+1. What is iconv ?
+
+Iconv started out as an international codeset conversion utility
+presenting a generalized interface.  When IRIX moved away from
+EUC only encodings, this became a natural way to also add non
+EUC support for the standard library converters (mbtowc et. al.).
+So now iconv is very generalized and it can handle many things
+that it didn't originally set out to do.
+
+Iconv consists of the following:
+
+    1. The iconv XPG4 API .
+
+    2. The place where all mbtowc etc conversions happen.
+
+    3. A place to hold other locale info that does not have a home
+       located elsewhere.
+
+2. iconv_comp and iconv_lib.c
+
+iconv_lib.c provides the interface to iconv_open(), iconv_close() and
+iconv().  To determine which functions to use it reads /usr/lib/iconvtab
+that is generate by iconv_comp. iconv_lib.c also has an interface for
+settings the function addresses used by mbtowc().
+
+The definition of an iconv converter in source form (input to iconv_comp)
+is as below:
+
+// comments like // are permitted
+"UCS-2"		  "KOI8"		 // FROM and TO encoding
+"libc.so.1"	  "__iconv_flh_idxb_flb" // spec for iconv function
+"libc.so.1"	  "__iconv_control"	 // the control function
+FILE "UCS-2_KOI8.map";			 // the mapping table to use
+
+Duplicate entries will cause the latest one in the source to be
+defined.
+
+The following defines an mbtowc set of functions, here, __mbwc_sbcs
+is a structure containing a number of different addresses including
+that of the real mbtowc funtion for the locale specified.
+
+"KOI8-1"    "irix-wc"	    // ISO 8859
+"libc.so.1" __mbwc_sbcs	    // Structure pointer containg addresses
+MBWC none none		    // Table for multibyte to wide char
+WCMB none none ;	    // Table for wide char to multibyte
+
+Here, irix-wc is the default encoding for the process code, however
+this may be changed (for the system) by placing a named resource
+in the iconvtab.  In this case "wide_encoding_name" is a string
+and this will be the name used for searching for stdlib conveters.
+
+The syntax for a resource is:
+
+resource "wide_encoding_name" {
+    char name "irix-wc",
+    // You can build a struct here
+}
+
+Possible types are :
+    int64, int32, int, int16, int8, short, char
+
+Not that the char type will return a relative pointer to the character
+string.  The iconvtab may be located anywhere in the address space.
+This is required since it cannot be guarenteed that an address range
+can be reserved.
+
+Note the exclusion of "long".  Since the iconvtab is mapping both
+into 64 bit and 32 bit execution environments, it is required that
+the type sizes are not different.
+
+Here is an example of how a resource can be extracted from the
+iconvtab.  The iconvtab consists of 32 bit relative pointers.
+
+    char	    * wcenc;
+    int		    * wcenc_rp;
+    char	    * baseaddr;	/* This is the relocation base of iconvtab*/
+				/* in this process's memory map		*/
+
+    wcenc_rp = __iconv_get_resource(
+	"wide_encoding_name", ( void ** ) & baseaddr
+    );
+
+    if ( wcenc_rp ) {
+	wcenc = * wcenc_rp + baseaddr;	/* Relocate the pointer		*/
+    }
+
+When iconv_open() is called, iconv_lib.c searches the iconvtab for
+the interface functions to use.  It will use the dlopen()/dlsym()
+interface to load and search for the symbols requested.  However
+in statically linked binaries, these functions must all be linked
+into the process space and it's address placed into the __ns_iconv_head
+array.  This array may be overridden by the linking executable
+if required so that newer symbols may be added, however this
+will require linking in *ALL* iconv_converter functions always.
+If this becomes a problem we will need to revisit this.
+
+Other syntax for iconv_comp is like below.
+
+The clone construct is for generating like iconv specifiers.
+
+CLONE
+    * "UCS-2"		"libc.so.1" "__iconv_flb_flh" none none
+USE
+    * "UCS-4"		"libc.so.1" "__iconv_flb_flw" none none;
+
+The join construct is to enable two different converters to
+be joined.
+
+JOIN
+   * "UCS-2" "libc.so.1" "__iconv_flb_dbcs_flh" "libc.so.1" "__iconv_control",
+  "UCS-2" * "libc.so.1" "__iconv_flh_idxh_mbs" "libc.so.1" "__iconv_control"
+USE
+    "libc.so.1" "__iconv_flb_dbcs_idxh_mbs" "libc.so.1" "__iconv_control";
+
+The code below specifies a set of stdlib conversions for
+
+"eucTW" "irix-wc"	    // Convert FROM and TO
+"libc.so.1" __mbwc_euctw    // pointer to a ICONV_LIB_METHODS struct
+MBWC none none		    // Conversion table specifier for mb->wc routines
+WCMB none none ;	    // Conversion table specifier for wc->mb routines
+
+Locale information may also be added:
+
+A codeset for a locale may be specified like:
+
+locale_codeset "de_AT"                          "ISO8859-1" ;
+
+An alias for a locale may be specified like:
+
+locale_alias   "de_AT.ISO8859-1"                "de_AT" ;
+locale_alias   "POSIX"                          "C" ;
+    
+
+HOW TO ADD A NEW CONVERTER
+--------------------------
+
+There are two different templates for converters, one is the
+iconv type and the other is the mbtowc, mbcstowcs etc type.
+Regardless, the base specification of the converter should
+work correctly on both.  The source is a set of m4 macros.
+You can be guarenteed that the m4 preprocessor will be one
+based on GNU m4 source.
+
+There are 6 template types.  These templates require a macro
+OUTPUT_SETVAL.  OUTPUT_SETVAL should be a definition of
+possibly a number of cascaded GET_VALUE macros.  They contain
+targets to handle and conditions that they care about.
+
+iconv_tmpl.m4	    : iconv template
+mblen_tmpl.m4	    : stdlib templates !
+btowc_tmpl.m4
+mbtowc_tmpl.m4
+wctob_tmpl.m4
+wctomb_tmpl.m4
+
+There are 3 types of converters, an input converter that specifically
+reads from the input parameters of the function, a basic converter
+taking GET_VALUE and redefining it, and a third, output converter
+that specifcally defines OUTPUT_SETVAL as a combination of GET_VALUE's
+and specifically deals with writing to the functions output parameters.
+
+Once the function is generated, for iconv converters you will need
+to edit the file ../computed_include/matrix.c and follow the
+instructions in this file.  The output of matrix.c is what is used
+to generate all the converters generated in iconv_converter.c .
+
+You will need to add a line for the new converter like the one below -
+czz_load_defs(flw,unsigned int,p,in,iconv_fl_in.m4)
+                ^       ^      ^  ^     ^- Name of the file containing macro
+                |       |      |  |- in, cnv, out - type of conversion
+                |       |      |- p for unaligned access
+		|       |- Type parameter - usually refers to output
+		|- Name of converter - will add a 'p' to flwp when 'p' is set
+
+into following files :
+
+iconv_top_defn.m4  : iconv converter defintions
+stdlib_top_defn.m4 : stdlib converter definitons
+
+For source created with stdlib_top_defn, you will need to make
+entries for the different templates that you want to use.
+
+You will need to actually check the source code generated yourself
+to see that it is reasonable source.
+
+After this it should all just work.  You will need to make the
+appropriate entries in the iconv spec files that are in the iconv_comp
+source directory.
+

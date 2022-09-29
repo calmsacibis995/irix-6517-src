@@ -1,0 +1,1661 @@
+<!-- Produced by version 3.14 (11/22/96) of SGI Frame/SGML translator -->
+<CHAPTER LBL="17"><TITLE><XREFTARGET ID="12931">Network Device Drivers</TITLE><PARAGRAPH>A network device driver is a kernel-level driver that connects a communications device to the IRIX TCP/IP protocol stack using the <INDEXTARGET ID="16-network1"><!-- POSTPROCESSDATA: 16-network1|network --><INDEXTARGET ID="16-network2"><!-- POSTPROCESSDATA: 16-network2|driver:types of:network --><DOCTITLE>ifnet</DOCTITLE> interface established by BSD UNIX. This chapter contains these major topics:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH><XREF IDREF="95122" TYPE="TITLE">&ldquo;Overview of Network Drivers&rdquo;</XREF> gives an overview of the IRIX networking subsystem and the role of an <DOCTITLE>ifnet</DOCTITLE> driver in it.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="25060" TYPE="TITLE">&ldquo;Network Driver Interfaces&rdquo;</XREF> summarizes the unique interfaces used by an <DOCTITLE>ifnet</DOCTITLE> driver.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="10726" TYPE="TITLE">&ldquo;Multiprocessor Considerations&rdquo;</XREF> discusses writing device drivers in a symmetric multiprocessing environment.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="63121" TYPE="TITLE">&ldquo;Example ifnet Driver&rdquo;</XREF> displays the code of a network driver, omitting all device-specific features.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<NOTE><PREFIX>Note</PREFIX>If your interest is in creating a network application based on sockets, TLI, or streams, this chapter offers little but background information. Refer to the <DOCTITLE>IRIX Network Programming Guide</DOCTITLE>, document Number 007-0810-080, for a complete review of all application-level services.</NOTE>
+<PARAGRAPH>Even if your interest is in creating a kernel-level network driver, you should be familiar with the facilities documented in the <DOCTITLE>IRIX Network Programming Guide</DOCTITLE>. This chapter assumes that your are familiar with them.</PARAGRAPH>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="95122">Overview of Network Drivers</TITLE><PARAGRAPH>A network driver is a kernel-level driver module that connects a communications device such as an Ethernet board to the IRIX implementation of TCP/IP. An overview of the IRIX networking subsystem is shown in <INDEXTARGET ID="16-network3"><!-- POSTPROCESSDATA: 16-network3|network:overview --><XREF IDREF="61365" TYPE="GRAPHIC">Figure&nbsp;17-1</XREF>.</PARAGRAPH>
+<PARAGRAPH><FIGURE><GRAPHIC FILE="16-net.overv.gif" POSITION="INLINE" SCALE="FALSE"><CAPTION LBL="17-1"><PREFIX>Figure 17-1 </PREFIX><XREFTARGET ID="61365">Overview of Network Architecture</CAPTION>
+</FIGURE>
+</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>Application Interfaces</TITLE><PARAGRAPH>User-level processes access the network in one of three ways:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>using the BSD socket interface (top left of <INDEXTARGET ID="16-network4"><!-- POSTPROCESSDATA: 16-network4|socket interface --><XREF IDREF="61365" TYPE="GRAPHIC">Figure&nbsp;17-1</XREF>)</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>using the SVR4 TLI interface through compatibility libraries that convert TLI operations into socket operations (top center of <INDEXTARGET ID="16-network5"><!-- POSTPROCESSDATA: 16-network5|TLI interface --><XREF IDREF="61365" TYPE="GRAPHIC">Figure&nbsp;17-1</XREF>)</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>using a STREAMS interface to a STREAMS-based protocol stack (top right of <INDEXTARGET ID="16-network6"><!-- POSTPROCESSDATA: 16-network6|network:STREAMS protocol stack --><INDEXTARGET ID="16-network7"><!-- POSTPROCESSDATA: 16-network7|STREAMS protocol stack --><XREF IDREF="61365" TYPE="GRAPHIC">Figure&nbsp;17-1</XREF>)</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>These three interfaces are documented in the <DOCTITLE>IRIX Network Programming Guide</DOCTITLE>.</PARAGRAPH>
+<PARAGRAPH>The native socket-based TCP/IP protocol code, the socket layer, and a number of <INDEXTARGET ID="16-network8"><!-- POSTPROCESSDATA: 16-network8|Network File System (NFS) --><VARIABLE>ifnet</VARIABLE>-based device drivers are bundled in the basic IRIX system. Socket-based applications such as <COMMAND>rlogin</COMMAND>, <COMMAND>rcp</COMMAND>, NFS client and server, and the socket-based RPC library operate directly over this native networking framework.</PARAGRAPH>
+<PARAGRAPH>Compatibility support is included for applications written to the STREAMS Transport Layer Interface (TLI). <DOCTITLE>tpisocket</DOCTITLE> is a kernel library module used by protocol-specific STREAMS pseudo-drivers, such as <COMMAND>tpitcp</COMMAND>, <COMMAND>tpiudp</COMMAND>, and so on, providing a TPI interface above the native kernel sockets-based network protocol stack.</PARAGRAPH>
+<PARAGRAPH>A STREAMS pseudo-driver that supports the Data Link Provider Interface (DLPI) for STREAMS-based kernel protocol stacks is delivered in the optional <INDEXTARGET ID="16-network9"><!-- POSTPROCESSDATA: 16-network9|Data Link Provider Interface (DLPI) --><COMMAND>dlpi</COMMAND> package.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Protocol Stack Interfaces</TITLE><PARAGRAPH>A <GLOSSARYITEM>protocol stack</GLOSSARYITEM> is the software subsystem that manages data traffic according to the rules of a particular communications protocol. There are two ways in which a protocol stack can be integrated into the IRIX kernel. The TCP/IP stack creates and uses the <DOCTITLE>ifnet</DOCTITLE> interface to drivers (bottom left of <XREF IDREF="61365" TYPE="GRAPHIC">Figure&nbsp;17-1</XREF>) and the socket interface to applications (top left of <XREF IDREF="61365" TYPE="GRAPHIC">Figure&nbsp;17-1</XREF>).</PARAGRAPH>
+<PARAGRAPH>Alternatively, a stack written to the DLPI architecture can communicate with STREAMS drivers (bottom right of <XREF IDREF="61365" TYPE="GRAPHIC">Figure&nbsp;17-1</XREF>).</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Device Driver Interfaces</TITLE><PARAGRAPH>A network driver uses the methods and facilities of other kernel-level device drivers, as described in <XREF IDREF="19849" TYPE="TITLE">Part III, &ldquo;Kernel-Level Drivers&rdquo;</XREF> of this book. A network driver is compiled and linked like other drivers, configured using the same configuration files, and loaded into the kernel by <COMMAND>lboot</COMMAND> like other drivers.</PARAGRAPH>
+<PARAGRAPH>However, other device drivers support the UNIX filesystem, transferring data in response to calls to their <VARIABLE>pfx</VARIABLE><FUNCTION>read()</FUNCTION>, <VARIABLE>pfx</VARIABLE><FUNCTION>write()</FUNCTION>, or <VARIABLE>pfx</VARIABLE><FUNCTION>strategy()</FUNCTION> entry points. This is not the case with a network driver; it supports protocol stacks, and it transfers data in response to calls from the <DOCTITLE>ifnet</DOCTITLE> interface.</PARAGRAPH>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="25060">Network Driver Interfaces</TITLE><PARAGRAPH>The IRIX kernel networking design is based on the kernel networking framework in 4.3BSD. If you are familiar with the 4.3BSD kernel networking design, then you are already familiar with the IRIX kernel networking design because they are basically the same.<INDEXTARGET ID="16-network10"><!-- POSTPROCESSDATA: 16-network10|network:based on 4.3BSD --><INDEXTARGET ID="16-network11"><!-- POSTPROCESSDATA: 16-network11|network:driver interfaces --></PARAGRAPH>
+<PARAGRAPH>The IRIX networking design is based on the socket interface: <VARIABLE>mbuf</VARIABLE> objects are used to exchange messages within the kernel, and device drivers support the TCP/IP internet protocol suite by supporting the <VARIABLE>ifnet</VARIABLE> interface.</PARAGRAPH>
+<PARAGRAPH>Since the BSD-based networking framework and the implementation of the TCP/IP protocol suite have changed little from previous releases of IRIX, porting your <VARIABLE>ifnet</VARIABLE> device driver to this release of IRIX should be straightforward.</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>Although the general kernel facilities documented in <XREF IDREF="31965" TYPE="TITLE">Chapter&nbsp;8, &ldquo;Device Driver/Kernel Interface,&rdquo;</XREF> are standardized and stable, this is not the case with network interfaces. <ITALICS>The ifnet and other interfaces summarized in this topic are subject to change without notice</ITALICS>.</NOTE>
+<SECTION2 LBL="" HELPID = ""><TITLE>Kernel Facilities</TITLE><PARAGRAPH>A network driver is structured like any kernel-level device driver, much as described in <XREF IDREF="19192" TYPE="TITLE">Chapter&nbsp;7, &ldquo;Structure of a Kernel-Level Driver,&rdquo;</XREF> but with the following similarities and differences:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>A network driver is loaded by <COMMAND>lboot</COMMAND> in response to either a USE or VECTOR line in a file in <FILENAME>/var/sysgen/system</FILENAME> (see <XREF IDREF="17503" TYPE="TITLE">&ldquo;Configuring a Nonloadable Driver&rdquo;</XREF>).</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>A network driver is initialized by a call to either its <VARIABLE>pfx</VARIABLE><FUNCTION>init()</FUNCTION> or <VARIABLE>pfx</VARIABLE><FUNCTION>edtinit()</FUNCTION> entry point when it is loaded.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>A network driver does not need to provide any other entry points (see <XREF IDREF="69038" TYPE="TITLE">&ldquo;Entry Point Summary&rdquo;</XREF>).</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>A network driver does not need to provide a driver flag constant <VARIABLE>pfx</VARIABLE><FUNCTION>devflag</FUNCTION> because a network driver is always assumed to be multiprocessor-aware (see <XREF IDREF="67704" TYPE="TITLE">&ldquo;Driver Flag Constant&rdquo;</XREF>).</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Although a network driver can use the kernel functions for synchronization and locking (see <XREF IDREF="14643" TYPE="TITLE">&ldquo;Waiting and Mutual Exclusion&rdquo;</XREF>), it normally does not because the <DOCTITLE>ifnet</DOCTITLE> interface includes special-purpose locking facilities that are more convenient (see <XREF IDREF="10726" TYPE="TITLE">&ldquo;Multiprocessor Considerations&rdquo;</XREF>).</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Principal ifnet Header Files</TITLE><PARAGRAPH>The software interface to network facilities is declared in the following important header files: <INDEXTARGET ID="16-network12"><!-- POSTPROCESSDATA: 16-network12|network:header files --><INDEXTARGET ID="16-network13"><!-- POSTPROCESSDATA: 16-network13|header files:for network drivers --></PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH><FILENAME>net/if.h</FILENAME>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="297"><PARAGRAPH>Basic ifnet facilities and data structures, including the <VARIABLE>ifnet</VARIABLE> 
+structure, the basic driver interface object.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH><FILENAME>net/if_types.h</FILENAME>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="297"><PARAGRAPH>Constants for interface types, used in decoding address headers.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH><FILENAME>sys/mbuf.h</FILENAME>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="297"><PARAGRAPH>The <VARIABLE>mbuf</VARIABLE> structure with related constants and macros, and 
+declarations of functions to allocate, manipulate, and free <VARIABLE>mbuf</VARIABLE> 
+objects.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH><FILENAME>net/netisr.h</FILENAME>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="297"><PARAGRAPH>Declarations related to software interrupts, including 
+<FUNCTION>schednetisr()</FUNCTION> to schedule an interrupt, and the IP input queue 
+<VARIABLE>ipintrq</VARIABLE>.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH><FILENAME>net/multi.h</FILENAME>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="297"><PARAGRAPH>Routines defining a generic filter for use by drivers whose devices 
+cannot perfectly filter multicast packets.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH><FILENAME>net/soioctl.h</FILENAME>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="297"><PARAGRAPH>Socket <FUNCTION>ioctl()</FUNCTION> function numbers, some of which reach a driver for 
+action.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH><FILENAME>net/raw.h</FILENAME>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="297"><PARAGRAPH>The interface to the raw protocol family members <DOCTITLE>snoop</DOCTITLE> and <DOCTITLE>drain</DOCTITLE>.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH><FILENAME>net/if_arp.h</FILENAME>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="297"><PARAGRAPH>Generic ARP declarations.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH><FILENAME>netinet/if_ether.h</FILENAME>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="297"><PARAGRAPH>Essential declarations for Ethernet drivers, including ARP protocol 
+for Ethernet.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH><FILENAME>sys/dlsap_register.h</FILENAME>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="297"><PARAGRAPH>DLPI interface declarations.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Debugging Facilities</TITLE><PARAGRAPH>When your driver is operating under a debugging kernel, you can use the facilities of <COMMAND>symmon</COMMAND> and <COMMAND>idbg</COMMAND> to display a variety of network-related data structures. See <XREF IDREF="86033" TYPE="TITLE">&ldquo;Preparing the System for Debugging&rdquo;</XREF>, and see <XREF IDREF="38031" TYPE="TITLE">&ldquo;Commands to Display Network-Related Structures&rdquo;</XREF>.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Information Sources</TITLE><PARAGRAPH>Aside from comments in header files, the complete <DOCTITLE>ifnet</DOCTITLE> interface and related interfaces have never been documented. In prior years, most people working on <DOCTITLE>ifnet</DOCTITLE> drivers have had access to the Berkeley UNIX source distribution and have been able to answer questions by referring to the code.</PARAGRAPH>
+<PARAGRAPH>Referring to the code is an even more common option today, thanks to the release of 4.4BSD-Lite, a software distribution of BSD UNIX that does not require a source license, now widely available at a reasonable price. To obtain a copy, order the following:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH><DOCTITLE>4.4BSD-Lite Berkeley Software Distribution CD-ROM Companion</DOCTITLE>, published by USENIX and O'Reilly &amp; Associates; ISBN 1-56592-081-3 (US domestic) or ISBN 1-56592-092-9 (non-US).</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>The <DOCTITLE>ifnet</DOCTITLE> source code in this software is functionally compatible with IRIX <DOCTITLE>ifnet</DOCTITLE>, although some protocols (for example, <DOCTITLE>snoop</DOCTITLE> and <DOCTITLE>drain</DOCTITLE>) are not implemented in BSD-Lite.</PARAGRAPH>
+<PARAGRAPH>Finally, the IRIX reference pages contain a wealth of detail regarding network interfaces. Some reference pages that are related to the interests of driver designers are listed in <XREF IDREF="13603" TYPE="TABLE">Table&nbsp;17-1</XREF>. Click on the name of a page to read it. </PARAGRAPH>
+<TABLE COLUMNS="2"><CAPTION LBL="17-1"><PREFIX>Table 17-1 </PREFIX><XREFTARGET ID="13603"> <EMPHASIS>(continued)        </EMPHASIS>Important Reference Pages Related to Network Drivers</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="72"><PARAGRAPH>Reference Page</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="315"><PARAGRAPH>Contents</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><REFPAGE>arp(7)</REFPAGE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="315"><PARAGRAPH>Operation of the ARP protocol, with details of <FUNCTION>ioctl</FUNCTION><FUNCTION>()</FUNCTION> functions. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><REFPAGE>drain(7)</REFPAGE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="315"><PARAGRAPH>Operation of the drain driver, which receives unwanted packets, with details 
+of its <FUNCTION>ioctl</FUNCTION><FUNCTION>()</FUNCTION> functions. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><REFPAGE>ethernet(7)</REFPAGE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="315"><PARAGRAPH>Overview of the IRIX Ethernet drivers, including error messages and the use 
+of VECTOR lines to configure them. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><REFPAGE>fddi(7)</REFPAGE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="315"><PARAGRAPH>Cursory overview of IRIX FDDI drivers, with naming conventions. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><REFPAGE>ifconfig(1)</REFPAGE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="315"><PARAGRAPH>Management program used to enable and disable network interfaces (drivers) 
+and change their runtime parameters. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><REFPAGE>netintro(7)</REFPAGE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="315"><PARAGRAPH>Overview of network facilities; mentions the role of the network interface 
+(driver); has extensive detail on routing <FUNCTION>ioctl</FUNCTION><FUNCTION>()</FUNCTION> calls. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><REFPAGE>network(1)</REFPAGE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="315"><PARAGRAPH>Documents the network initialization script that runs when the system is 
+booted up. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><REFPAGE>raw(7)</REFPAGE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="315"><PARAGRAPH>Overview of the Raw protocol family whose members are snoop and drain. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><REFPAGE>routed(1)</REFPAGE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="315"><PARAGRAPH>Documents operation of the routing daemon, including <FUNCTION>ioctl</FUNCTION><FUNCTION>()</FUNCTION> use. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><REFPAGE>snoop(7)</REFPAGE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="315"><PARAGRAPH>Operation of the snoop driver, which allows inspection of packets, with details 
+of its <FUNCTION>ioctl</FUNCTION><FUNCTION>()</FUNCTION> features. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><REFPAGE>ticlts(7)</REFPAGE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="315"><PARAGRAPH>Operation and use of the ticlts, ticots, and ticotsord loopback drivers. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><REFPAGE>tokenring(7)</REFPAGE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="315"><PARAGRAPH>Overview of the IRIX token-ring drivers, including packet formats. </PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Network Inventory Entries</TITLE><PARAGRAPH>The driver must call <INDEXTARGET ID="16-network14"><!-- POSTPROCESSDATA: 16-network14|hardware inventory:network driver use --><FUNCTION>device_inventory_add()</FUNCTION> from its <FUNCTION>attach()</FUNCTION> entry point to label the device hardware vertex with the appropriate inventory information. The device configuration program <COMMAND>ioconfig</COMMAND> requires this information in order to assign a unique controller number and communicate this to the device driver by opening the device (see <XREF IDREF="83505" TYPE="TITLE">&ldquo;Using ioconfig for Global Controller Numbers&rdquo;</XREF>).</PARAGRAPH>
+<PARAGRAPH>The driver can use the following parameters when calling <FUNCTION>device_inventory_add()</FUNCTION>: </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><VARIABLE>vhdl</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="315"><PARAGRAPH>The vertex handle of the attached device. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><VARIABLE>class</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="315"><PARAGRAPH>INV_NETWORK </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><VARIABLE>type</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="315"><PARAGRAPH>The packet type, for example INV_NET_ETHER. See <FILENAME>sys/invent.h</FILENAME> for 
+the possible &ldquo;types for class network&rdquo; list. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><VARIABLE>controller</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="315"><PARAGRAPH>The kind of network controller from the &ldquo;controllers for network 
+types&rdquo; list in <FILENAME>sys/invent.h</FILENAME>. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><VARIABLE>unit</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="315"><PARAGRAPH>Any distinguishing number for this device. The <COMMAND>hinv</COMMAND> command does 
+not decode this field. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><VARIABLE>state</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="315"><PARAGRAPH>Any characteristic number for this device. The <COMMAND>hinv</COMMAND> command does not 
+decode this field. </PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>For details see <FILENAME>sys/invent.h</FILENAME> and <XREF IDREF="29254" TYPE="TITLE">&ldquo;Attaching Device Information&rdquo;</XREF>.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Interface Changes for IRIX 6.5</TITLE><PARAGRAPH>The <FUNCTION>if_output()</FUNCTION> routine now takes a fourth parameter, <VARIABLE>rte</VARIABLE> to specify routing table entry. See <FILENAME>/usr/include/net/if.h</FILENAME> for details. The <FUNCTION>IFNET_LOCK()</FUNCTION> and <FUNCTION>IFNET_UNLOCK()</FUNCTION> macros now take only one argument instead of two.</PARAGRAPH>
+<PARAGRAPH>The implementation of <FUNCTION>ip_arpresolve()</FUNCTION> has changed, but its functionality has not. Calling <FUNCTION>ip_arpresolve()</FUNCTION> used to cause another call to <FUNCTION>if_output()</FUNCTION> with a destination address family of AF_UNSPEC, as an ARP broadcast request. Now, <FUNCTION>ip_arpresolve()</FUNCTION> never calls <FUNCTION>if_output()</FUNCTION> itself, other functions do. In particular, <FUNCTION>arp_rtrequest()</FUNCTION> may call <FUNCTION>arprequest()</FUNCTION> which calls <FUNCTION>send_arp()</FUNCTION>, and <FUNCTION>arpresolve()</FUNCTION> calls <FUNCTION>arprequest()</FUNCTION> which calls <FUNCTION>send_arp()</FUNCTION>.</PARAGRAPH>
+<PARAGRAPH>The networking packet input interface was changed to support higher parallelism for TCP/IP implementations. Especially on Origin systems, this improves the performance of Web benchmarks and TCP-centric applications. The interface is defined as follows:</PARAGRAPH>
+<CODE>
+/*
+&space;* This is the data structure for each network input process.
+&space;*/
+struct per_netproc {
+&space;       struct ifqueue  netproc_q;      /* input queue */
+&space;       struct route    netproc_rt;     /* forwarding cache */
+&space;       thd_int_t       netproc_thread; /* &ldquo;interrupt&rdquo; thread data */
+} **netproc_data;
+/*
+&space;* Called once per address family to set up input function.
+&space;* Just store it in the above table.
+&space;*/
+void network_input_setup(int af, network_input_t func)
+{
+&space;       if (af > AF_MAX)
+&space;           cmn_err(CE_PANIC, &ldquo;address family %d out of range&rdquo;, af);
+&space;       input_table[af] = func;
+}
+extern int max_netprocs;
+/*
+&space;* Called from network interface device drivers when packets come in.
+&space;* Use the direction policy wake up the right network input process.
+&space;* Returns error code (zero is OK).
+&space;* This is a critical performance path!
+&space;*/
+int
+network_input(struct mbuf *m, int af, int flags)
+{
+&space;       int n = cpuid();
+&space;       struct ifqueue *ifq;
+&space;       int s;
+&space;       METER(nproc_stats.intr++);
+&space;       mtod(m, struct ifheader *)->ifh_af = af;
+&space;       ifq = &amp;(netproc_data[n]->netproc_q);
+&space;       if (IF_QFULL(ifq)) {
+&space;               IF_DROP(ifq);
+&space;               NETIN_UTRACE(UTN(`neti','drop'), m, __return_address);
+&space;               m_freem(m);
+&space;               return ENOBUFS;
+&space;       }
+&space;       NETIN_UTRACE(UTN(`neti','que `), m, __return_address);
+&space;       IFQ_LOCK(ifq, s);
+&space;       IF_ENQUEUE_NOLOCK(ifq, m);
+&space;       IFQ_UNLOCK(ifq, s);
+&space;       if ((flags &amp; NETPROC_MORETOCOME) == 0) {
+&space;               cvsema(&amp;(netproc_data[n]->netproc_thread.thd_isync));
+&space;       }
+&space;       return 0;
+}
+</CODE>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="10726">Multiprocessor Considerations</TITLE><PARAGRAPH>Prior to IRIX 5.3, the kernel BSD framework code and TCP/IP protocol stack executed under a single kernel lock, creating a single-threaded implementation. Beginning with IRIX 5.3, the BSD framework and TCP/IP protocol suite have been multi-threaded to support symmetric multiprocessing. The code uses different kernel locks to protect different critical sections.<INDEXTARGET ID="16-network15"><!-- POSTPROCESSDATA: 16-network15|network:multiprocessor considerations --><INDEXTARGET ID="16-network16"><!-- POSTPROCESSDATA: 16-network16|multiprocessor:network drivers in --></PARAGRAPH>
+<PARAGRAPH>IRIX now supports multiple, concurrent threads of execution within the TCP/UDP/IP protocol suite and the kernel socket layer. In addition, network device drivers run on any available CPU, concurrently with the network software, applications, and other drivers. This means that any ifnet-based network driver must be prepared to run asynchronously and concurrently with other drivers and with the protocol stack.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>Ineffective spl*() Functions</TITLE><PARAGRAPH>The <INDEXTARGET ID="16-network17"><!-- POSTPROCESSDATA: 16-network17|kernel functions:<FUNCTION>splnet()</FUNCTION>:ineffective --><FUNCTION>spl*()</FUNCTION> functions were the traditional UNIX method of gaining exclusive use of data. In single-threaded ifnet drivers, the <FUNCTION>splimp()</FUNCTION> or <FUNCTION>splnet()</FUNCTION> functions were used to get exclusive use of the ifnet structure.</PARAGRAPH>
+<PARAGRAPH>In a multiprocessor, <FUNCTION>spl*()</FUNCTION> functions like <FUNCTION>splimp()</FUNCTION> or <FUNCTION>splnet()</FUNCTION> do block interrupts on the local CPU, but they do not prevent interrupts from occurring on other processors in the system, nor do they prevent other processes on other CPUs from executing code that refers to the same data.</PARAGRAPH>
+<PARAGRAPH>If you are porting a driver from a uniprocessor environment, search for any use of an <FUNCTION>spl*()</FUNCTION> function and plan to replace it with effective mutual exclusion locking macros.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Multiprocessor Locking Macros</TITLE><PARAGRAPH>Under BSD networking, drivers interface with the protocol stacks by queueing incoming packets on a per-protocol input queue. In a multiprocessor, each protocol input queue must be protected by the locking macros defined in the file <FILENAME>net/if.h</FILENAME>.</PARAGRAPH>
+<PARAGRAPH>All the locking macros that protect the input queue are assumed to be called at the proper processor interrupt masking level, <FUNCTION>splimp</FUNCTION>. All input queue locking macros also take an input parameter <VARIABLE>ifq</VARIABLE>, which is a pointer to the protocol input queue that must be defined as a <VARIABLE>struct ifqueue</VARIABLE>.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Compiler Flags for MP TCP/IP</TITLE><PARAGRAPH>The _MP_NETLOCKS and MP compiler variables must be defined in order to enable the macros necessary to run under multi-threaded TCP/IP (see <INDEXTARGET ID="16-network18"><!-- POSTPROCESSDATA: 16-network18|compiler options:for network driver --><INDEXTARGET ID="16-network19"><!-- POSTPROCESSDATA: 16-network19|driver:compiling --><XREF IDREF="28510" TYPE="TITLE">&ldquo;Compiler Variables&rdquo;</XREF>).</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Mutual Exclusion Macros</TITLE><PARAGRAPH>The macros for mutual exclusion defined in <INDEXTARGET ID="16-network20"><!-- POSTPROCESSDATA: 16-network20|mutual exclusion:in network driver --><FILENAME>net/if.h</FILENAME> are listed in <XREF IDREF="11357" TYPE="TABLE">Table&nbsp;17-2</XREF>.</PARAGRAPH>
+<TABLE COLUMNS="2"><CAPTION LBL="17-2"><PREFIX>Table 17-2 </PREFIX><XREFTARGET ID="11357"> <EMPHASIS>(continued)        </EMPHASIS>Mutual Exclusion Macros for ifnet Drivers</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="153"><PARAGRAPH>Macro Prototype</PARAGRAPH>
+</CELL>
+<CELL LEFT="160" WIDTH="234"><PARAGRAPH>Purpose</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="153"><PARAGRAPH>IFNET_INITLOCKS(<VARIABLE>ifp</VARIABLE>) </PARAGRAPH>
+</CELL>
+<CELL LEFT="160" WIDTH="234"><PARAGRAPH>Initialize locks with <FUNCTION>mutex_init()</FUNCTION> and structure *<VARIABLE>ifp</VARIABLE>. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="153"><PARAGRAPH>IFNET_LOCK(<VARIABLE>ifp</VARIABLE>) </PARAGRAPH>
+</CELL>
+<CELL LEFT="160" WIDTH="234"><PARAGRAPH>Get exclusive use of the structure *<VARIABLE>ifp</VARIABLE>. <FUNCTION>splimp</FUNCTION><FUNCTION>()</FUNCTION> is called to 
+raise the interrupt level if necessary. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="153"><PARAGRAPH>IFNET_UNLOCK(<VARIABLE>ifp</VARIABLE>) </PARAGRAPH>
+</CELL>
+<CELL LEFT="160" WIDTH="234"><PARAGRAPH>Release use of *<VARIABLE>ifp</VARIABLE> and return to previous interrupt level. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="153"><PARAGRAPH>IFNET_ISLOCKED(<VARIABLE>ifp</VARIABLE>) </PARAGRAPH>
+</CELL>
+<CELL LEFT="160" WIDTH="234"><PARAGRAPH>Test whether *<VARIABLE>ifp</VARIABLE> is locked. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="153"><PARAGRAPH>IFQ_LOCK(<VARIABLE>ifq</VARIABLE>) </PARAGRAPH>
+</CELL>
+<CELL LEFT="160" WIDTH="234"><PARAGRAPH>Get exclusive use of an input queue *<VARIABLE>ifq</VARIABLE>. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="153"><PARAGRAPH>IFQ_UNLOCK(<VARIABLE>ifq</VARIABLE>) </PARAGRAPH>
+</CELL>
+<CELL LEFT="160" WIDTH="234"><PARAGRAPH>Release use of *<VARIABLE>ifq</VARIABLE>. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="153"><PARAGRAPH>IF_ENQUEUE(<VARIABLE>ifq</VARIABLE>, <VARIABLE>mp</VARIABLE>) </PARAGRAPH>
+</CELL>
+<CELL LEFT="160" WIDTH="234"><PARAGRAPH>Lock the queue *<VARIABLE>ifq</VARIABLE>; post the mbuf *<VARIABLE>mp</VARIABLE>; release the queue. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="153"><PARAGRAPH>IF_ENQUEUE_NOLOCK(<VARIABLE>ifq</VARIABLE>,<VARIABLE>mp</VARIABLE>) </PARAGRAPH>
+</CELL>
+<CELL LEFT="160" WIDTH="234"><PARAGRAPH>Post the mbuf *<VARIABLE>mp</VARIABLE> without locking. </PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>The variables used in <XREF IDREF="11357" TYPE="TABLE">Table&nbsp;17-2</XREF> are as follows: </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><VARIABLE>ifp</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="270"><PARAGRAPH>Address of a <VARIABLE>struct ifnet</VARIABLE> to be used exclusively. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><VARIABLE>s</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="270"><PARAGRAPH>Integer variable to store the current interrupt mask level. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><VARIABLE>ifq</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="270"><PARAGRAPH>Address of a <VARIABLE>struct ifqueue</VARIABLE> to be posted. </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH><VARIABLE>mp</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="270"><PARAGRAPH>Address of a <VARIABLE>struct mbuf</VARIABLE> to be posted. </PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<SECTION3 LBL="" HELPID = ""><TITLE>Macro Use</TITLE><PARAGRAPH>The TCP/IP protocol stack automatically acquires the ifnet structure before calling a network driver routine through that structure. Thus the driver's <FUNCTION>init()</FUNCTION>, <FUNCTION>stop()</FUNCTION>, <FUNCTION>start()</FUNCTION>, <FUNCTION>output()</FUNCTION>, and <FUNCTION>ioctl()</FUNCTION> functions do not need to use IFNET_LOCK or IFNET_UNLOCK. Look for expressions</PARAGRAPH>
+<EXAMPLE>
+ASSERT(IFNET_ISLOCKED(ifp));
+</EXAMPLE>
+<PARAGRAPH>in the example driver (<XREF IDREF="63121" TYPE="TITLE">&ldquo;Example ifnet Driver&rdquo;</XREF>) to see places where this is the case. Explicit use of IFNET_LOCK is needed in the interrupt handler. </PARAGRAPH>
+</SECTION3>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="63121">Example ifnet Driver</TITLE><PARAGRAPH>The code in <INDEXTARGET ID="16-network21"><!-- POSTPROCESSDATA: 16-network21|network:example driver --><INDEXTARGET ID="16-network22"><!-- POSTPROCESSDATA: 16-network22|example driver --><INDEXTARGET ID="16-network23"><!-- POSTPROCESSDATA: 16-network23|driver:examples:network --><XREF IDREF="50931" TYPE="TEXT">Example&nbsp;17-1</XREF> represents the skeleton of an ifnet driver, showing its entry points, data structures, required <FUNCTION>ioctl</FUNCTION>() functions, address format conventions, and its use of kernel utility routines and locking primitives.</PARAGRAPH>
+<PARAGRAPH>A comment beginning &ldquo;MISSING:&rdquo; represents a point at which a complete driver would contain code related to the device or bus it manages.</PARAGRAPH>
+<CODE><CAPTION LBL="17-1"><PREFIX>Example 17-1 </PREFIX><XREFTARGET ID="50931">Skeleton ifnet Driver</CAPTION>/*
+&space;* if_sk - skeleton IRIX 6.5 ifnet device driver
+&space;*
+&space;* This is a skeleton ifnet driver for IRIX 6.5 meant to demonstrate ifnet
+&space;* driver entry points, data structures, required ioctls, address format
+&space;* conventions, kernel utility routines, and locking primitives.
+&space;* These kernel data structures and routines are SUBJECT TO CHANGE
+&space;* without notice.
+&space;*
+&space;* Refer to the IRIX 6.5 Device Driver Programming Guide and Device Driver
+&space;* Reference Pages for complete information on writing PCI, GIO, VME
+&space;* and EISA bus device drivers for SGI systems.
+&space;*
+&space;* "MISSING" is used to designate places where device/bus/driver-specific
+&space;* code sections are required.
+&space;*
+&space;* Locking strategy:
+&space;*
+&space;* There are TWO different approaches supported in Irix 6.5 regarding
+&space;* device driver locking. The two approaches are designated via the presence
+&space;* or absense of the IFF_DRVRLOCK flag in bsd/net/if.h for this driver.
+&space;* This flag indicates whether the network device driver is responsible for
+&space;* performing it's own MP locking or whether it depends on the upper level
+&space;* to serialize access to the network device driver.
+&space;*
+&space;* If you have a high performance networking device which is to be supported
+&space;* under Irix, then your drive should set and implement the locking
+&space;* required when using the IFF_DRVRLOCK flag. The flag is set in the sk_attach
+&space;* procedure.
+&space;*
+&space;* This device driver example will demonstrate this type of locking support.
+&space;*
+&space;* In the event you choose to NOT implement the IFF_DRVRLOCK flag then the
+&space;* IFNET_LOCK() and IFNET_UNLOCK() macro's are used acquire/release the lock
+&space;* on a given ifnet structure. The ifnet lock must be held while modifying
+&space;* any fields within the associated ifnet data structure. The ifnet lock can
+&space;* also be used to single thread portions of the device driver if so required.
+&space;*
+&space;* The driver xxinit, xxreset, xxoutput, xxwatchdog, and xxioctl entry points
+&space;* are called with the driver lock already acquired thus only a single thread
+&space;* of execution is allowed in these portions of the driver for each interface.
+&space;*
+&space;* It is the driver's responsibility to obtain a lock within its xxintr()
+&space;* procedure and other private routines to single thread any critical sections.
+&space;*
+&space;* Notes:
+&space;* - don't forget appropriate machine-specific cache flushing operations
+&space;*      (refer to IRIX Device Driver Programming guide)
+&space;* - declare pointers to device registers as "volatile"
+&space;*
+&space;* Caveat Emptor:
+&space;* No guarantees are made with respect to correctness nor completeness
+&space;* of this source code.
+&space;*
+&space;* Copyright 1998 Silicon Graphics, Inc.  All rights reserved.
+&space;*/
+#ident "$Revision: 1.6 $"
+&nbsp;
+#include &lt;sys/types.h>
+#include &lt;sys/param.h>
+#include &lt;sys/systm.h>
+#include &lt;sys/sysmacros.h>
+#include &lt;sys/cmn_err.h>
+#include &lt;sys/debug.h>
+#include &lt;sys/hwgraph.h>
+#include &lt;sys/iograph.h>
+#include &lt;sys/errno.h>
+#include &lt;sys/PCI/pciio.h>
+#include &lt;sys/idbgentry.h>
+#include &lt;sys/tcp-param.h>
+#include &lt;sys/mbuf.h>   
+#include &lt;sys/immu.h>
+#include &lt;sys/sbd.h>
+#include &lt;sys/ddi.h>
+#include &lt;sys/kmem.h>
+#include &lt;sys/cpu.h>
+#include &lt;sys/invent.h>
+#include &lt;net/if.h>
+#include &lt;net/if_types.h>
+#include &lt;net/netisr.h>
+#include &lt;netinet/if_ether.h>
+#include &lt;net/raw.h>
+#include &lt;net/multi.h>
+#include &lt;netinet/in_var.h>
+#include &lt;net/soioctl.h>
+#include &lt;sys/dlsap_register.h>
+/* MISSING: driver-specific header includes go here */
+&nbsp;
+/*
+&space;* driver-specific and device-specific data structure
+&space;* declarations and definitions might go here.
+&space;*/
+#define SK_MAX_UNITS    8
+#define SK_MTU    4096
+#define SK_DOG    (2*IFNET_SLOWHZ) /* watchdog duration in seconds */
+#define SK_IFT    (IFT_FDDI)      /* refer to &lt;net/if_types.h> */
+#define SK_INV    (INV_NET_FDDI)  /* refer to &lt;sys/invent.h> */
+&nbsp;
+#define INV_FDDI_SK     (23)        /* refer to &lt;sys/invent.h> */
+&nbsp;
+#define IFF_ALIVE          (IFF_UP|IFF_RUNNING)
+#define iff_alive(flags)    (((flags) &amp; IFF_ALIVE) == IFF_ALIVE)
+#define iff_dead(flags)  (((flags) &amp; IFF_ALIVE) != IFF_ALIVE)
+&nbsp;
+#define SK_ISBROAD(addr)    (!bcmp((addr), &amp;skbroadcastaddr, SKADDRLEN))
+#define SK_ISGROUP(addr)    ((addr)[0] &amp; 01)
+/*
+&space;* MISSING media-specific definitions of address size and header format.
+&space;*/
+#define SKADDRLEN       (6)
+#define SKHEADERLEN     (sizeof (struct skheader))
+&nbsp;
+/*
+&space;* Our fictional media has an IEEE 802-looking header..
+&space;*/
+struct skaddr {
+&space;   u_int8_t sk_vec[SKADDRLEN];
+};
+&nbsp;
+struct skheader {
+&space;   struct skaddr sh_dhost;
+&space;   struct skaddr sh_shost;
+&space;   u_int16_t sh_type;
+};
+&nbsp;
+struct skaddr skbroadcastaddr = {
+&space;   0xff, 0xff, 0xff, 0xff, 0xff, 0xff
+};
+&nbsp;
+/*
+&space;* Each interface is represented by a private
+&space;* network interface data structure that maintains
+&space;* the device hardware resource addresses, pointers
+&space;* to device registers, allocated dma_alloc maps,
+&space;* lists of mbufs pending transmit or reception, etc, etc.
+&space;* We use ARP and have an 802 address.
+&space;*/
+struct sk_info {
+&space;   struct arpcom si_ac;        /* common ifnet and arp */
+&space;   struct skaddr si_ouraddr;       /* our individual media address */
+&space;   struct mfilter si_filter;       /* AF_RAW sw snoop filter */
+&space;   struct rawif si_rawif;    /* raw snoop interface */
+&space;   int si_flags;
+&space;   caddr_t si_regs;        /* pointer to device registers */
+&space;   vertex_hdl_t si_our_vhdl;       /* our vertex */
+&space;   vertex_hdl_t si_conn_vhdl;      /* our parent vertex */
+&space;   pciio_intr_t    si_intr;    /* interrupt handle */
+&space;   /* MISSING additional driver-specific data structures */
+};
+&nbsp;
+#define SK_IF_LOCK  0x1000      /* private driver bitlock */
+&nbsp;
+#define si_if   si_ac.ac_if
+&nbsp;
+#define sktoifp(si) (&amp;(si)->si_ac.ac_if)
+#define ifptosk(ifp)((struct sk_info *)ifp)
+&nbsp;
+#define ALIGNED(addr, alignment)    (((u_long)(addr) &amp; (alignment-1)) == 0)
+
+#define sk_info_set(v,i)    hwgraph_fastinfo_set((v),(arbitrary_info_t)(i))
+#define sk_info_get(v)    ((struct sk_info *)hwgraph_fastinfo_get((v)))
+&nbsp;
+/*
+&space;* The start of an mbuf containing an input frame
+&space;*/
+struct sk_ibuf {
+&space;   struct ifheader sib_ifh;
+&space;   struct snoopheader sib_snoop;
+&space;   struct skheader sib_skh;
+};
+&nbsp;
+#define SK_IBUFSZ       (sizeof (struct sk_ibuf))
+&nbsp;
+/*
+&space;* Multicast filter request for SIOCADDMULTI/SIOCDELMULTI .
+&space;*/
+struct mfreq {
+&space;   union mkey *mfr_key;    /* pointer to socket ioctl arg */
+&space;   mval_t  mfr_value;      /* associated value */
+};
+&nbsp;
+void sk_init(void);
+static int sk_ifinit(struct ifnet *ifp);
+int sk_attach(vertex_hdl_t conn_vhdl);
+static void sk_reset(struct sk_info *si);
+static void sk_intr(struct sk_info *si);
+static int sk_output(struct ifnet *ifp, struct mbuf *m, struct sockaddr *dst);
+static void sk_input(struct sk_info *si, struct mbuf *m, int totlen);
+static int sk_ioctl(struct ifnet *ifp, int cmd, void *data);
+static void sk_watchdog(struct ifnet *ifp);
+static void sk_stop(struct sk_info *si);
+static int sk_start(struct sk_info *si, int flags);
+static int sk_add_da(struct sk_info *si, union mkey *key, int ismulti);
+static int sk_del_da(struct sk_info *si, union mkey *key, int ismulti);
+static int sk_dstaddr_hash(char *addr);
+static int sk_dlp(struct sk_info *si,int port,int encap,struct mbuf *m,int len);
+static void sk_dump(int unit);
+/* MISSING additional driver-specific routine prototypes */
+&nbsp;
+extern void bitswapcopy(void *, void *, int);
+&nbsp;
+extern int mutex_bitlock(unsigned int bitlock, unsigned int lock_flag);
+extern void mutex_bitunlock(unsigned int bitlock, unsigned int lock_flag,
+&space;   int rtn_bitlock);
+extern struct ifnet loif;       /* loopback driver if */
+&nbsp;
+int     sk_devflag = D_MP;
+&nbsp;
+/*
+&space;* xxinit() routine called early during boot.
+&space;*/
+void
+sk_init(void)
+{
+&space;   /* register ourselves with the pci i/o infrastructure */
+&space;   pciio_driver_register(0x10A9, 0x0003, "sk_", 0);
+&space;   /*
+&space;    * register a handy debugging routine so we can call it
+&space;    * from idbg(1) and the kernel debugger.
+&space;    */
+&space;   idbg_addfunc("sk_dump", (void (*)())sk_dump);
+&space;   return;
+}
+&nbsp;
+/*
+&space;* xxattach() routine is called by the i/o infrastructure
+&space;* when a hardware device matches our pci vendor and device ids.
+&space;*/
+int
+sk_attach(vertex_hdl_t conn_vhdl)
+{
+&space;   graph_error_t rc;
+&space;   vertex_hdl_t our_vhdl;
+&space;   struct sk_info *si;
+&space;   struct ifnet *ifp;
+&space;   device_desc_t sk_dev_desc;
+&nbsp;
+&space;   /* add a char device vertex to the hardware graph tree ("/hw") */
+&space;   if ((rc = hwgraph_char_device_add(conn_vhdl, "sk", "sk_",
+&space;       &amp;our_vhdl)) != GRAPH_SUCCESS) {
+&space;       cmn_err(CE_ALERT,
+&space;           "skattach: hwgraph_char_device_add error %d", rc);
+&space;       return EIO;
+&space;   }
+&nbsp;
+&space;   /* fix up device descriptor */
+&space;   sk_dev_desc = device_desc_dup(our_vhdl);
+&space;   device_desc_intr_name_set(sk_dev_desc, "sk device");
+&space;   device_desc_default_set(our_vhdl, sk_dev_desc);
+&nbsp;
+&space;   si = (struct sk_info*)kmem_zalloc(sizeof (struct sk_info), KM_SLEEP);
+&space;   if (si == NULL) {
+&space;       cmn_err(CE_ALERT, "skattach: kmem_alloc failed\n");
+&space;       return ENOMEM;
+&space;   }
+&nbsp;
+&space;   /* save our vertex and our parent's vertex for later */
+&space;   si->si_our_vhdl = our_vhdl;
+&space;   si->si_conn_vhdl = conn_vhdl;
+&nbsp;
+&space;   /* save a pointer to our sk_info structure in our vertex */
+&space;   sk_info_set(our_vhdl, si);
+&nbsp;
+&space;   /*
+&space;    * MISSING
+&space;    * Driver-specific actions that might go here:
+&space;    *
+&space;    * - call sk_reset to disable the device
+&space;    * - pciio_pio map in the device registers
+&space;    * - allocate a new sk_info structure
+&space;    * - allocate device host memory buffers and descriptors
+&space;    *      and create any static dma mappings (pciio_dmamap_xx )
+&space;    * ...
+&space;    */
+&nbsp;
+&space;   /* register our interrupt handler */
+&space;   si->si_intr = pciio_intr_alloc(conn_vhdl, sk_dev_desc,
+&space;       PCIIO_INTR_LINE_A, our_vhdl);
+&space;   pciio_intr_connect(si->si_intr,
+&space;       (intr_func_t)sk_intr,
+&space;       (intr_arg_t) si,
+&space;       (void *)0);
+&nbsp;
+&space;   /*
+&space;    * MISSING your address translation protocol goes here.
+&space;    * Save a copy of our MAC address in the arpcom structure.
+&space;    */
+&space;   bcopy((caddr_t)&amp;si->si_ouraddr, (caddr_t)si->si_ac.ac_enaddr,
+&space;       SKADDRLEN);
+&space;   /*
+&space;    * Initialize ifnet structure with our name, type, mtu size,
+&space;    * supported flags, pointers to our entry points,
+&space;    * and attach to the available ifnet drivers list.
+&space;    */
+&space;   ifp = sktoifp(si);
+&space;   ifp->if_name = "sk";
+&space;   ifp->if_unit = -1;
+&space;   ifp->if_type = SK_IFT;
+&space;   ifp->if_mtu = SK_MTU;
+&space;   ifp->if_flags =
+&space;       IFF_BROADCAST | IFF_MULTICAST | IFF_DRVRLOCK |IFF_NOTRAILERS;
+&nbsp;
+&space;   ifp->if_output = sk_output;
+&space;   ifp->if_ioctl = (int (*)(struct ifnet*, int, void*))sk_ioctl;
+&space;   ifp->if_watchdog = sk_watchdog;
+&nbsp;
+&space;   /*
+&space;    * A note about unit numbering and when to call if_attach:
+&space;    *
+&space;    * Starting with IRIX 6.4 a boot-time command ioconfig(1M) is
+&space;    * provided which walks the hardware device tree ("/hw"), allocates
+&space;    * and assigns a controller number (unit number) to each
+&space;    * device vertex it finds which has an inventory record.
+&space;    *
+&space;    * So we do everything but the if_attach() call now,
+&space;    * since we don't yet have our unit number, and call
+&space;    * if_attach() from our xxopen() routine when it is
+&space;    * called by the ioconfig(1M) command during booting.
+&space;    */
+&nbsp;
+&space;   /*
+&space;    * Allocate a multicast filter table with an initial
+&space;    * size of 10.  See &lt;net/multi.h> for a description
+&space;    * of the support for generic sw multicast filtering.
+&space;    * Use of these mf routines is purely optional -
+&space;    * if you're not supporting multicast addresses or
+&space;    * your device does perfect filtering or you think
+&space;    * you can roll your own better, feel free.
+&space;    */
+&space;   if (!mfnew(&amp;si->si_filter, 10))
+&space;       cmn_err(CE_PANIC, "sk_edtinit: no memory for frame filter\n");
+&nbsp;
+&space;   /*
+&space;    * You must create an inventory record for this vertex now
+&space;    * or ioconfig(1M) will not call our xxopen() routine to
+&space;    * pass in an allocated unit number later.
+&space;    */
+&space;   device_inventory_add(our_vhdl, INV_NETWORK, INV_NET_FDDI, 100, -1, 0);
+&space;   return 0;
+}
+&nbsp;
+/*
+&space;* Driver xxopen() routine exists only to take unit# which has now been
+&space;* assigned to the vertex by ioconfig(1M) and if_attach() the device.
+&space;*/
+/* ARGSUSED */
+int
+sk_open(dev_t *devp, int flag, int otyp, struct cred *crp)
+{
+&space;   vertex_hdl_t our_vhdl;
+&space;   struct sk_info *si;
+&space;   int unit;
+&nbsp;
+&space;   our_vhdl = dev_to_vhdl(*devp);
+&nbsp;
+&space;   if ((si = sk_info_get(our_vhdl)) == NULL)
+&space;       return EIO;
+&nbsp;
+&space;   /* if already if_attached, just return */
+&space;   if (si->si_if.if_unit != -1)
+&space;       return 0;
+&nbsp;
+&space;   /* get our unit number from the vertex label */
+&space;   if ((unit = device_controller_num_get(our_vhdl)) &lt; 0) {
+&space;       cmn_err(CE_ALERT, "sk_open: vertex missing ctlr number");
+&space;       return EIO;
+&space;   }
+&nbsp;
+&space;   si->si_if.if_unit = unit;
+&space;   /*
+&space;    * Install this device in the list of IRIX ifnet structures.
+&space;    */
+&space;   if_attach(&amp;si->si_if);
+&nbsp;
+&space;   /*
+&space;    * Initialize the raw socket interface.  See &lt;net/raw.h>
+&space;    * and the man pages for descriptions of the SNOOP
+&space;    * and DRAIN raw protocols.
+&space;    */
+&space;   rawif_attach(&amp;si->si_rawif, &amp;si->si_if,
+&space;       (caddr_t) &amp;si->si_ouraddr,
+&space;       (caddr_t) &amp;skbroadcastaddr,
+&space;       SKADDRLEN,
+&space;       SKHEADERLEN,
+&space;       structoff(skheader, sh_shost),
+&space;       structoff(skheader, sh_dhost));
+&space;   return 0;
+}
+&nbsp;
+static int
+sk_ifinit(struct ifnet *ifp)
+{
+&space;   struct sk_info *si = ifptosk(ifp);
+&space;   int s;
+&nbsp;
+&space;   s = mutex_bitlock(&amp;si->si_flags, SK_IF_LOCK);
+&nbsp;
+&space;   /*
+&space;    * Reset the device first, ask questions later..
+&space;    */
+&space;   sk_reset(si);
+&space;   /*
+&space;    * - free or reuse any pending xmit/recv mbufs
+&space;    * - initialize device configuration registers, etc.
+&space;    * - allocate and post receive buffers
+&space;    *
+&space;    * Refer to Device Driver Programming guide for
+&space;    * descriptions on use of kvtophys() (GIO) or
+&space;    * dma_map/dma_mapaddr() (VME) routines for
+&space;    * obtaining DMA addresses and system-specific
+&space;    * issues like flushing caches or write buffers.
+&space;    */
+&space;   /*
+&space;    * MISSING
+&space;    * enable if_flags device behavior (IFF_DEBUG on/off, etc.)
+&space;    */
+&nbsp;
+&space;   ifp->if_timer = SK_DOG; /* turn on watchdog */
+&nbsp;
+&space;   /* MISSING: turn device "on" now */
+&nbsp;
+&space;   mutex_bitunlock(&amp;si->si_flags, EIF_LOCK, s);
+&space;   return 0;
+}
+&nbsp;
+/*
+&space;* Reset the interface.
+&space;*/
+static void
+sk_reset(struct sk_info *si)
+{
+&space;   struct ifnet *ifp = sktoifp(si);
+&space;   int s;
+&nbsp;
+&space;   s = mutex_bitlock(&amp;si->si_flags, SK_IF_LOCK);
+&space;   ifp->if_timer = 0;      /* turn off watchdog */
+&space;   mutex_bitunlock(&amp;si->si_flags, EIF_LOCK, s);
+&space;   /*
+&space;    * MISSING
+&space;    * - reset device
+&space;    * - reset device receive descriptor ring
+&space;    * - free any enqueued transmit mbufs
+&space;    * - create device xmit descriptor ring
+&space;    */
+&space;   return;
+}
+&space;   
+static void
+sk_intr(struct sk_info *si)
+{
+&space;   struct ifnet *ifp;
+&space;   struct mbuf *m;
+&space;   int totlen, s;
+&nbsp;
+&space;   ifp = &amp;si->si_if;
+&nbsp;
+&space;   s = mutex_bitlock(&amp;si->si_flags, SK_IF_LOCK);
+&space;   /*
+&space;    * Ignore early interrupts.
+&space;    */
+&space;   if (iff_dead(ifp->if_flags)) {
+&space;       sk_stop(si);
+&nbsp;
+&space;       mutex_bitunlock(&amp;si->si_flags, EIF_LOCK, s);
+&space;       return;
+&space;   }
+&space;   /*
+&space;    * MISSING: read and clear the device interrupt status register.
+&space;    */
+&nbsp;
+&space;   /*
+&space;    * process any received packets.
+&space;    */
+&space;   while (0 /* MISSING: received packets available */) {
+&nbsp;
+&space;       /*
+&space;        * MISSING
+&space;        * Do device-specific receive processing here.
+&space;        * Allocate and post a replacement receive buffer.
+&space;        */
+&nbsp;
+&space;       sk_input(si, m, totlen);
+&space;   }
+&nbsp;
+&space;   while (0 /* MISSING mbufs completed transmission */) {
+&nbsp;
+&space;       /*
+&space;        * MISSING
+&space;        * Reclaim any completed device transmit resources
+&space;        * freeing completed mbufs, checking for errors,
+&space;        * and maintaining if_opackets, if_oerrors,
+&space;        * if_collisions, etc.
+&space;        */
+&space;   }
+&nbsp;
+&space;   /* MISSING: process any other interrupt conditions */
+&nbsp;
+&space;   mutex_bitunlock(&amp;si->si_flags, EIF_LOCK, s);
+&space;   return;
+}
+&nbsp;
+/*
+&space;* Transmit packet.  If the destination is this system or
+&space;* broadcast, send the packet to the loop-back device if
+&space;* we cannot hear ourself transmit.  Return 0 or errno.
+&space;*/
+static int
+sk_output(
+&space;   struct ifnet    *ifp,
+&space;   struct mbuf *m0,
+&space;   struct sockaddr *dst)
+{
+&space;   struct sk_info *si = ifptosk(ifp);
+&space;   struct skheader *sh;
+&space;   struct mbuf *m, *m1;
+&space;   struct mbuf *mloop;
+&space;   struct sockaddr_sdl *sdl;
+&space;   int error, s;
+&nbsp;
+&space;   mloop = NULL;
+&nbsp;
+&space;   s = mutex_bitlock(&amp;si->si_flags, SK_IF_LOCK);
+&nbsp;
+&space;   if (iff_dead(ifp->if_flags)) {
+&space;       error = EHOSTDOWN;
+&space;       goto bad;
+&space;   }
+&nbsp;
+&space;   /*
+&space;    * If snd queue full, try reclaiming some completed
+&space;    * mbufs.  If it's still full, then just drop the
+&space;    * packet and return ENOBUFS.
+&space;    */
+&space;   if (IF_QFULL(&amp;si->si_if.if_snd)) {
+&nbsp;
+&space;       while (0 /* MISSING xmits done */) {
+&space;           /*
+&space;            * MISSING: Reclaim completed xmit descriptors.
+&space;            */
+&nbsp;
+&space;           IF_DEQUEUE_NOLOCK(&amp;si->si_if.if_snd, m);
+&space;           m_freem(m);
+&space;       }
+&space;       if (IF_QFULL(&amp;si->si_if.if_snd)) {
+&space;           m_freem(m0);
+&space;           si->si_if.if_odrops++;
+&space;           IF_DROP(&amp;si->si_if.if_snd);
+&space;
+&space;           mutex_bitunlock(&amp;si->si_flags, EIF_LOCK, s);
+&space;           return ENOBUFS;
+&space;       }
+&space;   }
+&nbsp;
+&space;   switch (dst->sa_family) {
+&space;   case AF_INET: {
+&space;       /*
+&space;        * Get room for media header,
+&space;        * use this mbuf if possible.
+&space;        */
+&space;       if (!M_HASCL(m0)
+&space;           &amp;&amp; m0->m_off >= MMINOFF+sizeof(*sh)
+&space;           &amp;&amp; (sh = mtod(m0, struct skheader*))
+&space;           &amp;&amp; ALIGNED(sh, sizeof (int))) {
+&space;           ASSERT(m0->m_off &lt;= MSIZE);
+&space;           m1 = 0;
+&space;           --sh;
+&space;       } else {
+&space;           m1 = m_get(M_DONTWAIT, MT_DATA);
+&space;           if (m1 == NULL) {
+&space;               m_freem(m0);
+&space;               si->si_if.if_odrops++;
+&space;               IF_DROP(&amp;si->si_if.if_snd);
+&nbsp;
+&space;               mutex_bitunlock(&amp;si->si_flags, EIF_LOCK, s);
+&space;               return ENOBUFS;
+&space;           }
+&space;           sh = mtod(m1, struct skheader*);
+&space;           m1->m_len = sizeof (*sh);
+&space;       }
+&nbsp;
+&space;       bcopy(&amp;si->si_ouraddr, &amp;sh->sh_shost, SKADDRLEN);
+&nbsp;
+&space;       /*
+&space;        * translate dst IP address to media address.
+&space;        */
+&space;       if (!ip_arpresolve(&amp;si->si_ac, m0,
+&space;           &amp;((struct sockaddr_in *)dst)->sin_addr,
+&space;           (u_char*)&amp;sh->sh_dhost)) {
+&space;           m_freem(m1);
+&nbsp;
+&space;           mutex_bitunlock(&amp;si->si_flags, EIF_LOCK, s);
+&space;           return 0;     /* just wait if not yet resolved */
+&space;       }
+&space;       if (m1 == 0) {
+&space;           m0->m_off -= sizeof (*sh);
+&space;           m0->m_len += sizeof (*sh);
+&space;       } else {
+&space;           m1->m_next = m0;
+&space;           m0 = m1;
+&space;       }
+&nbsp;
+&space;       /*
+&space;        * Listen to ourself, if we are supposed to.
+&space;        */
+&space;       if (SK_ISBROAD(&amp;sh->sh_shost)) {
+&space;           mloop = m_copy(m0, sizeof (*sh), M_COPYALL);
+&space;           if (mloop == NULL) {
+&space;               m_freem(m0);
+&space;               si->si_if.if_odrops++;
+&space;               IF_DROP(&amp;si->si_if.if_snd);
+&nbsp;
+&space;               mutex_bitunlock(&amp;si->si_flags, EIF_LOCK, s);
+&space;               return ENOBUFS;
+&space;           }
+&space;       }
+&space;       break;
+&space;   }
+&nbsp;
+&space;   case AF_UNSPEC:
+#define EP      ((struct ether_header *)&amp;dst->sa_data[0])
+&space;       /*
+&space;        * Translate an ARP packet using RFC-1042.
+&space;        * Require the entire ARP packet be in the first mbuf.
+&space;        */
+&space;       sh = mtod(m0, struct skheader*);
+&space;       if (M_HASCL(m0)
+&space;           || !ALIGNED(sh, sizeof (int))
+&space;           || m0->m_len &lt; sizeof(struct ether_arp)
+&space;           || m0->m_off &lt; MMINOFF+sizeof(*sh)
+&space;           || EP->ether_type != ETHERTYPE_ARP) {
+&space;           printf("sk_output: bad ARP output\n");
+&space;           m_freem(m0);
+&space;           si->si_if.if_oerrors++;
+&space;           IF_DROP(&amp;si->si_if.if_snd);
+&nbsp;
+&space;           mutex_bitunlock(&amp;si->si_flags, EIF_LOCK, s);
+&space;           return EAFNOSUPPORT;
+&space;       }
+&space;       ASSERT(m0->m_off &lt;= MSIZE);
+&space;       m0->m_len += sizeof(*sh);
+&space;       m0->m_off -= sizeof(*sh);
+&space;       --sh;
+&nbsp;
+&space;       bcopy(&amp;si->si_ouraddr, &amp;sh->sh_shost, SKADDRLEN);
+&space;       bcopy(&amp;EP->ether_dhost[0], &amp;sh->sh_dhost, SKADDRLEN);
+&nbsp;
+&space;       sh->sh_type = EP->ether_type;
+#undef EP
+&space;       break;
+&nbsp;
+&space;   case AF_RAW:
+&space;       /* The mbuf chain contains the raw frame incl header.
+&space;        */
+&space;       sh = mtod(m0, struct skheader*);
+&space;       if (M_HASCL(m0)
+&space;           || m0->m_len &lt; sizeof(*sh)
+&space;           || !ALIGNED(sh, sizeof (int))) {
+&space;           m0 = m_pullup(m0, SKHEADERLEN);
+&space;           if (m0 == NULL) {
+&space;               si->si_if.if_odrops++;
+&space;               IF_DROP(&amp;si->si_if.if_snd);
+&space;               return ENOBUFS;
+&space;           };
+&space;           sh = mtod(m0, struct skheader*);
+&space;       }
+&space;       break;
+&nbsp;
+&space;   case AF_SDL:
+&space;       /*
+&space;        * Send an 802 packet for DLPI.
+&space;        * mbuf chain should already have everything
+&space;        * but MAC header.
+&space;        */
+&space;       sdl = (struct sockaddr_sdl*) dst;
+&nbsp;
+&space;       /* sanity check the MAC address */
+&space;       if (sdl->ssdl_addr_len != SKADDRLEN) {
+&space;           m_freem(m0);
+&space;           return EAFNOSUPPORT;
+&space;       }
+&space;       sh = mtod(m0, struct skheader*);
+&space;       if (!M_HASCL(m0)
+&space;           &amp;&amp; m1->m_off >= MMINOFF+SKHEADERLEN
+&space;           &amp;&amp; ALIGNED(sh, sizeof(int))) {
+&space;           ASSERT(m0->m_off &lt;= MSIZE);
+&space;           m0->m_len += SKHEADERLEN;
+&space;           m0->m_off -= SKHEADERLEN;
+&space;       } else {
+&space;           m1 = m_get(M_DONTWAIT,MT_DATA);
+&space;           if (!m1) {
+&space;               m_freem(m0);
+&space;               si->si_if.if_odrops++;
+&space;               IF_DROP(&amp;si->si_if.if_snd);
+&space;               return ENOBUFS;
+&space;           }
+&space;           m1->m_len = SKHEADERLEN;
+&space;           m1->m_next = m0;
+&space;           m0 = m1;
+&space;           sh = mtod(m0, struct skheader*);
+&space;       }
+&space;       sh->sh_type = htons(ETHERTYPE_IP);
+&space;       bcopy(&amp;si->si_ouraddr, &amp;sh->sh_shost, SKADDRLEN);
+&space;       bcopy(sdl->ssdl_addr, &amp;sh->sh_dhost, SKADDRLEN);
+&space;       break;
+&nbsp;
+&space;   default:
+&space;       mutex_bitunlock(&amp;si->si_flags, EIF_LOCK, s);
+&nbsp;
+&space;       printf("sk_output:  bad af %u\n", dst->sa_family);
+&space;       m_freem(m0);
+&space;       return EAFNOSUPPORT;
+&space;   }
+&nbsp;
+&space;   /*
+&space;    * Check whether snoopers want to copy this packet.
+&space;    */
+&space;   if (RAWIF_SNOOPING(&amp;si->si_rawif)
+&space;       &amp;&amp; snoop_match(&amp;si->si_rawif, (caddr_t)sh, m0->m_len)) {
+&space;       struct mbuf *ms, *mt;
+&space;       int len;        /* m0 bytes to copy */
+&space;       int lenoff;
+&space;       int curlen;
+&nbsp;
+&space;       len = m_length(m0);
+&space;       lenoff = 0;
+&space;       curlen = len + SK_IBUFSZ;
+&space;       if (curlen > MCLBYTES)
+&space;           curlen = MCLBYTES;
+&space;       ms = m_vget(M_DONTWAIT, MAX(curlen, SK_IBUFSZ), MT_DATA);
+&space;       if (ms) {
+&space;           IF_INITHEADER(mtod(ms,caddr_t), &amp;si->si_if, SK_IBUFSZ);
+&space;           curlen = m_datacopy(m0, lenoff, curlen - SK_IBUFSZ,
+&space;               mtod(ms,caddr_t) + SK_IBUFSZ);
+&space;           mt = ms;
+&space;           for (;;) {
+&space;               lenoff += curlen;
+&space;               len -= curlen;
+&space;               if (len &lt;= 0)
+&space;                   break;
+&space;               curlen = MIN(len, MCLBYTES);
+&space;               m1 = m_vget(M_DONTWAIT, curlen, MT_DATA);
+&space;               if (0 == m1) {
+&space;                   m_freem(ms);
+&space;                   ms = 0;
+&space;                   break;
+&space;               }
+&space;               mt->m_next = m1;
+&space;               mt = m1;
+&space;               curlen = m_datacopy(m0, lenoff, curlen,
+&space;                           mtod(m1, caddr_t));
+&space;           }
+&space;       }
+&space;       if (ms == NULL) {
+&space;           snoop_drop(&amp;si->si_rawif, SN_PROMISC,
+&space;                  mtod(m0,caddr_t), m0->m_len);
+&space;       } else {
+&space;           (void)snoop_input(&amp;si->si_rawif, SN_PROMISC,
+&space;                     mtod(m0, caddr_t),
+&space;                     ms,
+&space;                     (lenoff > SKHEADERLEN)?
+&space;                     (lenoff - SKHEADERLEN) : 0);
+&space;       }
+&space;   }
+&nbsp;
+&space;   /*
+&space;    * Save a copy of the mbuf chain to free later.
+&space;    */
+&space;   IF_ENQUEUE_NOLOCK(&amp;si->si_if.if_snd, m0);
+&nbsp;
+&space;   /*
+&space;    * MISSING
+&space;    * Allocate and initialize transmit descriptor resources
+&space;    * and kick the chip to start DMA reads for transmitting.
+&space;    */
+&nbsp;
+&space;   if (error)
+&space;       goto bad;
+&nbsp;
+&space;   ifp->if_opackets++;
+&nbsp;
+&space;   if (mloop) {
+&space;       si->si_if.if_omcasts++;
+&space;       mutex_bitunlock(&amp;si->si_flags, EIF_LOCK, s);
+&nbsp;
+&space;       (void) looutput(&amp;loif, mloop, dst);
+&space;   } else {
+&space;       if (SK_ISGROUP(sh->sh_dhost.sk_vec))
+&space;           si->si_if.if_omcasts++;
+&nbsp;
+&space;       mutex_bitunlock(&amp;si->si_flags, EIF_LOCK, s);
+&space;   }
+&space;   return 0;
+&nbsp;
+bad:
+&space;   ifp->if_oerrors++;
+&space;   mutex_bitunlock(&amp;si->si_flags, EIF_LOCK, s);
+&nbsp;
+&space;   m_freem(m);
+&space;   m_freem(mloop);
+&space;   return error;
+}
+&nbsp;
+/*
+&space;* deal with a complete input frame in a string of mbufs.
+&space;* mbuf points at a (struct sk_ibuf), totlen is #bytes
+&space;* in user data portion of the mbuf.
+&space;*/
+static void
+sk_input(struct sk_info *si,
+&space;   struct mbuf *m,
+&space;   int totlen)
+{
+&space;   struct sk_ibuf *sib;
+&space;   int snoopflags = 0;
+&space;   uint port;
+&nbsp;
+&space;   /*
+&space;    * MISSING: set local variables 'snoopflags' and
+&space;    * 'if_ierrors' as appropriate
+&space;    */
+&nbsp;
+&space;   sib = mtod(m, struct sk_ibuf*);
+&space;   IF_INITHEADER(sib, &amp;si->si_if, SK_IBUFSZ);
+&nbsp;
+&space;   si->si_if.if_ibytes += totlen;
+&space;   si->si_if.if_ipackets++;
+&nbsp;
+&space;   /*
+&space;    * If it is a broadcast or multicast frame,
+&space;    * get rid of imperfectly filtered multicasts.
+&space;    */
+&space;   if (SK_ISGROUP(sib->sib_skh.sh_dhost.sk_vec)) {
+&space;       if (SK_ISBROAD(sib->sib_skh.sh_dhost.sk_vec))
+&space;           m->m_flags |= M_BCAST;
+&space;       else {
+&space;           if (((si->si_ac.ac_if.if_flags &amp; IFF_ALLMULTI) == 0)
+&space;           &amp;&amp; !mfethermatch(&amp;si->si_filter,
+&space;               sib->sib_skh.sh_dhost.sk_vec, 0)) {
+&space;               if (RAWIF_SNOOPING(&amp;si->si_rawif)
+&space;               &amp;&amp; snoop_match(&amp;si->si_rawif,
+&space;                   (caddr_t) &amp;sib->sib_skh, totlen))
+&space;                   snoopflags = SN_PROMISC;
+&space;               else {
+&space;                   m_freem(m);
+&space;                   return;
+&space;               }
+&space;               m->m_flags |= M_MCAST;
+&space;           }
+&space;       }
+&space;       si->si_if.if_imcasts++;
+&space;   } else {
+&space;       if (RAWIF_SNOOPING(&amp;si->si_rawif)
+&space;           &amp;&amp; snoop_match(&amp;si->si_rawif,
+&space;               (caddr_t) &amp;sib->sib_skh,
+&space;               totlen))
+&space;           snoopflags = SN_PROMISC;
+&space;       else {
+&space;           m_freem(m);
+&space;           return;
+&space;       }
+&space;   }
+&nbsp;
+&space;   /*
+&space;    *  Set 'port' .  For us, just sh_type.
+&space;    */
+&space;   port = ntohs(sib->sib_skh.sh_type);
+&nbsp;
+&space;   /*
+&space;    * do raw snooping.
+&space;    */
+&space;   if (RAWIF_SNOOPING(&amp;si->si_rawif)) {
+&space;       if (!snoop_input(&amp;si->si_rawif, snoopflags,
+&space;                (caddr_t)&amp;sib->sib_skh,
+&space;                m,
+&space;                (totlen>sizeof(struct skheader)
+&space;                 ? totlen-sizeof(struct skheader) : 0))) {
+&space;       }
+&space;       if (snoopflags)
+&space;           return;
+&nbsp;
+&space;   } else if (snoopflags) {
+&space;       goto drop;      /* if bad, count and skip it */
+&space;   }
+&nbsp;
+&space;   /*
+&space;    * If it is a frame we understand, then give it to the
+&space;    * correct protocol code.
+&space;    */
+&space;   switch (port) {
+&space;   case ETHERTYPE_IP:
+&space;       network_input(m, AF_INET, 0);
+&space;       break;
+&nbsp;
+&space;   case ETHERTYPE_ARP:
+&space;       arpinput(&amp;si->si_ac, m);
+&space;       return;
+&nbsp;
+&space;   default:
+&space;       (void)(sk_dlp(si, port, DL_ETHER_ENCAP, m, totlen))
+&space;       break;
+&space;   }
+&space;   return;
+&nbsp;
+drop:
+&space;   m_freem(m);
+&space;   if (RAWIF_SNOOPING(&amp;si->si_rawif))
+&space;       snoop_drop(&amp;si->si_rawif, snoopflags,
+&space;              (caddr_t)&amp;sib->sib_skh, totlen);
+&space;   if (RAWIF_DRAINING(&amp;si->si_rawif))
+&space;       drain_drop(&amp;si->si_rawif, port);
+&space;   return;
+}
+&nbsp;
+/*
+&space;* See if a DLPI function wants a frame.
+&space;*/
+static int
+sk_dlp(struct sk_info *si,
+&space;   int port,
+&space;   int encap,
+&space;   struct mbuf *m,
+&space;   int len)
+{
+&space;   dlsap_family_t *dlp;
+&space;   struct mbuf *m2;
+&space;   struct sk_ibuf *sib;
+&nbsp;
+&space;   if ((dlp = dlsap_find(port, encap)) == NULL)
+&space;       return 0;
+&space;   /*
+&space;    * The DLPI code wants the entire MAC and LLC headers.
+&space;    * It needs the total length of the mbuf chain to reflect
+&space;    * the actual data length, not to be extended to contain a fake,
+&space;    * zeroed LLC header which keeps the snoop code from crashing.
+&space;    */
+&space;   if ((m2 = m_copy(m, 0, len+sizeof(struct skheader))) == NULL)
+&space;       return 0;
+&nbsp;
+&space;   if (M_HASCL(m2)) {
+&space;       m2 = m_pullup(m2, SK_IBUFSZ);
+&space;       if (m2 == NULL)
+&space;           return 0;
+&space;   }
+&space;   sib = mtod(m2, struct sk_ibuf*);
+&nbsp;
+&space;   /*
+&space;    * MISSING: The DLPI code wants the MAC address in canonical bit order.
+&space;    * Convert here if necessary.
+&space;    */
+&nbsp;
+&space;   /*
+&space;    * MISSING:
+&space;    * The DLPI code wants the LLC header, if present,
+&space;    * not to be hidden with the MAC header.  Decrement
+&space;    * LLC header size from ifh_hdrlen if necessary.
+&space;    */
+&nbsp;
+&space;   if ((*dlp->dl_infunc)(dlp, &amp;si->si_if, m2, &amp;sib->sib_skh)) {
+&space;       m_freem(m);
+&space;       return 1;
+&space;   }
+&space;   m_freem(m2);
+&space;   return 0;
+}
+&nbsp;
+/*
+&space;* Process an ioctl request.
+&space;* Return 0 or errno.
+&space;*/
+static int
+sk_ioctl(
+&space;   struct ifnet *ifp,
+&space;   int cmd,
+&space;   void *data)
+{
+&space;   struct sk_info *si;
+&space;   int error = 0;
+&space;   int flags, s;
+&nbsp;
+&space;   si = ifptosk(ifp);
+&nbsp;
+&space;   s = mutex_bitlock(&amp;si->si_flags, SK_IF_LOCK);
+&nbsp;
+&space;   switch (cmd) {
+&space;   case SIOCSIFADDR:
+&space;   {
+&space;       struct ifaddr *ifa = (struct ifaddr *)data;
+&space;
+&space;       switch (ifa->ifa_addr->sa_family) {
+&space;       case AF_INET:
+&space;           sk_stop(si);
+&space;           si->si_ac.ac_ipaddr = IA_SIN(ifa)->sin_addr;
+&space;           sk_start(si, ifp->if_flags);
+&space;           break;
+&nbsp;
+&space;       case AF_RAW:
+&space;           /*
+&space;            * Not safe to change addr while the
+&space;            * board is alive.
+&space;            */
+&space;           if (!iff_dead(ifp->if_flags))
+&space;               error = EINVAL;
+&space;           else {
+&space;               bcopy(ifa->ifa_addr->sa_data,
+&space;                   si->si_ac.ac_enaddr, SKADDRLEN);
+&space;               error = sk_start(si, ifp->if_flags);
+&space;           }
+&space;           break;
+&nbsp;
+&space;       default:
+&space;           error = EINVAL;
+&space;           break;
+&space;       }
+&space;       break;
+&space;   }
+&space;   case SIOCSIFFLAGS:
+&space;   {
+&space;       flags = ((struct ifreq *)data)->ifr_flags;
+&nbsp;
+&space;       if (((struct ifreq*)data)->ifr_flags &amp; IFF_UP)
+&space;           error = sk_start(si, flags);
+&space;       else
+&space;           sk_stop(si);
+&space;       break;
+&space;   }
+&nbsp;
+&space;   case SIOCADDMULTI:
+&space;   case SIOCDELMULTI:
+&space;   {
+#define MKEY ((union mkey*)data)
+&space;       int allmulti;
+&nbsp;
+&space;       /*
+&space;        * Convert an internet multicast socket address
+&space;        * into an 802-type address.
+&space;        */
+&space;       error = ether_cvtmulti((struct sockaddr *)data, &amp;allmulti);
+&space;       if (0 == error) {
+&space;           if (allmulti) {
+&space;               if (SIOCADDMULTI == cmd)
+&space;                   si->si_if.if_flags |= IFF_ALLMULTI;
+&space;               else
+&space;                   si->si_if.if_flags &amp;= ~IFF_ALLMULTI;
+&space;               /* MISSING enable hw all multicast addrs */
+&space;           } else {
+&space;               bitswapcopy(MKEY->mk_dhost, MKEY->mk_dhost,
+&space;                   sizeof (MKEY->mk_dhost));
+&space;               if (SIOCADDMULTI == cmd)
+&space;                   error = sk_add_da(si, MKEY, 1);
+&space;               else
+&space;                   error = sk_del_da(si, MKEY, 1);
+&space;           }
+&space;       }
+&space;       break;
+#undef MKEY
+&space;   }
+&nbsp;
+&space;   case SIOCADDSNOOP:
+&space;   case SIOCDELSNOOP:
+&space;   {
+#define SF(nm) ((struct skheader*)&amp;(((struct snoopfilter *)data)->nm))
+&space;       /*
+&space;        * raw protocol snoop filter.  See &lt;net/raw.h>
+&space;        * and &lt;net/multi.h> and the snoop(7P) man page.
+&space;        */
+&space;       u_char *a;
+&space;       union mkey key;
+&nbsp;
+&space;       a = &amp;SF(sf_mask[0])->sh_dhost.sk_vec[0];
+&space;       if (!SK_ISBROAD(a)) {
+&space;           /*
+&space;            * cannot filter on device unless mask is trivial.
+&space;            */
+&space;           error = EINVAL;
+&space;       } else {
+&space;           /*
+&space;            * Filter individual destination addresses.
+&space;            * Use a different address family to avoid
+&space;            * damaging an ordinary multi-cast filter.
+&space;            * MISSING You'll have to invent your own
+&space;            * mulicast filter routines if this doesn't
+&space;            * fit your address size or needs.
+&space;            */
+&space;           a = &amp;SF(sf_match[0])->sh_dhost.sk_vec[0];
+&space;           key.mk_family = AF_RAW;
+&space;           bcopy(a, key.mk_dhost, sizeof (key.mk_dhost));
+&nbsp;
+&space;           if (cmd == SIOCADDSNOOP) {
+&space;               error = sk_add_da(si, &amp;key, SK_ISGROUP(a));
+&space;           } else {
+&space;               error = sk_del_da(si, &amp;key, SK_ISGROUP(a));
+&space;           }
+&space;       }
+&space;       break;
+&space;   }
+&nbsp;
+&space;   /*
+&space;    * MISSING: add any driver-specific ioctls here.
+&space;    */
+&nbsp;
+&space;   default:
+&space;       error = EINVAL;
+&space;   }
+&nbsp;
+&space;   return error;
+}
+
+/*
+&space;* Add a destination address.
+&space;* Add address to the sw multicast filter table and to
+&space;* our hw device address (if applicable).
+&space;*/
+/* ARGSUSED */
+static int
+sk_add_da(
+&space;   struct sk_info *si,
+&space;   union mkey *key,
+&space;   int ismulti)
+{
+&space;   struct mfreq mfr;
+&nbsp;
+&space;   /*
+&space;    * mfmatchcnt() looks up key in our multicast filter
+&space;    * and, if found, just increments its refcnt and
+&space;    * returns true.
+&space;    */
+&space;   if (mfmatchcnt(&amp;si->si_filter, 1, key, 0))
+&space;       return 0;
+&nbsp;
+&space;   mfr.mfr_key = key;
+&space;   mfr.mfr_value = (mval_t) sk_dstaddr_hash((char*)key->mk_dhost);
+&space;   if (!mfadd(&amp;si->si_filter, key, mfr.mfr_value))
+&space;       return ENOMEM;
+&nbsp;
+&space;   /* MISSING: poke this hash into device's hw address filter */
+&space;   return 0;
+}
+
+/*
+&space;* Delete an address filter. If key is unassociated, do nothing.
+&space;* Otherwise delete software filter first, then hardware filter.
+&space;*/
+/* ARGSUSED */
+static int
+sk_del_da(
+&space;   struct sk_info *si,
+&space;   union mkey *key,
+&space;   int ismulti)
+{
+&space;   struct mfreq mfr;
+&nbsp;
+&space;   /*
+&space;    * Decrement refcnt of this address in our multicast filter
+&space;    * and reclaim the entry if refcnt == 0.
+&space;    */
+&space;   if (mfmatchcnt(&amp;si->si_filter, -1, key, &amp;mfr.mfr_value))
+&space;       return 0;
+&space;   mfdel(&amp;si->si_filter, key);
+&nbsp;
+&space;   /* MISSING: disable this hash value from the device if necessary */
+&nbsp;
+&space;   return 0;
+}
+&nbsp;
+/*
+&space;* compute a hash value for destination address
+&space;*/
+static int
+sk_dstaddr_hash(char *addr)
+{
+&space;   int     hv;
+&nbsp;
+&space;   hv = addr[0] ^ addr[1] ^ addr[2] ^ addr[3] ^ addr[4] ^ addr[5];
+&space;   return (hv &amp; 0xff);
+}
+&nbsp;
+/*
+&space;* Periodically poll the device for input packets
+&space;* in case an interrupt gets lost or the device
+&space;* somehow gets wedged.  Reset if necessary.
+&space;*/
+static void
+sk_watchdog(struct ifnet *ifp)
+{
+&space;   struct sk_info *si;
+&space;   int s;
+&nbsp;
+&space;   si = ifptosk(ifp);
+&space;   /* check for a missed interrupt */
+&space;   sk_intr(si);
+&nbsp;
+&space;   s = mutex_bitlock(&amp;si->si_flags, SK_IF_LOCK);
+&space;   si->si_if.if_timer = SK_DOG;
+&space;   mutex_bitunlock(&amp;si->si_flags, EIF_LOCK, s);
+&nbsp;
+&space;   return;
+}
+&nbsp;
+/*
+&space;* Disable the interface.
+&space;*/
+static void
+sk_stop(struct sk_info *si)
+{
+&space;   struct ifnet *ifp = sktoifp(si);
+&nbsp;
+&space;   ifp->if_flags &amp;= ~IFF_ALIVE;
+&nbsp;
+&space;   /*
+&space;    * Mark an interface down and notify protocols
+&space;    * of the transition.
+&space;    */
+&space;   if_down(ifp);
+&nbsp;
+&space;   sk_reset(si);
+&space;   return;
+}
+&nbsp;
+/*
+&space;* Enable the interface.
+&space;*/
+static int
+sk_start(struct sk_info *si, int flags)
+{
+&space;   struct ifnet *ifp = sktoifp(si);
+&space;   int error, s;
+&nbsp;
+&space;   if ((error = sk_ifinit(ifp))) {
+&space;       return error;
+&space;   }
+&space;   s = mutex_bitlock(&amp;si->si_flags, SK_IF_LOCK);
+&space;   ifp->if_flags = flags | IFF_ALIVE;
+&space;   mutex_bitunlock(&amp;si->si_flags, EIF_LOCK, s);
+&nbsp;
+&space;   /*
+&space;    * Broadcast an ARP packet, asking who has addr
+&space;    * on interface ac.
+&space;    */
+&space;   arpwhohas(&amp;si->si_ac, &amp;si->si_ac.ac_ipaddr);
+&space;   return 0;
+}
+&nbsp;
+/*
+&space;* private debugging routine.
+&space;*/
+static void
+sk_dump(int unit)
+{
+&space;   struct sk_info *si;
+&space;   struct ifnet *ifp;
+&space;   char name[128];
+&nbsp;
+&space;   if (unit == -1)
+&space;       unit = 0;
+&space;   sprintf(name, "sk%d", unit);
+&nbsp;
+&space;   if ((ifp = ifunit(name)) == NULL) {
+&space;       qprintf("sk_dump: %s not found in ifnet list\n", name);
+&space;       return;
+&space;   }
+&nbsp;
+&space;   si = ifptosk(ifp);
+&space;   qprintf("si 0x%x\n", si);
+&space;   /* MISSING: qprintf() whatever you want here */
+&space;   return;
+}
+
+</CODE>
+<PARAGRAPH></PARAGRAPH>
+</SECTION1>
+</CHAPTER>

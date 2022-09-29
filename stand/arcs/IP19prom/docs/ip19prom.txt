@@ -1,0 +1,345 @@
+
+	PROM Hardware Configuration
+	===========================
+
+IP19 PROM
+---------
+
+A note on the LEDS:
+  The constant in parentheses following a step is the value the LEDS are
+  set to before that step is performed.  If a recoverable error of any
+  kind occurs, the most significant bit of the LEDS will be set and 
+  remain set for the course of the PROM startup.  If an unrecoverable
+  error occurs and the processor is unable to enter POD mode for some
+  reason, the LEDS will flash.  The numeric values associated with these 
+  constants may be found in prom_leds.h.
+
+0.	Check to see if we got an NMI.   
+
+1.	Set the CC LEDS to PLED_R4KINIT (1).
+
+2.	Set up the R4000 coprocessor registers, etc.
+
+3. 	Call pod_check_cclocal. (LEDS: PLED_CKCCLOCAL)
+
+	pod_check_cclocal():
+Writes to CC local registers and reads them back.  Minimally tests interrupt
+handling registers, nd makes sure the RTSC is ticking.  When it passes, it
+returns 0.  On failure, it calls pul_flash_cc_leds(FLED_CCLOCAL).
+
+	(LEDS: PLED_CKCCCONFIG)
+
+	pod_check_ccconfig():
+Writes to several CC chip config registers and reads them back.  Senses system
+configuration and makes sure its CPU board is listed.  When it passes, it
+returns 0.  On failure, it calls pul_flash_cc_leds(FLED_CCCONFIG).
+
+4. 	Do basic initial configuration of the CC chip (LEDS: PLED_CCINIT1).
+This includes:
+	Setting IGRMASK to 0		(Watch no groups)
+	Setting ILE to 0 		(Disabling all interrupts).
+	Writing CIPL1245		(Clear pending ints at lv 1,2,4,5)
+	Writing to CERTOIP		(Ensure no errors initially)
+	Setting ECCSB_DIS to 1 		(Disabling Single Bit ECC)
+
+5. 	Configure the CC chip's UART. (LEDS: PLED_UARTINIT) 
+If we are in bring-up mode, we will display informational messages, otherwise 
+we will talk to the System Controller. 
+
+6.	Call pod_check_achip -- This may be a no-op. (LEDS: PLED_CKACHIP)
+	When it passes, it returns 0.  On failure, it returns a nonzero error
+	code.
+
+7.	Configure the local A chip.  (LEDS: PLED_AINIT) 
+The current thinking on this is that all 
+of the processors will just write these values; if this causes a problem, we
+can instead go through a board master arbitration. Theoretically, since
+this has to touch the EBUS in order to work, it should be called after the
+EBUS diag.  However, there is circular dependency here, since we can't touch
+the EBUS if the A-chip doesn't work.  So we configure it at this point 
+anyway.
+	Set A_URGENT_TIMEOUT_REG to xxx
+	Set A_RSC_TIMEOUT_REG to RSRC_TOUT_VALUE 
+	Clear A_ERROR_CLEAR_REG
+
+8.	Call pod_check_ebus1. (LEDS: PLED_CKEBUS1) 
+This will be the first part of a two-stage process, since initially each
+processor will attempt to run the EBUS1 diagnostics.  On success, it returns
+zero.  On failure, it returns a nonzero error code.
+
+9. 	Configure the CC chip's configuration registers. (LEDS: PLED_CCINIT2)
+	Set DIT0EN and DIT1EN to 0
+	Set PGBRDEN to 1		(Enabling Piggy Back Reads)
+	Set CPERIOD to 20 ns
+	Set PROC_DATARATE to 0 		(DDDD)
+	Set CACHE_SZ to 0		(4 megabytes)
+	Set IW_TRIG to IW_TRIG_VALUE	(This depends on Proc_clock_period)
+	Set RR_TRIG to RR_TRIG_VALUE	(This also depends on Proc_clock_per)
+
+10.	Write an 'R' to the CC UART. (LEDS: PLED_SCINIT) 
+If the System Controller is connected, this will tell it that the system
+needs to rearbitrate for Boot Master.  On powerup, this character will
+be ignored since the Boot Master is already running the Boot Master 
+detection routine.  If the system was reset with a Kamikaze Reset, however,
+the System Controller needs to be explcitly told that a rearbitration is
+needed.  Since it must already have been connected to the processor which
+formerly held the role of Boot Master, it will receive this request 
+immediately.
+
+11. 	Perform Boot master arbitration. (LEDS: PLED_BMARB) 
+Each processor does a senseconfig and reads its SPNUM register in order to 
+determine its Temporary Processor ID (TPID).  Processor 0 on the processor 
+board in the lowest-numbered slot is assigned a TPID of 0.  Because the code 
+assumes that each processor board has four processors on it, there can be gaps 
+in the TPIDs.  After calculating its TPID, each processor performs the 
+following algorithm:
+	IGRMASK = 1;
+	timeout = TPID * 10000000 + RTC;  /* Wait for 10 ms * TPID */
+	while (RTC < timeout && !(IP0 & 0x2)) /* Spin waiting for int */ ;
+	if (IP0 & 0x1) {
+		/* We got the interrupt, so someone else is Boot Master */
+		Spin waiting for further interrupts;
+	}
+	else { 
+		/* Timer expired before someone else claimed Boot Master's 
+		    role, so this processor will become the Boot Master. */
+		Send interrupt level 1 to destination 64;
+		Continue on;
+	}
+
+NOTE: At this stage, the CPU should use the information from earlier
+diagnostics to determine if it would be suitable bootmaster.
+
+	*** Slaves branch to slave code from here. ***
+
+12.	Tell the System Controller about the Boot Master. (LEDS: PLED_BMDONE)
+The Boot Master waits until it reads an 'O' (ASCII 0x4f) from its CC UART.
+It then writes a 'K' (ASCII 0x4b) to the UART to notify the System Controller
+that it has assumed the role of Boot Master.
+
+13.	Call pod_check_ebus2. (LEDS: PLED_CKEBUS2) 
+This test consists of further EBUS diagnostics, but it is called only by the 
+bootmaster processor, and the bus should be completely quiet otherwise.  It
+returns 0 on success and a nonzero error code on failure.
+
+15.	Call pod_check_pdcache1(). (LEDS: PLED_CKPDCACHE1)
+Test the primary cache bits.
+
+16.	Call fix_dcache_parity to setup pdcache and call main().
+
+17.	Call init_cfginfo to do initial inventory acquisition. This routine
+	simply sets the eb_type and eb_slot fields for each of the boards
+	in the system. 
+
+18.	Call io4_initmaster() to set up the "master" IO4 board.  At this point,
+	we can't configure anything else because we haven't read the
+	inventory information out of the NVRAM.
+	
+19.	Find and initialize the system NVRAM. (LEDS: PLED_NVRAM)
+The boot master assumes that the NVRAM is on the EPC of the IO4 in 
+window 1 (which was set up by io4_initmaster). The init_inventory
+routine is called to set up the eb_inventory fields in the config
+structure.  
+
+
+20.	Call pod_check_console().  (LEDS: PLED_CKCONS)
+This test performs a loopback test on the EPC UART chosen as console.  On 
+success it returns zero.  On failure, it returns a nonzero error code.
+
+21.	Initialize the system console terminal. (LEDS: PLED_CONSOLE)
+The Boot Master assumes that the system console is the first UART on
+the PBUS whose IO4 is assigned window 1.  If for some reason it 
+can't find the system console, it sets the global error flag and 
+continues. (syscon_init).
+
+23.	Examine system configuration and disable processors.
+	(LEDS: PLED_CONFIGCPUS)
+If the Boot Master is supposed to be disabled, it broadcasts a 
+group-directed interrupt which awakens the spinning processors and
+causes them to rearbitrate for Boot Master.  The previous boot master
+then disables itself.  The new Boot Master rereads the NVRAM and 
+ensures that the processors indicated are indeed disabled.  It then
+continues on to the next step.
+
+24.	Call pod_check_rawmem(evcfginfo_t*).  (LEDS: PLED_CKRAWMEM)
+This function will initiate the memory's BIST and check the values stored in 
+the BIST registers when it completes.  If pod_check_memory returns an error 
+condition, the Boot Master will enter PON mode.  This function is also 
+responsible for ensuring the control registers in the memory board operate 
+correctly.  On success it returns zero.  On failure, it returns a nonzero error
+code.  Pod_check_rawmem should timeout if the BIST doesn't return on any board.
+Unfortunately, pod_check_rawmem will have to enable a bank in each leaf it
+tests in order to read from the per-leaf registers.  It will disable these
+leaves upon successful completion.
+
+25.	Configure memory with mc3_init(evcfginfo_t*). (LEDS: PLED_CONFIGMEM)
+The Boot Master finds all of the memory boards in the system.  It
+reads the NVRAM to determine which banks, if any, should be disabled
+and marks them off in the bank_used used register.  It then proceeds
+through the boards and attempts to find the largest number of banks
+which can be interleaved together.  Currently, the interleave algorithm
+is greedy and attempts to build the largest possible interleaves.  However,
+there may be a PROM variable, balance_memory, which when set to 0 causes
+the memory configuration code to use an algorithm which attempts to 
+use the same interleaving factor for all of the banks.  This algorithm
+has the advantage of preventing irregularities in performance based
+on memory positioning.  See the attached pages for more information on
+the greedy allocation algorithm.  If memory configuration fails for some
+reason, the Boot Master will enter PON mode. 
+
+26.	Call pod_check_mem(evcfginfo_t*). 
+	(LEDS: PLED_CKMEM)
+This function will extensively check the memory to be used by the IO PROM,
+will check the first an last words of each bank of memory (write all, read all),
+and will check enough words to test all address lines used for the amount of
+memory present.  On success it returns zero.  On a failure it returns an error
+code and sets the appriate fields in the sysconfig array to indicate which
+bank(s) failed.
+
+27.	Find and load IO4 PROM. (LEDS: PLED_LOADPROM)
+The Boot Master checks the PROM on IO4 in window 1.  If it
+finds a PROM, it checks the first couple words of the PROM to see if they
+are valid.  If they are, it begins to download and checksum the PROM.
+If it detects an error in the checksum, the Boot Master will look for 
+a valid PROM on the next highest-numbered IO4 board.  If no valid IO4
+PROMS can be found, the Boot Master will print an error message and
+drop into POD mode.
+
+28.	Write the evcfginfo structure out to its appropriate position
+in main memory.  This is necessary since we're about to lose the
+contents of the caches.
+	
+29.	Call pod_check_scache1(). (LEDS: PLED_CKSCACHE1)
+Test the secondary cache as RAM
+
+30.	Call pod_check_picache().  (LEDS: PLED_CKPICACHE)
+Test the primary instruction cache.  This test requires that the
+secondary test has completed.
+
+31. 	Call pod_check_pdcache2(). (LEDS: PLED_CKPCACHE2)
+Test the primary cache writeback logic a la IP17.
+
+32.	Call pod_check_scache2(). (LEDS: PLED_CKSCACHE2)
+Test the secondary cache writeback logic a la IP17.
+
+33. 	Initialize and size the primary and secondary caches.
+	(LEDS: PLED_CACHEINIT)
+
+34.	Call pod_check_bustags(int scache_size). (LEDS: PLED_CKBT)
+Test the bus tags as RAM.  The secondary cache size is necessary to tell how
+much bus tag RAM there should be.  On success, it returns 0.  On failure,
+it returns an error code.
+
+35.	Initialize the CC Bus Tags.  (LEDS: PLED_BTINIT)
+
+36.	Call pod_check_prom(int load_cksum).  (LEDS: PLED_CKPROM)
+Verify the secondary PROM checksum as it sits in RAM.  Compare this against
+the checksum generate by the mainline PROM when it loaded the secondary PROM.
+On success it returns zero.  On failure, it returns a nonzero error code.
+
+37.	Start executing the secondary PROM code. (LEDS: PLED_PROMJUMP)
+At this point, the Boot Master is executing from k0seg, the cached,
+unmapped region of memory.
+
+  1.	Setup MPCONF area
+  2. 	Send an interrupt to the slaves which instructs each of them to perform
+		its cache and bus tag tests, update its diagnostic status,
+		cache size, endianness, and processor type.
+  3.	Update System Controller's notion of processor states from MPCONF.
+  4.	Initialize the ARCS main-line code.
+  5.	Build system inventory tree and check it against the one
+	 stored in the NVRAM.
+  5.    Perform power-on diagnostics on all possible boot devices present.
+  6.	Lots of other stuff I haven't thought of yet.
+
+
+POD MODE
+--------
+
+During bringup and in the event of unexpected exception the PROM can drop
+into a special command interpreter.  This interface, known as the Power-On
+Diagnostics mode, provides a simple interface through which a user can examine
+and modify the state of the machine.  The commands provided by POD MODE are
+listed below.  All numerical inputs should be entered in hex and need not be
+prefixed with '0x'.
+
+	wb ADDRESS VALUE
+	wh ADDRESS VALUE
+	ww ADDRESS VALUE
+	wd ADDRESS VALUE -- Write the value into a byte, half, word, 
+		 	    or doubleword at the given address.   
+	db ADDRESS
+	dh ADDRESS
+	dw ADDRESS
+	dd ADDRESS	 -- Display the contents of the byte, halfword, word, 
+			    or doubleword at the given address.
+	wr REG VALUE	 -- Write the given value into the register specified.
+	dr REGISTER 	 -- Displays the contents of the given register.
+	dc SLOT REG	 -- Displays the value of the specified Everest
+			    configuration register.
+	j ADDRESS	 -- Jump to the given address.
+	info		 -- Displays the slot and processor number of the
+			    processor and prints out a description of the
+		  	    system configuration (as provided by SenseConfig). 
+	reset		 -- Reset the system.
+	sload		 -- Download code through the serial port.
+	pload		 -- Download the contents of the IO4 flash eprom from
+			    the serial port. 
+	sloop (COMMAND)	 -- Performs a 'scope loop of the following command
+			    line.  Sloop runs the specified command until a
+			    key is pressed.
+	loop TIMES (COMMAND)
+			 -- Performs a nonzero number of iterations of COMMAND.
+	mem START END STRIDE
+			 -- Performs a memory test starting with address START,
+			    ending with address END, with stride STRIDE.
+	?		 -- Displays list of commands.
+
+Loops may be nested, and commands may be combined on a line by separating them
+with semicolons.  For example:
+
+	sloop (loop 5 (wb a0000000 c; wb a0000001 d) loop 5 (dh a0000000))
+
+With the exception of a couple of new commands and the looping constructs,
+Everest's POD mode is very similar to the IP5's PON mode. 
+
+
+NVRAM Information
+-----------------
+
+Name			Public	Size	Default Value
+-----------------------------------------------------
+checksum		No	4	---
+serial_num		No	4	(initialized from SysCtlr)
+ConsoleIn		Yes	80	
+ConsoleOut		Yes	80	---
+SystemPartition		Yes	80	"multi()scsi()disk(1)rdisk()partition(8)"
+OSLoader		Yes	40
+OSLoadPartition		Yes	80	"multi()scsi()disk(1)rdisk()partition(0)"
+OSLoadFilename		Yes	32	"unix"
+OSLoadOptions		Yes	32	"auto"
+TimeZone		Yes	8	"PST8PDT"
+AutoLoad		Yes	8	"Yes"
+FWSearchPath		Yes	240	---
+bootmode		Yes	1	"c"
+netaddr			Yes	16	---
+scsid			No	1	"0" (Allows for mult. initiators)
+dbaud			Yes	5	"9600"
+rbaud			Yes	5	"9600"
+screencolor		Yes	6	---
+pagecolor		Yes	6	---
+logocolor		Yes	6	---
+diskless		Yes	1	"0"
+nogfxkbd		Yes	1	""
+passwd_key		No	8	""
+scsiretries		Yes	4	""
+scsihostid		Yes	4	""
+endianess		No	1	"1"
+balance_mem		Yes	1	"0"
+valid			No	1	--
+diag_level		Yes	1	"1"
+vadap			No	128	""
+configmap		No	512-1K	
+	
+			Total:  ~ 2000 bytes 
+

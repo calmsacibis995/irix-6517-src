@@ -1,0 +1,208 @@
+'\"macro stdmacro
+.TH USPSEMA 3P
+.SH NAME
+uspsema \- acquire a semaphore 
+.Op c p a
+.SH C SYNOPSIS
+.B #include <ulocks.h>
+.PP
+.B "int uspsema (usema_t \(**sema);"
+.Op
+.Op f
+.SH FORTRAN SYNOPSIS
+.B integer*4 function uspsema (sema)
+.br
+.B TYPE sema
+.br
+.in +1i
+where
+.B TYPE
+is
+.B "integer*4"
+in 32 bit mode, and is
+.B "integer*8"
+in 64 bit mode.
+.in -1i
+.Op
+.SH DESCRIPTION
+.I uspsema\^
+decrements the count of the previously allocated semaphore specified by 
+.I sema.
+If the count is then negative, the semaphore will logically block the calling
+process
+until the count is incremented due to a
+.IR usvsema (3P)
+call made by another process.
+The count can be interpreted in the following way: if it is greater than
+zero, there are 'count' resources available,
+namely 'count' processes
+can call
+.I uspsema
+and not block;
+if the count is negative then the absolute value of count is the number
+of waiting processes.
+.IR ustestsema (3P)
+can be used to obtain the semaphore count.
+.I uspsema\^
+can operate on either polling (those allocated via
+.IR usnewpollsema (3P))
+or non-polling (those allocated via
+.IR usnewsema (3P))
+semaphores.
+The semantics of
+.I uspsema\^
+are different for the two types of semaphores.
+.P
+For non-polling semaphores, the caller is actually suspended if the
+semaphore is not available.
+During suspension signals may be received and processed.
+The caller must not
+.I longjmp
+out of a signal handler and bypass the semaphore operation as this
+will result in corruption of the internal data structures of the semaphore.
+It the user does this, the semaphore must be re-initialized via
+.IR usinitsema (3P).
+.I uspsema\^
+uses the
+.IR usema (7M)
+device to perform the actual suspending of the caller if necessary.
+Processes are unblocked in FIFO order.
+If the current owner of the semaphore abnormally exits while still holding
+one or more semaphores, no corrective action is taken.
+This means that the only way a process that is blocked waiting for
+a semaphore to recover is to take a signal, longjmp out of the
+handler and re-initialize the semaphore (see
+.IR "FUTURE DIRECTIONS" ).
+.P
+With either type of semaphore, the semaphore can be made recursive
+by using the
+.SM
+.B CS_RECURSIVEON
+option to
+.IR usctlsema (3P).
+Recursive semaphores permit the current owner to acquire the semaphore
+multiple times.
+A matching number of
+.IR usvsema (3P)
+calls will release the semaphore.
+Recursive semaphores only work with semaphores that have been
+initialized to 1 (i.e. mutual exclusion semaphores).
+.P
+For polling semaphores, the caller is never actually suspended - either
+1 or 0 is returned based on whether the semaphore was available.
+If the semaphore was not available, the process is placed on the queue
+of processes waiting for the semaphore and
+the caller must perform either a
+.IR poll (2)
+or
+.IR select (2)
+on the file descriptor returned by
+.IR usopenpollsema (3P)
+to determine when the semaphore becomes available.
+The
+.SM
+.B POLLIN
+event should be used with
+.IR poll (2).
+The semaphore file descriptor should be passed in as a read descriptor
+for
+.IR select (2).
+The caller must not call
+.I uspsema
+again until having acquired the semaphore by receiving a ready status from
+.I select
+or
+.IR poll .
+Use
+.IR uscpsema (3P)
+to acquire a semaphore if its available but not be queued
+if it isn't.
+.P
+Note that only in the transition from unavailable to available will the 
+file descriptor of a pollable semaphore trip a 
+.IR poll (2) 
+or 
+.IR select (2)
+call. In other words, 
+.IR poll (2) 
+or 
+.IR select (2) 
+will block if you have already successfully acquired the semaphore with
+.IR uspsema .
+.P
+In order to use a semaphore, the caller must have joined the shared
+arena out of which the semaphore is allocated (via
+.IR usinit (3P)),
+and have a file descriptor to a
+.I usema
+device to suspend on.
+As a convenience,
+.I uspsema
+will automatically do this for members of a share group, or for
+related (via
+.IR fork (2))
+processes.
+This automatic facility can generate the same errors as
+.IR usinit (3P),
+and
+.IR usopenpollsema (3P).
+These errors will be passed back to the caller.
+If tracing is enabled (see
+.IR usinit(3P))
+then any errors will cause a message to be printed to
+.IR stderr .
+To avoid these errors and therefore not need to check for errors
+on every
+.I uspsema
+call, have each process call
+.IR usinit(3P)
+and each user of a pollable semaphore call
+.IR usopenpollsema (3P).
+.P
+The following errors can occur due to misuse of a semaphore:
+.TP 15
+.SM
+\%[EBADF]
+The underlying file descriptor for the semaphore
+was closed or re-used by the application.
+.TP
+.SM
+\%[EBADF]
+.I uspsema
+was called on a polling semaphore which was not available and no one
+had ever done a
+.IR usopenpollsema (3P)).
+.TP
+.SM
+\%[ERANGE]
+The semaphore queue overflowed.
+This is caused when using a polling semaphore and the caller has 'double-tripped', i.e. calls
+.I uspsema
+more than once without properly having received the semaphore via
+.IR poll (2)
+or
+.IR select (2).
+This can also occur if the number of users of a semaphore exceeds the number
+that the arena was originally configured for.
+This will never happen if ALL users register with the arena via
+.IR usinit (3P).
+.SH SEE ALSO
+uscpsema(3P), usctlsema(3P),
+usinit(3P), usinitsema(3P), usnewsema(3P), usnewpollsema(3P),
+usopenpollsema(3P),
+ustestsema(3P),
+usvsema(3P), 
+usema(7M).
+.SH DIAGNOSTICS
+Upon successful completion the semaphore has been acquired and
+a value of 1 is returned.
+For polling semaphores, 0 is returned if the semaphore is unavailable.
+On error, \-1 is returned and
+.I errno
+is set to indicate the error.
+.SH "FUTURE DIRECTIONS"
+To facilitate error handling,
+.I uspsema
+will return distinctive affirmative results based on whether the semaphore
+was acquired normally or was acquired due to the owner having
+abnormally terminated.

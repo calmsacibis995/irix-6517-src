@@ -1,0 +1,65 @@
+/*
+ * Test getprotobynumber, getprotobyname, and getprotoent.
+ *
+ */
+
+int PNumb[]={ 0, 1, 2, 3, 6, 8, 12, 17, 20, 22, 27, 29 };
+
+char PNam[][20]={ "ip", "icmp", "igmp", "ggp", "tcp", "egp", "pup",\
+"udp", "hmp", "xns-idp", "rdp", "iso-tp4"};
+#include <stdio.h>
+#include <netdb.h>
+#include <errno.h>
+#include <string.h>
+
+void main(){
+
+  char *		a;
+  int			j, i, n;
+  struct protoent *	p;
+
+
+  n = sizeof( PNumb )/sizeof( int );
+
+  fprintf( stdout, "main: testing %d protocols...\n", n );
+  fflush( stdout );
+
+  /* Get protocol by number */
+
+  for( i = 0; i < n; i++ ){
+
+    fprintf( stdout, "main: protocol_number[%d]=%d\n", i, PNumb[i] );
+
+    if((p = getprotobynumber( PNumb[i] ))==NULL){
+
+
+      fprintf( stdout, "main: getprotobynumber() failed, errno=(%d,>%s<)\n",\
+	       errno, strerror( errno ) );
+
+    }else{
+      
+      /* Display results */
+
+      fprintf( stdout, "main: key    ->%d<\n", PNumb[i] );
+      fprintf( stdout, "main: p_name ->%s<\n", p->p_name ? p->p_name: "NULL" );
+      fprintf( stdout, "main: p_proto->%d<\n", p->p_proto );
+
+      for( j = 0; p->p_aliases[ j ] != NULL; j++ ){
+
+	fprintf( stdout, "main: p_aliasses[%d]->%s<\n", j, p->p_aliases[ j ] );
+
+      }
+      
+      fprintf( stdout, "\n" );
+
+    }
+    
+    fflush( stdout );
+
+  }
+
+  /* Get Protocol by name */
+
+
+}
+

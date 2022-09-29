@@ -1,0 +1,51 @@
+
+This directory contains the code to implement the NIS Version 2 protocol
+for lamed.  The implementation is pretty disgusting since NIS is pretty
+disgusting.  In particular we have to deal with "missing" NIS maps.
+These are the maps rpc.bynumber, services.byname, and group.bymember
+which NIS should have implemented in order to do an efficient implementation
+in libc, but did not.  SGI has added these maps, but has to support other
+vendors who have not.
+
+Also, the services.byname map is really keyed by port/protocol so we
+have to play games with the map name in order to do the right thing.
+Currently we just create a services.byport map which is really indexed
+by name/protocol then swap the names in the request.  Yes, this is
+a hack.
+
+The initialization code, and the code for doing lookups (yp_match) is
+found in lookup.c.  This includes a bunch of special case code for the
+above missing maps.  For this we step through another map comparing
+each entry until we have built an answer that would look like what we
+receive in a map if it existed on the server.
+
+The code for stepping through a remote map is found in next.c.  Note
+that we do not check for missing maps in this code so if someone tries
+to step through one they will receive an error.  The first/next loop
+is depricated so we did not feel the need to put too much effort here.
+
+Since lamed should be the only process on the machine that is trying
+to speak the NIS protocol we do our own binding.  If a request to the
+currently bound server fails we will send out a bind request, either
+broadcasted on each of our networks or to the machines listed in the
+ypservers file.
+
+There is one protocol specific function "which" and the code for this
+is in method.c.  This simply returns the address for the bound machine.
+if the routine that displays this wants to print the name then it must
+turn around and do a lookup in hosts.byaddr.
+
+All of the routines which implement the protocol look more or less
+alike.  They loop in a binding proceedure, then if we are bound they
+send out the request which either times out resulting in another
+request, or a result comes back and the callback is called.  The
+request routine and the callback are separated and we fall back to
+the lamed main loop in between.  There is just one callback and one
+timeout routine for NIS.  The timeout just drops back into the bind
+loop, and the callback reads the result into a static array and
+parses the RPC header then forwards the processing to the correct
+function based on the transaction ID in the header.
+
+This code does not call any RPC routines in libc, but attempts to
+hand package the requests inline instead.  Each of the routines includes
+a big long comment which explains what the data should look like.

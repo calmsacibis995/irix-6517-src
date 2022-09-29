@@ -1,0 +1,163 @@
+'\"macro stdmacro
+.TH LATENSCOPE 1
+.SH NAME
+latenscope \- print out code paths involved in excessive interrupt holdoffs
+.SH SYNOPSIS
+.B latenscope
+[
+.B \-qHDSjd
+] [
+.B \-r milliseconds
+] [
+.B \-s milliseconds
+] [
+.B \-c milliseconds
+] [
+.B \-p cpu
+] [
+.B \-u unix
+]
+.SH DESCRIPTION
+.I Latenscope
+detects and reports processor interrupt holdoffs.  It does this by
+scheduling itself as a real-time process and detecting points when it wasn't
+able to run as scheduled.  When this happens it scans back through recent
+kernel profiling interrupt records to print out where the kernel was
+executing during the period of scheduling holdoff.
+.PP
+.I Latencope
+computes latencies by testing the time taken by
+.IR nanosleep(3c)
+and subtracting the expected sleep time.
+.PP
+                              time -->
+
+    ----|--------------|-------------|-----------------|---------->
+
+        ^              ^             ^                 ^
+    nanosleep()    timer set   timer expires      nanosleep()
+    call begins                                   returns &
+                                                  user instructions
+                                                  begin executing
+.PP
+Using the above diagram, the latency is the amount of time from when the
+timer expires to when latenscope's instructions begin to execute after
+.IR nanosleep(3c)
+returns.
+.PP
+In order for this tool to work, the
+.I rtmond
+process must be killed since this tool supplants
+.I rtmond
+in monitoring the kernel event queues.  Additionally, kernel stack profiling
+must be enabled.  Finally,
+.I latenscope
+must be executed with real-time priority:
+.PP
+.nf
+% su
+# killall rtmond
+# prfstat off
+# prfld /unix
+# prfstat stack
+# latenscope -u /unix
+.fi
+.PP
+.I latenscope
+runs at the highest system priority (255), even higher than operating
+system interrupt and system threads.  At this priority, you can use
+.I latenscope
+to detect excessively long non-threaded interrupt handlers and other sources
+of interrupt holdoff.
+If you run as priority 255 and your
+sleep interval (-s) is less than half of your cutoff interval (-c), 
+and you see a
+stack that ends with
+.BR idle() ,
+then you have found a scheduler or timeout problem.  Either way,
+.B "please file bugs when you discover an excessive holdoff!"
+Include the
+.I latenscope
+output with your bug report.  It should be possible to run with a sleep
+interval of 1ms and a cutoff interval of 2ms with no reported holdoffs.
+.PP
+While
+.I latenscope
+initializes and while it is reporting holdoffs, it will revoke any real-time
+scheduling priority with which you ran it.  This keeps 
+latenscope from momentarily
+hanging your machine.
+.I latenscope
+will not attempt to detect holdoffs during these periods.
+.PP
+N.B: the point of this tool is not to see how often you can run on average,
+which you might call bandwidth.  The issue is
+.IR latency .
+This tool simulates low-latency applications which must react to an incoming
+signal (serial, parallel, PCI, VME, UI, audio, video, ...) by producing a
+corresponding output signal within a guaranteed amount of time.
+.SH OPTIONS
+.TP
+\fB\-r\fp \fImilliseconds\fP
+Report interval: how often to report progress (default 900ms).
+.TP
+\fB\-s\fP \fImilliseconds\fP
+Sleep interval: how often to try and run (default 1ms).
+.TP
+\fB\-c\fP \fImilliseconds\fP
+Cutoff interval: how much time counts as a holdoff (default 3ms).
+.TP
+\fB\-p\fP \fIcpu\fP
+Which processor to monitor (default 0).  Note that unlike many other
+.I rtmon
+tools,
+.I latenscope
+doesn't not support processing on multiple CPUs via a
+.IR processor-list ;
+only a single processor at a time can be monitored by any
+.I latenscope
+process.
+.TP
+\fB\-l\fP \fIpriority\fP
+Change the priority of latenscope (default 255).
+.TP
+\fB\-u\fP \fIunix\fP
+Running kernel image (default /unix).
+.TP
+.B \-v
+Verbose mode: report if there are no holdoffs every -r
+.IR milliseconds.
+.TP
+.B \-H
+Hard spin on the CPU instead of sleeping and exit after first report.
+.B WARNING
+this effectively hangs your system when run at a high-priority!
+.TP
+.B -D
+Print some debugging information.
+.TP
+.B \-S
+Spew kernel profile stack traces even when there is no holdoff.
+.TP
+.B -j
+Forget about the stacks ... just show holdoff length.
+.TP
+.B -d
+Sort reports by holdoff duration (implies
+.BR \-j )
+(default is to sort by holdoff start time).
+.SH FILES
+.DT
+/unix			default name-list file for \fBlatenscope\fB
+.SH BUGS
+Since kernel profiling interrupts occur at 1ms intervals it is impossible
+to detect interrupt holdoffs of less than 1ms.
+.PP
+.I Latenscope
+does not support multi-processor monitoring, although you can run
+multiple instances of latenscope, each of which traces on one processor.
+.SH "SEE ALSO"
+.IR rtmond (1),
+.IR prfld (1m),
+.IR prfstat (1m),
+.IR kernprof (1m)

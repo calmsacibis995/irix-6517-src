@@ -1,0 +1,276 @@
+.TH xtalk_intr D3
+.IX "\f4xtalk_intr_alloc\f1(D3)"
+.IX "\f4xtalk_intr_connect\f1(D3)"
+.IX "\f4xtalk_intr_disconnect\f1(D3)"
+.IX "\f4xtalk_intr_free\f1(D3)"
+.SH NAME
+.nf
+\f4xtalk_intr_alloc\f1 \- allocate a XIO Interrupt channel
+\f4xtalk_intr_connect\f1 \- connect handling function
+\f4xtalk_intr_disconnect\f1 \- disconnect handling function
+\f4xtalk_intr_free\f1 \- release a XIO Interrupt channel
+.fi
+.SH SYNOPSIS
+.nf
+.ds fT \f1
+.if t .ds fT \f4
+\*(fT#include <sys/XIO/xtalk.h>
+.sp .8v
+xtalk_intr_t
+xtalk_intr_alloc(vertex_hdl_t \f2vhdl\*(fT,
+		 device_desc_t \f2desc\*(fT,
+		 vertex_hdl_t \f2owner\*(fT)
+.sp .8v
+int
+xtalk_intr_connect(xtalk_intr_t \f2intr\*(fT,
+		intr_func_t \f2func\*(fT,
+		intr_arg_t \f2arg\*(fT,
+		xtalk_intr_setfunc_t \f2setfunc\*(fT,
+		void *\f2setfunc_arg\*(fT,
+		void *\f2thread\*(fT)
+.sp .8v
+void
+xtalk_intr_disconnect(xtalk_intr_t \f2intr\*(fT)
+.sp .8v
+void
+xtalk_intr_free(xtalk_intr_t \f2intr\*(fT)\f1
+.ft 1
+.fi
+
+.SS Arguments
+
+.IP "\f2vhdl\f1" 8n
+is the appropriate XIO connection point.
+.IP "\f2desc\f1" 8n
+is a device descriptor, usually zero.
+.IP "\f2lines\f1" 8n
+specifies one or more of the XIO Interrupt
+pins connected to the card.
+.IP "\f2owner\f1" 8n
+is an appropriate vertex handle to use
+when printing messages about this particular
+interrupt,
+and is usually a vertex created by the
+device driver.
+.IP "\f2intr\f1" 8n
+is the opaque interrupt channel handle
+.IP "\f2func\f1" 8n
+is a function to be used for interrupt service
+.IP "\f2arg\f1" 8n
+is the parameter to pass to the function when
+this particular interrupt occurs, and is commonly
+a pointer to a driver-private data structure.
+.IP "\f2setfunc\f1" 8n
+is a callback function that will be called
+by the infrastructure to set up a new interrupt
+target widget number, address, or vector.
+It will always be called once, to set the initial
+assignment; the system may call it again, later,
+if the interrupt needs to be migrated to a different
+target.
+.IP "\f2setfunc_arg\f1" 8n
+is an opaque value, owned by the driver, that
+is stored within the interrupt structure
+and can be retrieved by the driver using
+.IR xtalk_intr_sfarg_get ().
+.IP "\f2thread\f1" 8n
+is reserved for use by the interrupt threads subsystem,
+and should be NULL.
+
+.SH DESCRIPTION
+
+When a device driver wishes to accept
+interrupt events from a device, the
+system needs to assign a target CPU and
+allocate a vector number on that CPU's
+XIO interface. The target information
+is then reported back to the driver, which
+can set up its device to send XIO interrupt
+packets with the proper data to the
+correct target port and address.
+Only then can a service function be attached
+to the interrupt channel.
+.P
+This three-phase handling of the XIO interrupt
+setup allows several things:
+.IP \(bu 4n
+The service function can be changed (or
+disconnected entirely) without losing any
+hardware resources and having to reallocate
+them in the process.
+.IP \(bu 4n
+The interrupt can be retargetted from one
+processor to another, should upper layers
+of software decide this is necessary.
+.P
+Since the interrupt delivery mechanism
+carries the address of the interrupt function,
+it is important to disconnect your interrupts
+before unloading your driver. Your driver
+will not be auto-loaded when an interrupt
+occurs.
+.P
+The necessary sequence of calls is as follows:
+.IP \(bu 4n
+When the device is initially attached,
+.IR xtalk_intr_alloc ()
+should be used to establish interrupt
+connectivity between the device and the
+processor.
+It is common to call
+.IR xtalk_intr_connect ()
+at this time.
+.IP \(bu 4n
+.IR xtalk_intr_connect ()
+triggers the first callback to the setfunc
+so the driver can correctly configure its
+hardware for the target processor, XIO port,
+XIO address, and vector number.
+.IP \(bu 4n
+If the device driver is automatically
+unloading, it will be unloaded shortly
+after the attaches are complete.
+Since the driver text is going away,
+it is important for all interrupts
+to be disconnected.
+.IR xtalk_iterate ()
+should be used to call a function with
+each of the driver's connection points,
+which can then execute the proper
+disconnect calls.
+.IP \(bu 4n
+When the device driver is reloaded,
+its
+.IR pfx init()
+entry point is called.
+The device driver should again use
+.IR xtalk_iterate (),
+this time to call a function that will
+re-connect interrupts to the
+new address of the service function.
+No special logic is needed to prevent
+this at the initial load time, since
+.IR xtalk_iterate ()
+is a no-operation when the device
+driver is not registered.
+.IP \(bu 4n
+When the device driver is unregistered,
+the act of unregistering with the XTALK
+infrastructure will trigger calls to
+.IR pfx detach()
+which should disconnect all interrupt service.
+
+.SS "Alternate Scenario"
+
+Some devices may not require interrupt service
+when they are not open. Leaving an interrupt
+allocated but not connected will keep it
+disabled, possibly reducing impact on the
+system from devices that may interrupt when
+there is no interest from the driver in
+actually performing any services.
+.P
+If this is true, then the scenario above
+may be somewhat simplified:
+.IP \(bu 4n
+If interrupts are required as part of
+setting up the device in
+.IR pfx attach(),
+then they can be connected, then disconnected
+before
+.IR pfx attach()
+returns.
+.IP \(bu 4n
+Since interrupts are not active when the
+device is closed,
+.IR pfx unload()
+and
+.IR pfx detach()
+do not need to worry about disconnecting
+the interrupt services, and
+.IR pfx init()
+does not need to worry about reconnecting them.
+Instead,
+.IR pfx open()
+would connect the interrupt on first open, and
+.IR pfx close()
+would disconnect the interrupt on last close.
+
+.SH EXAMPLES
+
+Here is a simple example of how an XIO
+device driver might get interrupt service started.
+
+.nf
+xiofoo_attach(vertex_hdl_t xconn_vhdl)
+{
+	xtalk_intr_t	intr;
+	struct xiofoo_regs	*xiofoo_regs;
+
+	...
+	/* This driver uses both line A and line B,
+	 * and wants to route both to the same
+	 * service function.
+	 */
+	intr = xtalk_intr_alloc(xconn_vhdl, 0, xiofoo_vhdl);
+
+	/* Arrange for the "soft" pointer to
+	 * be the parameter for the interrupt,
+	 * and for the device registers themselves
+	 * to be the parameter for the setfunc()
+	 * call.
+	 */
+	xtalk_intr_connect(
+		intr,
+		xiofoo_intr,
+		(intr_arg_t)xiofoo_soft,
+		xiofoo_intr_setfunc,
+		(void *)xiofoo_regs,
+		(void *)0);
+	...
+}
+
+static void
+xiofoo_intr_setfunc(xtalk_intr_t intr)
+{
+	xwidgetnum_t	targ = xtalk_intr_target_get(intr);
+	iopaddr_t	addr = xtalk_intr_addr_get(intr);
+	xtalk_intr_vector_t	vect = xtalk_intr_vector_get(intr);
+	struct xiofoo_regs	*fooregs;
+
+	fooregs = (struct xiofoo_regs *)
+		xtalk_intr_sfarg_get(intr);
+
+	fooregs->control &= FOOREGS_INT_ENABLE;
+	fooregs->intr_port = targ;
+	fooregs->intr_addr = addr;
+	fooregs->intr_vect = vect;
+	fooregs->control |= FOOREGS_INT_ENABLE;
+}
+
+.fi
+
+/\" .SH NOTES
+.\" .SH FILES
+.\" sample_xtalk.c
+
+.SH "SEE ALSO"
+
+xtalk(D3),
+xtalk_dma(D3),
+xtalk_error(D3),
+xtalk_get(D3),
+xtalk_pio(D3).
+
+.SH DIAGNOSTICS
+
+.IR xtalk_intr_alloc ()
+will return a null value if it can not
+allocate memory.
+
+.IR xtalk_intr_connect ()
+will return a zero for succes, or a negative
+value on failure.
+Since the channel is preallocated, the only
+interesting failure is the attempt to use
+a null interrupt cookie value.

@@ -1,0 +1,439 @@
+*-------------------------------------------------------*
+*						      							*
+*		    CSTARTUP.S07		      					*
+*						      							*
+* This module contains the 6301/68HC11 C startup    	*
+* routine and must usually be tailored to suit       	*
+* customer's hardware.				      				*
+*						      							*
+* V3.00 [A.R. 31/Mar/89]			      				*
+*						      							*
+*	4/13/93 - 	Added code to move the SCI interrupt	*
+*				to be the highest priority.				*
+*														*
+*	4/21/93 -	Changed the Input Capature timer 		*
+*				resolution from 2 us to 8 us to 		*
+*				reduce the number of overflows.			*
+*-------------------------------------------------------*
+	NAME	CSTARTUP
+$defcpu.inc
+	EXTERN	?C_EXIT		Where to go when program is done
+	EXTERN	main		Where to begin execution
+    PUBLIC		stack_begin
+    PUBLIC		startup
+
+* System Controller Memory Map Settings
+
+INTRAM			EQU		$0000
+INTRAM_END		EQU		$00FF
+NV_RAM			EQU		$0100
+NV_RAM_END		EQU		$017F
+EXT_REG			EQU		$0180
+EXT_REG_END		EQU		$01BF
+EXT_RAM_1		EQU		$01C0
+EXT_RAM_1_END	EQU		$0FFF
+INT_REG			EQU		$1000
+INT_REG_END		EQU		$103F
+EXT_RAM_2		EQU		$1040
+EXT_RAM_2_END	EQU		$1FFF
+INT_VEC			EQU 	$FFC0
+
+
+* Internal Register Assignments
+IR_TMSK2		EQU 	INT_REG.OR.$0024
+IR_BPROT		EQU 	INT_REG.OR.$0035
+IR_OPTION		EQU 	INT_REG.OR.$0039
+IR_COPRST		EQU 	INT_REG.OR.$003A
+IR_PPROG		EQU 	INT_REG.OR.$003B
+IR_HPRIO		EQU 	INT_REG.OR.$003C
+IR_CONFIG		EQU		INT_REG.OR.$003F
+
+
+	RSEG	DATA
+
+STK_STRT:	RMB		2
+
+*--------------------------------------------------------------*
+* The next two lines declares a segment holding the 'C' stack- *
+* space.  512 bytes is suitable for moderately sized programs  *
+* that do not use lot of function call nesting and many local  *
+* variables.  Note that in the small memory models (-m2, -m3), *
+* stack size must be reduced to below 255.                     *
+*--------------------------------------------------------------*
+
+	RSEG	STACK
+	RMB	4032			Upper Section of RAM
+stack_begin:
+
+	RSEG	CSTART
+startup:
+	LDS		#stack_begin-1		From high to low addresses
+	des							place the stack on a word boundary
+	sts		STK_STRT			store the address for future reference
+
+*--------------------------------------------------------------*
+* If the 68HC11 OPTION register MUST be modified, here is the  *
+* place to do it in order to meet the 64-cycle requirement.    *
+*--------------------------------------------------------------*
+
+
+*						Set the COP Timer for a 1.049 Sec Timeout
+*						Enable Clock Monitor Reset
+*						Power Up A/D Converter
+*						Select Level Triggering for Interrupts
+
+
+	ldaa	IR_OPTION			
+	oraa	#$8B
+	staa	IR_OPTION
+
+*	set the HPRIO register to force the SCI interrupt to be the hightest
+*	priority of the settable vectors
+	ldaa	IR_HPRIO
+	anda	#$F0
+	oraa	#$04
+	staa	IR_HPRIO
+
+
+* 	check to see if the COP timer is enabled, and if not reset the
+*	BPROT register to enable EEPROM porgramming later in this module.
+*	LDAA	IR_CONFIG				Load configuration register
+*	BITA	#$04					check if the COP is enabled
+*	BEQ		RESET_COP				and do not reset the BPROT reg if so.
+*	LDAA	#$00
+*	STAA	IR_BPROT
+
+
+RESET_COP:
+	ldaa	#$55					Reset the COP TIMER 
+	staa	IR_COPRST			 
+	ldaa	#$AA					 
+	staa	IR_COPRST			 
+
+*
+	ldaa	#$03					Set the Timer prescale to a factor
+	staa	IR_TMSK2				of 16 for Blower Tach. measurements
+
+
+*--------------------------------------------------------------*
+* If hardware must be initiated from assembly or if interrupts *
+* should be on when reaching main, this is the place to insert *
+* such code.						       *
+*--------------------------------------------------------------*
+
+
+
+
+* Unfortunately, the RAM is broken up into three sections.  The memory test 
+* will test each section, one at a time.
+
+* INTERNAL MEMORY
+* address test (write phase)
+	ldx		#INTRAM				# starting address
+mem_loop_1:
+	stx		x					# store the address of the location
+	inx							# increment index register by two
+	inx
+	cpx		#INTRAM_END			# ending address (Word Length)
+	ble		mem_loop_1
+
+* address test (read/compare phase)
+	ldx		#INTRAM				# starting address
+mem_loop_2:
+	cpx		x					# compare contents with address
+	beq		cont_1
+	jmp		mem_add_err
+cont_1:
+	inx							# increment index register by two
+	inx
+	cpx		#INTRAM_END			# ending address (Word Length)
+	ble		mem_loop_2
+
+* $A pattern test
+	ldaa	#$AA				# put test pattern in A
+	ldx		#INTRAM				# starting address
+ram_AA:
+	staa	x					# store pattern to location
+	cmpa	x					# compare a to memory pointed to by X
+	beq		cont_2
+	jmp		mem_AA_err
+cont_2:
+	inx							# increment index register
+	cpx		#INTRAM_END			# ending address (Word Length)
+	ble		ram_AA
+
+* $55 pattern test
+	ldaa	#$55				# put test pattern in A
+	ldx		#INTRAM				# starting address
+ram_55:
+	staa	x					# store pattern to location
+	cmpa	x					# compare a to memory pointed to by X
+	beq		cont_3
+	jmp		mem_55_err
+cont_3:
+	inx							# increment index register
+	cpx		#INTRAM_END			# ending address (Word Length)
+	ble		ram_55
+
+
+* 1st section of external memory
+* address test (write phase)
+	ldx		#EXT_RAM_1			# starting address
+ext1_mem_loop_1:
+	stx		x					# store the address of the location
+	inx							# increment index register by two
+	inx
+	cpx		#EXT_RAM_1_END 		# ending address (Word Length)
+	ble		ext1_mem_loop_1
+
+* address test (read/compare phase)
+	ldx		#EXT_RAM_1			# starting address
+ext1_mem_loop_2:
+	cpx		x					# compare contents with address
+	beq		cont_4
+	jmp		mem_add_err
+cont_4:
+	inx							# increment index register by two
+	inx
+	cpx		#EXT_RAM_1_END		# ending address (Word Length)
+	ble		ext1_mem_loop_2
+
+* $A pattern test
+	ldaa	#$AA				# put test pattern in A
+	ldx		#EXT_RAM_1			# starting address
+ext1_ram_AA:
+	staa	x					# store pattern to location
+	cmpa	x					# compare a to memory pointed to by X
+	beq		cont_5
+	jmp		mem_AA_err
+cont_5:
+	inx							# increment index register
+	cpx		#EXT_RAM_1_END		# ending address (Word Length)
+	ble		ext1_ram_AA
+
+* $5 pattern test
+	ldx		#EXT_RAM_1			# starting address
+	ldaa	#$55				# put test pattern in A
+ext1_ram_55:
+	staa	x					# store pattern to location
+	cmpa	x					# compare a to memory pointed to by X
+	beq		cont_6
+	jmp		mem_55_err
+cont_6
+	inx							# increment index register 
+	cpx		#EXT_RAM_1_END		# ending address (Word Length)
+	ble		ext1_ram_55
+
+* 2st section of external memory
+* address test (write phase)
+	ldx		#EXT_RAM_2			# starting address
+ext2_mem_loop_1:
+	stx		x					# store the address of the location
+	inx							# increment index register by two
+	inx
+	cpx		#EXT_RAM_2_END		# ending address (Word Length)
+	ble		ext2_mem_loop_1
+
+* address test (read/compare phase)
+	ldx		#EXT_RAM_2			# starting address
+ext2_mem_loop_2:
+	cpx		x					# compare contents with address
+	beq		cont_7
+	jmp		mem_add_err
+cont_7:
+	inx							# increment index register by two
+	inx
+	cpx		#EXT_RAM_2_END		# ending address (Word Length)
+	ble		ext2_mem_loop_2
+
+* $A pattern test
+	ldx		#EXT_RAM_2			# starting address
+	ldaa	#$AA				# put test pattern in A
+ext2_ram_AA:
+	staa	x					# store pattern to location
+	cmpa	x					# compare a to memory pointed to by X
+	beq		cont_8
+	jmp		mem_AA_err
+cont_8:
+	inx							# increment index register
+	cpx		#EXT_RAM_2_END		# ending address (Word Length)
+	ble		ext2_ram_AA
+
+* $5 pattern test
+	ldx		#EXT_RAM_2			# starting address
+	ldaa	#$55				# put test pattern in D1
+ext2_ram_55:
+	staa	x					# store pattern to location
+	cmpa	x					# compare a to memory pointed to by X
+	beq		cont_9
+	jmp		mem_55_err
+cont_9:
+	inx							# increment index register
+	cpx		#EXT_RAM_2_END		# ending address (Word Length)
+	ble		ext2_ram_55
+*(RAM test successful)
+
+
+*clear the three sections of memory
+
+	ldd		#0					# Load zero into D accumulator
+	ldx		#INTRAM				# Starting address
+clrmem_1:
+	std		x					# Clear the memory location
+	inx							# Increment X register for word length	
+	inx
+	cpx		#INTRAM_END-1		# ending address (Word Length)
+	bls		clrmem_1
+
+	ldx		#EXT_RAM_1			# Starting address
+clrmem_2:
+	std		x					# Clear the memory location
+	inx
+	inx
+	cpx		#EXT_RAM_1_END-1	# ending address (Word Length)
+	bls		clrmem_2
+
+	ldx		#EXT_RAM_2			# Starting address
+clrmem_3:
+	std		x					# Clear the memory location
+	inx
+	inx
+	cpx		#EXT_RAM_2_END-1	# ending address (Word Length)
+	bls		clrmem_3
+
+*--------------------------------------------------------------*
+* If it is not a requirement that static/global data is set    *
+* to zero or to some explicit value at startup, the next two   *
+* lines of code can be deleted.                                *
+*--------------------------------------------------------------*
+*
+	EXTERN	?SEG_INIT_L07
+	JSR	?SEG_INIT_L07	Initialize segments
+
+
+*	IF	banking
+*
+*	EXTERN	?X_CALL_L09
+*	LDX	#main
+*	JSR	?X_CALL_L09	main()
+*
+*	ELSE
+*
+*	JSR	main		main()
+*
+*	ENDIF
+
+*   If the COP timer is not enabled, program the EEPROM config register
+*	and enable the COP timer
+	EXTERN	delay
+
+	LDAA	IR_CONFIG		Load configuration register
+	BITA	#$04			check if the COP is enabled
+	BEQ		NO_EEPROG		and skip programming if enabled
+
+	LDAB	#$02			Turn on EEPROM program latch
+	STAB	IR_PPROG
+
+	LDAA	#$08			Enable COP, but leave security mode disabled
+	STAA	IR_CONFIG
+
+	LDAB	#$03			Turn on programming bit
+	STAB	IR_PPROG
+
+	LDX		#$0190			delay 20 msec
+	PSHX
+	LDD		#$0000
+	JSR		delay
+	PULX
+
+	CLR		IR_PPROG	Turn off high voltage & set to read mode
+	LDAA	#$2C
+*	STAA	IR_BPROT	Enhibit EEPROM programming
+
+NO_EEPROG:
+*	Since main is forced to be unbanked.....
+	jsr 	main
+
+*--------------------------------------------------------------*
+* Memory test error routines                                   *
+* I need to report status on the front panel with the failing  *
+* address													   *	
+*--------------------------------------------------------------*
+mem_add_err:
+	stop
+
+mem_55_err:
+	stop
+
+mem_AA_err:
+	stop
+*--------------------------------------------------------------*
+* Now when we are ready with our C program (usually 6301/6811  *
+* programs are continouous) we must perform a system-dependent *
+* action.  In this simple case we just enter an idle loop.     *
+*--------------------------------------------------------------*
+* DO NOT CHANGE NEXT LINE OF CSTARTUP IF YOU WANT TO RUN YOUR  *
+* SOFTWARE WITH THE AID OF THE C-SPY HLL DEBUGGER.	       *
+*--------------------------------------------------------------*
+	JMP	?C_EXIT	
+
+*--------------------------------------------------------------*
+* Interrupt vectors must be inserted by the user.    Here we   *
+* only used RESET.					       *
+*--------------------------------------------------------------*
+
+	ASEG			Fix position
+	ORG	$FFFE
+	FDB	startup		
+
+	ENDMOD	startup
+
+    MODULE		sys_reset
+    PUBLIC		sys_reset
+    EXTERN		startup
+    EXTERN		stack_begin
+
+    P68H11              Use for 68HC11 chip
+    RSEG    CODE
+
+*	sys_reset - 
+*		Resets the stack pointer and jumps to main for the 
+*		restart. 
+ 
+sys_reset:
+	LDS		#stack_begin-1		From high to low addresses
+	des							place the stack on a word boundary
+	jmp		startup
+    ENDMOD
+
+*--------------------------------------------------------------*
+* Function/module: exit(int code)			       *
+*							       *
+* When C-SPY is used this code will automatically be replaced  *
+* by a 'debug' version of exit().			       *
+*--------------------------------------------------------------*
+	MODULE	exit
+
+	PUBLIC	exit
+	PUBLIC	?C_EXIT
+
+	RSEG	RCODE
+
+?C_EXIT:
+*--------------------------------------------------------------*
+* The next line could be replaced by user defined code.        *
+*--------------------------------------------------------------*
+
+	IF	banking
+
+	RSEG	FLIST
+exit:
+	FQB	?C_EXIT
+
+	ELSE
+
+exit	EQU	?C_EXIT
+
+	ENDIF
+
+	END

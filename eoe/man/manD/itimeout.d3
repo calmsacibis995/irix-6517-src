@@ -1,0 +1,141 @@
+.\" Copyright 1991, 1992 UNIX System Laboratories, Inc.
+.\" Copyright 1989 AT&T
+.TH itimeout D3
+.SH NAME
+\f4itimeout\fP, \f4fast_itimeout\fP \- execute a function after a
+(possibly high resolution) delay
+.SH SYNOPSIS
+.nf
+\f4#include <sys/types.h>
+#include <sys/ddi.h>
+.sp
+toid_t itimeout(void (*\f2func\fP)(), void *\f2arg\fP, long \f2ticks\fP,
+                      pl_t \f2pl\fP, void *\f2arg2\fP...);
+.sp
+toid_t fast_itimeout(void (*\f2func\fP)(), void *\f2arg\fP, long \f2fast_ticks\fP,
+                      pl_t \f2pl\fP, void *\f2arg2\fP...);
+\f1
+.fi
+.
+.SS Arguments
+.RS 0
+.IP "\f2func\fP" 10n
+Function to execute when the time increment expires.
+.IP "\f2arg\fP"
+First or only argument to the function.
+.IP "\f2arg2..." 10n
+Optional, additional arguments to the function.
+.IP "\f2ticks\fP" 10n
+Number of (fast or normal) clock ticks to wait before the function is called.
+.IP "\f2pl\fP" 10n
+The interrupt priority level at which the function will be called.
+.RE
+.SH DESCRIPTION
+These two functions are nearly identical, the difference being which
+clock is used.  
+.I itimeout
+schedules the function specified by
+.I func
+to be called after the time interval specified by
+.IR ticks ,
+while
+.I fast_itimeout
+schedules the function specified by
+.I func
+to be called after the the number of fast clock ticks specified by
+.IR fast_ticks .
+The resolution of the fast clock varies with system type, and with
+local setup, because it is a tuneable value.  It is typically near
+one millisecond.  See the function
+.IR fasthzto (D3)
+for a standard way to convert from a timeval to fast ticks.
+.sp
+Both functions call the function at the interrupt priority level specified by
+.IR pl .
+The first argument to
+.I func
+is
+.IR arg .
+If additional arguments are passed following
+.I pl
+(varargs), they also are are passed to
+.IR func .
+.P
+The call returns immediately without waiting for the specified
+function to execute.
+.SS "Return Values"
+If the function specified by \f2func\fP is successfully scheduled, \f4itimeout\fP
+returns a non-zero value that can be passed to \f4untimeout\fP to cancel
+the request.
+If the function could not be scheduled, \f4itimeout\fP
+returns a value of 0.
+.SH USAGE
+.I pl
+must specify a priority level greater than or equal to
+.IR pltimeout .
+Identifiers for priority levels are declared in
+.IR sys/ddi.h ;
+.I plhi
+is the typical value to pass.
+.P
+Note that no matter what value is given for
+.IR pl ,
+other CPUs can be executing kernel code concurrently with
+the execution of
+.IR func ,
+including other instances of the same driver that
+scheduled
+.I func
+and even other instances of
+.I func
+itself. 
+Hence it is essential to use locking to protect critical data.
+.P
+The
+.I ticks
+argument specifies the number of tick interrupts to pass before
+the function is called.
+A
+.I ticks
+value of 0 is treated as if it were 1.
+After the specified number of ticks have been counted, the call to
+.I func
+is deferred until the processor is at base level.
+.P
+The length of time before the function is called is not guaranteed to be
+exactly equal to the requested time,
+but will be at least
+.IR ticks \-1
+clock ticks in length.
+.P
+When called,
+.I func
+may not lower the priority level below
+.IR pl .
+.P
+If
+.I itimeout
+is called holding a lock that is claimed by
+.IR func ,
+the caller must hold the lock at a processor level
+greater than the base processor level.
+.P
+Loadable drivers must use
+.IR untimeout ()
+to cancel any pending timeout functions before unloading;
+otherwise a kernel panic can result when the no-longer-loaded
+function is called.
+A driver that is deallocating a data structure must be careful
+to cancel any pending timeout function that refers to the data structure.
+.SS Level
+Base or Interrupt.
+.SS "Synchronization Constraints"
+Driver-defined basic locks, read/write locks, and sleep locks
+may be held across calls to this function.
+.SS Examples
+See \f4copyb\fP(D3) for an example of \f4itimeout\fP.
+.SH REFERENCES
+LOCK_ALLOC(D3),
+dtimeout(D3),
+fasthzto(D3),
+untimeout(D3).

@@ -1,0 +1,217 @@
+#! /sbin/sh
+#Tag 0x00000f00
+
+# Start sendmail demon after checking that things are healthy.
+# $Revision: 1.63 $
+
+CONFIG=/etc/config
+IS_ON=/sbin/chkconfig
+
+QUEUEDIR=/var/spool/mqueue
+MAILDIR=/var/mail
+
+G_RC=/usr/local/etc/mgmt/rc
+
+if $IS_ON verbose ; then	# For a verbose startup and shutdown
+    ECHO=echo
+    VERBOSE=-v
+else				# For a quiet startup and shutdown
+    ECHO=:
+    VERBOSE=
+fi
+
+
+if $IS_ON cap_su_off && test "`sysconf MAC`" -eq 1; then
+    CSU=csu_off
+    csu_off () {
+	while true; do
+	    case "$1" in
+	    -M) shift 2;;
+	    -M?*) shift;;
+	    -m) shift;;
+	    -C) shift 2;;
+	    -C?*) shift;;
+	    *) break;;
+	    esac
+	done
+	shift
+	eval $*
+	return
+    }
+else
+    CSU="/sbin/suattr"
+fi
+CSU_DBADMIN="$CSU -M dbadmin"
+CAP_SENDMAIL="CAP_PRIV_PORT+ip"
+
+
+parse_args () {
+    OPTS=""
+    while true; do
+	case "$1" in
+	-q) DOPTS="$DOPTS $1$2"; shift 2;;
+	-q?*) DOPTS="$DOPTS $1"; shift;;
+	-bd) shift;;
+	"") break;;
+	*) OPTS="$OPTS $1"; shift;;
+	esac
+    done
+    if test "$DOPTS" = ""; then
+	DOPTS="-bd -q15m"
+    else
+	DOPTS="-bd $DOPTS"
+    fi
+    return
+}
+
+case "$1" in
+'start')
+    $ECHO "Mailer daemons: \c"
+
+    # Choose sendmail options.  The file might contain something like -om
+    #	to turn on "metoo"
+    OPTS=`cat $CONFIG/sendmail.options 2>/dev/null`
+
+    # Force $G if Gauntlet appears to be installed.
+    if [ -f /etc/init.d/gauntlet ]; then
+	if expr "$OPTS" : "oMGgauntlet" >/dev/null; then
+	    OPTS="$OPTS -oMGgauntlet"
+	fi
+	$G_RC/S100mail stop
+    fi
+    parse_args $OPTS
+
+    # Move to post office directory
+    if $CSU -m -c "test ! -d ${MAILDIR} -a ! -L ${MAILDIR}"; then
+	mkdir -m 775 ${MAILDIR}
+	if test "`sysconf MAC`" -eq 1; then
+	    chlabel -m ${MAILDIR}
+	fi
+    fi
+    olddir="`pwd`"
+    cd ${MAILDIR}
+    if test $? = 0; then
+	cd ${olddir}
+	if test "`sysconf MAC`" -eq 1; then
+	    files=`$CSU -m -C CAP_MAC_READ+ipe -c "echo ${MAILDIR}/[A-Z]-[a-z]*"`
+	    for f in $files; do
+		label=`$CSU -m -C CAP_MAC_READ+ipe -c "ls -1Md $f"	\
+			| awk '{print $2}'				\
+			| sed -e 's!\[!!' -e 's!\]!!'`
+		if $CSU -M $label -c "test ! -d ${MAILDIR}/:saved"; then
+		    $CSU -M $label -c "mkdir ${MAILDIR}/:saved"
+		fi
+		$CSU -M $label -C CAP_FOWNER+ipe			\
+		    -c "chown root ${MAILDIR}/. ${MAILDIR}/:saved ;	\
+			/sbin/find ${MAILDIR}/. -local -exec chgrp mail {} \\; \
+						-exec chmod g+w {} \\;"
+	    done
+	else
+		if test ! -d ${MAILDIR}/:saved ; then
+			mkdir -m 775 ${MAILDIR}/:saved
+		fi
+		$CSU -C CAP_FOWNER+ipe					\
+		    -c "chown root.mail ${MAILDIR}/. ${MAILDIR}/:saved ; \
+			/sbin/find ${MAILDIR}/. -local			\
+			    \\( ! -group mail -o ! -perm -020 \\)	\
+			    -exec chgrp mail {} \\;			\
+			    -exec chmod g+w {} \\;"
+	fi
+    fi
+
+    # Move to spool directory.  Make sure the directory exists, and is of the
+    # proper permissions
+    if test ! -d /var/spool; then
+	mkdir /var/spool
+    fi
+    if $CSU_DBADMIN -c "test ! -d ${QUEUEDIR}/."; then
+	$CSU_DBADMIN -c "mkdir -m 755 ${QUEUEDIR}"
+    fi
+    $CSU_DBADMIN -C CAP_FOWNER+ipe -c "chmod 755 ${QUEUEDIR}/.;	\
+				chown root.mail ${QUEUEDIR}/."
+
+    # Make sure that /usr/lib/sendmail is executable and setuid root
+    if test ! -x /usr/lib/sendmail; then
+	echo "mail: no /usr/lib/sendmail, can't use mail"
+	exit 255
+    fi
+
+    # check the alias data base
+    if test ! -r /etc/aliases; then
+	echo "mail: /etc/aliases is missing, can't use mail"
+	exit 255
+    fi
+    if test ! -r /etc/aliases.dir -o ! -r /etc/aliases.pag; then
+	touch /etc/aliases.dir /etc/aliases.pag
+	sleep 1
+	touch /etc/aliases
+    fi
+
+    # Make sure that /bin/mail is correct
+    if test ! -x /bin/mail; then
+	echo "mail: no /bin/mail, can't use mail"
+	exit 255
+    fi
+
+    if test ! -c /dev/log; then
+	echo "mail: syslogd is not running, /dev/log does not exist"
+	exit 255
+    fi
+
+    # kill any old daemons
+    $CSU_DBADMIN -c "/sbin/killall -15 sendmail"
+
+    # Clean up any old lock files
+    $CSU_DBADMIN -c "rm -rf ${QUEUEDIR}/[tnx]f*" >/dev/null 2>&1
+
+    # If both smap and sendmail chkconfig'ed on, smap does and should prevail.
+    if $IS_ON smap; then
+	if test ! -d /usr/spool/smap; then
+		mkdir -m 755 -p /usr/spool/smap
+		chown smap /usr/spool/smap
+	fi
+	# /etc/sendmail.fc necessary since sendmail is still delivery agent
+	if test -s /etc/sendmail.fc; then
+	    (echo "Freezing sendmail.cf" ;
+		/usr/lib/sendmail -bz) | logger -t sendmail
+	fi
+	# ignore SIGHUP from init, so backgrounded demons will not be killed
+	trap "" 1
+
+	# smap and other Gauntlet support is delt with in the gauntlet mail
+	# startup script
+	if [ -f /etc/init.d/gauntlet ]; then
+	    $G_RC/S100mail start
+	fi
+
+    elif $IS_ON sendmail; then
+	# start the daemon.
+	if test -s /etc/sendmail.fc; then
+	    FRZ="echo Freezing sendmail.cf; /usr/lib/sendmail -bz; "
+	fi
+	# start in background because starting can take a while
+	$CSU_DBADMIN -C $CAP_SENDMAIL -c		\
+		"$FRZ /usr/lib/sendmail $DOPTS $OPTS"	\
+	    | logger -t sendmail &
+	$ECHO "sendmail."
+
+    else
+	$ECHO "none."
+    fi
+
+    # rebuild aliases just in case, but after freezing sendmail.cf.
+    $CSU_DBADMIN -c "rm -f /etc/aliases.pag /etc/aliases.dir /etc/aliases.db"
+    newaliases >/dev/null &
+    ;;
+
+'stop')
+    $CSU_DBADMIN -c "/sbin/killall -15 sendmail"
+    if [ -f /etc/init.d/gauntlet ]; then
+	$G_RC/S100mail stop
+    fi
+    ;;
+
+*)
+    echo "usage: $0 {start|stop}"
+    ;;
+esac

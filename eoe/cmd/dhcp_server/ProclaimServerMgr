@@ -1,0 +1,1541 @@
+#!/usr/sgitcl/bin/sgitcl -n
+# This program is the gui for the dhcp_bootp server program. It allows the
+# user to set up the configuration and options to run the server
+#
+#most Widgets have a capital W at end
+
+dlopen libsautil.so init SAUtil_Init
+
+#falback resources get these from the app-defaults/Dhcp file
+set fbacks {
+    {*sgiMode:       true}
+    {*useSchemes:    all}
+    {Dhcp*title:	Proclaim Server}
+}
+
+#
+#constants for printing lease info.
+#
+set SECSPERDAY [expr 3600*24]
+set SECSPERHOUR 3600
+set SECSPERMIN 60
+#
+#constants to define the frequency at which to update lease info.
+#
+set MINUPDFREQ 5000
+set INITUPDFREQ [expr $SECSPERMIN*1000]
+#
+# error messages
+#
+set ILLEGAL_OPTIONS_MSG "Illegal Option in File"
+set Y_NOT_SUPPORTED "-y option is ignored"
+set FILE_EXISTS "Configuration exists"
+set FILE_NOT_EXISTS "Configuration does not exist"
+set SELECT_FILE "Select a configuration from the list"
+set WRONG_CONFIG_FORMAT "This configuration is badly formatted"
+set SAVE_FILE_QTN "Changes mades, Save?"
+set DELETE_FILE_QTN "Confirm Delete"
+#
+#global defines
+#
+set defaultOptionsDir /etc/config
+set defaultOptionsFile $defaultOptionsDir/dhcp_bootp.options
+set defaultProclaimConfigDir /var/dhcp/config
+set defaultProclaimConfigFile config.Default
+set etherToIPFile /var/tmp/etherToIP
+set defaultHostsMap /etc/hosts
+set defaultEthersMap /etc/ethers
+set defaultSysName /unix
+
+
+set defaultProclaimMask config.*
+
+#
+#global variables
+#
+set optionsFile $defaultOptionsFile
+set hostsMap		""	;# -w
+set ethersMap		""	;# -e
+set sysName		""	;# -u
+set proclaimConfigDir	$defaultProclaimConfigDir	;# -c
+set otherOptions	""
+
+set updFreq $INITUPDFREQ ; # frequency of updating lease information
+set timer 0 ; # handle for the timer
+set lastModTime ""
+
+set mapsOnOffStatus 0
+#
+#matrix Widget values
+#
+set colLabels "Host, Domain, IP\nAddress, Expiration\nDate     Time"
+set colMaxLengths  "64, 20, 30, 50"
+set colWidths "12, 15, 15, 20"
+#
+#global widgets
+#
+set dialW	""; #is a global used for small popup messages
+set qdialW	""; #is a global used for questions
+set fileSDWokCB "" ; # callback for file selection widget
+set qdialOkCB ""
+set qdialCanCB ""
+#
+# table of labels for the optios
+# the app-defaults file contains the actual labels
+# this array holds the widget names for the labels
+# We do this in order to allow the label strings to be 
+# configured as per the users needs
+#
+set optionLabel(Serve_This_Network:) lbl68	;# 1
+set optionLabel(pro_address_counter:) lbl0	;# 1
+set optionLabel(pro_host_pfx_counter:) lbl1	;# 1
+set optionLabel(pro_netmask:) lbl2		;# 1
+set optionLabel(pro_lease:) lbl3		;# 1
+set optionLabel(pro_host_prefix:) lbl5		;# 1
+set optionLabel(pro_choose_name:) lbl6		;# 1
+set optionLabel(pro_ipaddress_range:) lbl7	;# 1
+set optionLabel(pro_router_addr:) lbl8  	;# 1
+set optionLabel(pro_timeserver_addr:) lbl9	;# 2
+set optionLabel(pro_nameserver_addr:) lbl10	;# 2
+set optionLabel(pro_dnsserver_addr:) lbl11	;# 2
+set optionLabel(pro_nisserver_addr:) lbl12	;# 4
+set optionLabel(pro_dns_domain:) lbl13		;# 1
+set optionLabel(pro_nis_domain:) lbl14		;# 4
+set optionLabel(pro_mtu:) lbl15			;# 6
+set optionLabel(pro_allnets_local:) lbl16	;# 6
+set optionLabel(pro_broadcast:) lbl17		;# 6
+set optionLabel(pro_domask_disc:) lbl18		;# 6
+set optionLabel(pro_resp_mask_req:) lbl19	;# 6
+set optionLabel(pro_static_routes:) lbl20	;# 6
+set optionLabel(pro_do_router_disc:) lbl21	;# 6
+set optionLabel(pro_router_solicit_addr:) lbl22 ;# 6
+set optionLabel(pro_logserver_addr:) lbl23	;# 2
+set optionLabel(pro_cookieserver_addr:) lbl24	;# 2
+set optionLabel(pro_LPRserver_addr:) lbl25	;# 2
+set optionLabel(pro_resourceserver_addr:) lbl26	;# 2
+set optionLabel(pro_bootfile_size:) lbl27	;# 1
+set optionLabel(pro_swapserver_addr:) lbl28	;# 2
+set optionLabel(pro_IPforwarding:) lbl29	;# 5
+set optionLabel(pro_source_routing:) lbl30	;# 5
+set optionLabel(pro_policy_filter:) lbl31	;# 5
+set optionLabel(pro_max_reassy_size:) lbl32	;# 5
+set optionLabel(pro_IP_ttl:) lbl33		;# 5
+set optionLabel(pro_pathmtu_timeout:) lbl34	;# 5
+set optionLabel(pro_pathmtu_table:) lbl35	;# 5
+set optionLabel(pro_trailer_encaps:) lbl36	;# 7
+set optionLabel(pro_arpcache_timeout:)  lbl37	;# 7
+set optionLabel(pro_ether_encaps:) lbl38	;# 7
+set optionLabel(pro_TCP_ttl:) lbl39		;# 8
+set optionLabel(pro_TCP_keepalive_intrvl:) lbl40;# 8
+set optionLabel(pro_TCP_keepalive_garbage:) lbl41;# 8
+set optionLabel(pro_NetBIOS_nameserver_addr:) lbl42	;# 4
+set optionLabel(pro_NetBIOS_distrserver_addr:) lbl43	;# 4
+set optionLabel(pro_NetBIOS_nodetype:) lbl44	;# 4
+set optionLabel(pro_NetBIOS_scope:) lbl45	;# 4
+set optionLabel(pro_X_fontserver_addr:) lbl46	;# 3
+set optionLabel(pro_X_displaymgr_addr:) lbl47	;# 3
+set optionLabel(pro_nisplus_domain:) lbl48	;# 4
+set optionLabel(pro_nisplusserver_addr:) lbl49	;# 4
+set optionLabel(pro_mobileIP_homeagent_addr:) lbl50	;# 3
+set optionLabel(pro_SMTPserver_addr:) lbl51	;# 3
+set optionLabel(pro_POP3server_addr:) lbl52	;# 3
+set optionLabel(pro_NNTPserver_addr:) lbl53	;# 3
+set optionLabel(pro_WWWserver_addr:) lbl54	;# 3
+set optionLabel(pro_fingerserver_addr:) lbl55	;# 3
+set optionLabel(pro_IRCserver_addr:) lbl56	;# 3
+set optionLabel(pro_StreetTalkserver_addr:) lbl57	;# 3
+set optionLabel(pro_STDAserver_addr:) lbl58	;# 3
+set optionLabel(pro_time_offset:) lbl59		;# 1
+set optionLabel(pro_nameserver116_addr:) lbl60  ;# 2
+set optionLabel(pro_impressserver_addr:) lbl61  ;# 2
+set optionLabel(pro_meritdump_pathname:) lbl62  ;# 1
+set optionLabel(pro_root_pathname:) lbl63	;# 1
+set optionLabel(pro_extensions_pathname:) lbl64 ;# 1
+set optionLabel(pro_NTPserver_addr:) lbl65	;# 2
+set optionLabel(pro_TFTPserver_name:) lbl66	;# 1
+set optionLabel(pro_bootfile_name:) lbl67	;# 1
+
+#
+#table of callbacks to verify entries in configurations
+#It is an array indexed by the option that is being validated
+#
+set verifyEntryProc(Serve_This_Network:) entryBlankBoolean
+set verifyEntryProc(pro_address_counter:) entryBlankInt
+set verifyEntryProc(pro_host_pfx_counter:) entryBlankInt
+set verifyEntryProc(pro_netmask:) entryBlankAddr
+set verifyEntryProc(pro_lease:) entryBlankLong
+set verifyEntryProc(pro_host_prefix:) entryBlankString
+set verifyEntryProc(pro_choose_name:) entryBlankBoolean
+set verifyEntryProc(pro_ipaddress_range:) entryIntRanges
+set verifyEntryProc(pro_router_addr:) entryBlankAddrList
+set verifyEntryProc(pro_timeserver_addr:) entryBlankAddrList
+set verifyEntryProc(pro_nameserver_addr:) entryBlankAddrList
+set verifyEntryProc(pro_dnsserver_addr:) entryBlankAddrList
+set verifyEntryProc(pro_nisserver_addr:) entryBlankAddrList
+set verifyEntryProc(pro_dns_domain:) entryBlankString
+set verifyEntryProc(pro_nis_domain:) entryBlankString
+set verifyEntryProc(pro_mtu:) entryBlankInt
+set verifyEntryProc(pro_allnets_local:) entryBlankBoolean
+set verifyEntryProc(pro_broadcast:) entryBlankAddr
+set verifyEntryProc(pro_domask_disc:) entryBlankBoolean
+set verifyEntryProc(pro_resp_mask_req:) entryBlankBoolean
+set verifyEntryProc(pro_static_routes:) entryBlankAddrPair
+set verifyEntryProc(pro_do_router_disc:) entryBlankBoolean
+set verifyEntryProc(pro_router_solicit_addr:) entryBlankAddr
+set verifyEntryProc(pro_logserver_addr:) entryBlankAddrList
+set verifyEntryProc(pro_cookieserver_addr:) entryBlankAddrList
+set verifyEntryProc(pro_LPRserver_addr:) entryBlankAddrList
+set verifyEntryProc(pro_resourceserver_addr:) entryBlankAddrList 
+set verifyEntryProc(pro_bootfile_size:) entryBlankInt
+set verifyEntryProc(pro_swapserver_addr:) entryBlankAddr
+set verifyEntryProc(pro_IPforwarding:) entryBlankBoolean
+set verifyEntryProc(pro_source_routing:) entryBlankBoolean
+set verifyEntryProc(pro_policy_filter:) entryBlankAddrList
+set verifyEntryProc(pro_max_reassy_size:) entryBlankInt
+set verifyEntryProc(pro_IP_ttl:) entryBlankInt
+set verifyEntryProc(pro_pathmtu_timeout:) entryBlankLong
+set verifyEntryProc(pro_pathmtu_table:) entryBlankInt ; # should be INtList
+set verifyEntryProc(pro_trailer_encaps:) entryBlankBoolean
+set verifyEntryProc(pro_arpcache_timeout:) entryBlankLong
+set verifyEntryProc(pro_ether_encaps:) entryBlankBoolean
+set verifyEntryProc(pro_TCP_ttl:) entryBlankInt
+set verifyEntryProc(pro_TCP_keepalive_intrvl:) entryBlankLong
+set verifyEntryProc(pro_TCP_keepalive_garbage:) entryBlankBoolean
+set verifyEntryProc(pro_NetBIOS_nameserver_addr:) entryBlankAddrList
+set verifyEntryProc(pro_NetBIOS_distrserver_addr:) entryBlankAddrList
+set verifyEntryProc(pro_NetBIOS_nodetype:) entryBlankInt
+set verifyEntryProc(pro_NetBIOS_scope:) entryBlankString ; # check this
+set verifyEntryProc(pro_X_fontserver_addr:) entryBlankAddrList
+set verifyEntryProc(pro_X_displaymgr_addr:) entryBlankAddrList
+set verifyEntryProc(pro_nisplus_domain:) entryBlankString
+set verifyEntryProc(pro_nisplusserver_addr:) entryBlankAddrList
+set verifyEntryProc(pro_mobileIP_homeagent_addr:) entryBlankAddrList
+set verifyEntryProc(pro_SMTPserver_addr:) entryBlankAddrList
+set verifyEntryProc(pro_POP3server_addr:) entryBlankAddrList
+set verifyEntryProc(pro_NNTPserver_addr:) entryBlankAddrList
+set verifyEntryProc(pro_WWWserver_addr:) entryBlankAddrList
+set verifyEntryProc(pro_fingerserver_addr:) entryBlankAddrList
+set verifyEntryProc(pro_IRCserver_addr:) entryBlankAddrList
+set verifyEntryProc(pro_StreetTalkserver_addr:) entryBlankAddrList
+set verifyEntryProc(pro_STDAserver_addr:) entryBlankAddrList
+set verifyEntryProc(pro_time_offset:) entryBlankInt
+set verifyEntryProc(pro_nameserver116_addr:) entryBlankAddrList
+set verifyEntryProc(pro_impressserver_addr:) entryBlankAddrList
+set verifyEntryProc(pro_meritdump_pathname:) entryBlankString
+set verifyEntryProc(pro_root_pathname:) entryBlankString
+set verifyEntryProc(pro_extensions_pathname:) entryBlankString
+set verifyEntryProc(pro_NTPserver_addr:) entryBlankAddrList
+set verifyEntryProc(pro_TFTPserver_name:) entryBlankString
+set verifyEntryProc(pro_bootfile_name:) entryBlankString
+#
+# groups of fields for display
+#
+# General group and Servers group Section 3 of RFC 1533
+#
+set genOptions1 {Serve_This_Network: pro_address_counter: \
+	pro_host_pfx_counter: pro_netmask: pro_lease: pro_host_prefix: \
+	pro_choose_name: pro_ipaddress_range: pro_router_addr: \
+	pro_bootfile_size: pro_time_offset: pro_meritdump_pathname: \
+	pro_root_pathname: pro_extensions_pathname: \
+	pro_TFTPserver_name: pro_bootfile_name: }
+
+set serverOptions2 {pro_dns_domain: pro_dnsserver_addr:\
+	pro_timeserver_addr:\
+	pro_logserver_addr: pro_cookieserver_addr: pro_LPRserver_addr:\
+	pro_resourceserver_addr: pro_swapserver_addr: pro_nameserver116_addr:\
+	pro_impressserver_addr: pro_NTPserver_addr: }
+
+#
+# section 8 of RFC 1533
+#
+set applOptions3 {pro_X_fontserver_addr: pro_X_displaymgr_addr:\
+	pro_mobileIP_homeagent_addr: pro_SMTPserver_addr:\
+	pro_POP3server_addr: pro_NNTPserver_addr: pro_WWWserver_addr:\
+	pro_fingerserver_addr: pro_IRCserver_addr:\
+	pro_StreetTalkserver_addr: pro_STDAserver_addr:}
+	
+set serviceOptions4 { pro_NetBIOS_nameserver_addr:\
+	pro_NetBIOS_distrserver_addr:\
+	pro_NetBIOS_nodetype: pro_NetBIOS_scope:\
+	pro_nis_domain: pro_nisserver_addr:\
+	pro_nisplus_domain: pro_nisplusserver_addr:}
+	
+
+#
+#section 4 of RFC 1533
+#
+set ipperhostOptions5 {pro_IPforwarding: pro_source_routing:\
+	pro_policy_filter: pro_max_reassy_size: pro_IP_ttl:\
+	pro_pathmtu_timeout: pro_pathmtu_table:}
+
+#
+#setion 5 of RFC 1533
+#
+set ipperinterfaceOptions6 {pro_mtu: pro_allnets_local: pro_broadcast:\
+	pro_domask_disc: pro_resp_mask_req: pro_do_router_disc:\
+	pro_router_solicit_addr: pro_static_routes: }
+#
+# section 6 
+#
+set linkperinterfaceOptions7 {pro_trailer_encaps: pro_arpcache_timeout:\
+	pro_ether_encaps:}
+
+#
+# section 7
+set tcpOptions8 {pro_TCP_ttl: pro_TCP_keepalive_intrvl:\
+	pro_TCP_keepalive_garbage:}
+
+#
+# this procedure calls the appropriate procedure for validating
+# options entries depending on the entry index in the verifyEntryProc
+# array
+#
+set errorW ""
+set currentEntryW ""
+proc verifyEntry {w} {
+    global editedForm oldValue
+    global verifyEntryProc currentEntryW errorW
+
+    set currentEntryW $w
+    set index [string range $w [expr [string last txt_ $w]+4] end]
+    $w getValues -value t
+    if {[string compare $oldValue($index) $t]} {
+	set editedForm 1
+    }
+    if {[catch {set verifyEntryProc($index)}]} {
+	entryBlankString $index $t
+    } else {
+	if {[info exists verifyEntryProc($index)]} {
+		$verifyEntryProc($index) $index $t 
+	}
+    }
+    if {![string compare $errorW $w]} {
+	set errorW ""
+    }
+}
+
+#
+# validates a range of integers
+#
+proc entryIntRanges {entry t} {
+    global dialW errorW currentEntryW
+    set t [string trimleft [string trimright $t]]
+    if {![string compare $t ""]} {
+	return
+    }
+    if {[regexp {^(([0-9]+ *- *[0-9]+ *, *)*(([0-9]+ *- *[0-9]+ *)|( *[0-9]+)))$} $t]} {
+	return
+    }
+    if {[string compare $errorW $currentEntryW]} {
+	set errorW $currentEntryW
+	postDialog $dialW dialog_error "$entry error, e.g. 1-3, 5-7, 9"
+    }
+}
+
+#
+# validates address pairs
+#
+proc entryBlankAddrPair {entry t} {
+    global dialW errorW currentEntryW
+    set t [string trimleft [string trimright $t]]
+    if {![string compare $t ""]} {
+	return
+    }
+    if {[regexp {^((([0-9]+.[0-9]+.[0-9]+.[0-9]+) *- *([0-9]+.[0-9]+.[0-9]+.[0-9]+) *, *)*(([0-9]+.[0-9]+.[0-9]+.[0-9]+) *- *([0-9]+.[0-9]+.[0-9]+.[0-9]+)))$} $t]} { 
+	return
+    }
+    if {[string compare $errorW $currentEntryW]} {
+	set errorW $currentEntryW
+	postDialog $dialW dialog_error "$entry error, e.g. addr1 - addr2, addr3 - addr4"
+    }
+}
+
+#
+# validates address list
+#
+proc entryBlankAddrList {entry t} {
+    global dialW errorW currentEntryW
+    set t [string trimleft [string trimright $t]]
+    if {![string compare $t ""]} {
+	return
+    }
+    if {[regexp {^((([0-9]+.[0-9]+.[0-9]+.[0-9]+)( )*,( )*)*([0-9]+.[0-9]+.[0-9]+.[0-9]+))$} $t]} {
+	return
+    }
+    if {[string compare $errorW $currentEntryW]} {
+	set errorW $currentEntryW
+	postDialog $dialW dialog_error "$entry error, e.g. addr1, addr2, addr3"
+    }
+}
+
+#
+# validate a boolean
+#
+proc entryBlankBoolean {entry t} {
+    global dialW errorW currentEntryW
+    set t [string trimleft [ string trimright $t]]
+    if {![string compare $t ""]} {
+	return
+    }
+    if {($t == "Y") || ($t == "N") || ($t == "y") || ($t == "n") || \
+	    ($t == 0) || ($t == 1) ||\
+	    ($t == "No") || ($t == "no") || \
+	    ($t == "Yes") || ($t == "yes")} {
+	return
+    } 
+    if {[string compare $errorW $currentEntryW]} {
+	set errorW $currentEntryW
+	postDialog $dialW dialog_error "$entry error, enter 0 or 1"
+    }
+}
+
+#
+#validate integer
+#
+proc entryBlankInt {entry t} {
+    global dialW errorW currentEntryW
+    set t [string trimleft [ string trimright $t]]
+    if {![string compare $t ""]} {
+	return
+    }
+    if {[regexp {^((\ )*)?((0x)[0-9a-fA-F]+|[0-9]+)$} $t]} {
+	return
+    }
+    if {[string compare $errorW $currentEntryW]} {
+	set errorW $currentEntryW
+	postDialog $dialW dialog_error "$entry error, enter integer"
+    }
+}
+
+#
+# validate ip address
+#
+proc entryBlankAddr {entry t} {
+    global dialW errorW currentEntryW
+    set t [string trimleft [ string trimright $t]]
+    if {![string compare $t ""]} {
+	return
+    }
+    if {[scan $t "0x%x" a]} {
+	return
+    }
+    if {[scan $t " %d.%d.%d.%d" a b c d] >= 4} {
+	if {($a < 0) || ($a > 255)} {
+	    if {[string compare $errorW $currentEntryW]} {
+		set errorW $currentEntryW
+		postDialog $dialW dialog_error "$entry error, enter address a.b.c.d"
+	    }
+	    return
+	}
+	if {($b < 0) || ($b > 255)} {
+	    if {[string compare $errorW $currentEntryW]} {
+		set errorW $currentEntryW
+		postDialog $dialW dialog_error "$entry error, enter address a.b.c.d"
+	    }
+	    return
+	}
+	if {($c < 0) || ($c > 255)} {
+	    if {[string compare $errorW $currentEntryW]} {
+		set errorW $currentEntryW
+		postDialog $dialW dialog_error "$entry error, enter address a.b.c.d"
+	    }
+	    return
+	}
+	if {($d < 0) || ($a > 255)} {
+	    if {[string compare $errorW $currentEntryW]} {
+		set errorW $currentEntryW
+		postDialog $dialW dialog_error "$entry error, enter address a.b.c.d"
+	    }
+	    return
+	}
+	return
+    }
+    if {[string compare $errorW $currentEntryW]} {
+	set errorW $currentEntryW
+	postDialog $dialW dialog_error "$entry error, enter address a.b.c.d"
+    }
+}
+ 
+#
+# validates long integer
+#   
+proc entryBlankLong {entry t} {
+    global dialW errorW currentEntryW
+    set t [string trimleft [ string trimright $t]]
+ 
+    if {![string compare $t ""]} {
+	return
+    }
+    if {[regexp {^((\ )*)?((0x)[0-9a-fA-F]+|[0-9]+)$} $t]} {
+	return
+    }
+    if {[string compare $errorW $currentEntryW]} {
+	set errorW $currentEntryW
+	postDialog $dialW dialog_error "$entry error, enter integer"
+    }
+}
+
+#
+# string entry
+#
+proc entryBlankString {entry t} {
+#    puts "entryBlankString called:$entry value: $t"
+}
+
+#
+#general routines used in several places 	    
+#
+# this routine creates a control panel for a dialog
+# the parent should be a pane and the number of buttons and callback list 
+# is passed as parameter
+#
+proc createCPanel {parent nbuttons whichDef cbList } {
+    xmForm $parent.cpForm
+    $parent.cpForm setValues -fractionBase [expr 20*$nbuttons-1]\
+	    -leftOffset 10 -rightOffset 10
+    set retW $parent.cpForm
+    set oldw 0
+    for {set i 0} {$i < $nbuttons} {set i [expr $i+1]} {
+	xmPushButton $retW.btn$i managed
+	$retW.btn$i getValues -width w
+	if {$w > $oldw} {
+	    set oldw $w
+	}
+	$retW.btn$i activateCallback [lindex $cbList $i]
+	$retW.btn$i setValues -topAttachment attach_form\
+		-bottomAttachment attach_form\
+		-showAsDefaults [expr $i==$whichDef]\
+		-defaultButtonShadowThickness 1
+	if {$i == [expr $nbuttons-1]} {
+	    $retW.btn$i setValues -rightAttachment attach_form
+	} 
+	if {$i != 0} {
+	    if {$i != [expr $nbuttons-1]} {
+		$retW.btn$i setValues -leftAttachment attach_position -leftPosition [expr 20*$i]
+	    }
+	} else {
+	    $parent.cpForm.btn$i getValues -height ht
+	    $retW.btn$i setValues -leftAttachment attach_form
+	}
+    }
+    $retW manageChild
+    $parent.cpForm getValues -marginHeight h
+    set ht [expr $ht + 2*$h]
+    if {$whichDef == -1} {
+	$parent.cpForm setValues -paneMaximum $ht -paneMinimum $ht
+    } else {
+	$parent.cpForm setValues -paneMaximum $ht -paneMinimum $ht\
+		-defaultButton $retW.btn$whichDef
+    }
+    for {set i 0} {$i < $nbuttons} {incr i} {
+	$retW.btn$i setValues -width [expr $oldw + 30]
+    }
+    return $retW
+}
+
+#
+# general dialog posting the type parameter can be any of the dialog types
+#
+proc postDialog {widget type msg} {
+    global dialW
+
+    if {![string compare $widget ""]} {
+	xmMessageDialog .dialW
+	set dialW dialW
+	set widget dialW
+	.$widget.Cancel unmanageChild
+	.$widget.Help unmanageChild
+    }
+    .$widget setValues -dialogType $type -messageString $msg
+    .$widget manageChild
+}
+
+#
+# question dialog
+#
+proc ask {widget msg okCB canCB} {
+    global stillModal answer qdialOkCB qdialCanCB qdialW
+    if {![string compare $widget ""]} {
+	xmQuestionDialog .qdialW\
+		-dialogStyle dialog_full_application_modal
+	set qdialW qdialW
+	set widget qdialW
+	.$widget.Help unmanageChild
+    }
+    if {[string compare $qdialOkCB ""]} {
+	.$widget removeCallback okCallback $qdialOkCB
+    }
+    if {[string compare $qdialOkCB ""]} {
+	.$widget removeCallback cancelCallback $qdialCanCB
+    }
+    set qdialOkCB $okCB
+    set qdialCanCB $canCB
+    .$widget okCallback $qdialOkCB
+    .$widget cancelCallback $qdialCanCB
+    
+    .$widget setValues -messageString $msg
+    .$widget manageChild
+    set stillModal 1
+    while {$stillModal} {
+	. processEvent
+    }
+    .$widget unmanageChild
+}
+
+#
+# this procedure creates an entry form, a entry for each item in the the
+# second parameter is created
+#
+proc createEntryW {parent configList index} {
+    global optionLabel
+
+    set rowcolW [xmRowColumn $parent.rcW$index \
+	    -isAligned true -numColumns 2 -orientation vertical\
+	    -packing pack_column]
+    set n {}
+    foreach i $configList {
+	xmLabel $rowcolW.$optionLabel($i) managed \
+		-marginLeft 20
+	lappend n $i
+    }
+    foreach in $n {
+	xmText $rowcolW.txt_$in managed
+	$rowcolW.txt_$in losingFocusCallback {verifyEntry %w }
+	$rowcolW.txt_$in activateCallback {verifyEntry %w }
+    }
+    $rowcolW manageChild
+    return $rowcolW
+}
+
+#
+# this routine unmanages all labels and text widget that were part of an
+# older entry form
+#
+proc destroyEntryW {parent} {
+    $parent getValues -children ch
+    foreach ich $ch {
+	[string trim $ich " ,"] unmanageChild
+    }
+}
+#
+# Options File Selection 
+#
+proc doFile {Dir FileMask File okcb} {
+    global fileSDWokCB 
+    .fileSDW setValues -dirMask $FileMask -directory $Dir 
+    if { ![lempty $File] } {
+	    .fileSDW setValues -dirSpec $File
+    }
+    if {[string compare $fileSDWokCB ""]} {
+	.fileSDW removeCallback okCallback $fileSDWokCB
+    } else {
+	.fileSDW cancelCallback {.fileSDW unmanageChild}
+    }
+    .fileSDW okCallback $okcb
+    set fileSDWokCB $okcb
+
+    .fileSDW manageChild
+}
+#
+# Options Form selections
+#
+proc doOptions {} {
+    global fileSDWokCB
+    global optionsFile
+    .optionsFormW manageChild
+    readOptionsFile
+}
+#
+# read and update the Options Form
+#
+proc readOptionsFile {} {
+    global optionsFile defaultSysName defaultProclaimConfigDir
+    global hostsMap ethersMap \
+	    sysName proclaimConfigDir otherOptions
+    global dialW ILLEGAL_OPTIONS_MSG Y_NOT_SUPPORTED
+    if {[catch {set fd [open $optionsFile r]} msg]} {
+	postDialog $dialW dialog_error [list $msg]
+	return
+    }
+    setMapsOn
+    set otherOptions ""
+    while {[gets $fd line] >= 0} {
+	if {![cequal [cindex $line 0] #]} {
+	    set len [llength $line]
+	    for {set index 0} {$index < $len} {set index [expr $index+1]} {
+		switch -- [lindex $line $index] {
+		    -y {
+		        postDialog $dialW dialog_error $Y_NOT_SUPPORTED
+		    }
+		    -w { 
+			setMapsOn
+			set hostsMap [lindex $line [set index [expr $index+1]]]
+			.optionsFormW.paneW.rcW.hostsTextW setValues -value $hostsMap
+		    }
+		    -e { 
+			setMapsOn
+			set ethersMap [lindex $line [set index [expr $index+1]]]
+			.optionsFormW.paneW.rcW.ethersTextW setValues -value $ethersMap
+		    }
+		    -u { 
+			set sysName [lindex $line [set index [expr $index+1]]]
+			.optionsFormW.paneW.rcW.sysnameTextW setValues -value $sysName
+		    }
+		    -c { 
+			set proclaimConfigDir [lindex $line [set index [expr $index+1]]]
+			.optionsFormW.paneW.rcW.proclaimConfDirTextW setValues -value $proclaimConfigDir
+		    }
+		    -x {
+			set otherOptions [format "%s -x" $otherOptions]
+		    }
+		    -t {
+			set buf [lindex $line [set index [expr $index + 1]]]
+			set otherOptions [format "%s -t %s" $otherOptions $buf]
+		    }
+		    -n {
+			set otherOptions [format "%s -n" $otherOptions]
+                    }
+		    -m {
+			set buf [lindex $line [set index [expr $index + 1]]]
+			set otherOptions [format "%s -m %s" $otherOptions $buf]
+		    }
+		    -r {
+ 			set buf [lindex $line [set index [expr $index+1]]]
+			set otherOptions [format "%s -r %s" $otherOptions $buf]
+		    }
+		    -W {
+			set otherOptions [format "%s -W" $otherOptions]
+		    }
+		    -E {
+			set otherOptions [format "%s -E" $otherOptions]
+		    }
+		    -pn {
+			set otherOptions [format "%s -pn" $otherOptions]
+		    }
+		    -pt {
+ 			set buf [lindex $line [set index [expr $index+1]]]
+			set otherOptions [format "%s -pt %s" $otherOptions $buf]
+		    }
+		    -pl {
+ 			set buf [lindex $line [set index [expr $index+1]]]
+			set otherOptions [format "%s -pl %s" $otherOptions $buf]
+		    }
+		    -pd {
+			set otherOptions [format "%s -pd" $otherOptions]
+		    }
+		    -dn {
+			set otherOptions [format "%s -dn" $otherOptions]
+		    }
+		    -da {
+			set otherOptions [format "%s -da" $otherOptions]
+		    }
+		    -db {
+			set otherOptions [format "%s -db" $otherOptions]
+		    }
+		    -dc {
+			set otherOptions [format "%s -dc" $otherOptions]
+		    }
+		    -ds {
+			set otherOptions [format "%s -ds" $otherOptions]
+		    }
+		    -dt {
+ 			set buf [lindex $line [set index [expr $index+1]]]
+			set otherOptions [format "%s -dt %s" $otherOptions $buf]
+		    }
+		    -l {
+ 			set buf [lindex $line [set index [expr $index+1]]]
+			set otherOptions [format "%s -l %s" $otherOptions $buf]
+		    }
+		    default { 
+			postDialog $dialW dialog_error $ILLEGAL_OPTIONS_MSG
+		    }
+		}
+	    }
+	}
+    }
+    close $fd
+    .optionsFormW.paneW.rcW.otherOptionsTextW setValues -value $otherOptions
+    if {![string compare [string trim $proclaimConfigDir] ""]} {
+	set proclaimConfigDir $defaultProclaimConfigDir
+	.optionsFormW.paneW.rcW.proclaimConfDirTextW setValues\
+		-value $proclaimConfigDir
+    }
+    if {![string compare [string trim $sysName] ""]} {
+	set sysName $defaultSysName
+	.optionsFormW.paneW.rcW.sysnameTextW setValues -value $sysName
+    }
+}
+
+
+#
+#define some callbacks used in the options form
+#
+proc optionsUpdCB {} {
+    set error [optionsAppCB]
+    if {$error == 0} {
+	.optionsFormW unmanageChild
+    }
+}
+
+proc optionsAppCB {} {
+    global dialW mapsOnOffStatus
+    global optionsFile defaultProclaimConfigDir defaultEthersMap\
+	defaultSysName defaultHostsMap 
+    global  hostsMap ethersMap sysName\
+	    proclaimConfigDir otherOptions
+    set buf ""
+    set error 0
+    .optionsFormW.paneW.rcW.hostsTextW getValues -value hostsMap
+    if {[string compare [string trim $hostsMap] ""]} {
+	if {[string compare $hostsMap $defaultHostsMap]} {
+	    set buf [format "%s-w %s " $buf $hostsMap]
+	}
+    }
+    .optionsFormW.paneW.rcW.ethersTextW getValues -value ethersMap
+    if {[string compare [string trim $ethersMap] ""]} {
+	if {[string compare $ethersMap $defaultEthersMap]} {
+	    set buf [format "%s-e %s " $buf $ethersMap]
+	}
+    }
+    .optionsFormW.paneW.rcW.sysnameTextW getValues -value sysName
+    if {[string compare [string trim $sysName] ""]} {
+	if {[string compare $sysName $defaultSysName]} {
+	    set buf [format "%s-u %s " $buf $sysName]
+	}
+    }
+    .optionsFormW.paneW.rcW.proclaimConfDirTextW getValues -value proclaimConfigDir
+    if {[string compare [string trim $proclaimConfigDir] ""]} {
+	if {[string compare $proclaimConfigDir $defaultProclaimConfigDir]} {
+	    set buf [format "%s-c %s " $buf $proclaimConfigDir]
+	}
+    } else {
+	set proclaimConfigDir $defaultProclaimConfigDir
+    }
+    .optionsFormW.paneW.rcW.otherOptionsTextW getValues -value otherOptions
+    if {[string compare [string trim $otherOptions] ""]} {
+	if {[string compare [string trim $buf] ""]} {
+	    set buf [format "%s %s" $buf $otherOptions]
+	} else {
+	    set buf [format "%s" [string trim $otherOptions]]
+	}
+    } 
+    
+    if {!($error)} {
+	if {[catch {set fd [open $optionsFile w]} msg]} {
+	    postDialog $dialW dialog_error [list $msg]
+	    return
+	}
+	puts $fd $buf
+	close $fd
+    }
+    return $error
+}
+
+proc optionsCanCB {} {
+    .optionsFormW unmanageChild
+}
+
+
+#
+# Interface Configuration callbacks
+#
+# Menu Button on Configuration Pulldown menu pressed
+#
+proc doConfiguration {} {
+    global proclaimConfigDir
+    .configFormW.paneW.rc1W.dirTextW setValues -value $proclaimConfigDir
+    set cFiles [getConfigFiles]
+    .configFormW.paneW.listW setValues -items $cFiles\
+	    -itemCount [llength $cFiles]
+    .configFormW manageChild
+}
+
+#
+# find all the config files in the configuration directory
+# return the list of files
+#
+proc getConfigFiles {} {
+    global proclaimConfigDir defaultProclaimConfigDir
+    if {![string compare $proclaimConfigDir ""]} {
+	set proclaimConfigDir $defaultProclaimConfigDir
+    }
+    set configFiles [glob -nocomplain $proclaimConfigDir/config.*]
+    set cFiles {}
+    foreach l $configFiles {
+	lappend cFiles [string range [file tail $l] 7 end]
+    }
+    return $cFiles
+}
+
+#
+# read config file and update values in all windows
+#
+proc updEditConfigForm {configFile} {
+    global configEntryW forms noForms configList editedForm oldValue
+    global dialW WRONG_CONFIG_FORMAT proclaimConfigDir\
+	    editConfigFile verifyEntryProc curFormIndex newFormIndex
+    $configEntryW($curFormIndex) unmanageChild
+    set editedForm 0
+    set curFormIndex $newFormIndex
+    set editConfigFile $configFile
+    if {[catch {set fd [open $editConfigFile r]} msg]} {
+	postDialog $dialW dialog_error [list $msg]
+	return
+    }
+    while {[gets $fd line] >= 0} {
+	if {![cequal [cindex $line 0] #]} {
+	    if {[set index [string first : $line]] == -1} {
+		postDialog $dialW dialog_error $WRONG_CONFIG_FORMAT
+	    } else {
+		set in [string range $line 0 $index]
+		lappend configList $in
+		set x [string trim [string range $line [expr $index+1] end]]
+		if {! [info exists verifyEntryProc($in)]} {
+		    continue
+		}
+		if {($verifyEntryProc($in) == "entryBlankBoolean")} {
+		    if {($x == 0)} {
+			set x N
+		    } elseif {($x == 1)} {
+			set x Y
+		    }
+		}
+		for {set i 0} {$i < $noForms} {incr i} {
+		    set whichList [lsearch [lindex $forms $i] $in]
+		    if {$whichList != -1} {
+			$configEntryW($i).txt_$in setValues -value $x
+			set oldValue($in) $x
+			break
+		    }
+		}
+	    }
+	}
+    }
+    set i [string last / $editConfigFile]
+    if {$i == -1} {
+	set fileName $editConfigFile
+    } else {
+	set fileName [string range $editConfigFile [incr i] end]
+    }
+    [.editConfigFormW parent] setValues -title\
+	    [format "Proclaim: Configuration - %s" $fileName]
+    close $fd
+    .fileSDW unmanageChild
+    $configEntryW($curFormIndex) manageChild
+    .editConfigFormW manageChild
+}
+
+proc showEntryW {w} {
+    global configEntryW newFormIndex curFormIndex
+    
+    regexp {[0-9]+} $w newFormIndex 
+    $configEntryW($curFormIndex) unmanageChild
+    $configEntryW($newFormIndex) manageChild
+    set curFormIndex $newFormIndex
+}
+
+#
+# when the configuration directory is changed 
+# set the config files correctly in the window
+#
+proc updateConfigDir {} {
+    global proclaimConfigDir
+    .configFormW.paneW.rc1W.dirTextW getValues -value proclaimConfigDir
+    set cFiles [getConfigFiles]
+    .configFormW.paneW.listW setValues -items $cFiles\
+	    -itemCount [llength $cFiles]
+    .configFormW.paneW.formW.textW setValues -value ""
+}
+ 
+# 
+# when a configuration is selected from the list
+# update it in the selected text window
+#   
+proc doSelectFromList {} {
+    .configFormW.paneW.listW getValues -selectedItems items
+    .configFormW.paneW.formW.textW setValues -value $items
+}
+
+#
+# The apply button was pressed - do either add/del
+# update the directory and the list
+#
+proc configAddCB {} {
+    global dialW proclaimConfigDir defaultProclaimConfigDir\
+	    defaultProclaimConfigFile
+    global FILE_EXISTS FILE_NOT_EXISTS SELECT_FILE
+    set error 0
+    .configFormW.paneW.formW.textW getValues -value entry
+    if {[string compare $entry ""]} {
+	set entry [format "config.%s" $entry]
+	if {[file exists $proclaimConfigDir/$entry]} {
+	    postDialog $dialW dialog_error $FILE_EXISTS
+	    set error 1
+	} else {
+	    .configFormW.paneW.listW getValues -selectedItems items
+	    if {[string compare $items ""]} {
+		set items [format "config.%s" $items]
+		if {[catch {exec cp $proclaimConfigDir/$items $proclaimConfigDir/$entry} msg]} {
+		    postDialog $dialW dialog_error [list $msg]
+		    return
+		}
+	    } else {
+		if {[catch {exec cp $defaultProclaimConfigDir/$defaultProclaimConfigFile $proclaimConfigDir/$entry} msg]} {
+		    postDialog $dialW dialog_error [list $msg]
+		    return
+		}
+	    }		    
+	    updateConfigDir
+	    .configFormW.paneW.formW.textW setValues -value ""
+	}
+    } else {
+	postDialog $dialW dialog_error $SELECT_FILE
+    }
+}
+
+proc deleteConfigOkCB {} {
+    global dialW proclaimConfigDir defaultProclaimConfigDir\
+	    defaultProclaimConfigFile editConfigFile stillModal answer\
+	    editedForm
+    global FILE_EXISTS FILE_NOT_EXISTS SELECT_FILE
+    set stillModal 0
+    set answer 1
+    set error 0
+    set entry $editConfigFile
+    if {[string compare $entry ""]} {
+	if {[file exists $entry]} {
+	    if {[catch {exec rm $entry} msg]} {
+		postDialog $dialW dialog_error [list $msg]
+		return
+	    }
+	    .editConfigFormW unmanageChild
+	    set editedForm 0
+	    return
+	} else {
+	    postDialog $dialW dialog_error $FILE_NOT_EXISTS
+	}
+    } else {
+	postDialog $dialW dialog_error $SELECT_FILE
+    }
+}
+
+proc deleteConfigCanCB {} {
+    global stillModal answer
+    set stillModal 0
+    set answer 0
+    return
+}
+
+#
+# edit button was pressed - bring up the form and load the values form file
+# by calling updEditConfigForm
+#
+
+proc configEdtCB {} {
+    global proclaimConfigDir dialW SELECT_FILE editedForm qdialW SAVE_FILE_QTN\
+	    oldValue
+    .fileSDW getValues -dirSpec items 
+
+    if {$editedForm} {
+	ask $qdialW $SAVE_FILE_QTN editConfigOkCB editConfigCanCB
+    } 
+    set editedForm 0
+    if {[string compare $items ""]} {
+	updEditConfigForm $items 
+    } else {
+	postDialog $dialW dialog_error $SELECT_FILE
+    }		
+    
+}
+
+proc configSavCB {} {
+    global proclaimConfigDir dialW SELECT_FILE  editConfigFile
+    .fileSDW getValues -dirSpec items
+    set editConfigFile $items
+    if {[string compare $items ""]} {
+	editConfigAppCB 
+    } else {
+	postDialog $dialW dialog_error $SELECT_FILE
+    }		    
+}
+    
+proc configClrCB {} {
+    .configFormW.paneW.formW.textW setValues -value ""
+}
+
+proc configCanCB {} {
+    .configFormW unmanageChild
+}
+
+#
+#functions and callbacks for edit config
+#
+#
+# update the values in the text fields to the file on disk
+#
+proc editConfigOkCB {} {
+    global stillModal answer editedForm
+    set stillModal 0
+    set answer 1
+    editConfigAppCB
+    .editConfigFormW unmanageChild
+    set editedForm 0
+}
+    
+proc editConfigAppCB {} {
+    global configList configEntryW dialW editConfigFile verifyEntryProc\
+	    noForms forms oldValue editedForm proclaimConfigDir
+    set i [string last / $editConfigFile]
+    if {$i == -1} {
+	set fileName $proclaimConfigDir/$editConfigFile
+    } else {
+	set fileName $editConfigFile
+    }
+
+    if {[catch {set fd [open $fileName w]} msg]} {
+	postDialog $dialW dialog_error [list $msg]
+	return
+    }
+
+    for {set j 0} {$j < $noForms} {incr j} {
+	set form [lindex $forms $j] 
+	foreach i $form {
+	    $configEntryW($j).txt_$i getValues -value entry
+	    if {($verifyEntryProc($i) == "entryBlankBoolean")} {
+		if {[string compare $entry ""]} {
+		    if {($entry == "Yes") || ($entry == "Y") || \
+		      ($entry == "yes") || ($entry == "y") } {
+			set entry 1
+		    } elseif {($entry == "No") || ($entry == "no") ||\
+			    ($entry == "N") || ($entry == "n")} {
+			set entry 0
+		    }
+		}
+	    }
+	    puts $fd "$i $entry"
+	    set oldValue($i) $entry
+	}
+    }
+    .fileSDW unmanageChild
+    close $fd
+    set editedForm 0
+    set i [string last / $editConfigFile]
+    if {$i == -1} {
+	set fileName $editConfigFile
+    } else {
+	set fileName [string range $editConfigFile [incr i] end]
+    }
+    [.editConfigFormW parent] setValues -title\
+	    [format "Proclaim: Configuration - %s" $fileName]
+}
+
+proc editConfigCanCB {} {
+    global stillModal answer editedForm
+    set stillModal 0
+    set answer 0
+    .editConfigFormW unmanageChild
+    set editedForm 0
+}
+
+#
+# lease callbacks
+#
+proc getRelTime {end begin} {
+    global SECSPERHOUR SECSPERMIN
+    if {($end < $begin)} {
+	return ""
+    }
+    set reltime [expr $end - $begin]
+    set hours [expr $reltime/$SECSPERHOUR]
+    set mins [expr [set tmp [expr ($reltime - $hours*$SECSPERHOUR)]]/$SECSPERMIN]
+    set secs [expr $tmp%$SECSPERMIN]
+    if {($hours != 0)} {
+	set x [format "In %d hours %d mins %d secs" $hours $mins $secs]
+    } elseif {($mins != 0)} {
+	set x [format "In %d mins %d secs" $mins $secs]
+    } else {
+	set x [format "In %d secs" $secs]
+    }
+    return $x
+}
+proc showLeases {} {
+    global etherToIPFile SECSPERDAY dialW updFreq timer \
+	    lastModTime
+    set curtime [getclock]
+    catch {. removeTimer $timer}
+    set timer [. addTimer $updFreq showLeases]
+    set leases {}
+    set nrows 0
+    catch {exec /usr/sbin/dbmToEthIP > $etherToIPFile}
+    if {[file exists $etherToIPFile]} {
+	set newModTime [file mtime $etherToIPFile]
+	if {$lastModTime == $newModTime} {
+		    return
+	}
+	set lastModTime $newModTime 
+	if {[catch {set fd [open $etherToIPFile r]} msg]} {
+		    postDialog $dialW dialog_error [list $msg]
+		    return
+	}
+		
+	while {[gets $fd line] >= 0} {
+	    if {![cequal [cindex $line 0] #]} {
+		  set conv [scan $line "%s\t%s\t%s\t%d" ether ip hostName expiry]
+		  if {$conv == 4} {
+		      set dot [string first . $hostName]
+		      if {$dot == -1} {
+			  set host $hostName
+			  set domain ""
+		      } else {
+			  set host [string range $hostName 0 [expr $dot-1]]
+			  set domain [string range $hostName [expr $dot+1]  end]
+		      }
+		      if {$expiry == 0} {
+			  lappend leases $host $domain $ip  Negotiating
+                      } elseif {$expiry == -1} {
+                          lappend leases $host $domain $ip  Infinite
+                      } elseif {$expiry == -2} {
+                          lappend leases $host $domain $ip  STOLEN
+                      } elseif {$expiry == -3} {
+                          lappend leases $host $domain $ip  STATIC
+		      } else {
+			  lappend leases $host $domain $ip \
+			      [fmtclock $expiry "%D %R"]
+		      }
+		      incr nrows
+		  }
+	    }
+	}
+	close $fd
+    }
+    .main.mPaneW.leaseMatrixW getValues -rows orows
+    if {$orows > 1} {
+	.main.mPaneW.leaseMatrixW deleteRows 0 [expr $orows-1]
+    }
+    if {$nrows} {
+	.main.mPaneW.leaseMatrixW addRows 0 $nrows $leases
+    }
+}
+
+proc restoreMatrixCell {} {
+    .main.mPaneW.leaseMatrixW cancelEdit 1
+}
+
+#
+# Frequency Related procedures
+#
+proc doPromptFreqCB {} {
+    global updFreq
+    .main.freqDialogW setValues -textString [expr $updFreq/1000]
+    .main.freqDialogW manageChild
+}
+
+proc updFreqCB {} {
+    global dialW ENTER_SECS updFreq MINUPDFREQ timer
+    .main.freqDialogW getValues -textString updFreq
+    if {[string compare $updFreq ""]} {
+	set updFreq [expr $updFreq*1000]
+	if {$updFreq < $MINUPDFREQ} {
+	    set updFreq $MINUPDFREQ
+	}
+	catch {. removeTimer $timer}
+	set timer [. addTimer $updFreq showLeases]
+	.main.freqDialogW unmanageChild
+    } else {
+	postDialog $dialW dialog_error $ENTER_SECS
+    }
+}
+
+proc canFreqCB {} {
+    .main.freqDialogW unmanageChild
+}
+
+#
+# runtime callbacks
+#
+proc setServerOnOff {} {
+    global dialW
+
+    .main.mPaneW.formW.chkconfigOnOffW getValues -set serverOnOffStatus 
+    if {$serverOnOffStatus} {
+	if {[catch {exec chkconfig -f proclaim_server on} msg]} {
+	    postDialog $dialW dialog_error [list $msg]
+	    .main.mPaneW.formW.chkconfigOnOffW setValues -set False
+	} else {
+	    catch {exec chkconfig -f proclaim_relayagent off}
+	}
+    } else {
+	catch {exec chkconfig -f proclaim_server off}
+    }
+}
+
+proc setMapsOn {} {
+    global mapsOnOffStatus fg bg hostsMap ethersMap\
+	    defaultHostsMap defaultEthersMap
+    if {$mapsOnOffStatus} {
+	return
+    }
+    #.optionsFormW.paneW.rcW.mapsW setValues -set 1
+    set mapsOnOffStatus 1
+    if {![string compare [string trim $hostsMap] ""]} {
+	set hostsMap $defaultHostsMap
+    }
+    if {![string compare [string trim $ethersMap] ""]} {
+	set ethersMap $defaultEthersMap
+    }
+    .optionsFormW.paneW.rcW.hostsTextW setValues -editable true\
+	    -foreground $fg -background $bg -value $hostsMap\
+	    -traversalOn true
+    .optionsFormW.paneW.rcW.ethersTextW setValues -editable true\
+	    -foreground $fg -background $bg -value $ethersMap\
+	    -traversalOn true
+    showLeases
+}
+
+proc checkSave {} {
+    global editedForm SAVE_FILE_QTN qdialW editConfigFile
+    if {$editedForm} {
+	set msg [format "%s: %s" $SAVE_FILE_QTN $editConfigFile]
+	ask $qdialW $msg editConfigOkCB editConfigCanCB
+    } else {
+	editConfigCanCB
+    }
+    set editedForm 0
+}
+
+proc checkDelete {} {
+    global  DELETE_FILE_QTN qdialW editConfigFile
+    set msg [format "%s: %s" $DELETE_FILE_QTN $editConfigFile]
+    ask $qdialW $msg deleteConfigOkCB deleteConfigCanCB
+}
+
+#############################################################
+# main program begins here
+#
+xtAppInitialize -class ProclaimServer\
+	-fallbackResources $fbacks
+
+xmMainWindow .main
+
+
+xmFileSelectionDialog .fileSDW
+.fileSDW.Help unmanageChild
+#
+# create a menu bar
+#
+xmMenuBar .main.barW managed 
+
+#
+#create a matrix to hold the leases in the main window
+#
+xmPanedWindow .main.mPaneW managed\
+	-sashWidth 1 -sashHeight 1 -separatorOn false
+
+xbaeMatrix .main.mPaneW.leaseMatrixW managed\
+	-boldLabels true -visibleRows 14 -columns 4 -columnWidths $colWidths\
+	-columnLabels $colLabels -columnMaxLengths $colMaxLengths\
+	-cellMarginHeight 2 -cellMarginWidth 2 -cellHighlightThickness 0\
+	-cellShadowThickness 0
+
+#avoid editing
+.main.mPaneW.leaseMatrixW modifyVerifyCallback {restoreMatrixCell}
+
+set serverOnOffStatus [expr ![catch {exec chkconfig proclaim_server}]]
+xmForm .main.mPaneW.formW managed 
+xmToggleButton .main.mPaneW.formW.chkconfigOnOffW managed\
+	-highlightThickness 0\
+	-alignment alignment_beginning -set $serverOnOffStatus\
+	-leftAttachment attach_form\
+	-bottomAttachment attach_form
+
+.main.mPaneW.formW.chkconfigOnOffW valueChangedCallback {setServerOnOff}
+
+.main.mPaneW.formW.chkconfigOnOffW getValues -height h 
+.main.mPaneW.formW getValues -marginHeight mh
+.main.mPaneW.formW setValues -paneMinimum [expr $h+2*$mh]\
+	-paneMaximum [expr $h+2*$mh]
+
+# 
+# arrange to make the pane the main window
+#
+.main setValues -menuBar .main.barW\
+	-workWindow .main.mPaneW
+
+.main manageChild
+
+
+#
+# create "file" pull-down menu
+#
+xmPulldownMenu .main.barW.fileMenuW
+xmPushButton .main.barW.fileMenuW.optionsW managed
+xmPushButton .main.barW.fileMenuW.configW managed
+xmPushButton .main.barW.fileMenuW.syslogW managed
+xmPushButton .main.barW.fileMenuW.quitW managed
+
+
+.main.barW.fileMenuW.optionsW activateCallback {doOptions}
+.main.barW.fileMenuW.configW activateCallback {doFile $proclaimConfigDir $defaultProclaimMask "" configEdtCB}
+.main.barW.fileMenuW.syslogW activateCallback {catch {exec sysmon &}}
+.main.barW.fileMenuW.quitW	activateCallback {exit 0}
+
+#
+# create cascade buttons on the menu bar 
+#
+xmCascadeButton .main.barW.fileW managed \
+	-subMenuId .main.barW.fileMenuW
+xmCascadeButton .main.barW.helpW managed 
+.main.barW setValues -menuHelpWidget .main.barW.helpW
+
+.main.barW.helpW activateCallback {catch {exec /usr/sbin/insight -v IA_NetwkMail -a 'query(DHCP)' > /dev/null 2>&1 &}}
+
+#############################################################
+#create options form
+#
+xmFormDialog .optionsFormW\
+	-noResize true -fractionBase 3
+
+xmPanedWindow .optionsFormW.paneW managed\
+	-sashWidth 1 -sashHeight 1 -separatorOn false\
+	-leftAttachment attach_form\
+	-rightAttachment attach_form -topAttachment attach_form\
+	-bottomAttachment attach_form
+
+xmRowColumn .optionsFormW.paneW.rcW \
+	-radioBehavior true\
+	-isAligned true -numColumns 2 -orientation vertical\
+	-packing pack_column 
+
+xmLabel .optionsFormW.paneW.rcW.hostsLabelW managed
+xmLabel .optionsFormW.paneW.rcW.ethersLabelW managed
+
+xmLabel .optionsFormW.paneW.rcW.sysnameLabelW managed
+xmLabel .optionsFormW.paneW.rcW.proclaimConfDirLabelW managed
+xmLabel .optionsFormW.paneW.rcW.otherOptionsLabelW managed
+
+xmLabel .optionsFormW.paneW.rcW.l2W managed\
+	-labelString ""
+xmText .optionsFormW.paneW.rcW.hostsTextW managed\
+	-value $defaultHostsMap
+xmText .optionsFormW.paneW.rcW.ethersTextW managed\
+	-value $defaultEthersMap
+
+xmText .optionsFormW.paneW.rcW.sysnameTextW managed\
+	-value $defaultSysName
+xmText .optionsFormW.paneW.rcW.proclaimConfDirTextW managed\
+	-value $defaultProclaimConfigDir
+xmText .optionsFormW.paneW.rcW.otherOptionsTextW managed\
+        -value $otherOptions
+.optionsFormW.paneW.rcW.proclaimConfDirTextW getValues\
+	-foreground fg -background bg
+.optionsFormW.paneW.rcW manageChild
+xmSeparator .optionsFormW.paneW.sepW managed
+#
+# create the control panel for the options dialog
+#
+set cpanel [createCPanel .optionsFormW.paneW 2 0 {optionsUpdCB optionsCanCB}]
+
+.optionsFormW.paneW manageChild
+
+
+#
+# read options to set the global values
+#
+readOptionsFile
+
+#
+# end of options form
+#
+
+#############################################################
+#create edit the config form
+#
+xmFormDialog .editConfigFormW\
+	-noResize true
+
+
+xmPanedWindow .editConfigFormW.paneW managed\
+	-sashWidth 1 -sashHeight 1\
+	-leftAttachment attach_form -rightAttachment attach_form \
+	-topAttachment attach_form -bottomAttachment attach_form\
+	-separatorOn false
+xmMenuBar .editConfigFormW.paneW.barW managed 
+
+#
+# create "file" pull-down menu
+#
+xmPulldownMenu .editConfigFormW.paneW.barW.fileMenuW
+xmPushButton .editConfigFormW.paneW.barW.fileMenuW.openW managed
+xmPushButton .editConfigFormW.paneW.barW.fileMenuW.saveW managed
+xmPushButton .editConfigFormW.paneW.barW.fileMenuW.saveasW managed
+xmPushButton .editConfigFormW.paneW.barW.fileMenuW.deleteW managed
+xmPushButton .editConfigFormW.paneW.barW.fileMenuW.closeW managed
+
+.editConfigFormW.paneW.barW.fileMenuW.openW activateCallback\
+	{doFile $proclaimConfigDir $defaultProclaimMask "" configEdtCB}
+.editConfigFormW.paneW.barW.fileMenuW.saveW activateCallback\
+	{editConfigAppCB}
+.editConfigFormW.paneW.barW.fileMenuW.saveasW activateCallback\
+	{doFile $proclaimConfigDir $defaultProclaimMask "" configSavCB}
+.editConfigFormW.paneW.barW.fileMenuW.deleteW activateCallback\
+	{checkDelete}
+.editConfigFormW.paneW.barW.fileMenuW.closeW activateCallback \
+	{checkSave}
+	
+#
+# create cascade buttons on the menu bar 
+#
+xmCascadeButton .editConfigFormW.paneW.barW.fileW managed \
+	-subMenuId .editConfigFormW.paneW.barW.fileMenuW
+xmCascadeButton .editConfigFormW.paneW.barW.helpW managed 
+.editConfigFormW.paneW.barW setValues -menuHelpWidget .editConfigFormW.paneW.barW.helpW
+.editConfigFormW.paneW.barW.helpW activateCallback {catch {exec /usr/sbin/insight -v IA_NetwkMail -a 'query(DHCP)' &}}
+
+set forms [list $genOptions1 $serverOptions2 $applOptions3 $serviceOptions4\
+	$ipperhostOptions5 $ipperinterfaceOptions6 $linkperinterfaceOptions7\
+	$tcpOptions8]
+set noForms [llength $forms]
+
+# create the options buttons
+xmRowColumn .editConfigFormW.paneW.rcW managed\
+	-orientation horizontal
+
+xmPulldownMenu .editConfigFormW.paneW.rcW.menuW
+for {set i 0} {$i < $noForms} {incr i} {
+    xmPushButton .editConfigFormW.paneW.rcW.menuW.btn$i managed
+    .editConfigFormW.paneW.rcW.menuW.btn$i activateCallback {showEntryW %w}
+}
+xmOptionMenu .editConfigFormW.paneW.rcW.oMenuW managed\
+	-subMenuId .editConfigFormW.paneW.rcW.menuW
+
+.editConfigFormW.paneW.rcW.menuW.btn0 getValues -height h
+.editConfigFormW.paneW.rcW.menuW getValues -marginHeight mh
+.editConfigFormW.paneW.rcW setValues -paneMaximum [expr 2*$h+2*$mh]\
+	-paneMinimum [expr 2*$h+2*$mh]
+
+xmScrolledWindow .editConfigFormW.paneW.scrW managed
+
+
+for {set i 0} {$i < $noForms} {incr i} {
+    set configEntryW($i)  [createEntryW .editConfigFormW.paneW.scrW \
+	    [lindex $forms $i] $i]
+    $configEntryW($i) unmanageChild
+    foreach item [lindex $forms $i] {
+	set oldValue($item) ""
+    }
+}
+
+set curFormIndex 0
+set newFormIndex 0
+set editedForm   0
+
+.editConfigFormW.paneW manageChild
+
+showLeases
+
+#
+# all forms created GO!
+#
+. realizeWidget
+. mainLoop
+

@@ -1,0 +1,231 @@
+#ident "ide/godzilla/bridge/Plan: $Revision 1.1$"
+
+	Bridge Diagnostics Plan
+	=======================
+   This document contains the level 1 and level 2 plans for Bridge diagnostics
+in a Godzilla system environment (such as Speed Racer).
+
+Level 1 Diagnostics Plan
+------------------------
+Assumptions:
+-----------
+ - Bridge is connected to Heart directly
+ - Heart Level 1 diagnostic tests pass
+ - All registers mentioned are Bridge Registers
+ - No tests for GIO address mapping
+ - No test(s) for SSRAM
+ - Prom and serial port are available
+ - Only Widget Master tests are done here 
+ - PCI master tests are done in level 2
+ - Every test should do the following at the beginning and end:
+	o  Program the HEART internal regs to appropriate values, if necessary.
+	o  Read Bridge Identification register and verify that it has the
+	   default value. This is just to make sure that we can talk to
+	   the Bridge chip.
+	o  Save the Bridge Control Register at the beginning and restore
+	   at the end.
+	o  Read Bridge Status register and verify
+	o  Read INT_STATUS register and make sure that it's zero.
+
+1) Read/Write Internal Registers
+--------------------------------
+ -  All read/write registers may be checked with a mask, except the
+    Bridge Control Register (This register will be used to check
+    the functionality of the Bridge)
+
+ -  All read only registers may be read and the value may be reported
+    If any of these registers have default value, they may be checked. 
+
+ -  No write only registers will be tested here (may be used to check
+    the functionality of the Bridge)
+
+2) Internal Memory Tests
+------------------------
+ -  Perform read/write operations on:
+	Internal Address Translation Entry RAM
+    	Read Response Buffer RAM 
+	Flash PROMS
+
+3) Bridge Functionality Tests
+-----------------------------
+ -  Widget Master Tests -> Crosstalk writes (reads) to (from) PCI:
+      	We use some of the I/O ports in the serial port PCI device
+      	to run these tests. 
+
+     Using Crosstalk Widget Space to program the PCI device:
+     ------------------------------------------------------
+	1. Select an I/O port (may be a counter on the serial port)
+
+	2. Program INT_MODE register to 0. This ensures that the Bridge
+	   will not set the ISR on the Heart chip. In the next level of tests,
+	   we will enable this bit for system level testing. Also, disable
+	   all the bits in the INT_ENABLE register.
+
+	3. Program PCI/GIO Time out register with reasonable values in 
+	   PCI_RETYR_HLD and PCI_RETRY_CNT fields.
+
+	4. Do the following for X = 0,1,2...,7 (to test device addresses)
+
+	   a) If the interrupt pins are connected to the device, program the
+	      INT_DEV register.
+
+      	   b) Configure the device (serial port) as device X. This can be done
+	      by programming the PCI configuration space for device 0.
+
+	   c) Read the PCI Configuration Space for DEVICE X and verify.
+
+           d) Program the DEVICE (0) register as follows:
+	   	- Set the DEV_SIZE bit to 0 (to indicate it is a 32 bit device)
+	   	- Set DEV_IO_MEM bit to 0 (to indicate I/O space)
+	   	- Set DEV_OFF bits depending on the I/O address of the port
+
+	   e) Write a known value to the selected I/O port. This is done by
+	      writing the data to the PCI/GIO device 0 address space.
+
+	   f) Read Status and INT_STATUS registers to make sure that Bridge is
+	      idle, and no error is reported.
+
+	   g) Read back the data from the selected I/O port. This is done by
+	      reading the data from the PCI/GIO device 0 address space.
+
+	   h) Read Status and INT_STATUS registers to make sure that Bridge is
+	      idle, and no error is reported.
+
+	5. If there is any memory on the device or if any of the registers 
+	   are memory mapped, repeat the test for those (to test PCI memory)
+
+     Using Crosstalk Larger Mapping Scheme:
+     -------------------------------------
+	We use the large mapping space to access the serial port. The steps
+     are similar to that given in the test above.
+
+     Unused Crosstalk Widget Address Space Test:
+     -------------------------------------------
+	1. Write to a known value to some of the unused space in the
+	   Crosstalk Widget Address Space.
+
+	2. Read the INT_STATUS register and verify that INVALID_ADDRESS
+	   bit is set.
+
+	3. Read PCI/GIO Error Upper (and Lower) Address Register and verify
+	   that the registers have the expected address.
+
+	4. Repeat the above test for a PIO read operation.
+
+     Interrupt Tests:
+     ---------------
+	This is a system level test, i.e. the HEART and BRIDGE are involved.
+	The strategy is to run all of the above mentioned tests, and verify
+	if the host (HEART) is interrupted whenever an error occurs.
+
+	In addition to the steps given in the tests above, we do:
+	1. Program HOST_ERR_FIELD register. This bit indicates which bit
+	   location in the host (HEART) interrupt register to test when an
+	   error occurs.
+
+	2. When an error occurs, read the interrupt status register of
+	   the host (HEART) and verify that one of the L4_IP bits is set.
+
+(Programming Note: The code must be modular. The idea is to write 
+ generic functions that may be shared among these tests)
+
+Level 2 Diagnostics Plan
+------------------------
+Assumptions:
+-----------
+ - Bridge is connected to Heart directly
+ - Heart Level 1 diagnostic tests pass
+ - Bridge Level 1 diagnostic tests pass
+ - All registers mentioned are Bridge Registers
+ - No tests for GIO address mapping
+ - No test(s) for SSRAM
+ - Prom, serial port and SCSI are available
+ - PCI master tests are done in this level
+ - stand alone SCSI driver is in place
+   (dma_write (PCI to Memory) and dma_read (Memory to PCI))
+ - 64-bit PCI bus is available
+
+1) SCSI check out test
+   o program the Heart and Bridge registers to values that the scsi driver
+     would use
+
+   o perform a simple device check
+
+   o perform the widget master tests for SCSI
+
+2) PCI Master Tests -> SCSI writes (reads) to (from) Crosstalk
+   The following set of tests are written based on SCSI-DMA. Before implementing
+   these tests, make sure that the SCSI-DMA and SCSI-setup functions are 
+   ready and may be called from these tests. In addition, there must be a
+   data buffer declared in the main memory for the purpose of SCSI-DMA.
+   Note that a PCI master (while Bridge is a slave) can only initiate PCI
+   memory access and NOT I/O.
+
+   o 32-bit direct mapping test:-
+      - From the physical address of the data buffer, find out the DIR_OFF
+	value in the Direct Mapping Register and program the mapping register
+
+      - do a dma_read from a known buffer in memory to SCSI.
+
+      - do a dm_write from SCSI to a scratch buffer in memory
+
+      - compare the buffers for correctness
+
+      - optionally, we could repeat the test by accessing the lower
+	1GB PCI Memory space and verify that the Bridge ignored the request
+	(do dma_read by using the upper 2GB PCI Memory Space;
+	 do dma_write by using the lower 1GB PCI Memory Space;
+	 the contents of the read and write buffers in memory should DIFFER)
+
+      - optionally, we could try a different data buffer and change the
+	DIR_OFF value and repeat the test
+	(just to make sure that the direct address mapping happens right)
+
+   o 64-bit direct mapping test:-
+      - do a dma_read from a known buffer in memory to SCSI.
+
+      - do a dm_write from SCSI to a scratch buffer in memory
+
+      - compare the buffers for correctness
+
+      - optionally, we could repeat the test by accessing the lower
+	part of the PCI Memory space and verify that the Bridge ignored 
+	the request
+	(do dma_read by using the upper 256TB PCI Memory Space;
+	 do dma_write by using the lower 1GB PCI Memory Space;
+	 the contents of the read and write buffers in memory should DIFFER)
+
+      - optionally, we could try a different data buffer
+	(just to make sure that the direct address mapping happens right)
+
+   o page mapped test:-
+      - program the Bridge internal RAM with ATE's (Address Translation Entry).
+	The ATE may be computed by using the physical address of the data
+	buffer in memory and remote map field and attributes
+        (use 32-bit addressing range: 4000 0000 - 8000 0000)
+
+      - do a dma_read from a known buffer in memory to SCSI.
+
+      - do a dm_write from SCSI to a scratch buffer in memory
+
+      - compare the buffers for correctness
+
+      - optionally, we could repeat the test by accessing the lower
+	1GB PCI Memory space and verify that the Bridge ignored the request
+	(do dma_read by using the middle 1GB PCI Memory Space;
+	 do dma_write by using the lower 1GB PCI Memory Space;
+	 the contents of the read and write buffers in memory should DIFFER)
+
+      - optionally, we could move the location of the ATE in the RAM
+	and repeat the test
+	(just to make sure that PMU does the address translation right)
+
+Open Issues:
+------------
+o How can we test the PCI device attributes such as prefetch, precise, coherent
+  and barrier?
+o How can we test all of the read response buffer registers with SCSI and
+  serial port connected to Bridge?
+o How can we test the Bridge device arbitration scheme?
+o Do we need to test the byte swapping functionality of Bridge?
+

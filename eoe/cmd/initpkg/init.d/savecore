@@ -1,0 +1,154 @@
+#!/sbin/sh
+#Tag 0x00000800
+#
+# Perform a crash dump save.
+# "$Revision: 1.23 $"
+
+#
+# Get the crash directory from the savecore.options file (if any).  This
+# way we can set up the savecore.options file in any fashion we want.
+#
+OPTIONS=`cat /etc/config/savecore.options 2> /dev/null`
+CRASHDIR=""
+if [ ! "${OPTIONS}" = "" ] ; then
+	for DIR in ${OPTIONS} ; do
+		if [ -d "${DIR}" ] ; then
+			CRASHDIR="${DIR}"
+		fi
+	done
+	if [ "${CRASHDIR}" = "" ] ; then
+		CRASHDIR="/var/adm/crash"
+		OPTIONS="${OPTIONS} ${CRASHDIR}"
+	fi
+else
+	OPTIONS="/var/adm/crash"
+	CRASHDIR=${OPTIONS}
+fi
+
+#
+# Set the current bounds value, if any.
+#
+BOUNDS=`/sbin/suattr -M dbadmin -c "cat ${CRASHDIR}/bounds" 2> /dev/null`
+BOUNDS=${BOUNDS:=0}
+
+#
+# Assign filenames appropriately for the files in ${CRASHDIR} so that
+# we write out the right reports to the right files.  Note that the .N
+# extension is whatever bounds value was assigned to this particular
+# system panic or hang.
+#
+# For completeness, the files that can end up in ${CRASHDIR} are:
+#
+# fru.N:
+#     The FRU analysis of the hardware on the system if the IP type is
+#     valid and results are returned.
+#
+# analysis.N:
+#     The full IRIX crash core file report that displays lots of data
+#     on what happened when the system crashed.  This report can be
+#     analyzed by SGI support personnel in order to try and find out
+#     why the system either paniced or hung.
+#
+# summary.N:
+#     The summary information about a crash, primarily used by the
+#     availmon information gathering process.  Note that this file
+#     is removed as soon as 'availmon' picks it up.
+#
+# unix.N:
+#     A copy of /unix from the time of the system crash.
+#
+# vmcore.N.comp:
+#     A compressed version of the virtual memory at the time of the
+#     system crash.  It can be used in combination with unix.N in order
+#     to gather details about the machine panic or hang.
+#
+FRU=${CRASHDIR}/fru.${BOUNDS}
+UNIX=${CRASHDIR}/unix.${BOUNDS}
+VMCORE=${CRASHDIR}/vmcore.${BOUNDS}.comp
+ANA=${CRASHDIR}/analysis.${BOUNDS}
+SUM=${CRASHDIR}/summary.${BOUNDS}
+CLG=${CRASHDIR}/crashlog.${BOUNDS}
+
+#
+# Flag to determine if we need to update the bounds file or not.  This
+# is needed when 'savecore' exits with a status of 2, which means that
+# there isn't enough disk space for a core dump, but there might be
+# enough disk space to save a report.
+#
+UPDATE_BOUNDS=0
+
+CONFIG=/etc/config
+IS_ON=/sbin/chkconfig
+
+if $IS_ON verbose ; then
+	LOGGER='/sbin/lfmt -l savecore -s info'
+else
+	LOGGER='/sbin/lfmt -l savecore -s info -G 1'
+fi
+
+NOMSGSEVERITY=1 export NOMSGSEVERITY
+
+#
+# If 'savecore' is chkconfiged on, run 'savecore', followed by 'icrash',
+# followed by 'fru', checking to make sure that the binaries are installed
+# on a given system.  If 'savecore' is chkconfiged off, run 'icrash',
+# followed by 'fru', and then clear the dump out of /dev/swap.
+#
+if $IS_ON savecore || [ ! -f /usr/bin/icrash ] ; then
+	/sbin/suattr -M dbadmin -C CAP_MAC_WRITE+ip -c "/usr/etc/savecore ${OPTIONS}"
+	if [ $? -eq 1 ] ; then
+		exit 1
+	elif [ $? -eq 2 ] ; then
+		UNIX=/unix
+		VMCORE=/dev/swap
+		UPDATE_BOUNDS=1
+	fi
+	if [ -f /usr/bin/icrash ] ; then
+		/sbin/suattr -M dbadmin -c "/bin/rm -f ${SUM} ${ANA}"
+		/sbin/suattr -M dbadmin -c "/usr/bin/icrash -r -a ${SUM} -w ${ANA} ${UNIX} ${VMCORE}" 2> /dev/null
+		if [ $? -eq 0 ] ; then
+			${LOGGER} "Created crash report.\n"
+			if /sbin/suattr -M dbadmin -c "test -f ${CLG}" ; then
+				/sbin/suattr -M dbadmin -c "/bin/rm -f ${CLG}"
+			fi
+			if [ $UPDATE_BOUNDS -eq 1 ] ; then
+				BOUNDS=`expr ${BOUNDS} + 1`
+				/sbin/suattr -M dbadmin -c "echo ${BOUNDS} > ${CRASHDIR}/bounds"
+			fi
+			/sbin/suattr -M dbadmin -c "/bin/rm -f ${FRU}"
+			/sbin/suattr -M dbadmin -c "/usr/bin/icrash -S -w ${FRU} -e "fru" ${UNIX} ${VMCORE}" 2> /dev/null
+			if [ $? -eq 0 ] ; then
+				${LOGGER} "Created fru report.\n"
+			else
+				/sbin/suattr -M dbadmin -c "/bin/rm -f ${FRU}"
+			fi
+		else
+			/sbin/suattr -M dbadmin -c "/bin/rm -f ${SUM} ${ANA}"
+			if /sbin/suattr -M dbadmin -c "test -f ${CLG}" ; then
+				/sbin/suattr -M dbadmin -c "/bin/mv ${CLG} ${ANA}"
+			fi
+		fi
+	fi
+else
+	UNIX=/unix
+	VMCORE=/dev/swap
+	if [ -f /usr/bin/icrash ] ; then
+		/sbin/suattr -M dbadmin -c "/bin/rm -f ${SUM} ${ANA}"
+		/sbin/suattr -M dbadmin -c "/usr/bin/icrash -r -a ${SUM} -w ${ANA} ${UNIX} ${VMCORE}" 2> /dev/null
+		if [ $? -eq 0 ] ; then
+			${LOGGER} "Created crash report.\n"
+			BOUNDS=`expr ${BOUNDS} + 1`
+			/sbin/suattr -M dbadmin -c "echo ${BOUNDS} > ${CRASHDIR}/bounds"
+			/sbin/suattr -M dbadmin -c "/bin/rm -f ${FRU}"
+			/sbin/suattr -M dbadmin -c "/usr/bin/icrash -S -w ${FRU} -e "fru" ${UNIX} ${VMCORE}" 2> /dev/null
+			if [ $? -eq 0 ] ; then
+				${LOGGER} "Created fru report.\n"
+			else
+				/sbin/suattr -M dbadmin -c "/bin/rm -f ${FRU}"
+			fi
+		else
+			/sbin/suattr -M dbadmin -c "/bin/rm -f ${SUM} ${ANA}"
+		fi
+		/sbin/suattr -M dbadmin -c "/usr/bin/icrash -c ${UNIX} ${VMCORE}" 2> /dev/null
+	fi
+fi

@@ -1,0 +1,787 @@
+#!/bin/sh
+#
+# A script to help identify possible conversion, type, size, etc.
+# mismatches both between the PCP and the kernel data structures
+# and to help track differences over time in the kernel data
+# structures we depend upon.
+#
+# $Id: Audit,v 1.13 1999/10/14 07:21:40 tes Exp $
+#
+# What to do ...
+#
+# 1. set OBJECT_STYLE to be the way the kernel of interest will be
+#    compiled.  In the post-5.3 IRIX era, this may have to be done
+#    more than once.
+#    This is given by the -o option.
+#
+# 2. Optionally update the hit list describing which structs in which source files
+#    are of interest. 
+#    See the STRUCTS TO AUDIT section.
+#    This is given by the -s option.
+#    Without this option, the structs file will be derived from the 
+#    pmMeta lines in the IRIX src code.
+#
+# 3. Review those struct elements that are really performance metrics.
+#    It may be necessary to add new entries here after the first few 
+#    iterations with a new IRIX source base. 
+#    See the EXCLUSIONS section.
+#    This is given by the -e option.
+#
+#  Example:
+#  	./Audit -o 64 -e except6_5 -i 6_5
+#
+
+# 
+# STRUCTS TO AUDIT
+#
+# To make changes to this procedure, edit the following "here is" document
+# to add/delete or change
+# (a) a source files to scan (field 1)
+# (b) a struct name to process from that source file (field 2)
+# (c) all of the #include files needed to define the elements of that
+#     struct type
+#
+# What follows assumes the C source files are modelled on the structure
+# created by the tool "newcluster".
+#
+# EXCLUSIONS
+#
+# These are structure elements that are _known_ to be something other
+# than a performance metric
+#
+
+# object code style for the IRIX kernel of interest
+#OBJECT_STYLE="-32 -mips1"	# 5.3 and earlier
+#OBJECT_STYLE="-n32 -mips2"	# 6.1 and later
+OBJECT_STYLE="-64 -mips3"	# 6.1 and later
+OBJECT_SIZE="64"
+IRIX="6_5"
+
+# WONT work - librarydefs contains Makefile macros
+# cpp defines for conditional code
+#CDEFS=`sed -n -e 's/^LIBRARY_CDEFS=//p' <../librarydefs`
+#echo "CDEFS=$CDEFS"
+
+tmp=/tmp/$$
+audit=foo
+verbose=false
+prog=`basename $0`
+trap "rm -f $tmp.*; exit" 0 1 2 3 15
+structs_file=$audit.structs # use our own generated one by default
+
+_usage()
+{
+    echo "Usage: $prog [-o object_style] [-e exceptions] [-s structs] [-i IRIX] [-v]"
+    exit 1
+}
+
+_process_args()
+{
+    while getopts "o:e:i:s:v" c $*
+    do
+        case $c
+        in
+        o)
+	    case "$OPTARG"
+	    in
+	    "N32")
+		OBJECT_STYLE="-n32 -mips2"	# 6.1 and later
+		OBJECT_SIZE=32
+		;;
+	    "32")
+		OBJECT_STYLE="-32 -mips1"	# 5.3 and earlier
+		OBJECT_SIZE=32
+		;;
+	    "64")
+		OBJECT_STYLE="-64 -mips3"	# 6.1 and later
+		OBJECT_SIZE=64
+		;;
+	    *)
+		echo "Bad object style: $OPTARG"
+		_usage
+	    esac
+	    ;;
+	e)
+	    file=$OPTARG
+	    if [ ! -f $file ]
+	    then
+		echo "Cannot open exceptions file $file"
+		_usage
+	    fi
+	    cat $file > $tmp.excl
+	    ;;
+	s)
+	    file=$OPTARG
+	    if [ ! -f $file ]
+	    then
+		echo "Cannot open structs file $file"
+		_usage
+	    fi
+	    cat $file > $tmp.ctl
+	    structs_file=$tmp.ctl
+	    ;;
+	i)
+	    IRIX=$OPTARG
+	    ;;
+	v)
+	    verbose=true
+	    ;;
+	\?)
+	    _usage
+	    ;;
+	esac
+    done
+} 
+
+
+_build_cprog()
+{
+#
+# Build a C program than includes an instance of each struct, and outputs
+# the size of each.
+#
+    echo "Build $audit.c ..."
+    cat <<End-of-File >$audit.c
+/*
+ * Code to used to discover information about kernel structs
+ *
+ * Built on `date` by $0
+ * for `uname -a`
+ */
+
+#define _KMEMUSER
+#include <stdio.h>
+End-of-File
+
+    nawk < $structs_file >>$audit.c '
+    # insert in set in order
+    function insert(file) {
+	for (i = 0; i < ni; i++) {
+	   if (file == inc[i])
+		break
+        }
+	if (i == ni) {
+	    inc[ni++] = file
+	}
+    }
+    BEGIN	{ ns = 0; ni = 0 }
+    /^#/	{ next }
+    NF == 0	{ next }
+	    { name[ns++] = $2
+	      for (a = 3; a <= NF; a++) {
+                insert($a)
+	      }
+	    }
+    END	{ 
+	      print "#define SN0 1"
+	      print "#define _PAGESZ 16384"
+	      for (i = 0; i < ni; i++) {
+		include = inc[i]
+		if (include ~ /["<]/) 
+		    printf "#include %s\n", include
+		else 
+		    printf "#include <%s>\n", include
+	      }
+	      print ""
+	      for (s = 0; s < ns; s++) {
+		# handle typedefs
+		if (name[s] ~ /_t$/)
+		    printf "%s XXXX_%s;\n",name[s],name[s]
+		else
+		    printf "struct %s XXXX_%s;\n",name[s],name[s]
+	      }
+	      print ""
+	      print "main(int argc, char **argv)"
+	      print "{"
+	      print "    printf(\"\\nHeader struct sizes in bytes\\n\");\n"
+	      for (s = 0; s < ns; s++)
+		printf "    printf(\"%s %%lu\\n\", sizeof(XXXX_%s));\n",name[s],name[s]
+	      print "    printf(\"\\n\");\n"
+	      print "}"
+	    }'
+
+    #
+    # Compile for debugging
+    #
+    echo "Compiling with $OBJECT_STYLE"
+    echo "ROOT = $ROOT"
+    echo "TOOLROOT = $TOOLROOT"
+
+    echo "Compile $audit.c ..."
+    rm -f $audit
+    cc -I/usr/include/pcp -I$ROOT/usr/include -g -o $audit $OBJECT_STYLE $audit.c
+    if [ ! -f $audit ]
+    then
+	echo "Compilation failed!"
+	exit 1
+    fi
+}
+
+
+#
+# Use dbx to document the structure of each struct
+#
+_expand_var()
+{
+    var=$1
+    fname=$tmp.expand
+
+    nawk < /dev/null -v variable=$var -v basefile=$fname -v audit=$audit '
+    function _expand(name, var, fname, level) {
+	whatis = fname level
+	dbx = fname ".dbx"
+	print "set $pagewindow=100000" > dbx
+	print "whatis",name >> dbx
+	cmd = "unset TOOLROOT; dbx " audit " < " dbx " >" whatis
+	system(cmd)
+	close(dbx)
+
+	# get over preamble of 2 lines
+	getline < whatis; getline < whatis 
+
+	while (getline line < whatis) {
+	    n = split(line, fields)
+	    f1 = fields[1]
+	    f2 = fields[2]
+#
+# Not all kernel types end in _t unfortunately
+#	    if (f1 ~ /_t$/) {
+#		# e.g. caddr_t in_ifaddr;
+#		_expand(f1, f2, fname, level+1)
+#	    }
+#
+	    if (n == 2 && f2 ~ /;/ && f1 != "unsigned" && f1 != "short" && f1 != "int" && f1 != "long" && f1 != "float" && f1 != "double" && f1 != "char" && f1 != "char*" && f1 != "}") {
+ 		# e.g. caddr_t in_ifaddr;
+ 		_expand(f1, f2, fname, level+1)
+ 	    }
+	    else if (f1 ~ /typedef/) {
+
+		if (f2 == "struct") {
+		    #e.g. typedef struct mutex {
+		    print "struct", name, "{"
+		}
+		else {
+		    # delete "typedef" string
+		    sub("typedef","",line)
+
+		    # expect one liner typedef
+		    sub(fields[n],"",line)
+		    if (f2 ~ /_t$/) {
+			#e.g. typedef __unint64_t m_bits
+			_expand(f2, var, fname, level+1)
+		    }
+		    else {
+			#e.g. typedef char* caddr_t
+			print line, var
+		    }
+	    
+		    var = 0
+		}
+	    }
+	    else if (f1 == "}" && var ) {
+		# end of typedef struct - put variable at end
+		print "}", var 
+	    }
+	    else if (f1 ~ /^u_/) {
+		# u_long rubbish;
+		sub(f1,"",line)
+		split(f1, utype, "_")
+		print "unsigned", utype[2], line 
+	    }
+	    else if (f1 == "uint") {
+		sub(f1,"",line)
+		print "unsigned int", line
+	    }
+	    else if (line !~ /^ *$/){
+		print line
+	    }
+	    whatis = fname level
+	} 
+	close(whatis)
+    }
+    BEGIN {
+	_expand(variable, 0, basefile, 1)
+    }'
+}
+
+#
+# output file in reverse order
+#
+_reverse()
+{
+    nawk < $1 ' {print n++, $0}' |\
+    sort -n -r +0 -1 | sed -e 's/^[0-9][0-9]* //'
+}
+
+_create_cdefs()
+{
+    echo "Extract C types for struct elements into $audit.cdefs ..."
+    rm -f $tmp.sed0
+
+    # extract variable names
+    grep 'XXXX_' $audit.c |\
+    sed -e '/printf/d' -e 's/.*\(XXXX_[^;]*\).*/\1/' |\
+    while read var
+    do
+        $verbose && echo "Expanding variable $var" >&2
+	_expand_var $var
+    done \
+    | _reverse \
+    | sed \
+	-e 's/ *\(\*\**\) */ \1 /g' \
+	-e 's/ *\[/ [/' \
+	-e 's/ *( *) */ () /' \
+	-e 's/[ 	][ 	]*/ /g' \
+	-e 's/^ //' \
+	-e 's/[; ]*$//' \
+	-e 's/( \* \(.*\)) ()/ * \1 ()/' \
+    | nawk '
+    BEGIN		{ level = 0 }
+    $1 == "}"   {     
+		      sname = $NF
+		      if (sname ~ /\[/) {
+			 x = NF-1
+			 # append the array 
+		         sname = $x $NF	
+		      }
+		      name[level] = sname
+		      level++;
+		      path=""
+		      for (i = 0; i < level; i++) {
+			  if (i == 0) path = name[i]
+			  else path = path "." name[i]
+		      }
+		      next
+		    }
+    level == 0	{ next }
+    $NF == "{"  { level--
+		      path=""
+		      for (i = 0; i < level; i++) {
+			  if (i == 0) path = name[i]
+			  else path = path "." name[i]
+		      }
+		      next
+		    }
+		    { n = NF
+		      if ($n == "()" || $n ~ /^\[/) n--
+		      printf "%s.%s|",path,$n
+		      for (i = 1; i <= NF; i++)
+			if (i != n) printf " %s",$i
+		      print ""
+		    }' | sed -e 's/XXXX_//' >$tmp.tmp
+    cp $tmp.tmp urk
+
+    # Use the exclusions file if we have one
+    if [ -s $tmp.excl.1 ]
+    then
+	cat $tmp.excl.1 >>$tmp.sed0
+    fi
+
+    echo "s/ /:/g" >>$tmp.sed0
+    echo "s/|:unsigned:long:long/:unsigned long long/" >>$tmp.sed0
+    echo "s/|:unsigned:long/:unsigned long/" >>$tmp.sed0
+    echo "s/|:unsigned:int/:unsigned int/" >>$tmp.sed0
+    echo "s/|:unsigned:short/:unsigned short/" >>$tmp.sed0
+    echo "s/|:unsigned:char/:unsigned char/" >>$tmp.sed0
+    echo "s/|:struct:/:struct /" >>$tmp.sed0
+    echo "s/|:/:/" >>$tmp.sed0
+    echo "s/ \* ()/:*()/" >>$tmp.sed0
+    echo "s/ \*/:*/" >>$tmp.sed0
+    echo "s/ \[/:[/" >>$tmp.sed0
+    echo "s/[()]:/:/g" >>$tmp.sed0
+
+    #
+    # The ".cdefs" file has one line per struct element, consisting of 3 fields
+    # separated by colons as follows ...
+    #	- the fully qualified struct element name
+    #	- the literal type
+    #	- an optional indicator for base type qualification; pointer "*",
+    #	  array "[N]", function pointer "*()"
+    #
+    #
+
+    sed -f $tmp.sed0 <$tmp.tmp \
+    | nawk -F: '
+    NF == 3	{ print; next }
+	    { print $0 ":" }' \
+    | sort -u > $audit.cdefs
+
+}
+
+_process_meta()
+{
+#
+# Now process the pmMeta initialization code in the source files
+# ... these lines look like ...
+# /* irix.resource.buffer_cache.getblks */
+#  { (char *)&getblkstats.getblks, { PMID(1,22,1), PM_TYPE_U32, PM_INDOM_NULL, PM_SEM_COUNTER, {0,0,1,0,0,PM_COUNT_ONE} } },
+#
+# The output is a ".meta" file with one line per initialized pmMeta
+# definition, consisiding of x colon-separated fields as follows
+#	- the fully qualified metrics struct element name
+#	- optional array index
+#	- the pmapi.h type (PM_TYPE_...)
+#	- the PMID() macro
+#	- the likely metric name, extracted from the comment [optional]
+#	  ... note this may _not_ be the same as the one in the PMNS
+#	- the source file name
+#
+# The ".meta.0" file constists of the pmMeta data that has 0 or NULL for
+# its stat variable. We will only be able to do checks on the pmns for
+# these ones.
+#
+# Also output a ".structs" file based on the pmMeta field variables.
+# It is of the form: <src-file> <variable-type> <include-file>...
+#
+    [ -f $audit.structs ] && rm $audit.structs
+    [ -f $audit.meta.0 ] && rm $audit.meta.0
+    [ -f $audit.meta ] && rm $audit.meta
+
+    echo "Extract pmMeta initializations into $audit.meta ..."
+    echo "Extract pmMeta variables into $audit.structs ..."
+    echo "IRIX = $IRIX"
+    for src in *.c
+    do
+	$verbose && echo "Processing $src ..." >&2
+	sed <$src \
+	    -e 's/^#include/%#include/' \
+	| /usr/lib/acpp -I -P -C -DIRIX$IRIX -D_MIPS_SZLONG=$OBJECT_SIZE\
+	| tee eek \
+	| sed \
+	    -e '/^[ 	]*$/d' \
+	    -e 's/^%#include/#include/' \
+	    -e 's/NULL/0/g' \
+	    -e 's/([^)]*)&//' \
+	    -e 's/([^)]*)0/0/' \
+	    -e 's/^[ 	]*//' \
+	    -e 's/{[ 	]*/{ /g' \
+	    -e 's/\[ *\([0-9][0-9]*\) *\]/[\1]/' \
+	    -e 's/, / /g' \
+	    -e 's/,$/ /g' \
+	    -e 's/};/THEEND/' \
+	    -e 's/;//' \
+	    -e 's;\./;;' \
+	    -e 's;/\* derived \*/;;' \
+	| nawk -v src=$src -v structs_file=$audit.structs -v err=$tmp.err '
+BEGIN  			{ # dont include these headers 
+			  # noinc["\"xpc.h\""] = 1;
+			}
+/^#include/		{ 
+			  if ( !($2 in noinc)) {
+				includes = includes " " $2 
+			  }
+			}
+/^static.*meta\[\]/	{ state = 1; next }
+/^static/		{ # vars[variable] = type 
+			  # e.g. static dba_stat_t       kaio_statbuf
+			  # e.g. static struct statfs    statfsx
+			  if ($2 == "struct")
+			      vars[$4] = $3
+			  else
+			      vars[$3] = $2
+			  next
+			}
+state == 1 && /THEEND/	{ exit }
+state == 0		{ next }
+/^\/\*/	{ 		  name = $2
+
+			  # Expect the struct initializer after the metric comment
+			  # Introduced for numa_node.c which doesnt have a PMID on same
+			  # line as field element
+			  getline
+			  if ($1 != "{") {
+			      if ($1 == "*") {
+				  # continuation of a comment
+			          next
+			      }
+			      print "Warning: no struct initializer for: " name >> err
+			      print "         " $0 >> err
+			      next
+			  }
+			
+			  
+			  # If go-over to next line then read next line
+			  # and concat it on the end
+			  # Introduced for numa_node.c which doesnt always have
+			  # struct initializer on the one line
+			  if ($0 !~ /PM_TYPE/) {
+			      line1 = $0
+			      getline line2
+			      $0 = line1 " " line2 
+			  }
+
+			  # cater for cases where have pmDesc struct in lieu of pmMeta
+			  # Introduced for hwrouter.c
+			  if ($4 ~ /PMID/) {
+			      elem=$2
+			      pmid=$4
+			      type=$5
+			  }
+			  else if ($2 ~ /PMID/) {
+			      elem="0"
+			      pmid=$2
+			      type=$3
+			  }
+			  else {
+			      print "Warning: no pmid found for: " name >> err
+			      print "         " $0 >> err
+			      next
+			  }
+
+			  if (type == "PM_TYPE_NOSUPPORT") 
+			     next
+
+
+			  # create structs file lines
+			  if (elem != "0") {
+			      n = split(elem, fields, ".")
+			      if (n > 1) {
+				  # extract variable
+				  var = fields[1]
+				  # extract the rest of the elem
+				  x = match(elem,/\./)
+				  rest = substr(elem, x) 
+				  # extract struct type for variable
+				  struct = vars[var]
+				  # store it away
+				  structs[struct] = 1
+				  print struct rest ":" type ":" pmid ":" name ":" src
+			      }
+			      else {
+				  print "Warning: no field elements: " elem >> err
+				  print "         " $0 >> err
+			      }
+			  }
+			  else {
+			      print elem ":" type ":" pmid ":" name ":" src
+			  }
+
+			}
+END			{
+			    for ( s in structs ) {
+			      print src "	" s "	" includes >> structs_file
+			    }
+			}'
+    done \
+    | sed \
+	-e 's/\[/:/' \
+	-e 's/]//' \
+    | nawk -F: >$audit.meta -v audit0=$audit.meta.0 -v err=$tmp.err '
+    BEGIN	{ OFS = ":" }
+    NF==6	{ print; next }
+    NF==5	{ if ($1 == "0") {
+		  print $1,"",$2,$3,$4,$5 >> audit0
+		  }
+		  else {
+		      print $1,"",$2,$3,$4,$5
+		  }
+		  next
+	        }
+	    { print "Warning: bad meta record (internal botch)" >> err
+	      print "         " $0 >> err
+	    }'
+    [ -s $tmp.err ] && cat $tmp.err
+}
+
+_match_meta_cdefs()
+{
+    #
+    # Correlate the two sources of information, based upon the fully
+    # qualified struct element names
+    #
+    # The ".full" file is contructed as follows ...
+    #
+    # *.meta example
+    # ifnet.if_collisions:<no index>:PM_TYPE_U32:PMID(1,25,1):irix..collisions:if.c
+    # 1.1                :1.2       :1.3        :1.4         :1.5             :1.6
+    #
+    # *.cdefs example
+    # ifnet.if_collisions:unsigned long:<no type qualification>
+    # 2.1                :2.2          :2.3
+    #
+    echo "Correlating information into $audit.full ..."
+    sort -t: +0 -1 $audit.meta >$tmp.meta.sort
+    sort -t: +0 -1 $audit.cdefs >$tmp.cdefs.sort
+
+    join -t: -a1 -a2 -e "#" -j1 1 -j2 1 \
+	-o 2.1,1.1,1.2,2.2,2.3,1.3,1.4,1.5,1.6 \
+	$tmp.meta.sort $tmp.cdefs.sort >$audit.full
+
+    #
+    # Producing output lines with colon-separated fields as follows
+    #
+    #	- the fully qualified struct element name from headers
+    #	- the fully qualified metrics struct element name from our C source
+    #	- optional array index from our C source
+    #	- the base type
+    #	- an optional indicator for base type qualification; pointer "*",
+    #	  array "[N]", function pointer "*()"
+    #	- the pmapi.h type (PM_TYPE_...)
+    #	- the PMID() macro
+    #	- the likely metric name, extracted from the comment [optional]
+    #	  ... note this may _not_ be the same as the one in the PMNS
+    #	- the source file name
+    #
+    # Missing fields appear as "#"
+    #
+}
+
+_integrity_vars()
+{
+    #
+    # The integrity checks
+    #
+
+    nawk -F: <$audit.full >$tmp.tmp '
+    $1 == "#" { if ($3 == "#") printf "%-12.12s  %s\n",$9,$2
+		else printf "%-12.12s  %s\n",$9,$2 "[" $3 "]"
+	      }'
+    if [ -s $tmp.tmp ]
+    then
+	echo ""
+	echo "pmMeta defintion, but no corresponding struct element from the headers"
+	echo "... looks like you've missed adding at least one struct to the audit setup"
+	echo "Source file   struct element"
+	cat $tmp.tmp
+    fi
+
+    nawk -v OS=$OBJECT_SIZE -F: <$audit.full '
+    $1 == "#" || $2 == "#"				{ continue }
+    $4 == "unsigned int" && $6 == "PM_TYPE_U32" { continue }
+    $4 == "int" && $6 == "PM_TYPE_32"		{ continue }
+    $4 == "unsigned long" && $6 == "PM_TYPE_U32" && OS == 32	{ continue }
+    $4 == "long" && $6 == "PM_TYPE_32" && OS == 32		{ continue }
+    $4 == "unsigned long" && $6 == "PM_TYPE_U64" && OS == 64	{ continue }
+    $4 == "long" && $6 == "PM_TYPE_64" && OS == 64		{ continue }
+    $4 == "unsigned long long" && $6 == "PM_TYPE_U64"	{ continue }
+    $4 == "long long" && $6 == "PM_TYPE_64"		{ continue }
+	{ if ($3 == "#") printf "%-12.12s  %-30.30s  %-15.15s  %s\n",$9,$2,$6,$4
+	  else printf "%-12.12s  %-30.30s  %-15.15s  %s\n",$9,$2 "[" $3 "]",$6,$4
+	}' \
+    | sed >$tmp.tmp \
+	-e '/sysinfo\.cpu\[.*PM_TYPE_U32.*int/d' \
+	-e '/sysinfo\.wait\[.*PM_TYPE_U32.*int/d'
+    if [ -s $tmp.tmp ]
+    then
+	echo ""
+	echo "Potential data type mismatch ... check for special case handling of"
+	echo "assignment in the pmFetch methods"
+	echo "Source file   struct element                  PMAPI type       C type"
+	cat $tmp.tmp
+    fi
+
+    nawk -F: <$audit.full >$tmp.tmp '$2 == "#" && $5 !~ /^\*/ { print $1 }'
+    if [ -s $tmp.tmp ]
+    then
+	echo ""
+	echo "Non-pointer struct elements in the header that are NOT part of the pmMeta"
+	echo "definitions ... these are potential omissions from the coverage of metrics"
+	pr -t -l1 -2 $tmp.tmp
+    fi
+
+    nawk -F: <$audit.full >$tmp.tmp '
+    $2 != "#" && $5 != "#" && $3 == "#"	{ printf "%-12.12s  %-40.40s  %s\n",$9,$2,$4 " " $5
+			    }'
+    if [ -s $tmp.tmp ]
+    then
+	echo ""
+	echo "Non-scalar data ... check for special case handling in the pmFetch methods"
+	echo "Source file   struct element                            Type"
+	cat $tmp.tmp
+    fi
+}
+
+_integrity_pmns()
+{
+    if [ -s ../root_irix -a -x /usr/sbin/pminfo ]
+    then
+	cat > $tmp.sed1 <<EOF
+	    /^$/d
+	    s/PMID: /PMID(/
+	    s/$/)/
+	    s/ /:/
+	    s/(\([0-9][0-9]*\)\.\([0-9][0-9]*\)\./(\1,\2,/
+EOF
+	if [ -s $tmp.excl.2 ]
+	then
+	    cat $tmp.excl.2 >>$tmp.sed1
+	fi
+
+	echo ""
+	echo "Check PMID-name map against default PMNS ..."
+	sort -t: +4 -5 $audit.meta $audit.meta.0 >$tmp.meta.sort
+	pminfo -n ../root_irix -m irix hinv hw \
+	| sed -f $tmp.sed1 \
+	| sort -t: +0 -1 \
+	| join -t: -a1 -a2 -e "#" -j1 1 -j2 5 \
+	    -o 2.5,1.1,2.4,1.2 \
+	    - $tmp.meta.sort >$audit.pmids
+
+
+	nawk  -F: <$audit.pmids >$tmp.tmp '
+    $1 == "#"	{ printf "%-40.40s  %s\n",$2,$4 }'
+	if [ -s $tmp.tmp ]
+	then
+	   echo ""
+	   echo "Irix metrics in the default PMNS, but NOT in the Irix PMDA"
+	   echo "Metric                                    PMID"
+	   sed -e 's/PMID(//' -e 's/)//' -e 's/,/./g' $tmp.tmp
+	fi
+
+	nawk  -F: <$audit.pmids >$tmp.tmp '
+    $2 == "#"	{ printf "%-40.40s  %s\n",$1,$3 }'
+	if [ -s $tmp.tmp ]
+	then
+	   echo ""
+	   echo "Metrics in the Irix PMDA, but NOT in the default PMNS"
+	   echo "Metric                                    PMID"
+	   sed -e 's/PMID(//' -e 's/)//' -e 's/,/./g' $tmp.tmp
+	fi
+
+	nawk  -F: <$audit.pmids >$tmp.tmp '
+    $1 == $2 && $3 != $4	{ printf "%-40.40s  %-10s  %-10s\n",$2,$3,$4 }'
+	if [ -s $tmp.tmp ]
+	then
+	   echo ""
+	   echo "Metrics with DIFFERENT PMIDS in the default PMNS and the Irix PMDA"
+	   echo "Metric                                    PMNS PMID   PMDA PMID"
+	   sed -e 's/PMID(//g' -e 's/)//g' -e 's/,/./g' $tmp.tmp
+	fi
+    else
+	echo "Cannot check PMID-name map against default PMNS"
+    fi
+}
+
+_create_excl()
+{
+    # Use the exclusions file if we have one
+    if [ -s $tmp.excl ]
+    then
+	sed <$tmp.excl >$tmp.excl.1 \
+	    -e '/^hw/d' \
+	    -e '/^irix/d' \
+	    -e '/^hinv/d' \
+	    -e '/^#/d' \
+	    -e 's/\./\\./g' \
+	    -e 's;^\([^ 	]*\).*;/^\1| /d;'
+
+	# only look at the hw, irix and hinv metrics
+        egrep '^hw|^irix|^hinv' $tmp.excl |\
+	sed >$tmp.excl.2 \
+	    -e 's/\./\\./g' \
+	    -e 's;^\([^ 	]*\).*;/^\1/d;'
+    fi
+}
+
+# top level
+
+_process_args $*
+_create_excl
+_process_meta
+_build_cprog; ./$audit
+_create_cdefs
+_match_meta_cdefs
+_integrity_vars
+_integrity_pmns
+
+exit

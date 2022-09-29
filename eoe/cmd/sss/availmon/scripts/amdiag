@@ -1,0 +1,273 @@
+#!/sbin/sh
+#
+# amdiag -- live diagnosis reporting
+#
+
+COMMAND=$0
+AMRVERSIONNUM=2.1
+AVAILDIR=/var/adm/avail
+SAVEDIR=$AVAILDIR/.save
+USRETCDIR=/usr/etc
+PLATFORM=`uname -m`
+NOSTR="NULL"
+DBQUERY="/usr/sbin/espquery"
+SQLSTMT="select option_default from tool where tool_name = 'AVAILMON' and"
+SSDB=ssdb
+FLAG=0
+SSLOGGER=/usr/sbin/esplogger
+AVAILCLASS=4000
+
+##################################################################
+# Binaries and their location
+##################################################################
+
+AMTIME1970=$USRETCDIR/amtime1970
+AMSYSLOG=$USRETCDIR/amsyslog
+AMTICKERD=$USRETCDIR/amtickerd
+TICKFILE=$SAVEDIR/lasttick
+
+##################################################################
+# Get crash directory
+##################################################################
+
+CRASHDIR=""
+OPTIONS=`cat /etc/config/savecore.options 2>/dev/null`
+if [ "$OPTIONS" != "" ] ; then
+    for DIR in $OPTIONS ; do
+	if [ -d "$DIR" ] ; then
+	    CRASHDIR=$DIR
+	fi
+    done
+fi
+
+if [ "$CRASHDIR" = "" ] ; then
+    CRASHDIR=/var/adm/crash
+fi
+TMPREPORT=$CRASHDIR/diagreport.$$
+
+##################################################################
+# Get the configuration parameters from SSDB
+##################################################################
+
+if [ -f "$DBQUERY" ] ; then
+    STATUSINTERVAL=`$DBQUERY -t -s "$SQLSTMT tool_option='statusinterval'" $SSDB | cut -d'|' -f2`
+fi
+
+STATUSINTERVAL=${STATUSINTERVAL:=0}
+
+##################################################################
+# Get the SYSLOG file and related variables
+##################################################################
+
+# First, get the configfile.
+
+SYSLOGDCONF=""
+SYSLOGDOPTS="df:m:p:"
+OPTIONS=`cat /etc/config/syslogd.options 2>/dev/null`
+if [ "$OPTIONS" != "" ] ; then
+    while getopts $SYSLOGDOPTS OPTNAME $OPTIONS 2>/dev/null
+    do
+	if [ "$OPTNAME" = "f" ] ; then
+	    if [ -f "$OPTARG" ] ; then
+		SYSLOGDCONF="$OPTARG"
+		break
+	    fi
+        fi
+    done
+fi
+
+if [ "$SYSLOGDCONF" = "" ] ; then
+    SYSLOGDCONF=/etc/syslog.conf
+fi
+
+if [ -f "$SYSLOGDCONF"  ] ; then
+    SYSLOGFILE=`cat $SYSLOGDCONF | grep -v "^#" | grep "\*.crit" | awk '{print $NF}' | sort -u | head -1 2>/dev/null`
+    if [ "z$SYSLOGFILE" = "z" -o ! -f "$SYSLOGFILE" ] ; then
+        SYSLOGFILE=/var/adm/SYSLOG
+    fi
+else
+    SYSLOGFILE=/var/adm/SYSLOG
+fi
+
+# Use SYSLOGFILE to generate its rotated version
+
+OSYSLOGFILE=`dirname $SYSLOGFILE`/o`basename $SYSLOGFILE`
+LASTSYSLOG=$SAVEDIR/lastsyslog
+AMSYSLOGFILE=$CRASHDIR/syslog
+
+##################################################################
+# Other variables/files
+##################################################################
+
+PREVSTARTFILE=$SAVEDIR/prevstart
+
+##################################################################
+# Usage
+##################################################################
+
+usage()
+{
+    echo "Usage: amdiag <diag-type> <summary-file> <report-file>"
+}
+
+##################################################################
+# Start main code
+##################################################################
+
+if [ ! -d $AVAILDIR ] ; then
+    echo "\n$CMD: Error: Cannot find directory $AVAILDIR"
+    echo "Please try re-installing OS\n"
+    logger -t availmon -p err -i cannot find $AVAILDIR
+    exit
+elif [ ! -x $AMTICKERD -o ! -x $AMSYSLOG -o ! -x $AMTIME1970 ] ; then
+    echo "\n$CMD: Error: Not all required executable files are present"
+    echo "Please try re-installing OS\n"
+    logger -t availmon -p err -i Executable files missing
+elif [ ! -d $SAVEDIR ] ; then
+    if [ $1 = stop ] ; then
+        exit
+    fi
+    
+    #
+    # Create .save directory if first time install
+    #
+    
+    mkdir $SAVEDIR
+    if [ $? -ne 0 ] ; then
+	echo "$CMD: Error: unable to create $SAVEDIR directory."
+	exit 1
+    fi
+
+    if [ -f $CRASHDIR/bounds ] ; then
+        cp $CRASHDIR/bounds $SAVEDIR/bounds
+    else
+        echo "0" > $SAVEDIR/bounds
+    fi
+    
+    echo "`$AMTIME1970 -i | cut -d'|' -f2`" > $PREVSTARTFILE
+    
+    if [ -f $SYSLOGFILE ] ; then
+        tail -1 $SYSLOGFILE > $LASTSYSLOG
+    fi
+
+    exit
+fi
+
+SINCE1970=`$AMTIME1970`
+case $# in 
+    1) DIAGTYPE=$1
+       if [ "$DIAGTYPE" != "STATUS" ] ; then
+           echo "$CMD: incorrect argument numbers"
+           usage
+           exit 1
+       fi
+    ;;
+    
+    3)
+       DIAGTYPE=$1
+       SUMMARYFILE=$2
+       REPORTFILE=$3
+       if [ ! -r "$REPORTFILE" ] ; then
+           echo "$CMD: cannot access $REPORTFILE"
+           exit 1
+       fi
+    ;;
+    
+    *)
+       echo "$CMD: incorrect argument numbers"
+       usage
+       exit 1
+    ;;
+esac
+
+#
+# Common check for all DIAGS except for STATUS
+#
+
+if [ "$DIAGTYPE" != "STATUS" ] ; then
+    if [ ! -r $SUMMARYFILE ] ; then
+        echo "$CMD: cannot access $SUMMARYFILE"
+        exit 1
+    fi
+fi
+
+#
+# Get LASTTICK
+#
+
+if [ "$TICKFILE" != "" ] ; then
+    LASTTICK=`cat $TICKFILE 2>/dev/null`
+else
+    LASTTICK=-1
+fi
+
+LASTTICK=${LASTTICK:=-1}
+
+#
+# Get PREVSTART
+#
+
+if [ -f $PREVSTARTFILE ] ; then
+    PREVSTART=`cat $PREVSTARTFILE`
+fi
+
+PREVSTART=${PREVSTART:=-1}
+
+#
+# Get EventCode and EventTime
+#
+
+if [ "$DIAGTYPE" != "STATUS" ] ; then
+    SUMMARYLINE=`head -2 $SUMMARYFILE | tail -1`
+    if echo $SUMMARYLINE | grep -i 'No error' > /dev/null ; then
+        EVENTCODE=2097161
+    elif echo $SUMMARYLINE | grep -i 'No hardware error' > /dev/null ; then
+        EVENTCODE=2097161
+    elif echo $SUMMARYLINE | grep -i 'Hardware error' > /dev/null ; then
+        EVENTCODE=2097160
+    else
+        EVENTCODE=2097159
+    fi
+    SUMMARYLINE=`tail +2 $SUMMARYFILE`
+    EVENTTIME=`awk '/TIME/ {print $2}' $SUMMARYFILE`
+    $AMSYSLOG -S $SYSLOGFILE -O $OSYSLOGFILE | tail -700 > $AMSYSLOGFILE
+    tail -1 $SYSLOGFILE > $LASTSYSLOG
+else
+    EVENTCODE=2097158
+    EVENTTIME=$SINCE1970
+    SUMMARYLINE=""
+fi
+
+
+
+#
+# Log event to SEM
+#
+
+echo -n "$EVENTTIME,$LASTTICK,$PREVSTART," >> $TMPREPORT
+echo -n "0,$STATUSINTERVAL,$NOSTR," >> $TMPREPORT
+
+if [ "$DIAGTYPE" = "STATUS" ] ; then
+    echo -n "$NOSTR,$NOSTR,$NOSTR,$NOSTR,$NOSTR,0," >> $TMPREPORT
+    echo -n "0,$NOSTR," >> $TMPREPORT
+    echo "$NOSTR" >> $TMPREPORT
+else
+    echo -n "'$DIAGTYPE','$REPORTFILE','$AMSYSLOGFILE',$NOSTR,$NOSTR,0," >> $TMPREPORT
+    if [ `echo $SUMMARYLINE | wc -c` -gt 250 ] ; then
+	echo -n "1,$NOSTR," >> $TMPREPORT
+	echo  "'$SUMMARYFILE'" >> $TMPREPORT
+    else
+	echo -n "0,$NOSTR," >> $TMPREPORT
+	echo $SUMMARYLINE | sed -e "s/%/%%/g" -e "s/\\\\/\\\\\\\\/g" -e "s/\'/\\\'/g" -e 's/\"/\\\"/g' -e "s/^/\'/" -e "s/$/\'/" >> $TMPREPORT
+    fi
+fi
+
+$SSLOGGER -s $EVENTCODE -f $TMPREPORT 2>/dev/null
+
+RETCODE=$?
+if [ $RETCODE != 0 ] ; then
+    logger -t availmon -p err -i "cannot log availmon event ($EVENTCODE) to SSDB ($RETCODE)"
+fi
+
+rm -f $TMPREPORT
+exit 0

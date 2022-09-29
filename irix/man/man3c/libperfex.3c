@@ -1,0 +1,142 @@
+.TH LIBPERFEX 3C
+.SH NAME 
+\f3libperfex\f1, \f3start_counters\f1, \f3read_counters\f1, \f3print_counters\f1, \f3print_costs\f1, \f3load_costs\f1 \- A procedural interface to processor event counters
+.SH C SYNOPSIS
+.nf
+
+    \f3int start_counters( int e0, int e1 );\f1
+    \f3int read_counters( int e0, long long *c0, int e1, long long *c1);\f1
+    \f3int print_counters( int e0, long long c0, int e1, long long c1);\f1
+    \f3int print_costs( int e0, long long c0, int e1, long long c1);\f1
+    \f3int load_costs(char *CostFileName);\f1
+
+.fi
+.SH FORTRAN SYNOPSIS
+.nf
+    \f3 INTEGER*8 c0, c1\f1
+    \f3 INTEGER   e0, e1\f1
+    \f3 CHARACTER(*n) CostFileName\f1
+    \f3 INTEGER*4 function start_counters( e0, e1 )\f1
+    \f3 INTEGER*4 function read_counters( e0, c0, e1, c1 )\f1
+    \f3 INTEGER*4 function print_counters( e0, c0, e1, c1 )\f1
+    \f3 INTEGER*4 function print_costs( e0, c0, e1, c1 )\f1
+    \f3 INTEGER*4 function load_costs( CostFileName )\f1
+.fi
+.SH DESCRIPTION
+These routines provide simple access to the hardware event counters.  The 
+arguments \f3e0\f1 and \f3e1\f1 are \f3int\f1 types specifying which events to 
+count.  For descriptions of the counters themselves, see the
+\f3perfex\f1(1) or the \f3r10k_counters\f1(5) man page.
+.PP
+The counts are returned in the \f3long long\f1 arguments \f3c0\f1 and
+\f3c1\f1. The \f3print_counters\f1 routine prints the counts to standard
+error.  Two events which \f3must\f1 be counted on the same hardware
+counter will cause a conflicting counters error. The arguments
+\f2e0\f1 and \f2e1\f1 can be overridden by setting the environment
+variables \f3T5_EVENT0\f1 and \f3T5_EVENT1\f1.  Calls to
+\f3start_counters\f1 implicitly zero out the internal software
+counters before starting them, while \f3read_counters\f1 implicitly
+stops the counters after reading them.  
+Thus if you want to accumulate
+counts over multiple start/read calls, you must save out the counts
+and do the accumulation yourself. Each of these incurs a typical 
+system call overhead which can amount to a few hundred microseconds 
+per start/stop call pair. 
+The \f3print_counters\f1 procedure
+is just a formatting convenience and has no effect on the state of the
+counters. 
+.SH TIME ESTIMATES AND COST TABLES 
+The \f3print_costs\f1 routine prints the counts together with approximate
+time estimates as described for \f3perfex\f1.  The \f3load_costs\f1
+procedure allows a cost table to be loaded from a file.  Cost ranges
+reflect both the width of the cost distribution and uncertainty in the
+degree of overlap.  Costs for different events are not exclusive due
+to the overlap of one type of event with others.  By default a table
+of costs for each event appropriate to the host system is used.  If
+the file \f3/etc/perfex.costs\f1 is present, it is used instead. If a
+table is loaded using load_costs, it is used instead. Partial tables
+may be used; the remaining entries taking the appropriate default
+values. The format of the cost table and how to dump the default cost
+table for the current system are described in the perfex manpage.
+.SH DIAGNOSTICS 
+Normal completion returns a positive integer, the \f3generation
+number\f1.  Negative return values signal an error.  The underlying
+operating system counter interface may produce other errors.  Among
+these are indications that the counter resource is in use, possibly
+because of monitoring by another user on the system (with root
+privileges) in system mode.
+.pp
+The generation numbers increment on a per-process basis each time the 
+counters are enabled or stopped.  Because the counters may have been 
+used by a supervisor-privilege process after being enabled by the user with 
+start_counters, but before being read by read_counters, all correct 
+uses of the interface must check that the generation number returned 
+by read_counters matches the generation number from the corresponding 
+start_counters, for each process.  For example,
+.pp
+To collect instruction and data scache miss counts on a program 
+normally executed by 
+.nf.
+int e0,e1
+long long c0,c1;
+int gen_start, gen_read
+
+/* ... set e0 and e1  ... */
+
+if((gen_start=start_counters(e0,e1)) < 0) { 
+    perror("start_counters"); 
+  }
+
+/* user code */
+
+if((gen_read=read_counters(e0,&c0,e1,&c1))<0) { 
+   perror("read_counters"); 
+  }
+
+if(gen_read != gen_start) { 
+   perror("lost counters!, aborting..."); 
+   exit(1); 
+  }
+
+/* do something with c0,c1 */
+.fi
+illustrates correct use.  
+.pp
+Counter measurements are typically not precisely reproducible for most 
+events.  For example, counts of cache misses depend on the change in 
+the cache population due to other processes when the target process is 
+not running.  Invalidation and intervention counts may depend on the 
+temporal ordering of memory accesses by different processors, which is 
+not guaranteed.  Issued instruction counts depend on the R10000's dynamic 
+scheduling of instructions, which in turn can depend on the pattern of 
+instruction cache misses.  Since the cache misses are affected by the 
+runtime environment as noted above, this count is also not precisely 
+reproducible.  In almost all cases, however, while the exact count 
+may not be reproducible, the amount of time attributable to any fluctuations 
+is a tiny fraction of the execution time.  Conversely, any event which 
+accounts for an important fraction of the execution time will have a 
+count with small relative fluctuations from run to run.  
+.SH RESTRICTIONS
+This interface is not reentrant or (pthread) thread-safe.  The
+start_counters, read_counters, print_counters and print_costs,
+routines can be called by individual sproc threads.  However there is
+only provision for a single global cost table, so load_costs should
+be called only in a sequential region, and that cost table must be
+applied to the counts from all threads.
+.SH FILES
+\f3/usr/lib/libperfex.so\f1 
+\f3/usr/lib32/libperfex.so\f1 
+\f3/usr/lib64/libperfex.so\f1 
+.SH DEPENDENCIES
+These procedures are only available on systems
+with hardware performance counters (systems with R10000 or R12000
+processors).  Use on systems with mixed processor types will have
+undefined results in systems with mixed processor types.
+.P
+Manipulating the
+counters with these routines and simultaneously through \f3perfex\f1 or 
+the OS counter interface ioctl procedures can produce an error if, for 
+example, the counters are enabled twice without being released in the 
+interim. 
+.SH SEE ALSO
+\f3perfex\f1(1), \f3r10k_counters\f1(5), \f3abi\f1(5), \f3mips4\f1(5), \f3mips3\f1(5)

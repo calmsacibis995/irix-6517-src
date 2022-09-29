@@ -1,0 +1,769 @@
+# Tests of DL_XID_REQ, DL_XID_RES
+#	1) Error conditions:
+#	    DL_OUTSTATE -- stream not in states DL_IDLE or DL_DATAXFER
+#	    DL_XIDAUTO -- attempt to send DL_XID on a stream that has been
+#		bound with automatic XID response enabled
+#	    DL_BADADDR -- attempt to send DL_XID to same SAP, loopback
+#	2) Normal transmission between two LLC1 streams, P/F bit not set
+#	3) Normal transmission between two LLC1 streams, P/F bit set
+#	4) Normal transmission between two LLC1 streams, with data in XID_REQ
+#	5) Send XID from LLC1 stream to zero SAP (should get automatic
+#	    response)
+#	6) Send XID from LLC1 stream to an LLC1 stream that has enabled
+#	    automatic XID response -- should get the automatic response,
+#	    and the other stream sees nothing
+#	7) Normal transmission between two LLC2 streams in DL_IDLE state
+#	8) Normal transmission between two LLC2 streams in DL_DATAXFER state
+#	9) Normal transmission between an LLC1 and an unconnected LLC2 stream,
+#	    and vice versa
+#	10) Normal transmission between an LLC1 and a connected LLC2 stream,
+#	    and vice versa
+#	11) Normal transmission between an unconnected LLC2 and a connected
+#	    LLC2 stream, and vice versa
+#	12) Attempt to send DL_XID to LLC2 stream that is in state
+#	    DL_INCON_PENDING -- should be dropped
+#	13) Send XID from LLC2 stream to zero SAP (should get automatic
+#	    response)
+#	14) Send XID from LLC2 stream to an LLC2 stream that has enabled
+#	    automatic XID response -- should get the automatic response,
+#	    and the other stream sees nothing
+#	15) Normal transmission between two connected LLC2 streams, but with
+#	    the P/F bit set
+#	16) Send XID to a SAP that hasn't been bound, and to a SAP that has
+#	    been bound w/o automatic handling enabled -- should see no response
+#	LLC1 and LLC2 stream on same SAP.  LLC1 stream receives XID_IND
+
+
+###### Test case #1 ######
+open 1
+
+# Try to send XID_REQ, XID_RES when in state DL_UNATTACHED
+xid_req $1 0:0:0:0:0:0,48 0 1 ''	dl_error_ack dl_outstate
+xid_res $1 0:0:0:0:0:0,48 0 ''
+
+# There should be no error return to DL_XID_RES
+poll $1 $1 0
+
+attach $1 43
+# Try to send XID_REQ when in state DL_UNBOUND
+xid_req $1 0:0:0:0:0:0,48 0 1 ''	dl_error_ack dl_outstate
+xid_res $1 0:0:0:0:0:0,48 0 ''
+
+# Once again, there should be no error return to DL_XID_RES
+poll $1 $1 0
+
+check_state $1 dl_unbound
+
+bind $1 40 1 0 0 3
+
+# Try to send DL_XID_REQ on an LLC1 stream that has been bound with automatic
+# XID response enabled
+xid_req $1 0:0:0:0:0:0,48 0 1 ''	dl_error_ack dl_xidauto
+xid_res $1 0:0:0:0:0:0,48 0 ''
+
+# Once again, there should be no error return to DL_XID_RES
+poll $1 $1 0
+
+check_state $1 dl_idle
+
+close $1
+
+open 1
+attach $1 43
+bind $1 40 2 0 0 3
+
+# Try to send DL_XID_REQ on an LLC2 stream that has been bound with automatic
+# XID response enabled
+xid_req $1 0:0:0:0:0:0,48 0 1 ''	dl_error_ack dl_xidauto
+xid_res $1 0:0:0:0:0:0,48 0 ''
+
+# Once again, there should be no error return to DL_XID_RES
+poll $1 $1 0
+
+check_state $1 dl_idle
+
+close $1
+
+open 1
+attach $1 43
+#bind $1 40 1 0 0 0
+bind $1 40 2 0 0 0
+
+# Try to send DL_XID_REQ to same SAP, loopback
+xid_req $1 0:0:0:0:0:0,40 0 1 ''	dl_error_ack dl_badaddr
+xid_res $1 0:0:0:0:0:0,40 0 ''
+
+# Once again, there should be no error return to DL_XID_RES
+poll $1 $1 0
+
+check_state $1 dl_idle
+
+close $1
+
+
+###### Test case #2 ######
+open 1
+attach $1 43
+bind $1 48 1 0 0 0
+
+open 2
+attach $2 43
+bind $2 40 1 0 0 0
+
+xid_req $2 0:0:0:0:0:0,48 0 0 ''
+
+# Should see an event on the other stream (3)
+poll $1 $2 $1
+
+xid_ind $1 0
+
+xid_res $1 0:0:0:0:0:0,40 0 ''
+
+poll $1 $2 $2
+
+xid_con $2 0
+
+poll $1 $2 0
+
+check_state $1 dl_idle
+check_state $2 dl_idle
+
+close $1
+close $2
+
+
+###### Test case #3 ######
+open 1
+attach $1 43
+bind $1 48 1 0 0 0
+
+open 2
+attach $2 43
+bind $2 40 1 0 0 0
+
+xid_req $2 0:0:0:0:0:0,48 1 0 ''
+
+# Should see an event on the other stream (3)
+poll $1 $2 $1
+
+xid_ind $1 1
+
+xid_res $1 0:0:0:0:0:0,40 1 ''
+
+poll $1 $2 $2
+
+xid_con $2 1
+
+poll $1 $2 0
+
+check_state $1 dl_idle
+check_state $2 dl_idle
+
+close $1
+close $2
+
+
+###### Test case #4 ######
+open 1
+attach $1 43
+bind $1 48 1 0 0 0
+
+open 2
+attach $2 43
+bind $2 40 1 0 0 0
+
+xid_req $2 0:0:0:0:0:0,48 1 0 '0 1 2 3 4 5 6 7 8 9'
+
+# Should see an event on the other stream (3)
+poll $1 $2 $1
+
+xid_ind $1 1
+
+xid_res $1 0:0:0:0:0:0,40 1 'aa bb cc dd ee ff'
+
+poll $1 $2 $2
+
+xid_con $2 1
+
+poll $1 $2 0
+
+check_state $1 dl_idle
+check_state $2 dl_idle
+
+close $1
+close $2
+
+
+###### Test case #5 ######
+open 1
+attach $1 43
+bind $1 48 1 0 0 0
+
+# Send DL_XID_REQ to zero SAP
+xid_req $1 0:0:0:0:0:0,0 1 0 '0 1 2 3 4 5 6 7 8 9'
+
+# Should see an event on the same stream (3)
+poll $1 $1 $1
+
+# Should get automatic response
+xid_con $1 1
+
+poll $1 $1 0
+check_state $1 dl_idle
+
+close $1
+
+
+###### Test case #6 ######
+open 1
+attach $1 43
+bind $1 48 1 0 0 0
+
+open 2
+attach $2 43
+bind $2 40 1 0 0 3
+
+# Send DL_XID_REQ to stream that has enablied automatic XID response
+xid_req $1 0:0:0:0:0:0,40 1 0 '0 1 2 3 4 5 6 7 8 9'
+
+# Should see an event on the same stream (3)
+poll $1 $2 $1
+
+# Should get automatic response
+xid_con $1 1
+
+poll $1 $2 0
+check_state $1 dl_idle
+check_state $2 dl_idle
+
+close $1
+close $2
+
+
+###### Test case #7 ######
+open 1
+attach $1 43
+bind $1 48 2 2 0 0
+
+open 2
+attach $2 43
+bind $2 40 2 0 0 0
+
+xid_req $2 0:0:0:0:0:0,48 0 0 ''
+
+# Should see an event on the other stream (3)
+poll $1 $2 $1
+
+xid_ind $1 0
+
+xid_res $1 0:0:0:0:0:0,40 0 ''
+
+poll $1 $2 $2
+
+xid_con $2 0
+
+poll $1 $2 0
+
+check_state $1 dl_idle
+check_state $2 dl_idle
+
+close $1
+close $2
+
+
+###### Test case #8 ######
+open 1
+attach $1 43
+bind $1 48 2 2 0 0
+
+open 2
+attach $2 43
+bind $2 40 2 0 0 0
+connect $2 0:0:0:0:0:0,48 0
+
+# Should see an event on the listen stream (3)
+poll $1 $2 $1
+
+# Receive the incoming call
+connect_ind $1 1 -
+
+# As soon as the other stream receives the connect confirmation, it will
+# start an XID sequence to exchange receive window sizes.  Receive the XID
+# and respond to it.  XXX
+#poll $1 $1 $1
+#xid_ind $1 0
+#xid_res $1 0:0:0:0:0:0,40 0 '81 03 fe'
+
+# Should see an event on the connecting stream (4)
+poll $1 $2 $2
+
+# Receive the connect confirmation
+connect_con $2
+
+# Should be no other events on the connecting stream (because the response
+# to the automatic XID frame is not passed up to the user, even though he
+# has not specified DL_AUTO_XID. XXX
+
+# Listen stream has started an XID sequence to exchange receive window sizes.
+# Receive the XID and respond to it.
+#NEW-3
+poll $1 $2 $2
+xid_ind $2 0
+xid_res $2 0:0:0:0:0:0,48 0 '81 03 fe'
+
+# Send a DL_XID_REQ from stream $2 to stream $1
+xid_req $2 0:0:0:0:0:0,48 0 0 ''
+
+# Should see an event on the other stream (3)
+poll $1 $2 $1
+
+xid_ind $1 0
+
+xid_res $1 0:0:0:0:0:0,40 0 ''
+
+poll $1 $2 $2
+
+xid_con $2 0
+
+poll $1 $2 0
+
+check_state $1 dl_dataxfer
+check_state $2 dl_dataxfer
+
+close $1
+close $2
+
+
+###### Test case #9 ######
+# Bind an LLC1 stream
+open 1
+attach $1 43
+bind $1 48 1 0 0 0
+
+# Bind an LLC2 stream
+open 2
+attach $2 43
+bind $2 40 2 0 0 0
+
+# Send DL_XID_REQ from LLC2 to LLC1 stream
+xid_req $2 0:0:0:0:0:0,48 0 0 ''
+
+# Should see an event on the LLC1 stream (3)
+poll $1 $2 $1
+
+xid_ind $1 0
+
+xid_res $1 0:0:0:0:0:0,40 0 ''
+
+poll $1 $2 $2
+
+xid_con $2 0
+
+poll $1 $2 0
+
+check_state $1 dl_idle
+check_state $2 dl_idle
+
+# Send DL_XID_REQ from LLC1 to LLC2 stream
+xid_req $1 0:0:0:0:0:0,40 0 0 ''
+
+# Should see an event on the LLC2 stream (4)
+poll $1 $2 $2
+
+xid_ind $2 0
+
+xid_res $2 0:0:0:0:0:0,48 0 ''
+
+poll $1 $2 $1
+
+xid_con $1 0
+
+poll $1 $2 0
+
+check_state $1 dl_idle
+check_state $2 dl_idle
+
+close $1
+close $2
+
+
+###### Test case #10 ######
+# Bind an LLC1 stream
+open 1
+attach $1 43
+bind $1 48 1 0 0 0
+
+# Bind an LLC2 listen stream
+open 2
+attach $2 43
+bind $2 40 2 2 0 0
+
+# Bind an LLC2 connecting stream (w/ DL_AUTO_XID set so that we don't see
+# automatic XID sequence)
+open 3
+attach $3 43
+bind $3 44 2 0 0 1
+
+# Connect the two LLC2 streams
+connect $3 0:0:0:0:0:0,40 0
+poll $1 $3 $2
+connect_ind $2 1 -
+# XXX see automatic XID on listen stream???
+#NEW-3
+poll $2 $2 $2
+xid_ind $2 0
+xid_res $2 0:0:0:0:0:0,44 0 '81 03 fe'
+poll $1 $3 $3
+connect_con $3
+poll $1 $3 0
+
+# Send DL_XID_REQ from LLC2 to LLC1 stream
+xid_req $2 0:0:0:0:0:0,48 0 0 '0 1 2 3 4'
+
+# Should see an event on the LLC1 stream (3)
+poll $1 $3 $1
+
+xid_ind $1 0
+
+xid_res $1 0:0:0:0:0:0,40 0 '5 6 7 8 9'
+
+poll $1 $3 $2
+
+xid_con $2 0
+
+poll $1 $3 0
+
+check_state $1 dl_idle
+check_state $2 dl_dataxfer
+check_state $3 dl_dataxfer
+
+# Send DL_XID_REQ from LLC1 to LLC2 stream
+xid_req $1 0:0:0:0:0:0,40 0 0 'a b c d'
+
+# Should see an event on the LLC2 stream (4)
+poll $1 $3 $2
+
+xid_ind $2 0
+
+xid_res $2 0:0:0:0:0:0,48 0 '1 2 3 4'
+
+poll $1 $3 $1
+
+xid_con $1 0
+
+poll $1 $3 0
+
+check_state $1 dl_idle
+check_state $2 dl_dataxfer
+check_state $3 dl_dataxfer
+
+close $1
+close $2
+close $3
+
+
+###### Test case #11 ######
+# Bind an LLC2 stream
+open 1
+attach $1 43
+bind $1 48 2 0 0 0
+
+# Bind an LLC2 listen stream (w/ DL_AUTO_XID set so that we don't see
+# automatic XID sequence)
+open 2
+attach $2 43
+bind $2 40 2 2 0 1
+
+# Bind an LLC2 connecting stream
+open 3
+attach $3 43
+bind $3 44 2 0 0 0
+
+# Connect the two LLC2 streams
+connect $3 0:0:0:0:0:0,40 0
+poll $1 $3 $2
+connect_ind $2 1 -
+poll $1 $3 $3
+connect_con $3
+# XXX see automatic XID on connecting stream ???
+#NEW-3
+poll $3 $3 $3
+xid_ind $3 0
+xid_res $3 0:0:0:0:0:0,40 0 '81 03 fe'
+
+poll $1 $3 0
+
+# Send DL_XID_REQ from connected LLC2 to unconnected LLC2 stream
+xid_req $3 0:0:0:0:0:0,48 0 0 '0 1 2 3 4'
+
+# Should see an event on the unconnected stream (3)
+poll $1 $3 $1
+
+xid_ind $1 0
+
+xid_res $1 0:0:0:0:0:0,44 0 '5 6 7 8 9'
+
+poll $1 $3 $3
+
+xid_con $3 0
+
+poll $1 $3 0
+
+check_state $1 dl_idle
+check_state $2 dl_dataxfer
+check_state $3 dl_dataxfer
+
+# Send DL_XID_REQ from unconnected LLC2 to connected LLC2 stream
+xid_req $1 0:0:0:0:0:0,44 0 0 'a b c d'
+
+# Should see an event on the connected stream (5)
+poll $1 $3 $3
+
+xid_ind $3 0
+
+xid_res $3 0:0:0:0:0:0,48 0 '1 2 3 4'
+
+poll $1 $3 $1
+
+xid_con $1 0
+
+poll $1 $3 0
+
+check_state $1 dl_idle
+check_state $2 dl_dataxfer
+check_state $3 dl_dataxfer
+
+close $1
+close $2
+close $3
+
+
+###### Test case #12 ######
+# Bind an LLC1 stream
+open 1
+attach $1 43
+bind $1 48 1 0 0 0
+
+# Bind an LLC2 listen stream
+open 2
+attach $2 43
+bind $2 40 2 2 0 0
+
+# Bind an LLC2 connecting stream
+open 3
+attach $3 43
+bind $3 44 2 0 0 0
+
+# Start a connection between the two LLC2 streams
+connect $3 0:0:0:0:0:0,40 0
+poll $1 $3 $2
+connect_ind $2 0 corr4
+
+poll $1 $3 0
+
+# Try to send XID from connecting LLC2 stream to listen stream
+xid_req $3 0:0:0:0:0:0,40 0 1 ''	dl_error_ack dl_outstate
+
+poll $1 $3 0
+
+# Try to send XID from LLC1 stream to listen stream
+xid_req $1 0:0:0:0:0:0,40 0 0 ''
+
+# Since the listen stream is in state DL_INCON_PENDING, the XID should
+# be quietly dropped
+poll $1 $3 0
+
+check_state $1 dl_idle
+check_state $2 dl_incon_pending
+check_state $3 dl_outcon_pending
+
+close $1
+close $2
+close $3
+
+
+###### Test case #13 ######
+open 1
+attach $1 43
+bind $1 48 2 0 0 0
+
+# Send DL_XID_REQ to zero SAP
+xid_req $1 0:0:0:0:0:0,0 1 0 '0 1 2 3 4 5 6 7 8 9'
+
+# Should see an event on the same stream (3)
+poll $1 $1 $1
+
+# Should get automatic response
+xid_con $1 1
+
+poll $1 $1 0
+check_state $1 dl_idle
+
+# Now setup a connection to another stream, and retry the xid
+# in state DL_DATAXFER
+open 2
+attach $2 43
+bind $2 40 2 2 0 3
+connect $1 0:0:0:0:0:0,40 0
+connect_ind $2 1 -
+connect_con $1
+
+# XXX see automatic XID on connecting stream ???
+#NEW-3
+poll $1 $1 $1
+xid_ind $1 0
+xid_res $1 0:0:0:0:0:0,40 0 '81 03 fe'
+poll $1 $2 0
+
+# Send DL_XID_REQ to zero SAP
+xid_req $1 0:0:0:0:0:0,0 1 0 '0 1 2 3 4 5 6 7 8 9'
+
+# Should see an event on the same stream (3)
+poll $1 $2 $1
+
+# Should get automatic response
+xid_con $1 1
+
+poll $1 $2 0
+check_state $1 dl_dataxfer
+
+close $1
+close $2
+
+
+###### Test case #14 ######
+open 1
+attach $1 43
+bind $1 48 2 0 0 0
+
+open 2
+attach $2 43
+bind $2 40 2 2 0 3
+
+# Send DL_XID_REQ to stream that has enablied automatic XID response
+xid_req $1 0:0:0:0:0:0,40 1 0 '0 1 2 3 4 5 6 7 8 9'
+
+# Should see an event on the same stream (3)
+poll $1 $2 $1
+
+# Should get automatic response
+xid_con $1 1
+
+poll $1 $2 0
+check_state $1 dl_idle
+check_state $2 dl_idle
+
+# Now setup a connection between the two streams
+# to retry the xid in state DL_DATAXFER
+connect $1 0:0:0:0:0:0,40 0
+connect_ind $2 1 -
+connect_con $1
+
+# XXX see automatic XID on connecting stream ???
+#NEW-3
+poll $1 $1 $1
+xid_ind $1 0
+xid_res $1 0:0:0:0:0:0,40 0 '81 03 fe'
+poll $1 $2 0
+
+# Send DL_XID_REQ to stream that has enablied automatic XID response
+xid_req $1 0:0:0:0:0:0,40 0 0 '0 1 2 3 4 5 6 7 8 9'
+
+# Should see an event on the same stream (3)
+poll $1 $2 $1
+
+# Should get automatic response
+xid_con $1 0
+
+poll $1 $2 0
+check_state $1 dl_dataxfer
+check_state $2 dl_dataxfer
+
+close $1
+close $2
+
+
+###### Test case #15 ######
+open 1
+attach $1 43
+bind $1 48 2 0 0 0
+
+open 2
+attach $2 43
+bind $2 40 2 2 0 0
+
+# Connect the two LLC2 streams
+connect $1 0:0:0:0:0:0,40 0
+connect_ind $2 1 -
+
+# As soon as the other stream receives the connect confirmation, it will
+# start an XID sequence to exchange receive window sizes.  Receive the XID
+# and respond to it.  XXX
+#poll $2 $2 $2
+#xid_ind $2 0
+#xid_res $2 0:0:0:0:0:0,48 0 '81 03 fe'
+
+poll $1 $2 $1
+connect_con $1
+
+# Should be no other events on the connecting stream (because the response
+# to the automatic XID frame is not passed up to the user, even though he
+# has not specified DL_AUTO_XID. XXX
+
+# Listen stream has started an XID sequence to exchange receive window sizes.
+# Receive the XID and respond to it.
+#NEW-3
+poll $1 $2 $1
+xid_ind $1 0
+xid_res $1 0:0:0:0:0:0,40 0 '81 03 fe'
+
+# Send DL_XID_REQ with P/F bit set
+xid_req $1 0:0:0:0:0:0,40 1 0 '0 1 2 3 4 5 6 7 8 9'
+
+# Should see an event on the other stream
+poll $1 $2 $2
+
+xid_ind $2 1
+
+xid_res $2 0:0:0:0:0:0,48 1 '0 1 2 3 4 5 6 7 8 9'
+
+poll $1 $2 $1
+
+xid_con $1 1
+
+check_state $1 dl_dataxfer
+check_state $2 dl_dataxfer
+
+close $1
+close $2
+
+
+###### Test case #16 ######
+open 1
+attach $1 43
+bind $1 48 1 0 0 0
+
+# Send XID to a SAP that hasn't been bound
+xid_req $1 0:0:0:0:0:0,40 0 0 '0 1 2 3 4 5'
+
+# Should be no response to XID
+sleep 5
+poll $1 $1 0
+
+# Bind a second stream, without automatic handling enabled
+open 2
+attach $2 43
+bind $2 40 1 0 0 0
+
+xid_req $1 0:0:0:0:0:0,40 0 0 '0 1 2 3 4 5'
+
+# Other stream will see the XID
+poll $1 $2 $2
+xid_ind $2 0
+
+# Don't respond to the XID -- other stream should see no response
+sleep 5
+poll $1 $2 0
+
+close $1
+close $2

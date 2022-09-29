@@ -1,0 +1,179 @@
+.if n .pH ddi.rm/d3/gen/bufcall @(#)bufcall	43.12 of 12/1/92
+.\" Copyright 1992, 1991 UNIX System Laboratories, Inc.
+.TH bufcall D3
+.IX "\f4bufcall\fP(D3)"
+.SH NAME
+\f4bufcall\f1 \- call a function when a buffer becomes available 
+.SH SYNOPSIS
+.nf
+.na
+.ft 4
+#include <sys/types.h>
+#include <sys/stream.h>
+#include <sys/ddi.h>
+.sp 0.4
+toid_t bufcall(uint_t \f2size\fP, int \f2pri\fP, void (*\f2func\fP)(), long \f2arg\fP);
+.ft 1
+.ad
+.fi
+.SS Arguments
+.RS 0
+.TP .35i
+\f2size\f1
+Number of bytes in the buffer to be allocated
+(from the failed \f4allocb\fP(D3) request).
+.TP
+\f2pri\f1
+Priority of the \f4allocb\f1 allocation request.
+.TP
+\f2func\f1
+Function or driver routine to be called when a buffer becomes available.
+.TP
+\f2arg\f1
+Argument to the function to be called when a buffer becomes available.
+.RE
+.SH DESCRIPTION
+When a buffer allocation request fails,
+the function \f4bufcall\f1 can be used to schedule the routine, \f2func\f1,
+to be called with the argument, \f2arg\f1, when a buffer of at least
+\f2size\fP bytes becomes available.
+\f4bufcall\f1 serves, in effect, as a timeout call of indeterminate length.
+.SS "Return Values"
+On success, \f4bufcall\f1 returns a non-zero value that identifies
+the scheduling request.
+On failure, \f4bufcall\f1 returns 0.
+.SH USAGE
+When \f2func\fP runs, all interrupts from STREAMS devices will be blocked.
+On multiprocessor systems,
+when \f2func\fP runs
+all interrupts from STREAMS devices will be blocked
+on the processor on which \f2func\fP is running.
+\f2func\fP will have no user context and may not call any function that sleeps.
+.P
+Even when \f2func\f1 is called,
+\f4allocb\f1 can still fail if another module or driver 
+had allocated the memory before \f2func\f1 was able to call \f4allocb\f1.
+.P
+The \f2pri\fP argument is no longer used but is retained for
+compatibility.
+.P
+The non-zero identifier returned by \f4bufcall\fP
+may be passed to \f4unbufcall\f1(D3) to cancel the request.
+.SS Level
+Base or Interrupt.
+.SS "Synchronization Constraints"
+Does not sleep.
+.P
+Driver-defined basic locks, read/write locks, and sleep locks
+may be held across calls to this function.
+.SS " Example"
+The purpose of this service routine [see \f4srv\f1(D2)]
+is to add a header to all
+\f4M_DATA\f1 messages.  We assume only \f4M_DATA\fP messages
+are added to its queue.
+Service routines must process all messages on their queues before
+returning, or arrange to be rescheduled.
+.P
+While there are messages to be processed (line 19), we check to see if
+we can send the message on in the stream.
+If not, we put the message back
+on the queue (line 21) and return.  The STREAMS flow control mechanism
+will re-enable us later when messages can be sent.
+If \f4canput\f1(D3) succeeded,
+we try to allocate a buffer large enough to
+hold the header (line 24).
+If no buffer is available, the service routine must be
+rescheduled later, when a buffer is available.
+We put the original message back on the queue (line 26) and use
+\f4bufcall\f1 to attempt the rescheduling (lines 27 and 28).
+If \f4bufcall\fP succeeds, we set the \f4m_type\fP field in the module's
+private data structure to \f4BUFCALL\fP.  If \f4bufcall\fP failed,
+we use \f4itimeout\fP(D3) to reschedule us instead (line 30).  \f4modcall\fP will be
+called in about a half second [\f4drv_usectohz\c
+(500000)\f1].
+When the rescheduling has been done, we return.
+.P
+When \f4modcall\fP runs, it will set the \f4m_type\fP field to zero, indicating
+that there is no outstanding request.  Then the queue's service routine is scheduled to run
+by calling \f4qenable\fP(D3).
+.P
+If the buffer allocation is successful, we initialize the header
+(lines 37\-39), make the message type \f4M_PROTO\f1 (line 41), link the
+\f4M_DATA\f1 message to it (line 42), and pass it on (line 43).
+.P
+See \f4unbufcall\fP(D3) for the other half of this example.
+.ne 4
+.P
+.nf
+.ft 4
+.ps 9
+.vs -1
+ 1  struct hdr {
+ 2    uint_t    h_size;
+ 3    int    h_version;
+ 4  };
+ 5  struct mod {
+ 6    long    m_id;
+ 7    char    m_type;
+    ...
+ 8  };
+ 9  #define TIMEOUT    1
+10  #define BUFCALL    2
+    ...
+11  modsrv(q)    /* assume only M_DATA messages enqueued here */
+12        queue_t *q;
+13  {
+14    mblk_t *bp;
+15    mblk_t *mp;
+16    struct hdr *hp;
+17    struct mod *modp;
+.sp 0.4
+18    modp = (struct mod *)q->q_ptr;
+19    while ((mp = getq(q)) != NULL) {
+20        if (!canput(q->q_next)) {
+21            putbq(q, mp);
+22            return;
+23        }
+24        bp = allocb(sizeof(struct hdr), BPRI_MED);
+25        if (bp == NULL) {
+26            putbq(q, mp);
+27            modp->m_id = bufcall(sizeof(struct hdr), BPRI_MED, 
+28                                 modcall, (long)q);
+29            if (modp->m_id == 0) {
+30               modp->m_id = itimeout(modcall, (long)q, 
+31                                     drv_usectohz(\&500000), plstr);
+32               modp->m_type = TIMEOUT;
+33            } else {
+34               modp->m_type = BUFCALL;
+35            }
+36            return;
+37        }
+38        hp = (struct hdr *)bp->b_wptr;  
+39        hp->h_size = msgdsize(mp);
+40        hp->h_version = 1;
+41        bp->b_wptr += sizeof(struct hdr);
+42        bp->b_datap->db_type = M_PROTO;
+43        bp->b_cont = mp;
+44        putnext(q, bp);
+45    }
+46  }
+.sp 0.4
+47  modcall(q)
+48	queue_t *q;
+49  {
+50	struct mod *modp;
+.sp 0.4
+51	modp = (struct mod *)q->q_ptr;
+52	modp->m_type = 0;
+53	qenable(q);
+54  }
+.ps
+.vs
+.SH REFERENCES
+.na
+\f4allocb\fP(D3),
+\f4esballoc\fP(D3),
+\f4esbbcall\fP(D3),
+\f4itimeout\fP(D3),
+\f4unbufcall\fP(D3)
+.ad

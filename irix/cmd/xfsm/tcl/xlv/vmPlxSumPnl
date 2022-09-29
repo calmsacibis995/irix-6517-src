@@ -1,0 +1,209 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	vmPlxSumPnl
+# Version:	$Revision: 1.2 $
+# Synopsis:	Encapsulates the panel that displays a summary of a plex.
+#		The summary includes the number of ve's, the number of
+#		partitions, and the total size of a given plex.
+# Functions:	plxSum:realize
+#		plxSum:setData
+#		plxSum:clear
+#		plxSum:setItemLabel
+#		plxSum:setOrientation
+#		plxSum:_create
+#%COMMENT_END
+
+#########################################
+#		Public			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	plxSum:realize
+# Synopsis:	Creates an instance of the panel.  On the first call, any
+#		class-wide data is initialized.  If an instance of this
+#		panel already exists for the given handle, no action is taken.
+#		other than to return the top-level widget for the panel.
+# Arguments:	- handle	An identifier that is used as a key for storing
+#				(and later retrieving) the created widgets and
+#				any instance specific data.
+#		- parent	The parent for the created panel.
+#%COMMENT_END
+proc plxSum:realize { handle parent } \
+{
+	global		_GW_plxSum _GD_plxSum
+
+	####	One time initialization
+	if {! [info exists _GD_plxSum(initialized)]} {
+		####	Make sure we don't go through this again
+		set _GD_plxSum(initialized) true
+
+		set _GD_plxSum(columns)	"ves parts size"
+	}
+
+	####	Per instance initialization / creation
+	if {! [info exists _GW_plxSum($handle,panel)]} {
+		set _GW_plxSum($handle,panel) [plxSum:_create $handle $parent]
+	}
+
+	return $_GW_plxSum($handle,panel)
+}
+
+#%COMMENT_BEGIN
+# Function:	plxSum:setData
+# Synopsis:	Sets each field of the panel with the data that is extracted
+#		from the "synopsis" and "obj_info" parameters.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- synopsis	A list of lists that is used internally to
+#				represent an xlv object.
+#		- obj_info	A description of the object in the xlv file
+#				format.  It is used to display the number
+#				of parts in the plex.
+#%COMMENT_END
+proc plxSum:setData { handle synopsis obj_info } \
+{
+	global		_GD_plxSum
+
+	if {[llength $synopsis] == 1} {
+		set synopsis [lindex $synopsis 0]
+	}
+
+	set data(plex,parts) 0
+	set data(plex,ves) 0
+	set s_subvs [lassign $synopsis s_name s_type]
+	foreach subv $s_subvs {
+		set p_plexes [lassign $subv p_type p_size p_num]
+		set data(plex,size) [format "%.2f" [expr $p_size / 2048.0]]
+		foreach plex $p_plexes {
+			set data(plex,ves) \
+				[expr $data(plex,ves) + [llength $plex]]
+		}
+	}
+	xlv:partCount $obj_info data
+
+	foreach item $_GD_plxSum(columns) {
+		plxSum:setItemLabel $handle $item $data(plex,$item)
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	plxSum:clear
+# Synopsis:	Resets all the displayed values to their default setting.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc plxSum:clear { handle } \
+{
+	plxSum:setItemLabel $handle ves 1
+	plxSum:setItemLabel $handle parts 0
+	plxSum:setItemLabel $handle size 0.00
+}
+
+#%COMMENT_BEGIN
+# Function:	plxSum:setItemLabel
+# Synopsis:	Set the value of single display item to the given value
+# Arguments:	- handle	The identifier for the desired instance.
+#		- item		A key that identifies the desired item.
+#		- value		The value to which the item is to be set.
+#%COMMENT_END
+proc plxSum:setItemLabel { handle item value } \
+{
+	global	_GW_plxSum _GD_plxSum
+
+	if {[info exists _GW_plxSum($handle,$item)]} {
+		$_GW_plxSum($handle,$item) setValues -labelString $value
+		return 1
+	}
+	return 0
+}
+
+#%COMMENT_BEGIN
+# Function:	plxSum:setOrientation
+# Synopsis:	Set the orientation of the displayed items in the summary.
+#		The summary can be displayed in either a horizontal or
+#		vertical fashion.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- orient	The orientation to set the displayed items to.
+#%COMMENT_END
+proc plxSum:setOrientation { handle orient } \
+{
+	global	_GW_plxSum _GD_plxSum
+
+	if {$orient == "horizontal"} {
+		$_GW_plxSum($handle,label) setValues -row 1 -column 0
+		set column 1
+		foreach item $_GD_plxSum(columns) {
+			$_GW_plxSum($handle,$item)-label setValues \
+					-row 0 -column $column \
+					-alignment alignment_center
+			$_GW_plxSum($handle,$item) setValues \
+					-row 1 -column $column \
+					-alignment alignment_center
+			incr column
+		}
+		$_GW_plxSum($handle,size) setValues \
+				-marginRight 10 \
+				-alignment alignment_end
+	} else {
+		$_GW_plxSum($handle,label) setValues -row 0 -column 0
+		set row 1
+		foreach item $_GD_plxSum(columns) {
+			$_GW_plxSum($handle,$item)-label setValues \
+					-row $row -column 0 \
+					-alignment alignment_end
+			$_GW_plxSum($handle,$item) setValues \
+					-row $row -column 1 \
+					-alignment alignment_end
+			incr row
+		}
+		$_GW_plxSum($handle,size) setValues -marginRight 0
+	}
+}
+
+#########################################
+#		Private			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	plxSum:_create
+# Synopsis:	Creates an instance of the panel.
+# Arguments:	- handle	The identifier for the new instance.
+#		- parent	The parent for the created panel.
+#%COMMENT_END
+proc plxSum:_create { handle parent } \
+{
+	global		_GW_plxSum _GD_plxSum _GD_resources
+	set name	plxSum
+
+	set panel [sgiGrid $parent.$name -numRows 4 -numColumns 4]
+
+	set font "-adobe-helvetica-medium-r-normal--14-140-75-75-p-77-iso8859-1"
+
+	set _GW_plxSum($handle,label) [xmLabel $panel.summary-label managed \
+			-row 1 -column 0]
+	set column 1
+	foreach item $_GD_plxSum(columns) {
+		xmLabel $panel.$item-label managed \
+				-row 0 -column $column
+		set _GW_plxSum($handle,$item) \
+				[xmLabel $panel.$item managed \
+				-row 1 -column $column \
+				-fontList $font \
+				-labelString 0]
+		incr column
+	}
+
+	$_GW_plxSum($handle,size) setValues \
+			-marginRight 10 \
+			-alignment alignment_end \
+			-labelString 0.00
+
+	return $panel
+}

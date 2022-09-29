@@ -1,0 +1,455 @@
+'\"macro stdmacro
+.if n .pH g3x.malloc @(#)malloc	30.3 of 1/19/86
+.nr X
+.if \nX=0 .ds x} AMALLOC 3P "Specialized Libraries" "\&"
+.if \nX=1 .ds x} AMALLOC 3P "Specialized Libraries"
+.if \nX=2 .ds x} AMALLOC 3P "" "\&"
+.if \nX=3 .ds x} AMALLOC "" "" "\&"
+.TH \*(x}
+.SH NAME
+acreate, adelete, amalloc, afree, arealloc, acalloc, amallopt, amallinfo,arecalloc, amallocblksize, amemalign \- arbitrary arena main memory allocator
+.SH SYNOPSIS
+.nf
+.B #include <sys/types.h>
+.B #include <malloc.h>
+.PP
+\f4void \(**acreate (void \(**\f2addr\f4, size_t \f2len\f4, int \f2flags\f4,\f1
+.br
+	\f4void \(**\f2ushdr\f4, void \(**(\(**\f2grow\f4)(size_t, void \(**));\f1
+.PP
+\f4void \(**amalloc (size_t \f2size\f4, void \(**\f2ap\f4);\f1
+.PP
+\f4void adelete (void \(**\f2ap\f4);\f1
+.PP
+\f4void afree (void \(**\f2ptr\f4, void \(**\f2ap\f4);\f1
+.PP
+\f4void \(**arealloc (void \(**\f2ptr\f4, size_t \f2size\f4, void \(**\f2ap\f4);\f1
+.PP
+\f4void \(**acalloc (size_t \f2nelem\f4, size_t \f2elsize\f4, void \(**\f2ap\f4);\f1
+.PP
+\f4int amallopt (int \f2cmd\f4, int \f2value\f4, void \(**\f2ap\f4);\f1
+.PP
+\f4struct mallinfo amallinfo (void \(**\f2ap\f4);\f1
+.PP
+\f4size_t amallocblksize (void \(**\f2ptr\f4, void \(**\f2ap\f4);\f1
+.PP
+\f4void \(**arecalloc (void \(**\f2ptr\f4, size_t \f2nelem\f4, size_t \f2elsize\f4,\f1
+.br
+	\f4void \(**\f2ap\f4);\f1
+.PP
+\f4void \(**amemalign (size_t \f2align\f4, size_t \f2size\f4, void \(**\f2ap\f4);\f1
+.PP
+.SH DESCRIPTION
+The arena malloc package provides a main memory allocator based on the
+\f4malloc\fP(3X)
+memory allocator.
+This allocator has been extended so that
+an arbitrary memory space ("arena")
+may be set up as an area from which to malloc.
+.PP
+Calls to the arena malloc package differ from calls to the standard
+\f4malloc\fP(3X)
+only in that an arena pointer must be supplied.
+This arena pointer is returned by a call to
+\f4acreate\fP.
+.PP
+\f4acreate\fP sets up an area defined as starting at virtual address
+.I addr
+and extending for
+.I len
+bytes.
+Arenas may be either growing or non-growing and either shared or unshared.
+An arena that is non-growing is constrained to use only up to
+.I len
+bytes of memory.
+The
+.I grow
+parameter should be
+.SM
+.B NULL
+in this case.
+If the arena is growable,
+.I len
+specifies the original size (this MUST be a minimum of 1K bytes)
+and the
+.I grow
+parameter specifies a function that will be called when the allocator
+requires more memory.
+Note that the original buffer \f2addr\fP will be used only for the
+arena header, the first time more memory is required, the \f2grow\fP function
+will be called.
+This suggests that when setting up a growable arena a minimal (1K)
+original buffer be used.
+The function will be called with two parameters, the number of bytes
+required and a pointer to the arena requiring the space.
+The number of bytes requested will always be a multiple of
+.SM
+.B M_BLKSZ
+(see \f4amallopt\fP below).
+The function should return the address of suitably large block of memory.
+This block need not be contiguous with the original arena memory.
+This block could be obtained from a number of sources, such as
+by allocating a new shared memory segment (via
+\f4shmget\fP(2));
+by mapping in another file (via \f4mmap\fP(2));
+or by calling \f4malloc\fP(3X)
+to enlarge ones data space.
+If the \f2grow\fP function decides that it cannot provide any more space it
+should return \f4(void\(**)\-1\fP.
+.PP
+Since the allocator package involves a two-tiered allocation
+strategy (small blocks and large blocks),
+various anomalies (such as not being able to allocate any space!)
+can arise when using very small non-growable arenas
+(
+.I len
+less than 64K).
+For this reason \f4acreate\fP will set
+.SM
+.B M_BLKSZ
+to 512
+and
+.SM
+.B M_MXFAST
+to 0 for all arenas whose size is less than 64K and is non-growable.
+These default values may be changed via
+\f4amallopt\fP.
+Users creating very small growable arenas may likewise have to tune the
+resulting arena's parameters.
+.PP
+If the arena is to be shared between multiple processes, then the
+.SM
+.B MEM_SHARED
+flag should be passed, and
+.I ushdr
+must be a pointer to a shared arena as returned from
+\f4usinit\fP(3P).
+Calling \f4acreate\fP with the
+.SM
+.B MEM_SHARED
+flag tells \f4acreate\fP
+to allocate a lock, which it then uses to single thread all accesses
+to the arena.
+It is the callers responsibility to ensure that the arena is accessible
+by all processes, and to provide a mechanism to exchange the addresses
+returned by \f4amalloc\fP between the various processes.
+.PP
+The \f4MEM_NOAUTOGROW\fP flag to \f4acreate\fP specifies that the
+memory for the arena is not going to come from a growable \f4mmap\fP file.
+This flag only has meaning for non-growable arenas.
+The default grow function (the one that slowly doles out up to
+\f2len\fP bytes) attempts to make sure that the memory being returned is
+in fact available.
+For all but autogrow mapped files, this is always the case - the memory
+was alloced somehow and by definition is available to the user process.
+Autogrow mapped files on the other hand can fail when first accessing a new
+largest page due to
+the file system on which the mmaped file resides being full.
+In this case, accesses to the file via a mapping result in a \f4SIGBUS\fP
+signal being sent.
+To avoid giving the applications (seemingly) random \f4SIGBUS\fP signals,
+the default grow function performs a system call to validate the memory,
+and if it gets a failure, returns \-1 (which subsequently causes \f4amalloc\fP
+to return NULL).
+.PP
+\f4adelete\fP
+causes any resources allocated for the arena (e.g. semaphores) to be freed.
+Nothing is done with the arena memory itself.
+No further calls to any
+arena functions should be made after calling
+\f4adelete\fP.
+.PP
+\f4amalloc\fP returns a pointer to a block of at least
+.I size\^
+bytes suitably aligned for any use.
+.PP
+The argument to \f4afree\fP
+is a pointer to a block previously allocated by
+\f4amalloc\fP;
+after
+\f4afree\fP
+is performed this space is made available for further allocation,
+and its contents are destroyed (see \f4amallopt\fP
+below for a way to change this behavior).
+.PP
+Undefined results will occur if the space
+assigned by \f4amalloc\fP
+is overrun or if some random number is handed to
+\f4afree\fP.
+It is always permitted to pass
+.SM NULL
+to
+\f4afree\fP.
+.PP
+\f4arealloc\fP changes the size of the block pointed to by
+.I ptr\^
+to
+.I size\^
+bytes and returns a pointer to the (possibly moved)
+block.
+The contents will be unchanged up to the
+lesser of the new and old sizes.
+In the special case of a null
+.IR ptr\^ ,
+\f4arealloc\fP degenerates to
+\f4amalloc\fP.
+A zero
+.I size
+causes the passed block to be freed.
+.PP
+\f4acalloc\fP allocates space for an array of
+.I nelem\^
+elements of size
+.IR elsize .
+The space is initialized to zeros.
+.PP
+\f4arecalloc\fP combines \f4arealloc\fP and \f4acalloc\fP.
+If the size of the block increases, any new bytes are initialized
+to zero.
+Note that for this to work properly, all allocations of
+a given pointer must go through
+\f4arecalloc\fP.
+If the original pointer was allocated with either
+\f4amalloc\fP or \f4arealloc\fP
+some new bytes may not be set properly to zero.
+.PP
+\f4amemalign\fP allocates
+\f2size\fP
+bytes on a specified alignment boundary,
+and returns a pointer to the allocated block.
+The value of the returned address is guaranteed to be
+an even multiple of
+\f2align\fP.
+Note: the value of
+.I align
+must be a power of two, and must be greater than
+or equal to the size of a word, or, for 64 bit objects, the size
+of a doubleword.
+.PP
+\f4amallocblksize\fP
+returns the actual size of the block pointed to by
+.IR ptr .
+The returned size may be greater than the original requested size due
+to padding and alignment.
+.PP
+\f4amallopt\fP provides for control over the allocation algorithm.
+The available values for 
+.I cmd\^
+are:
+.TP .90i
+\f4M_MXFAST\fP
+Set 
+.IR maxfast
+to 
+.IR value. 
+The algorithm allocates all blocks at or below the size
+of 
+.IR maxfast
+in large groups and then doles them out very quickly.
+The default value for
+.IR maxfast
+is 28.
+.TP
+\f4M_NLBLKS\fP
+Set 
+.IR numlblks
+to 
+.IR value .
+The above mentioned ``large groups'' each contain
+.I numlblks\^
+blocks.  
+.I numlblks\^
+must be greater than 0.
+The default value for 
+.I numlblks\^
+is 100.
+.TP
+\f4M_GRAIN\fP
+Set 
+.I grain\^
+to 
+.IR value .
+Requests less than or equal to
+.I maxfast\^
+will have the size of a pointer added to them and be rounded up to
+the next multiple of
+.IR grain .
+.I value\^
+will be rounded up to a multiple of the alignment size (16 bytes)
+when
+.I grain\^
+is set.
+.I grain\^
+must be greater than 0.
+The default value of 
+.I grain\^
+is 16.
+.TP
+\f4M_KEEP\fP
+Preserve data in a freed block until the next
+\f4amalloc\fP, \f4arealloc\fP, or \f4acalloc\fP.
+This option is provided only for compatibility with the old
+version of 
+\f4malloc\fP and is not recommended.
+.TP
+\f4M_DEBUG\fP
+Turns debug checking on if
+.I value
+is not equal to 0, otherwise turns debug checking off.
+When debugging is on, each call to 
+\f4amalloc\fP and \f4afree\fP
+causes the entire malloc arena
+to be scanned and checked for consistency.
+This option may be invoked at any time.
+Note that when debug checking is on, the performance of
+\f4amalloc\fP is reduced considerably.
+.TP
+\f4M_BLKSZ\fP
+When
+\f4amalloc\fP
+requires additional space, it uses 
+\f4sbrk\fP(2)
+to allocate enough memory for the current
+\f4amalloc\fP
+request rounded up to a minimum size (default is 8K).
+The new size is set to
+.I value
+after it has been rounded up to the current block alignment.
+.I value
+must be at least 512 bytes.
+If a lot of space is to be allocated,
+setting the size larger can cut down on the system overhead.
+This option may be invoked at any time.
+.TP
+\f4M_MXCHK\fP
+By default,
+\f4amalloc\fP
+trades off time versus space - if anywhere in the arena there is a block
+of the appropriate size,
+\f4amalloc\fP
+will find and return it.
+If the arena has become fragmented due to many
+\f4amalloc\fPs and \f4afrees\fP,
+it is possible that \f4amalloc\fP
+will have to search through many blocks to find one of the appropriate size.
+If the arena is severely fragmented, the average
+\f4amalloc\fP
+time can be on the order of tens of milliseconds (as opposed to a normal
+average of tens of microseconds).
+This option allows the user to place a limit on the number of blocks that
+\f4amalloc\fP
+will search through before allocating a new block of space from the system.
+Small values (less than 50) can cause much more memory to be allocated.
+Values around 100 (the default) cause very uniform response time,
+with a small space penalty.
+This option may be invoked at any time.
+.TP
+\f4M_FREEHD\fP
+When
+.I value
+is not zero, \f4afree\fP, \f4arecalloc\fP, and \f4arealloc\fP
+will place any freed memory in the front of the free list(s)
+instead of at the end
+(which is the default).
+Some applications will benefit in processing speed and space
+compaction by having freed memory placed at the beginning of the free list(s)
+(a zero \f2value\fP).
+.TP
+\f4M_CLRONFREE\fP
+With this option, all blocks that are freed are set to
+.IR value .
+This option may be set at any time, but there is no way to turn it off.
+That part of the beginning of a freed block which is used for internal pointers
+will of course not be set to
+.IR value .
+.TP
+\f4M_CRLOCK\fP
+Instructs the arena to do whatever is necessary to make it MP-safe.
+This is equivalent to passing the \f4MEM_SHARED\fP option to \f4acreate\fP
+but may be done at any time.
+It is used by \f4usinit\fP(3P) to initialize the arena it uses to honor
+\f4usmalloc\fP calls.
+.PP
+These values are defined in the \f4<malloc.h>\fP
+header file.
+.PP
+\f4amallopt\fP
+may be called repeatedly, but, for most commands,
+may not be called after the first small block is allocated.
+.PP
+\f4amallinfo\fP
+provides instrumentation describing space usage.
+It returns the structure:
+.PP
+.ds HZ	:::::int:keepcost;::::
+.nf
+struct mallinfo  {
+        int arena;	\h'|\w'\*(HZ'u'/\(** total space in arena \(**/
+        int ordblks;	\h'|\w'\*(HZ'u'/\(** number of ordinary blocks \(**/
+        int smblks;	\h'|\w'\*(HZ'u'/\(** number of small blocks \(**/
+        int hblkhd;	\h'|\w'\*(HZ'u'/\(** space in holding block headers \(**/
+        int hblks;	\h'|\w'\*(HZ'u'/\(** number of holding blocks \(**/
+        int usmblks;	\h'|\w'\*(HZ'u'/\(** space in small blocks in use \(**/
+        int fsmblks;	\h'|\w'\*(HZ'u'/\(** space in free small blocks \(**/
+        int uordblks;	\h'|\w'\*(HZ'u'/\(** space in ordinary blocks in use \(**/
+        int fordblks;	\h'|\w'\*(HZ'u'/\(** space in free ordinary blocks \(**/
+        int keepcost;	\h'|\w'\*(HZ'u'/\(** space penalty if keep option \(**/
+			\h'|\w'\*(HZ'u'/\(** is used \(**/
+}
+.fi
+.PP
+This structure is defined in the \f4<malloc.h>\fP header file.
+The structure is zero until after the first space has been allocated from
+the arena.
+.PP
+Each of the allocation routines returns a pointer
+to space suitably aligned (after possible pointer coercion)
+for storage of any type of object.
+.SH SEE ALSO
+brk(2), malloc(3X), usinit(3P), usnewlock(3P), usmalloc(3P).
+.SH DIAGNOSTICS
+\f4acreate\fP
+will return NULL and set \f4errno\fP if either
+.I len
+is less than 1K or
+the
+.SM
+.B MEM_SHARED
+flag is passed but
+.I ushdr
+is
+.SM
+.BR NULL .
+\f4amalloc\fP,
+\f4arecalloc\fP,
+\f4amemalign\fP,
+\f4arealloc\fP
+and
+\f4acalloc\fP
+return a
+.SM NULL
+pointer if there is not enough available memory.
+On the first call to
+\f4amalloc\fP,
+\f4arecalloc\fP,
+\f4arealloc\fP,
+or
+\f4acalloc\fP
+\-1 may be returned and \f4errno\fP
+set if the
+.SM
+.B MEM_SHARED
+flag is set and it is impossible to allocate a lock.
+When \f4arealloc\fP or \f4arecalloc\fP returns 
+\s-1NULL\s+1, the block pointed to by
+.I ptr\^
+is left intact.
+If \f4amallopt\fP
+is called after any allocation (for most
+.I cmd\^
+arguments) or if
+.I cmd\^ 
+or 
+.I value\^
+are invalid, non-zero is returned.
+Otherwise, it returns zero.

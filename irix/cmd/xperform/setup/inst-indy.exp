@@ -1,0 +1,183 @@
+#! /usr/sgitcl/bin/expect
+
+# This file is direct from Jerry Wei.  It's included for leveraging
+# purposes only.
+
+source runtest.base
+set env(DSQUERY) SGIBASE_CORP_1001_B
+set env(SYBASE) /usr/local/lib/pv+
+if {[catch {set connection [sybconnect adhoc_dbo gamma1]} errmsg]} {
+    puts "sybconnect failed, try later"
+   puts $errmsg
+   exit -1
+}
+set sybcmd "AH_sp_incrID AH_Testresult_n"
+catch {sybsql $connection $sybcmd} errmsg
+catch {sybnext $connection} rid
+spawn telnet annex9 5058
+log_file -a indy.log
+checkinprom
+if { $inprom < 0 } {
+2u_root
+# insert AH_Testresult_n to inform installation begining 
+testr_b inst mroot irix irix 6.2 1232792137 testowner $rid
+sleep 5
+sh_root_cmd { nvram console d }
+u_root2p_mon
+}
+set ip_dist "192.26.68.9"
+set mach_dist "sinead"
+load_mr_rdisk "sinead:/4DTEST/6.2-mar09h.G" "IP22"
+inst_cmd {sh echo "netmask 0xffffff00" > /etc/config/ifconfig-1.options}
+inst_cmd {sh /etc/init.d/network stop}
+inst_cmd {sh /etc/init.d/network start}
+from_dist "sinead:/4DTEST/6.2-mar09h.G" "sinead" "192.26.68.9" "indy" "150.166.65.21" 
+inst_cmd {set neweroverride on}
+inst_cmd {set verbose off}
+inst_cmd {keep N}
+inst_cmd {list i}
+choice_inst
+i_top2u_root
+exec rcp indy.log guest@sinead:/TS/LOGS/inst/indy.$rid
+# update AH_Testresult_n to inform installation ending
+testr_c 1 1 1 6.2 "http://sinead/TSLOGS/inst/indy.$rid" testowner $rid
+set sybcmd "AH_sp_incrID AH_Testresult_n"
+catch {sybsql $connection $sybcmd} errmsg
+catch {sybnext $connection} rid
+sleep 30
+set timeout -1
+2u_root
+# send mail to inform installation begining 
+set os_release [sh_cmd_out "uname -r | cut -f1 -d-" ]
+set alpha [sh_cmd_out "versions -n eoe.sw.unix | fgrep sw.unix | nawk '{print \$3}'"]
+testr_b acceptance all NULL NULL $os_release $alpha testowner $rid
+2u_root
+sh_root_cmd " cd /usr/tmp "
+sh_root_cmd { TimeOut 7200 }
+sh_root_cmd " ./acceptance"
+set t_pass 0
+set t_total 0
+set t_val 0
+sh_root_cmd " cd /usr/tmp "
+set outstr [sh_cmd_out " grep TESTRESULTS: accept.log "]
+catch {scan $outstr "TESTRESULTS: pass/%d total/%d val/%f" t_pass t_total t_val} ret
+if {$ret == 2} {
+    set t_val [expr $t_pass * 1.0 / $t_total]
+}
+sh_root_cmd " /bin/sh"
+sh_root_cmd " if \[ ! -r accept.log \]; then exit "
+sh_root_cmd "  elif \[ ! -r accept_err.log \]; then exit "
+sh_root_cmd "  else "
+sh_root_cmd " os=`uname -r|cut -f1 -d-` "
+sh_root_cmd " alp=`versions -n eoe.sw.unix|grep eoe.sw.unix|awk '{print \$3}'` "
+sh_root_cmd " host=`hostname` "
+sh_root_cmd " dom=`domainname | cut -f1 -d.` "
+sh_root_cmd " rsh guest@sinead.engr mkdir -p /TS/LOGS/acceptance/\$host.$rid "
+sh_root_cmd " rsh guest@sinead.engr chmod 777 /TS/LOGS/acceptance/\$host.$rid "
+sh_root_cmd " rsh guest@sinead.engr touch /TS/LOGS/acceptance/\$host.$rid/\$os-\$alp "
+sh_root_cmd " rcp -rp accept.log guest@sinead.engr:/TS/LOGS/acceptance/\$host.$rid "
+sh_root_cmd " rcp -rp accept_err.log guest@sinead.engr:/TS/LOGS/acceptance/\$host.$rid "
+sh_root_cmd " exit "
+sh_root_cmd " fi "
+set host [sh_cmd_out " hostname "]
+set os [sh_cmd_out " uname -r|cut -f1 -d- "]
+# send mail to inform testing ending
+testr_c $t_pass $t_total $t_val $os "http://sinead/TSLOGS/acceptance/$host.$rid" testowner $rid
+set sybcmd "AH_sp_incrID AH_Testresult_n"
+catch {sybsql $connection $sybcmd} errmsg
+catch {sybnext $connection} rid
+sleep 30
+sh_root_cmd " cd /usr/tmp/gtst "
+sh_root_cmd { TimeOut 7200 }
+sh_root_cmd " ./rungtst "
+sh_root_cmd " cd /usr/test_sgi/opengl "
+sh_root_cmd " ./runconform "
+sh_root_cmd " cd /usr/tmp/ogtst "
+sh_root_cmd " ./runogtst "
+sleep 30
+sh_root_cmd " killall Xsgi "
+sleep 30
+set timeout -1
+2u_root
+# send mail to inform installation begining 
+set os_release [sh_cmd_out "uname -r | cut -f1 -d-" ]
+set alpha [sh_cmd_out "versions -n eoe.sw.unix | fgrep sw.unix | nawk '{print \$3}'"]
+testr_b aim3 all NULL NULL $os_release $alpha testowner $rid
+2u_root
+sh_root_cmd { mkdir -p /usr/tmp }
+sh_root_cmd { rcp guest@sinead:/TS/SQP/aim/AIM/III/runaim3 /usr/tmp }
+sh_root_cmd " cd /usr/tmp "
+sh_root_cmd { TimeOut 15000 }
+sh_root_cmd " ./runaim3"
+set t_pass 0
+set t_total 0
+set t_val 0
+sh_root_cmd " cd /usr/tmp "
+set outstr [sh_cmd_out " grep TESTRESULTS: AIMIII.result "]
+catch {scan $outstr "TESTRESULTS: pass/%d total/%d val/%f" t_pass t_total t_val} ret
+if {$ret == 2} {
+    set t_val [expr $t_pass * 1.0 / $t_total]
+}
+sh_root_cmd " /bin/sh"
+sh_root_cmd " if \[ ! -r AIMIII.out \]; then exit "
+sh_root_cmd "  elif \[ ! -r AIMIII.result \]; then exit "
+sh_root_cmd "  else "
+sh_root_cmd " os=`uname -r|cut -f1 -d-` "
+sh_root_cmd " alp=`versions -n eoe.sw.unix|grep eoe.sw.unix|awk '{print \$3}'` "
+sh_root_cmd " host=`hostname` "
+sh_root_cmd " dom=`domainname | cut -f1 -d.` "
+sh_root_cmd " rsh guest@sinead.engr mkdir -p /TS/LOGS/aim3/\$host.$rid "
+sh_root_cmd " rsh guest@sinead.engr chmod 777 /TS/LOGS/aim3/\$host.$rid "
+sh_root_cmd " rsh guest@sinead.engr touch /TS/LOGS/aim3/\$host.$rid/\$os-\$alp "
+sh_root_cmd " rcp -rp AIMIII.out guest@sinead.engr:/TS/LOGS/aim3/\$host.$rid "
+sh_root_cmd " rcp -rp AIMIII.result guest@sinead.engr:/TS/LOGS/aim3/\$host.$rid "
+sh_root_cmd " exit "
+sh_root_cmd " fi "
+set host [sh_cmd_out " hostname "]
+set os [sh_cmd_out " uname -r|cut -f1 -d- "]
+# send mail to inform testing ending
+testr_c $t_pass $t_total $t_val $os "http://sinead/TSLOGS/aim3/$host.$rid" testowner $rid
+set sybcmd "AH_sp_incrID AH_Testresult_n"
+catch {sybsql $connection $sybcmd} errmsg
+catch {sybnext $connection} rid
+sleep 30
+set timeout -1
+2u_root
+# send mail to inform installation begining 
+set os_release [sh_cmd_out "uname -r | cut -f1 -d-" ]
+set alpha [sh_cmd_out "versions -n eoe.sw.unix | fgrep sw.unix | nawk '{print \$3}'"]
+testr_b aim9 all NULL NULL $os_release $alpha testowner $rid
+2u_root
+sh_root_cmd { mkdir -p /usr/tmp }
+sh_root_cmd { rcp guest@sinead:/TS/SQP/aim/AIM/IX/runaim9 /usr/tmp }
+sh_root_cmd " cd /usr/tmp "
+sh_root_cmd { TimeOut 7200 }
+sh_root_cmd " ./runaim9"
+set t_pass 0
+set t_total 0
+set t_val 0
+sh_root_cmd " cd /usr/tmp "
+set outstr [sh_cmd_out " grep TESTRESULTS: AIMIX.result "]
+catch {scan $outstr "TESTRESULTS: pass/%d total/%d val/%f" t_pass t_total t_val} ret
+if {$ret == 2} {
+    set t_val [expr $t_pass * 1.0 / $t_total]
+}
+sh_root_cmd " /bin/sh"
+sh_root_cmd " if \[ ! -r AIMIX.out \]; then exit "
+sh_root_cmd "  elif \[ ! -r AIMIX.result \]; then exit "
+sh_root_cmd "  else "
+sh_root_cmd " os=`uname -r|cut -f1 -d-` "
+sh_root_cmd " alp=`versions -n eoe.sw.unix|grep eoe.sw.unix|awk '{print \$3}'` "
+sh_root_cmd " host=`hostname` "
+sh_root_cmd " dom=`domainname | cut -f1 -d.` "
+sh_root_cmd " rsh guest@sinead.engr mkdir -p /TS/LOGS/aim9/\$host.$rid "
+sh_root_cmd " rsh guest@sinead.engr chmod 777 /TS/LOGS/aim9/\$host.$rid "
+sh_root_cmd " rsh guest@sinead.engr touch /TS/LOGS/aim9/\$host.$rid/\$os-\$alp "
+sh_root_cmd " rcp -rp AIMIX.out guest@sinead.engr:/TS/LOGS/aim9/\$host.$rid "
+sh_root_cmd " rcp -rp AIMIX.result guest@sinead.engr:/TS/LOGS/aim9/\$host.$rid "
+sh_root_cmd " exit "
+sh_root_cmd " fi "
+set host [sh_cmd_out " hostname "]
+set os [sh_cmd_out " uname -r|cut -f1 -d- "]
+# send mail to inform testing ending
+testr_c $t_pass $t_total $t_val $os "http://sinead/TSLOGS/aim9/$host.$rid" testowner $rid

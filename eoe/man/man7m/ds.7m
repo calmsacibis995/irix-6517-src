@@ -1,0 +1,429 @@
+'\"macro stdmacro
+'\" $Revision: 1.21 $
+.de _C	\" prefix for C code
+.RS 2
+.nf
+.ta 2 +2 +2 +2 +2 +2 +2 +2
+.ps -2
+.vs -2
+.ft C	\" fixed size font
+.sp
+..
+.de _E	\" end C code include
+.sp
+.ps	\" return to previous sizes
+.vs
+.ft P	\" return to previous font
+.DT
+.fi
+.RE
+..
+.TH DS 7M
+.SH NAME
+ds \- generic (user mode) SCSI driver
+.SH SYNOPSIS
+/dev/scsi/*
+.SH DESCRIPTION
+The
+.I ds
+interface provides user-mode access to the SCSI bus.
+It supports the programming interfaces described in
+.IR dslib (3)
+and below.
+.PP
+All of the 
+.I ds
+devices support the same general interface.
+The program calls
+.IR open ,
+gaining exclusive use of a specified SCSI device (that is, two processes
+may not both have the same device open at the same time via this
+driver).  Additionally, when the
+.B O_EXCL
+open flag set, exclusive use of the target will be acquired.
+No other SCSI driver will be able to use the target until it
+is closed.  If some other
+process has the target device open from another SCSI driver, the open
+will fail with errno set to
+.BR EBUSY .
+More than one process may in fact have the same target open via this
+driver, if one is a descendent of the other (via
+.IR sproc (2)
+or
+.IR fork (2).
+In this case, it is the responsibility of the program(s) to ensure that
+both processes do not both attempt to do commands at the same time.
+.PP
+After opening,
+.I ioctl
+calls can be made.  They will either be performed directly
+or turned into SCSI transactions.
+Finally, the
+.I close
+call releases the device for further use.
+.LP
+The critical interface definitions (request structure and codes, return
+codes, etc.) are defined in
+.IR <sys/dsreq.h> .
+In particular, most SCSI transactions are performed using the
+.I dsreq
+structure:
+._C
+typedef struct dsreq {        /* DEVSCSI ioctl structure      */
+
+                              /* devscsi prefix ...........   */
+  uint          ds_flags;     /* see DSRQ_* flags below       */
+  uint          ds_time;      /* timeout in milliseconds
+                                 (1 HZ used if zero)          */
+  __psint_t     ds_private;   /* private use by caller        */
+
+                              /* SCSI request .............   */
+  caddr_t       ds_cmdbuf;    /* command buffer               */
+  uchar_t       ds_cmdlen;    /* command buffer length        */
+  caddr_t       ds_databuf;   /* data buffer start            */
+  uint          ds_datalen;   /* total data length            */
+  caddr_t       ds_sensebuf;  /* sense buffer                 */
+  uchar_t       ds_senselen;  /* sense buffer length          */
+
+                              /* scatter-gather, etc. .....   */
+  dsiovec_t    *ds_iovbuf;    /* scatter-gather dma control   */
+  ushort        ds_iovlen;    /* length of scatter-gather     */
+  struct dsreq *ds_link;      /* for linked requests          */
+  ushort        ds_synch;     /* synchronous transfer control */
+  uchar_t       ds_revcode;   /* devscsi version code         */
+
+                              /* return portion ...........   */
+  uchar_t       ds_ret;       /* devscsi return code          */
+  uchar_t       ds_status;    /* status byte value            */
+  uchar_t       ds_msg;       /* message byte value           */
+  uchar_t       ds_cmdsent;   /* actual length command        */
+  uint          ds_datasent;  /* actual length user data      */
+  uchar_t       ds_sensesent; /* actual length sense data     */
+} dsreq_t;
+._E
+.LP
+The first two parts of the structure (devscsi prefix, SCSI request)
+must be filled in by the calling program.
+The third part (scatter-gather, etc.) is largely optional, and the
+last part (return portion) is used only for returned information.
+.LP
+Normally, the
+.I ds_data*
+fields are used to control data transmission.
+In this mode, all sent (received) data uses a single I/O buffer.
+If desired, however, the
+.I ds_iov*
+fields may be used (see DSRQ_IOV) to support a set of I/O buffers.
+The number of scatter gather entries supported is given by the V_MAX
+define, and is currently 1.
+The scatter-gather structure,
+.IR dsiovec_t ,
+is defined as follows:
+._C
+typedef struct dsiovec {  /* DEVSCSI scatter-gather control   */
+    caddr_t  iov_base;    /* i/o base */
+    int     iov_len;     /* i/o length */
+} dsiovec_t;
+._E
+.LP
+Different
+.I /dev/scsi
+implementations will support different
+subsets of the specification.
+Items in the following tables are therefore marked to indicate
+the likelihood of support:
+.RS 3
+.nf
+
+!  required  (must be supported)
+\&.  normal    (usually supported)
+?  unusual   (seldom  supported)
+.fi
+.RE
+.SH IOCTLS, ETC.
+.LP
+Several
+.IR ioctl s
+are supported by /dev/scsi:
+.nf
+
+.ta \w'DS_CONTIN    'u +\w'struct dsreq     'u +3
+DS_ENTER	struct dsreq	!	enter a request
+
+DS_CANCEL	struct dsreq	?	cancel a request
+DS_POLL	struct dsreq	?	sample a request
+DS_CONTIN	struct dsreq	?	continue a request
+
+DS_RESET	uint	.	obsolete -- see scsiha(7M)
+
+DS_SET	uint	!	set permanent flags
+DS_CLEAR	uint	!	clear permanent flags
+DS_GET	uint	!	get permanent flags
+DS_CONF	struct dsconf	!	get configuration data
+DS_ABORT	uint	.	send abort message
+
+.fi
+.LP
+The DS_ENTER
+.I ioctl
+is the basis for most interaction with the driver.
+The user program prepares a request structure, issues the
+.IR ioctl ,
+and examines the returned status information.
+.LP
+Other
+.IR ioctl s
+help to fill out the interface, however.
+The polled I/O
+.IR ioctl s
+(DS_CANCEL, DS_POLL, DS_CONTIN) are for support
+asynchronous /dev/scsi operations (not in the SCSI sense, but in the
+I/O sense); these are not supported under IRIX.
+The DS_ABORT
+.IR ioctl ,
+provides the ability to send an abort message; it is not implemented
+for all host adapter types.  The abort message will be sent only
+when the target has no commands pending, and is therefore useful
+only to abort immediate mode commands, or target specific functions.
+.LP
+The permanent flag
+.IR ioctl s
+(DS_SET, DS_GET, DS_CLEAR)
+allow access to internal driver flag bits.
+These are undefined, implementation specific, and should be avoided
+if portable code is desired.
+The DS_GET ioctl returns bits whose definitions begin with DSG_
+(from
+.IR dsreq.h )
+under IRIX 5.1.  Not all of the low level host adapter drivers support
+all (or even any) of these bits.
+.LP
+The DS_CONF
+.IR ioctl ,
+by contrast, allows a user program to detect (and perhaps handle)
+implementation-specific configuration parameters:
+._C
+typedef struct dsconf {         /* DEVSCSI configuration structure */
+	uint dsc_flags;        /* DSRQ flags honored by driver */
+	uint dsc_preset;       /* DSRQ flag  preset values */
+	uint dsc_bus;          /* # of this SCSI bus */
+	uint dsc_imax;         /* # of ID's per bus */
+	uint dsc_lmax;         /* # of LUN's per ID */
+	uint dsc_iomax;        /* maximum length of an I/O on this system */
+	uint dsc_biomax        /* maximum length of buffered I/O's */
+} dsconf_t;
+._E
+.LP
+Most of the dsconf members (
+.IR dsc_bus ,
+.IR dsc_*max )
+have obvious meanings.  The
+.IR dsc_iomax
+parameter is equivalent to the kernel tunable parameter
+.I maxdmasz,
+except that
+.IR dsc_iomax
+is in bytes, rather than pages.
+The
+.I dsc_flags
+and
+.I dsc_preset
+words, require more explanation.
+They work together to indicate how the driver will interpret the
+DSRQ_* flag bits.
+.LP
+These bits are ORed by the driver with the
+.I ds_flags
+word in
+.IR dsreq ,
+request specific driver actions.
+The implementation is then free to reject, honor, or ignore them.
+Specifically, options will not be turned off, but may be rejected via
+the DSRT_UNIMPL return code.
+Options may be turned on without any notice whatsoever.
+.LP
+The
+.I dsc_flags
+member of
+.I dsconf
+indicates which flags the implementation promises to honor.
+The
+.I dsc_preset
+word indicates, for each flag not honored, the value
+defined by the implementation.
+By appropriate logical operations, an application may determine which
+DSRQ_* options are actually available.
+The action in parentheses is taken when the flag is not set.
+
+Note that the DSRQ_SYNXFR and DSRQ_ASYNXFR flags should not be used in
+all commands, only when strictly necessary, as such negotiations are
+relatively expensive.  Not all host adapter drivers will honor these
+flags; for the wd93 host adapter, the default for the
+.I ds
+driver is to operate in the SCSI bus asynchronous mode.  For other
+host adapters, the default is to operate in synchronous mode and wide
+mode if it is supported by the target.  If necessary, such parameters
+can usually be controlled by editing the master file for the particular
+host adapter driver (i.e. /var/sysgen/master.d/wd95 for wd95,
+/var/sysgen/master.d/scip for scip, etc.).
+.nf
+
+.ta \w'DSRQ_MIXRDWR    'u +3
+devscsi options:
+
+DSRQ_ASYNC	?	no (yes) sleep until request done
+DSRQ_SENSE	.	yes (no) auto get sense on status
+DSRQ_TARGET	?	target (initiator) role
+
+select options:
+
+DSRQ_SELATN	.	select with (without) atn
+DSRQ_DISC	.	identify disconnect (not) allowed
+DSRQ_SYNXFR	.	attempt SCSI synchronous transfer negotiation
+DSRQ_ASYNXFR	.	attempt SCSI asynchronous transfer negotiation
+DSRQ_SELMSG	.	send supplied (generate) message
+
+data transfer options:
+
+DSRQ_IOV	.	scatter-gather (not) specified
+DSRQ_READ	!	input from SCSI bus
+DSRQ_WRITE	!	output to	SCSI bus
+DSRQ_BUF	.	buffered (direct) data transfer
+
+progress/continuation callbacks:
+
+DSRQ_CALL	?	notify progress (completion-only)
+DSRQ_ACKH	?	(don't) hold ACK asserted
+DSRQ_ATNH	?	(don't) hold ATN asserted
+DSRQ_ABORT	?	abort msg until bus clear
+
+host options (non-portable):
+
+DSRQ_TRACE	.	trace (no) this request
+DSRQ_PRINT	.	print (no) this request
+DSRQ_CTRL1	.	request with host control bit 1
+DSRQ_CTRL2	.	enable driver debug printfs during ioctl
+		  (if program has superuser privileges)
+
+additional flags:
+
+DSRQ_MIXRDWR	?	request can both read and write
+.fi
+.SH RETURN CODES
+.LP
+The driver has a number of possible return codes, signifying failures
+on the part of the driver, the host SCSI software, or the protocol.
+Some return codes may be mapped to more generic return codes
+(DSRT_DEVSCSI, DSRT_HOST, DSRT_PROTO).
+Note that the
+.I ds_status
+field contains valid completion status only
+when the command completed 'normally'.  On timeouts and some other
+errors, this field is set to 0xff on return to indicate that is not
+valid. The
+.I ds_ret
+may be non-zero even if the command completed successfully; i.e.
+on partial i/o completion, and when a request sense has been done.
+.nf
+
+devscsi software returns:
+
+.ta \w'DSRT_TIMEOUT     'u +3
+DSRT_DEVSCSI	!	general devscsi failure
+DSRT_MULT	!	request rejected
+DSRT_CANCEL	!	lower request cancelled
+DSRT_REVCODE	!	software obsolete, must recompile
+DSRT_AGAIN	!	try again, recoverable bus error
+DSRT_UNIMPL	!	unimplemented request option
+
+host SCSI software returns:
+
+DSRT_HOST	!	general host failure
+DSRT_NOSEL	.	no unit responded to select
+DSRT_SHORT	!	incomplete transfer (not an error)
+DSRT_OK	!	complete	transfer (no error status)
+DSRT_SENSE	!	cmd w/ status, sense data gotten
+DSRT_NOSENSE	!	cmd w/ status, error getting sense
+DSRT_TIMEOUT	!	request idle longer than requested
+DSRT_LONG	!	target overran data bounds
+
+protocol failures:
+
+DSRT_PROTO	!	misc. protocol failure
+DSRT_EBSY	.	busy dropped unexpectedly
+DSRT_REJECT	.	message reject
+DSRT_PARITY	.	parity error on SCSI bus
+DSRT_MEMORY	.	host memory error
+DSRT_CMDO	.	error during command phase
+DSRT_STAI	.	error during status	phase
+.fi
+.SH SUPPORT CODE
+.LP
+A number of ancillary macros, functions, and data structures are
+defined in
+.I <dslib.h>.
+While not strictly necessary, these should facilitate the task of
+programming SCSI control programs.
+.SH ADDITIONAL INFORMATION
+Consult the SCSI standards documents, and the manuals for the
+device you are working with for more information.
+The "SCSI 1" specification document is called
+.I SCSI Specification, ANSI X3T9.2/86-109.
+Also of interest is the Common Command Set specification document
+.I SCSI CCS Specification, ANSI X3T9.2/85-3
+.SH NOTES
+.LP
+The 
+.I ds
+programming interface contains a number of optional features.
+The control program must therefore be able to react properly, should a
+desired function be unavailable.
+.LP
+The peculiarities of any given SCSI device are the responsibility
+of the control program.
+The
+.I /dev/scsi
+interface merely allows communication to take place.
+.LP
+Since the driver provides direct access to the SCSI bus, the system
+administrator must be very careful in setting up the permissions on
+the device files, lest security holes occur.
+.LP
+No kernel read/write interface is provided, due to the variety of forms
+these commands take in terms of both size and field definitions.
+.LP
+No support currently exists for target mode or asynchronous (polled) I/O.
+.LP
+No checking is currently performed for potentially dangerous actions
+(Copy, ID and code downloading, etc.).
+.SH NOTE
+The device for each controller, id, lun trio is exclusive open,
+in that once that combination is opened via this interface or
+the 'normal' system interfaces, it may not be opened again, until
+released by the other user.
+The
+normal error returned in this case is EBUSY.  The driver
+is semaphored such that multiple copies of the file descriptor
+may be used, either by the same program, or its children via fork,
+etc.
+.SH FILES
+.nf
+\f3/dev/scsi/sc\f1\f2controller#\f1\f3d\f1\f2target#\f1\f3l\f1\f2lun#
+\f3/dev/scsi/\f1\f2nodename\f1\f3/lun\f1\f2lun#\f1\f3/c\f1\f2controller#\f1\f3p\f1\f2port#
+.fi
+.SH SEE ALSO
+.LP
+dslib(3) for discussion of routines to simplify the use of the driver.
+.br
+dksc(7M) for a NOTES section describing some configuration options
+of the underlying SCSI driver.
+.br
+scsiha(7M) for operations on the entire SCSI bus
+.br
+cdintro(3) for discussion of a library above dslib that supports
+use of audio CD's in the CD-ROM drive.
+.br
+scsicontrol(1m) for a program that uses this driver to probe
+and control scsi devices.
+.\" origin: code licensed from Gene Dronek of Vulcan laboratory
+.\" and Rich Morin of Canta Forda Computer Laboratory.

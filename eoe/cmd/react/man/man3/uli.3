@@ -1,0 +1,310 @@
+.\" %Z%%M% %I% %E% SMI; from _source_
+.TH ULI 3 "7 April 1995"
+.SH NAME
+uli,vmeuli \- user level interrupts
+.SH INTRODUCTION
+.LP
+The user level interrupt (ULI) facility allows a hardware interrupt to
+be handled by a user process.
+.LP
+A user process may register a function, linked into the process in the
+normal fashion, to be called directly by the kernel when a particular
+interrupt is received. The process, referred to as a ULI process,
+effectively becomes multi-threaded, with the main process thread
+possibly running simultaneously with the interrupt handler thread. The
+interrupt handler is called asynchronously, at interrupt level. It
+runs in a state somewhere between interrupt mode and user mode; it is
+a true interrupt handler in the respect that it cannot be preempted by
+any user process and may only be interrupted by a higher priority
+interrupt, but it runs in usermode and thus has access only to the
+process's address space and may not execute privileged instructions.
+.LP
+The ULI facility is intended primarily to simplify the creation of
+device drivers for unsupported devices. An error in programming in the
+driver will result in nothing more serious than the termination of a
+process rather than crashing the entire system, and the developer need
+not know anything about interfacing a driver into the kernel.
+.SH AVAILABILITY
+.LP
+User level interrupts are device dependent and are currently
+implemented for vme interrupts (see usrvme(7)) and external interrupts
+(see ei(7)). In addition, the ULI facility is currently restricted to
+Challenge/Onyx and Power Challenge/Power Onyx, Octane, and SN0 platforms.
+The user must either be superuser or have the CAP_DEVICE_MGT capability.
+.SH CONFIGURATION
+.PP
+No special configuration is required to register the external
+interrupt as a ULI. On Challenge/Onyx systems only, the following configuration
+line must be added to the file /var/sysgen/system/irix.sm (see
+autoconfig(1))
+.PP
+VECTOR: bustype=VME module=vmeuli ipl=\f4ipl\fP adapter=\f4adap\fP
+ctlr=\f4ctlr\fP vector=\f4vec\fP
+.PP
+\f4ipl\fP is the interrupt priority that the device will interrupt at,
+and must be in the range 1 to 7. \f4adap\fP is the adapter number of
+the VME bus that the device is on, typically zero. The optional vector
+number \f4vec\fP reserves an interrupt vector for devices which do not
+have a programmable interrupt vector. This argument is unnecessary for
+devices which have a programmable vector number. The optional
+\f4ctlr\fP number is required if more than one vmeuli device is
+configured into the same kernel. Each VECTOR line must have a distinct
+\f4ctrl\fP number.  A separate line of the above type must be added
+for every distinct combination of ipl, adapter and possibly vector
+that will be used.
+.SH SYNOPSIS
+#include <sys/uli.h>
+.PP
+link with -luli
+.PP
+void *\f4ULI_register_vme\fP(int fd, void (*func)(void*), void *arg,
+int nsemas, char *stack, int stacksize, int ipl, int *vec);
+.PP
+void *\f4ULI_register_ei\fP(int fd, void (*func)(void*), void *arg,
+int nsemas, char *stack, int stacksize);
+.PP
+void *\f4ULI_register_pci\fP(int fd, void (*func)(void*), void *arg,
+int nsemas, char *stack, int stacksize, int lines);
+.PP
+void \f4ULI_block_intr\fP(void *intr);
+.PP
+void \f4ULI_unblock_intr\fP(void *intr);
+.PP
+void \f4ULI_sleep\fP(void *intr, int sema);
+.PP
+void \f4ULI_wakeup\fP(void *intr, int sema);
+.SH DESCRIPTION
+.PP
+All registration functions return an opaque identifier for the ULI,
+which is passed as an argument to various other ULI functions. All
+registration functions have the following common arguments:
+.PP
+.I func
+is a pointer to the function that will handle the interrupt.
+.I arg
+is the argument that will be passed to the interrupt handler.
+.I nsemas
+is the number of sleeping semaphores that will be allocated for this
+ULI (see ULI_sleep below).
+If
+.I stack
+is non-NULL, it points to a block of memory to be used as the stack
+for the ULI handler, and
+.I stacksize
+specifies the size of this block of memory. Any block of memory
+normally accessible to the user process may be used. If
+.I stack
+is NULL and
+.I stacksize
+is non-zero, a stack of size
+.I stacksize
+is allocated internally. If
+.I stack
+is NULL and
+.I stacksize
+is zero, a stack of size 1024 bytes is allocated internally.
+.PP
+Behavior is undefined if the ULI handler overruns its stack.
+.PP
+\f4ULI_register_vme\fP requests that a vme interrupt be handled as a
+ULI. In addition to the parameters listed above, 
+.I fd
+is an open file descriptor to a device in /dev/vme/ which the user has
+opened to access the vme device in question (see usrvme(7)).
+.I ipl
+is the vme interrupt level that the vme device will interrupt at.
+.I vec
+is a pointer to an integer used as both a parameter and return value.
+If the device being registered has a fixed interrupt vector value,
+this value should be passed in as the parameter. On return, the value
+remains unchanged. If the device being registered has a programmable
+interrupt vector value, the value VMEVEC_ANY should be passed in as
+the parameter, and the return value will be a dynamically allocated
+vector value. This value should then be programmed into the hardware
+by the caller in order to receive the interrupt properly.
+.PP
+\f4ULI_register_ei\fP requests that the external interrupt be handled
+as a ULI. In addition to the parameters listed above,
+.I fd
+is an open file descriptor to the EI device (see ei(7)).
+.PP
+\f4ULI_register_pci\fP requests that a PCI interrupt be handled
+as a ULI. In addition to the parameters listed above,
+.I fd
+is an open file descriptor to the pciba device (see pciba(7)) and
+.I lines
+is a bitmask indicating which interrupt lines to attach to, with bits
+0,1,2,3 corresponding to PCI interrupt lines A,B,C,D respectively.
+.PP
+Once one of the above registration functions has been called, the
+handler function may be called asynchronously any time the associated
+hardware sees fit to generate an interrupt. Any state needed by the
+handler function must have been initialized before ULI registration.
+The process will continue to receive the ULI until it exits, at which
+time the system reverts to handling the interrupt in the kernel. The
+cpu which executes the ULI handler is the cpu which would execute the
+equivalent kernel-based interrupt handler if the ULI were not
+registered, i.e. the cpu to which the device sends the interrupt.
+.PP
+The handler function is called as
+.PP
+func(void *arg);
+.PP
+where
+.I arg
+is the value given at registration time.
+.PP
+\f4ULI_block_intr\fP blocks a ULI.
+.I intr
+is the identifier for the ULI as returned by the registration
+function.  If the handler is currently running on another cpu in an MP
+environment, ULI_block_intr will spin until the handler has completed.
+.PP
+\f4ULI_unblock_intr\fP unblocks a ULI.
+.I intr
+is the identifier for the ULI as returned by the registration
+function. Interrupts posted while the ULI was blocked will be handled
+at this time. If multiple interrupts occur while blocked, the handler
+function will be called only once when the interrupt is unblocked.
+.PP
+\f4ULI_sleep\fP blocks the calling process on a semaphore associated
+with a particular ULI.
+.I intr
+is the identifier for the ULI as returned by the registration
+function.
+.I sema
+is the number of the semaphore to sleep on. As noted above, the
+registration function initializes the ULI with a caller-specified number
+of semaphores.
+.I sema
+must be a value in the range 0 to n-1 where n is the number of
+semaphores. Note that ULI_sleep may return before the event being
+awaited has occurred, thus it should be called within a while loop, as
+in the example:
+.PP
+.Ex
+while(need_to_sleep)
+    ULI_sleep(ULIid, semanum);
+.PP
+\f4ULI_wakeup\fP wakes up the next process sleeping on a semaphore
+associated with a particular ULI.
+.I intr
+is the identifier for the ULI as returned by the registration
+function.
+.I sema
+is the number of the semaphore (see ULI_sleep). If ULI_wakeup is
+called before the corresponding ULI_sleep, the call to ULI_sleep will
+return immediately without blocking.
+.SH DIAGNOSTICS
+.PP
+On error, 
+.I ULI_register_vme
+returns a NULL pointer and sets errno to one of the following:
+.TP
+.B ENOMEM
+Not enough memory for the requested operation
+.TP
+.B ENODEV
+The vmeuli device is not configured into the system
+.TP
+.B EINVAL
+.I nsemas
+is negative, or the specified
+.I ipl
+or the optional
+.I vec
+have not been configured for use by the vmeuli device (see above)
+.TP
+.B EBUSY
+The requested interrupt is already in use as a ULI, or the maximum
+number of ULIs are already in use, or no more vme vectors are
+available for dynamic allocation.
+.PP
+On error,
+.I ULI_register_ei
+returns a NULL pointer and sets errno to one of the following:
+.TP
+.B ENOMEM
+Not enough memory for the requested operation
+.TP
+.B EINVAL
+.I nsemas
+is negative
+.TP
+.B EBUSY 
+The external interrupt is already in use as a ULI, or the maximum
+number of ULIs are already in use.
+.PP
+.I ULI_sleep
+and
+.I ULI_wakeup
+return 0 on success or -1 with errno set to EINVAL if the passed
+arguments are bad.
+.SH RESTRICTIONS
+.PP
+The ULI handler function may not make any system calls or use the
+floating point coprocessor. Both operations will cause the handler
+function to abort and a signal to be sent to the process. The ULI
+handler function may use C library routines provided they meet the
+above two requirements. Further, C library routines and more generally
+any function in the process which is non-reentrant (i.e. accesses
+global data) must not run simultaneously in the interrupt thread and
+the main thread, as this will cause corruption of the global data.
+Accesses to global data or calls to non-reentrant functions must be
+protected with a ULI_block_intr-ULI_unblock_intr pair in the main
+thread. Protection is implicit in the interrupt thread, with no
+special action necessary. Note that this can be avoided by simply not
+using global data. The C library provides most functions in reentrant
+form by compiling the entire process with _SGI_REENTRANT_FUNCTIONS
+defined (see intro(3))
+.PP
+Of the ULI library functions listed above, only ULI_wakeup may be
+called by the handler function.
+.PP
+Any program text or data which the ULI handler function will access
+must be pinned into memory to eliminate the possibility of page
+faults, which would be fatal to the ULI process. A variety of
+facilities exist to accomplish this (see plock(2) and mpin(2)). Note
+that in addition to process text and data segments, any mapped files
+which are accessed by the ULI handler must be pinned into
+memory. Mapped device files need not be pinned since they cannot be
+swapped to secondary storage.
+.PP
+The ULI_sleep and ULI_wakeup functions may only be used inside of a
+share group and cannot wake up arbitrary processes.
+.SH DEBUGGING
+Runtime debuggers such as dbx may not be used to debug the ULI handler
+since the handler runs at interrupt level. Insertion of breakpoints
+into the handler code simply causes the ULI process to abort with a
+core dump. Further, print statements may not be inserted into the ULI
+handler since system calls are illegal. However, if an exception
+occurs in the ULI handler, the ULI process will abort and produce a
+core file which may be analyzed in the normal fashion. Note that an
+actual core file must be produced. If the ULI process is run within a
+debugger and aborts without producing a core file, the debugger will
+not be able to tell where the exception occurred.
+.PP
+All exceptions except for TLB exceptions in the ULI handler are fatal
+to the handler and cause the ULI process to abort with a core dump.
+The signal killing the process reflects the nature of the exception.
+The following signals may be posted to the ULI process:
+.TP
+.B SIGSEGV
+an access was made to an invalid memory location, or to a page which
+has been swapped out (see the note on plock() above).
+.TP
+.B SIGBUS
+an access was made to an improperly aligned memory location, to a
+location in the kernel's address space, or a hardware bus error
+occurred.
+.TP
+.B SIGILL
+an illegal instruction was executed. Illegal instructions for the ULI
+handler include syscalls, floating point instructions, system
+coprocessor instructions, breakpoints and trap instructions.
+.TP
+.B SIGFPE
+an integer overflow occurred. Integer overflow may be avoided by
+using unsigned integers for addition and subtraction.
+.SH SEE ALSO
+ei(7), usrvme(7), realtime(5)

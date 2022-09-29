@@ -1,0 +1,836 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	advXfsPnl
+# Version:	$Revision: 1.8 $
+# Synopsis:	Encapsulates the panel that displays advanced XFS options.
+# Functions:	advXfs:realize
+#		advXfs:manage
+#		advXfs:setData
+#		advXfs:setResource
+#		advXfs:setSize
+#		advXfs:setClass
+#		advXfs:getData
+#		advXfs:_create
+#		advXfs:_setDefaults
+#		advXfs:_setDefaultPartLogSize
+#		advXfs:_getBlockBytes
+#		advXfs:_getInodeBytes
+#		advXfs:_numToPow
+#		advXfs:_hasLog
+#		advXfs:_hasRt
+#		advXfs:_logTbCallback
+#		advXfs:_biOmCallback
+#		advXfs:_biTfCallback
+#		advXfs:_biMvCallback
+#%COMMENT_END
+
+#########################################
+#		Public			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	advXfs:realize
+# Synopsis:	Creates an instance of the panel.  On the first call, any
+#		class-wide data is initialized.  If an instance of this
+#		panel already exists for the given handle, no action is taken
+#		other than to return the top-level widget for the panel.
+# Arguments:	- handle	An identifier that is used as a key for storing
+#				(and later retrieving) the created widgets and
+#				any instance specific data.
+#		- parent	The parent for the created panel.
+#%COMMENT_END
+proc advXfs:realize { handle parent } \
+{
+	global		_GW_advXfs _GD_advXfs
+
+	if {! [info exists _GD_advXfs(initialized)]} {
+		set _GD_advXfs(texts)		\
+			{XFS_DATA_SIZE XFS_LOG_SIZE XFS_RT_EXTSIZE XFS_RT_SIZE}
+		set _GD_advXfs(opts)		\
+			{XFS_BLK XFS_INODE}
+		set _GD_advXfs(toggles) {XFS_LOG_INTERNAL}
+
+		set _GD_advXfs(XFS_BLK,opts)	\
+			{XFS_BLK_SIZE XFS_BLK_SIZE_LOG}
+		set _GD_advXfs(XFS_INODE,opts) \
+			{XFS_INODE_SIZE XFS_INODE_LOG XFS_INODE_PERBLK}
+
+		set _GD_advXfs(def,XFS_BLK_SIZE)	4096
+		set _GD_advXfs(min,XFS_BLK_SIZE)	512
+		set _GD_advXfs(max,XFS_BLK_SIZE)	65536
+		set _GD_advXfs(min,XFS_BLK_SIZE_LOG)	\
+			[advXfs:_numToPow $_GD_advXfs(min,XFS_BLK_SIZE)]
+		set _GD_advXfs(max,XFS_BLK_SIZE_LOG)	\
+			[advXfs:_numToPow $_GD_advXfs(max,XFS_BLK_SIZE)]
+
+		set _GD_advXfs(def,XFS_INODE_SIZE)	256
+		set _GD_advXfs(min,XFS_INODE_SIZE)	128
+		set _GD_advXfs(max,XFS_INODE_SIZE)	2048
+		set _GD_advXfs(min,XFS_INODE_LOG)	\
+			[advXfs:_numToPow $_GD_advXfs(min,XFS_INODE_SIZE)]
+		set _GD_advXfs(max,XFS_INODE_LOG)	\
+			[advXfs:_numToPow $_GD_advXfs(max,XFS_INODE_SIZE)]
+		set _GD_advXfs(min,XFS_INODE_PERBLK)	2
+		set _GD_advXfs(max,XFS_INODE_PERBLK)	512
+
+		set _GD_advXfs(def,XFS_RT_EXTSIZE)	65536
+		set _GD_advXfs(min,XFS_RT_EXTSIZE)	65536
+		set _GD_advXfs(max,XFS_RT_EXTSIZE)	1073741824
+
+		set _GD_advXfs(initialized) true
+	}
+
+	if {! [info exists _GW_advXfs($handle,panel)]} {
+		set _GD_advXfs($handle,class) ""
+		set _GW_advXfs($handle,panel) [advXfs:_create $handle $parent]
+		advXfs:_setDefaults $handle
+		advXfs:_hasRt $handle false
+	}
+
+	return $_GW_advXfs($handle,panel)
+}
+
+#%COMMENT_BEGIN
+# Function:	advXfs:manage
+# Synopsis:	Manages an instance of the panel.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc advXfs:manage { handle } \
+{
+	global	_GW_advXfs
+	if {[info exists _GW_advXfs($handle,panel)]} {
+		$_GW_advXfs($handle,panel) manageChild
+	}
+}
+
+#########################################
+#	Public: Set Data		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	advXfs:setData
+# Synopsis:	Given a list of keyword/value pairs, fill in the appropriate
+#		field with the appropriate value.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- lst		A list of keyword/value pairs.
+#%COMMENT_END
+proc advXfs:setData { handle lst } \
+{
+	global		_GW_advXfs _GD_advXfs
+
+	foreach item $lst {
+		set x   [split $item ":"]
+		set key [string trim [lindex $x 0]]
+		set val [string trim [lindex $x 1]]
+
+		if {[info exists _GW_advXfs($handle,$key)]} {
+			set class [$_GW_advXfs($handle,$key) class]
+		}
+
+		if {[lsearch -exact $_GD_advXfs(texts) $key] != -1} {
+			$_GW_advXfs($handle,$key) setValues -value $val
+		} elseif {[lsearch -exact $_GD_advXfs(toggles) $key] != -1} {
+			$_GW_advXfs($handle,$key) setValues -set $val
+		}
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	advXfs:setResource
+# Synopsis:	
+# Arguments:	- handle	The identifier for the desired instance.
+#		- class		The class for the resource (PART or VOL).
+#		- resourcex	A list of keyword/value pairs.
+#%COMMENT_END
+proc advXfs:setResource { handle class resource } \
+{
+	global		_GW_advXfs _GD_advXfs
+
+	set _GD_advXfs($handle,class) $class
+
+	set dsize ""; set lsize ""; set rsize ""
+	if {[cequal $class "PART"]} {
+		set dsize [vpSrch:getPartsSize $handle $resource b]
+		if {! $dsize} {
+			em:simpleMsg $handle warning \
+				"$resource is not a valid partition."
+			return 0
+		}
+	} else {
+		if {! [vpSrch:getVolSubvSizes $handle $resource \
+						dsize lsize rsize b]} {
+			em:simpleMsg $handle warning \
+				"$resource is not a valid volume."
+			return 0
+		}
+	}
+	set _GD_advXfs($handle,XFS_DATA_SIZE,bytes) $dsize
+	set _GD_advXfs($handle,XFS_LOG_SIZE,bytes) $lsize
+	set _GD_advXfs($handle,XFS_RT_SIZE,bytes) $rsize
+
+	if {[clength $dsize]} {
+		advXfs:setSize $handle XFS_DATA_SIZE $dsize
+	}
+
+	if {[clength $lsize]} {
+		advXfs:_hasLog $handle true
+		advXfs:setSize $handle XFS_LOG_SIZE $lsize
+	} else {
+		advXfs:_hasLog $handle false
+		advXfs:_setDefaultPartLogSize $handle
+	}
+
+	if {[clength $rsize]} {
+		advXfs:_hasRt $handle true
+		advXfs:setSize $handle XFS_RT_SIZE $rsize
+	} else {
+		advXfs:_hasRt $handle false
+	}
+
+	return 1
+}
+
+#%COMMENT_BEGIN
+# Function:	advXfs:setSize
+# Synopsis:	Sets the value of the given text input field to the given
+#		size after converting to an appropriate unit.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- item		A key to identify which text input to set.
+#		- size		The new size value.
+#		- units		An optional parameter that allows the caller
+#				to specify the desired unit to display the
+#				size in.
+#%COMMENT_END
+proc advXfs:setSize { handle item size {units ""} } \
+{
+	global		_GW_advXfs _GD_advXfs
+
+	set size [cvt:bytesToUnits {m k} $size cvt_size cvt_unit $units]
+	$_GW_advXfs($handle,$item) setString ""
+	$_GW_advXfs($handle,$item) setString $size
+}
+
+#%COMMENT_BEGIN
+# Function:	advXfs:setClass
+# Synopsis:	This is called when switching between using a partition for
+#		the filesystem and using a volume.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- class		The new class of the filesystem resource
+#				(PART or VOL).
+#%COMMENT_END
+proc advXfs:setClass { handle class } \
+{
+	global		_GW_advXfs _GD_advXfs
+
+	if {$_GD_advXfs($handle,class) != $class} {
+		if {[cequal $class "PART"]} {
+			advXfs:_hasLog $handle false
+			advXfs:_hasRt $handle false
+		}
+		set _GD_advXfs($handle,class) $class
+	}
+}
+
+#########################################
+#	Public: Get Data		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	advXfs:getData
+# Synopsis:	Reads the data from the panel and stores it in keyword/value
+#		pair format.  If a field is currently set to its' default
+#		value, then it is ignored.  If an XmTextField is empty, it
+#		is assumed to be the default and is ignored.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- data		A reference to an array variable in which
+#				to store the data.
+#		- check		An optional parameter that indicates whether
+#				or not to check the data for completeness.
+#				(default value: true)
+#%COMMENT_END
+proc advXfs:getData { handle data {check true} } \
+{
+	global		_GW_advXfs _GD_advXfs
+	upvar $data	dat
+
+	if {! [info exists _GW_advXfs($handle,panel)]} {
+		return 1
+	}
+
+	foreach key $_GD_advXfs(toggles) {
+		$_GW_advXfs($handle,$key) getValues -set internal
+		lappend dat $key:$internal
+		set internal $internal
+	}
+	set blk_size [advXfs:_getBlockBytes $handle]
+	if {$blk_size != $_GD_advXfs(def,XFS_BLK_SIZE)} {
+		lappend dat XFS_BLK_SIZE:[int $blk_size]
+	}
+	set inode_size [advXfs:_getInodeBytes $handle]
+	if {$inode_size != $_GD_advXfs(def,XFS_INODE_SIZE)} {
+		lappend dat XFS_INODE_SIZE:[int $inode_size]
+	}
+
+	foreach key $_GD_advXfs(texts) {
+	    if {[$_GW_advXfs($handle,$key) isManaged] == "false"} {
+		continue
+	    }
+	    set val [string trim [$_GW_advXfs($handle,$key) getString]]
+	    if {[cequal $val ""]} {
+		if {$internal == "true" && $key == "XFS_LOG_SIZE"} {
+			lappend dat "$key:1000b"
+		}
+		continue
+	    }
+
+	    cvt:unitsToBytes $val bytes unit "" $blk_size
+	    cvt:parseSizeString $val size unit
+	    set ch [cindex $unit 0]
+
+	    if {([info exists _GD_advXfs(def,$key)] && \
+	         [cequal $bytes $_GD_advXfs(def,$key)]) || \
+	        ([info exists _GD_advXfs($handle,$key,bytes)] && \
+	         [cequal $bytes $_GD_advXfs($handle,$key,bytes)]) || \
+	        ([cequal $key "XFS_LOG_SIZE"] && \
+		 [cequal $bytes [expr $blk_size * 1000.0]]) && \
+		 [cequal $internal "false"]} {
+		continue
+	    }
+	    set size [lindex [split $size .] 0]
+	    lappend dat "$key:$size$ch"
+	}
+
+	return 1
+}
+
+#########################################
+#		Private			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	advXfs:_create
+# Synopsis:	Creates an instance of the panel.
+# Arguments:	- handle	The identifier for the new instance.
+#		- parent	The parent for the created panel.
+#%COMMENT_END
+proc advXfs:_create { handle parent } \
+{
+	global		_GW_advXfs _GD_advXfs
+	set name	advXfs
+
+	set container [xmForm $parent.$name]
+	set grid [sgiGrid $container.$handle -numColumns 7 -numRows 4 \
+			-defaultSpacing 2 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none]
+
+	set row 0
+	foreach item {XFS_BLK XFS_INODE} {
+		xmLabel $grid.$item-label managed -row $row -column 0
+		xmPulldownMenu $grid.$item-pd
+		foreach opt $_GD_advXfs($item,opts) {
+			set _GW_advXfs($handle,$opt) \
+				[xmPushButton $grid.$item-pd.$opt managed \
+					-marginHeight 0 \
+					-marginWidth 0]
+			$_GW_advXfs($handle,$opt) activateCallback \
+				"advXfs:_biOmCallback $handle $item $opt"
+		}
+		set _GW_advXfs($handle,$item-om) [xmOptionMenu $grid.$item-om \
+				 managed \
+				-row $row -column 1 \
+				-subMenuId $grid.$item-pd  \
+				-labelString "" \
+				-spacing 0 \
+				-marginWidth 0 \
+				-marginHeight 0]
+		set _GW_advXfs($handle,$item) [xmText $grid.$item managed \
+				-row $row -column 2 \
+				-resizeVertical false \
+				-resizeHorizontal false \
+				-gravity 4 \
+				-columns 10 \
+				-maxLength 10]
+		$_GW_advXfs($handle,$item) activateCallback \
+			"advXfs:_biTfCallback $handle $item %w"
+		$_GW_advXfs($handle,$item) losingFocusCallback \
+			"advXfs:_biTfCallback $handle $item %w"
+		$_GW_advXfs($handle,$item) modifyVerifyCallback \
+			"advXfs:_biMvCallback $handle $item %w %ptr %length %doit"
+		incr row
+	}
+
+	####	Data section
+	set row 0; set item XFS_DATA_SIZE
+	xmLabel $grid.$item-label managed -row $row -column 4
+	set _GW_advXfs($handle,$item) [xmText $grid.$item managed \
+			-row $row -column 5 \
+			-resizeVertical false \
+			-resizeHorizontal false \
+			-gravity 4 \
+			-columns 14 \
+			-maxLength 14]
+
+	####	Log section
+	incr row; set item XFS_LOG_SIZE
+	xmLabel $grid.$item-label managed -row $row -column 4
+	set _GW_advXfs($handle,$item) [xmText $grid.$item managed \
+			-row $row -column 5 \
+			-resizeHorizontal false \
+			-columns 14 \
+			-maxLength 14]
+
+	set item XFS_LOG_INTERNAL
+	set _GW_advXfs($handle,$item) [xmToggleButton $grid.$item managed \
+			-row $row -column 6]
+	$_GW_advXfs($handle,$item) valueChangedCallback \
+			"$name:_logTbCallback $handle %set"
+
+	####	RT section
+	incr row; set item XFS_RT_SIZE
+	set _GW_advXfs($handle,$item-label) [xmLabel $grid.$item-label managed \
+			-row $row -column 4]
+	set _GW_advXfs($handle,$item) [xmText $grid.$item managed \
+			-row $row -column 5 \
+			-resizeHorizontal false \
+			-columns 14 \
+			-maxLength 14]
+
+	incr row; set item XFS_RT_EXTSIZE
+	set _GW_advXfs($handle,$item-label) [xmLabel $grid.$item-label managed \
+			-row $row -column 4]
+	set _GW_advXfs($handle,$item) [xmText $grid.$item managed \
+			-row $row -column 5 \
+			-resizeHorizontal false \
+			-columns 14 \
+			-maxLength 14]
+
+	foreach item {XFS_DATA_SIZE XFS_LOG_SIZE XFS_RT_SIZE XFS_RT_EXTSIZE
+		      XFS_BLK XFS_INODE} {
+		$_GW_advXfs($handle,$item) modifyVerifyCallback \
+				"tfu:sizeMvCb {m k b} %w %ptr %length %doit %currInsert"
+	}
+
+	$grid columnMargin 3 20
+	$grid columnMargin 4 4
+	$grid columnResizable 0 false
+	$grid columnResizable 1 false
+	$grid columnResizable 2 false
+	$grid columnResizable 3 false
+	$grid columnResizable 4 false
+	$grid columnResizable 5 false
+	$grid manageChild
+
+	return $container
+}
+
+#########################################
+#	Private: Set Data		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	advXfs:_setDefaults
+# Synopsis:	Sets all XmTextFields/XmToggleButton/XmOptionMenu widgets
+#		to their defaults.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc advXfs:_setDefaults { handle } \
+{
+	global		_GW_advXfs _GD_advXfs
+
+	foreach item {XFS_BLK XFS_INODE} {
+	    set defopt [lindex $_GD_advXfs($item,opts) 0]
+	    set _GD_advXfs($handle,$item,om) $defopt
+	    set _GD_advXfs($handle,$item,tf) \
+		[cvt:bytesToUnits {m k} $_GD_advXfs(def,$defopt) size unit]
+
+	    $_GW_advXfs($handle,$item-om) setValues \
+		-menuHistory $_GW_advXfs($handle,$defopt)
+	    $_GW_advXfs($handle,$item) setString \
+		[cvt:bytesToUnits {m k} $_GD_advXfs(def,$defopt) size unit]
+	}
+
+	$_GW_advXfs($handle,XFS_RT_EXTSIZE) setString \
+	    [cvt:bytesToUnits {m k} $_GD_advXfs(def,XFS_RT_EXTSIZE) size unit]
+
+	advXfs:_setDefaultPartLogSize $handle
+}
+
+#%COMMENT_BEGIN
+# Function:	advXfs:_setDefaultPartLogSize
+# Synopsis:	Sets the log size to its default value when the resource
+#		for the filesystem is a partition.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc advXfs:_setDefaultPartLogSize { handle } \
+{
+	global		_GW_advXfs _GD_advXfs
+
+	set item XFS_LOG_SIZE
+	$_GW_advXfs($handle,$item) setString ""
+	$_GW_advXfs($handle,$item) setString "1000 b"
+}
+
+#########################################
+#	Private: Get Data		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	advXfs:_getBlockBytes
+# Synopsis:	Gets the value of the "Block Size" input field, converts
+#		it to bytes and returns it.  If the input field is empty
+#		it returns the default value.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- val		An optional parameter that specifies a
+#				value other than what is in the input field
+#				to use for the conversion.  If this is an empty
+#				string (the default), it gets the value from
+#				the input field.
+#%COMMENT_END
+proc advXfs:_getBlockBytes { handle {val ""} } \
+{
+	global		_GW_advXfs _GD_advXfs
+
+	set item XFS_BLK
+	if {[cequal $val ""]} {
+		set val [string trim [$_GW_advXfs($handle,$item) getString]]
+		if {[cequal $val ""]} {
+			return $_GD_advXfs(def,XFS_BLK_SIZE)
+		}
+	}
+
+	if {$_GD_advXfs($handle,$item,om) == "XFS_BLK_SIZE"} {
+		set size [cvt:unitsToBytes $val cvt_size cvt_unit]
+	} else {
+		set size [pow 2 $val]
+	}
+	return $size
+}
+
+#%COMMENT_BEGIN
+# Function:	advXfs:_getInodeBytes
+# Synopsis:	Gets the value of the "Inode Size" input field, converts
+#		it to bytes and returns it.  If the input field is empty
+#		it returns the default value.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- val		An optional parameter that specifies a
+#				value other than what is in the input field
+#				to use for the conversion.  If this is an empty
+#				string (the default), it gets the value from
+#				the input field.
+#%COMMENT_END
+proc advXfs:_getInodeBytes { handle {val ""} } \
+{
+	global		_GW_advXfs _GD_advXfs
+
+	set item XFS_INODE
+	if {[cequal $val "0"]} {
+		return 0
+	}
+
+	if {[cequal $val ""]} {
+		set val [string trim [$_GW_advXfs($handle,$item) getString]]
+		if {[cequal $val ""]} {
+			return $_GD_advXfs(def,XFS_INODE_SIZE)
+		}
+	}
+
+	if {$_GD_advXfs($handle,$item,om) == "XFS_INODE_SIZE"} {
+		set size [cvt:unitsToBytes $val cvt_size cvt_unit]
+	} elseif {$_GD_advXfs($handle,$item,om) == "XFS_INODE_LOG"} {
+		set size [pow 2 $val]
+	} else {
+		set blksize [advXfs:_getBlockBytes $handle]
+		set size [int [expr $blksize / $val]]
+	}
+	return $size
+}
+
+#########################################
+#	Private: Utilities		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	advXfs:_numToPow
+# Synopsis:	
+# Arguments:	- num
+#%COMMENT_END
+proc advXfs:_numToPow { num } \
+{
+	for {set pow 0; set num [int $num]} {($num >> $pow) > 1} {incr pow} { }
+
+	return $pow
+}
+
+#%COMMENT_BEGIN
+# Function:	advXfs:_hasLog
+# Synopsis:	This is called when a volume has a log sub-volume.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- has_log	True/False
+#%COMMENT_END
+proc advXfs:_hasLog { handle has_log } \
+{
+	global		_GW_advXfs _GD_advXfs
+
+	$_GW_advXfs($handle,XFS_LOG_INTERNAL) getValues \
+			-set set -traversalOn traversal
+	if {$has_log} {
+		if {$set} {
+			set do_set false
+		}
+		if {$traversal == "false"} {
+			set do_traversal true
+		}
+	} else {
+		if {$set == "false"} {
+			set do_set true
+		}
+		if {$traversal} {
+			set do_traversal false
+		}
+	}
+
+	if {[info exists do_set]} {
+		$_GW_advXfs($handle,XFS_LOG_INTERNAL) setValues -set $do_set
+	}
+	if {[info exists do_traversal]} {
+		$_GW_advXfs($handle,XFS_LOG_INTERNAL) setValues \
+				-traversalOn $do_traversal
+	}
+
+	set _GD_advXfs($handle,hasLog) $has_log
+}
+
+#%COMMENT_BEGIN
+# Function:	advXfs:_hasRt
+# Synopsis:	This is called when a volume has a real-time sub-volume.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- has_log	True/False
+#%COMMENT_END
+proc advXfs:_hasRt { handle has_rt } \
+{
+	global		_GW_advXfs _GD_advXfs
+
+	if {$has_rt} {
+		$_GW_advXfs($handle,XFS_RT_EXTSIZE-label) manageChild
+		$_GW_advXfs($handle,XFS_RT_EXTSIZE) manageChild
+		$_GW_advXfs($handle,XFS_RT_SIZE-label) manageChild
+		$_GW_advXfs($handle,XFS_RT_SIZE) manageChild
+	} else {
+		$_GW_advXfs($handle,XFS_RT_EXTSIZE-label) unmanageChild
+		$_GW_advXfs($handle,XFS_RT_EXTSIZE) unmanageChild
+		$_GW_advXfs($handle,XFS_RT_SIZE-label) unmanageChild
+		$_GW_advXfs($handle,XFS_RT_SIZE) unmanageChild
+	}
+
+	set _GD_advXfs($handle,hasRt) $has_rt
+}
+
+#########################################
+#	Private: Callbacks		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	advXfs:_logTbCallback
+# Synopsis:	The callback function for the toggle button that indicates
+#		that the XFS log sub-volume should be part of the data
+#		sub-volume.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- set		The current value of the toggle button.
+#%COMMENT_END
+proc advXfs:_logTbCallback { handle set } \
+{
+	global		_GW_advXfs _GD_advXfs
+
+	if {$_GD_advXfs($handle,hasLog) == "false" && $set == "false"} {
+		$_GW_advXfs($handle,XFS_LOG_INTERNAL) setValues \
+				-set true
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	advXfs:_biOmCallback
+# Synopsis:	The callback function for both the Block and Inode option
+#		menus.  Converts the data in the input field associated
+#		with the option menu based upon the value of the option menu.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- menu		Indicates whether this is the Block option menu
+#				(XFS_BLK) or the Inode option menu (XFS_INODE).
+#		- opt		The currently selected option.
+#%COMMENT_END
+proc advXfs:_biOmCallback { handle menu opt {force "false"} } \
+{
+	global		_GW_advXfs _GD_advXfs
+
+	if {$opt == $_GD_advXfs($handle,$menu,om) && [cequal $force "false"]} {
+		return
+	}
+
+	switch $opt {
+		XFS_BLK_SIZE -
+		XFS_INODE_SIZE { set maxLength 10 }
+		XFS_BLK_SIZE_LOG -
+		XFS_INODE_LOG { set maxLength 2 }
+		XFS_INODE_PERBLK { set maxLength 3 }
+	}
+	if {[info exists maxLength]} {
+		$_GW_advXfs($handle,$menu) setValues -maxLength $maxLength
+	}
+
+	set val $_GD_advXfs($handle,$menu,tf)
+	if {[cequal $val ""]} {
+		set _GD_advXfs($handle,$menu,om) $opt
+		set _GD_advXfs($handle,$menu,tf) $val
+		return
+	}
+	set bytes [cvt:unitsToBytes $val cvt_size cvt_unit]
+	set blksize [advXfs:_getBlockBytes $handle]
+	if {$opt == "XFS_BLK_SIZE"} {
+		set val [cvt:bytesToUnits {m k} [pow 2 $val] size unit]
+		if {[llength $val] == 1} {
+			set val [int $val]
+		}
+	} elseif {$opt == "XFS_BLK_SIZE_LOG"} {
+		set val [advXfs:_numToPow $bytes]
+	} elseif {$opt == "XFS_INODE_SIZE"} {
+		if {$_GD_advXfs($handle,$menu,om) == "XFS_INODE_LOG"} {
+			set val [cvt:bytesToUnits {m k} [pow 2 $val] size unit]
+			if {[llength $val] == 1} {
+				set val [int $val]
+			}
+		} else {
+			set val [int [expr $blksize / $bytes]]
+		}
+	} elseif {$opt == "XFS_INODE_LOG"} {
+		if {$_GD_advXfs($handle,$menu,om) == "XFS_INODE_SIZE"} {
+			set val [advXfs:_numToPow $bytes]
+		} else {
+			set val [int [expr $blksize / $bytes]]
+			set val [advXfs:_numToPow $val]
+		}
+	} elseif {$opt == "XFS_INODE_PERBLK"} {
+		if {$_GD_advXfs($handle,$menu,om) == "XFS_INODE_LOG"} {
+			set val [int [expr $blksize / [pow 2 $val]]]
+		} else {
+			set val [int [expr $blksize / $bytes]]
+		}
+	}
+
+	set _GD_advXfs($handle,$menu,om) $opt
+
+	$_GW_advXfs($handle,$menu) setString ""
+	$_GW_advXfs($handle,$menu) setString $val
+	set _GD_advXfs($handle,$menu,tf) $val
+}
+
+#%COMMENT_BEGIN
+# Function:	advXfs:_biTfCallback
+# Synopsis:	The XmNactivateCallback and XmNlosingFocusCallback callback
+#		functions for both the Block and Inode input fields.  It
+#		It checks to make sure that the value fits within the
+#		acceptable range.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- menu		Indicates whether this is the Block option menu
+#				(XFS_BLK) or the Inode option menu (XFS_INODE).
+#		- w		The widget id for the input field.
+#%COMMENT_END
+proc advXfs:_biTfCallback { handle menu w } \
+{
+	global		_GW_advXfs _GD_advXfs
+
+	set val [$w getString]
+
+	$_GW_advXfs($handle,$menu)-label getValues -labelString str1
+	$_GW_advXfs($handle,$menu-om) getValues -menuHistory mh
+	$mh getValues -labelString str2
+
+	set min $_GD_advXfs(min,$_GD_advXfs($handle,$menu,om))
+	set max $_GD_advXfs(max,$_GD_advXfs($handle,$menu,om))
+	set chk_val $val
+	set v_min $min
+	set v_max $max
+
+	if {$menu == "XFS_BLK"} {
+	    if {$_GD_advXfs($handle,$menu,om) == "XFS_BLK_SIZE"} {
+		if {[clength $val]} {
+			set chk_val [advXfs:_getBlockBytes $handle $val]
+		}
+		set v_min [cvt:bytesToUnits {m k} $min size unit]
+		set v_max [cvt:bytesToUnits {m k} $max size unit]
+	    }
+	} else {
+	    set blksize [advXfs:_getBlockBytes $handle]
+
+	    if {$_GD_advXfs($handle,$menu,om) == "XFS_INODE_SIZE"} {
+		if {[clength $val]} {
+			set chk_val [advXfs:_getInodeBytes $handle $val]
+		}
+		set max [min $max [int [expr $blksize / 2]]]
+		set v_min [cvt:bytesToUnits {m k} $min size unit]
+		set v_max [cvt:bytesToUnits {m k} $max size unit]
+	    } elseif {$_GD_advXfs($handle,$menu,om) == "XFS_INODE_LOG"} {
+		set max [min $max [int [advXfs:_numToPow [expr $blksize / 2]]]]
+		set v_max $max
+	    } else {
+		set max [int [expr $blksize / $_GD_advXfs(min,XFS_INODE_SIZE)]]
+		set min [int [expr $blksize / $_GD_advXfs(max,XFS_INODE_SIZE)]]
+		set min [max $min 2]
+		set v_min $min
+		set v_max $max
+	    }
+	}
+
+	if {[clength $chk_val] == 0 || [expr $chk_val < $min]} {
+		set v $v_min
+		set error "The minimum value for \\\"$str1 ($str2)\\\" is $v."
+	} elseif {[expr $chk_val > $max]} {
+		set v $v_max
+		set error "The maximum value for \\\"$str1 ($str2)\\\" is $v."
+	}
+
+	if {[info exists error]} {
+		em:simpleMsg $handle warning $error
+		$w setString ""
+		$w setString $v
+		set _GD_advXfs($handle,$menu,tf) $v
+	} else {
+		set _GD_advXfs($handle,$menu,tf) $val
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	advXfs:_biMvCallback
+# Synopsis:	The XmNmodifyVerifyCallback callback function for both the
+#		Block and Inode input fields.  If the option menu value
+#		is either "Base 2 Log" or "Per Block" it ensures that only
+#		digits are entered.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- menu		Indicates whether this is the Block option menu
+#				(XFS_BLK) or the Inode option menu (XFS_INODE).
+#		- w		The widget id for the input field.
+#		- pointer	The data that was entered.
+#		- length	The length of the entered data.
+#		- do		If set to 0, this will cancel the modification.
+#%COMMENT_END
+proc advXfs:_biMvCallback { handle menu w pointer length do } \
+{
+	global		_GD_advXfs
+	upvar $pointer	ptr
+	upvar $length	len
+	upvar $do	doit
+
+	if {$_GD_advXfs($handle,$menu,om) == "XFS_BLK_SIZE" || \
+	    $_GD_advXfs($handle,$menu,om) == "XFS_INODE_SIZE" ||
+	    $len == 0} {
+		return
+	}
+	
+	if {! [ctype digit $ptr]} {
+		set doit false
+	}
+}

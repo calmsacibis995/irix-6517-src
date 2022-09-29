@@ -1,0 +1,211 @@
+divert(-1)
+
+define(INCLUDES, `
+#include <sys/types.h>
+#include <sys/signal.h>
+#include <sys/file.h>
+#include <sys/time.h>
+#include <sys/prctl.h>
+#include <stdio.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <ulocks.h>
+#include <unistd.h>
+#include <assert.h>
+')
+
+define(MAIN_ENV, `
+INCLUDES
+usptr_t* sv_arena = 0;
+')
+
+define(EXTERN_ENV, `
+INCLUDES
+extern usptr_t* sv_arena;
+')
+
+define(INITENV, `
+{
+        if (usconfig(CONF_INITUSERS, 64) == -1) {
+                perror("usconfig");
+                exit(1);
+        }
+        if (usconfig(CONF_INITSIZE, (4*1024*1024)) == -1) {
+                perror("usconfig");
+                exit(1);
+        }
+        if (usconfig(CONF_AUTORESV, 1) == -1) {
+                perror("usconfig");
+                exit(1);
+        }
+
+        sv_arena = usinit("/dev/zero");
+        if (sv_arena == NULL) {
+                perror("usinit");
+                exit(1);
+        }
+}
+')
+
+define(MAIN_INITENV, `
+INITENV
+')
+
+define(MAIN_END, `
+{exit(ifelse($1,,0,$1));}
+')
+
+define(G_MALLOC, `
+malloc($1);
+')
+
+define(G_FREE, `
+free($1);
+')
+
+
+define(N_MALLOC, ifdef(`NUMA', `numa_amalloc($1, $2);', `malloc($1);'))
+
+define(N_FREE, ifdef(`NUMA', `numa_afree($1, $2);', `free($1);'))
+
+#
+# Barriers
+#
+
+define(BARDEC, `
+barrier_t* $1;
+')
+
+define(BARINIT, `
+{
+	assert(sv_arena);
+	$1 = new_barrier(sv_arena);
+	if ($1 == NULL) {
+		perror("new_barrier");
+		exit(1);
+	}
+}
+')
+
+define(BARRIER, `
+{
+	assert($1);
+	barrier($1, $2);
+}
+')
+
+#
+# Spin Locks
+#
+
+define(LOCKDEC, `
+ulock_t $1;
+')
+
+define(LOCKINIT, `
+{
+	assert(sv_arena);
+	$1 = usnewlock(sv_arena);
+	if ($1 == NULL) {
+		perror("usnewlock");
+		exit(1);
+	}
+}
+')
+
+define(LOCK, `
+{
+	assert($1);
+	if (uswsetlock($1, 20) != 1) {
+		perror("uswsetlock");
+		exit(1);
+	}	
+}
+')
+
+define(UNLOCK, `
+{
+	assert($1);
+	usunsetlock($1);
+}
+')
+
+#
+# Arrays of spin locks
+#
+
+define(ALOCKDEC, `
+ulock_t $1[$2];
+')
+
+define(ALOCKINIT, `
+{
+	int i;
+	assert (sv_arena);
+	for (i = 0; i < $2; i++) {
+		$1[i] = usnewlock(sv_arena);
+		if ($1[i] == NULL) {
+			perror("usnewlock-array");
+			fprintf(stderr, "Allocated number of locks: %d\n", i);
+			fprintf(stderr, "Requested number of locks: %d\n", $2);
+			exit(1);
+		}
+	}
+}
+')
+
+define(ALOCK, `
+{
+	assert($1);
+	assert($1[$2]);
+	if (uswsetlock($1[$2], 20) != 1) {
+		perror("uswsetlock-array");
+		exit(1);
+	}	
+}
+')
+
+define(AULOCK, `
+{
+	assert($1);
+	assert($1[$2]);
+	usunsetlock($1[$2]);
+}
+')
+
+#
+# Timing
+#
+
+define(CLOCK, `
+{
+	struct timeval timev;
+ 	if (gettimeofday(&timev, (struct timezone *)0) != 0) {
+   		perror ("gettimeofday");
+		exit(1);
+	}
+  	$1 = (timev.tv_sec & 0x7ff)*1000000 + timev.tv_usec;
+}
+')
+
+#
+# Thread creation
+#
+
+define(CREATE, `
+{
+ 	int rc;
+
+  	fflush (stdout);
+  	fflush (stderr);
+	rc = sproc($1, PR_SALL);
+	if (rc < 0) {
+		perror("sproc");
+		exit(1);
+	}
+}
+')
+
+define(WAIT_FOR_END,`{ int i; for (i = 1; i <= $1; i++) wait (0); }')
+
+divert(0)

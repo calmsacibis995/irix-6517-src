@@ -1,0 +1,127 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+#
+#	"$Revision: 1.2 $"
+
+#%COMMENT_BEGIN
+# Filename:	objUtil.tlib
+# Version:	$Revision: 1.2 $
+# Synopsis:	High level object functions.
+# Packages:	ObjUtil-Base
+#
+#
+#%COMMENT_END
+
+
+#%COMMENT_BEGIN
+# Package:	ObjUtil-Base
+# Functions:	ou:getObjsOnHost
+#		ou:getPartsOnDisk
+#
+# Function:	ou:getObjsOnHost
+# Synopsis:	Gets a list of objects from a host.
+# Arguments:	- objects	A reference to a variable in which to store
+#				the returned list of objects.
+#		- host		The host from which to get the information.
+#		- class		The class of objects to retrieve (one of:
+#				DISK, FS, VOL).
+#		- pattern	An optional parameter allowing the caller to
+#				narrow the focus of the request to get only
+#				objects whose names match "pattern" (using
+#				glob-style matching).
+#
+# Function:	ou:getPartsOnDisk
+# Synopsis:	Gets partition information for a given disk on a given host.
+#		The information is returned as a set of lists.  Each list
+#		contains information about a single partition.  The information
+#		that is contained in the list is dependent upon the "info"
+#		parameter.
+# Arguments:	- host		The host from which to get the information.
+#		- disk		The name of the disk whose partitions are
+#				to be retrieved.
+#		- info		An optional parameter that allows the caller
+#				to specify what information to retrieve.
+#				This parameter is a list containing one
+#				or more of the following values:
+#					raw	all information (the default)
+#					name	partition name
+#					device	partition device
+#					size	size of partition (in blocks)
+#					start	start of partition (in blocks)
+#					end	end of partition (in blocks)
+#					type	type of partition
+#%COMMENT_END
+
+#@package: ObjUtil-Base	ou:getObjsOnHost ou:getPartsOnDisk
+
+proc ou:getObjsOnHost { objects host class {pattern *} } \
+{
+	upvar	$objects objs
+
+	lappend data "HOST_PATTERN:$host"
+	lappend data "OBJ_TYPE:$class"
+	lappend data "OBJ_PATTERN:$pattern"
+
+	if {[catch {set objs [xfsObjects [join $data "\n"]]} error]} {
+		em:storeMsg ou error \
+		"Unable to get [tolower $class] objects from $host.\n\t$error"
+		return 0
+	}
+
+	return 1
+}
+
+proc ou:getPartsOnDisk { host disk {info raw} } \
+{
+	if {[catch {set data [xfsGetPartTable [list "$host DISK $disk 0"]]} error]} {
+		em:storeMsg ou error \
+		"Unable to get partitions from $disk on $host.\n\t$error"
+		return ""
+	}
+
+	if {$data == "" || $info == "raw"} {
+		return $data
+	}
+
+	set dir [file dirname $disk]
+	set root [format "%ss" [string trimright [file tail $disk] vh]]
+
+	foreach partition $data {
+		lassign [split $partition :] key value
+		if {$key == "diskname" || $key == "partitions"} {
+			continue
+		}
+		set y [split $key "."]
+		set values([lindex $y 1],[lindex $y 0]) $value
+	}
+
+	loop i 0 16 1 {
+		if {! [info exists values($i,start)]} {
+			continue
+		}
+		set part_info ""
+		foreach item $info {
+			switch $item {
+				name { lappend part_info $root$i }	
+				device { lappend part_info $dir/$root$i }	
+				size	-
+				start	-
+				end	-
+				type { lappend part_info $values($i,$item) }	
+			}
+		}
+		lappend parts_info $part_info
+	}
+
+	return $parts_info
+}
+#@packend

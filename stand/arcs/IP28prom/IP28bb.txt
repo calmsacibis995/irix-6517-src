@@ -1,0 +1,146 @@
+19 MAR 96
+
+The following document describes the software visible features of the IP28
+board that are related to the ECC logic.
+
+
+1.  IP28 BOARD REVISION
+
+The board revision number(s) for IP28 (and derivatives) is different than
+older IP22 and IP26 revision numbers.
+
+IP28 board revision number = 0x1B.  Future IP28 boards will have revision
+numbers HIGHER than this. All IP22 and IP26 boards will have revision numbers
+LOWER than this.
+
+
+
+2.  INITIALIZING ECC LOGIC
+
+Whenever the MC does a CPU_COLD_RESET (at power on or when the SIN bit is set
+in CPUCTRL0) the ECC_LOGIC is reset. After a reset, the ECC logic must be
+initialized before doing any main memory reads. 
+
+Initializing the ECC logic involves writing the correct values into ? MC
+registers and the ECC_CONTROL register. All of physical memory must also be
+initialized to make sure it contains good ECC values.
+
+The ECC_CONTROL register is read and written via the 4th bank of memory
+(mem bank 3 in the MC).
+
+The 4th bank should be configured as follows in MEMCFG1:
+	- base address	= TBD by software
+	- mem size	= any legal mem size supported by MC
+	- valid
+	- one sub-bank
+
+The ECC_CONTROL register must be written to cached (only 1 men_n signal for
+both ECC chips). It may be read either cached or uncached.
+
+
+3.  ECC_CONTROL REGISTER
+
+The ECC_CONTROL register controls the operation of the IP28 ECC logic.
+Logically it is one single register; physically it is distributed between
+the 3pals and 2 ECC chips. The ECC_CONTROL register is written by doing a
+cached write to the "4th bank" of IP28 memory.
+
+A cache-line is composed of 128 bytes = 16 doublewords. When writing to the
+ECC_CONTROL register every doubleword in the cache-line should contain the
+exact same data. The bit definition of each double word is as follows:
+
+Bits	Field		Value	Description
+----	-----		-----	-----------
+2:0	EDCM		   0    ECC chips in error data output  mode
+			   1    ECC chips in diagnostic output  mode
+			   2    ECC chips in generate-detect    mode
+			-> 3	ECC chips in normal correction  mode
+			   4	ECC chips in checkbit injection mode
+
+3	CLRECC		-> 0	ECC chips don't clear internal registers 
+			   1	ECC chips       clear internal registers 
+
+4	RWBD		-> 0	ECC chips dual FIFO's
+			   1	ECC chips single FIFO
+
+5	PSEL		-> 0	ECC chips generate even parity
+			   1	ECC chips generate odd  parity
+
+6	RMODE		-> 0	ECC chips drive normal data to Mux chips
+			   1	ECC chips drive mode reigister to Mux chips
+
+15:7	UNUSED		-> 0	don't care
+
+18:16	ECC_CNTL	   0	this encoding puts IP28 in FASTMODE. the IP28
+				will power on in SLOWMODE. 
+
+			   1	this encoding puts IP28 in SLOWMODE. the IP28
+				will power on in SLOWMODE. 
+
+			   2	this encoding enables bits 6:0 of the
+				ECC_CONTROL register to be written. if any
+				other encoding is written into this field then
+				bits 6:0 do not change value.
+
+			   3	this encoding clears the NMI that is generated
+				by a multibit ecc error or cpu_write error.
+
+			   4	this encoding is not used
+
+			   5	this encoding enables ECC error checking on
+				IP28. the IP28 will power on with error
+				checking disabled.
+
+			   6	this encoding disables ECC error checking on
+				IP28. the IP28 will power on with error
+				checking disabled.
+
+
+4.  ECC ERROR REPORTING
+
+If error checking is enabled (ie a 0x5 has been written to the ECC_CNTL field
+of the ECC_CONTROL register) the IP28 will generate an  NMI to the processor
+in the following 2 circumstances:
+	1. a multi-bit ECC error is detected during a memory read.
+	2. the cpu does a word or partial-word write to memory while the IP28
+	   is in FASTMODE.
+
+when an NMI is generated software should read the PBUS_IOREG_RD1 XBUS register
+(address 0x??) to determine the cause of the NMI.
+
+the bit definition of PBUS_IOREG_RD1 is as follows:
+
+Bits	Field		Value	Description
+----	-----		-----	-----------
+3:0	UNUSED		 0xF    don't care
+4	SCSI0PWR		SCSI 0 power status   (Same as IP22)
+5	SCSI1PWR		SCSI 1 power status   (Same as IP22)
+6	ENETPWR			Ethernet power status (Same as IP22)
+7	ENETLINK		Ethernet LED Link     (Same as IP22)
+
+11:8	ERR_SIMM	 0x5	ECC error in simm S9  or S10
+			 0x6	ECC error in simm S5  or S6
+			 0x7	ECC error in simm S1  or S2
+
+			 0x9	ECC error in simm S12 or S11
+			 0xA	ECC error in simm S7  or S8
+			 0xB	ECC error in simm S3  or S4
+
+			 0xD	ECC error in simm (S9 or S10) and (S11 or S12)
+			 0xE	ECC error in simm (S5 or S6 ) and (S7  or S8 )
+			 0xF	ECC error in simm (S1 or S2 ) and (S3  or S4 )
+
+
+12	ERR_TYPE	 0x0	NMI due to uncorrectable ECC error
+			 0x1	NMI due to uncached CPU write in fastmode
+
+13	ERR_CLK		 0x0	ECC error happened during a CPU read
+			 0x1	ECC error happened during a GIO read
+
+14	SSRAM_TYPE	 0x0	PMT5 module has x18 SSRAM chips
+			 0x1	PMT5 module has x36 SSRAM chips
+
+15	UNUSED		 0x1	don't care
+
+
+7. MC REGISTER VALUES

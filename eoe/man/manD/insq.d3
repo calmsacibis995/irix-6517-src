@@ -1,0 +1,121 @@
+.if n .pH ddi.rm/d3/gen/insq @(#)insq	43.12 of 12/9/92
+.\" Copyright 1992, 1991 UNIX System Laboratories, Inc.
+.TH insq D3
+.IX "\f4insq\fP(D3)"
+.SH NAME 
+\f4insq\f1 \- insert a message into a queue
+.SH SYNOPSIS 
+.nf
+.na
+.ft 4
+#include <sys/stream.h>
+#include <sys/ddi.h>
+.sp 0.4
+int insq(queue_t *\f2q\fP, mblk_t *\f2emp\fP, mblk_t *\f2nmp\fP);
+.ft 1
+.ad
+.fi
+.SS Arguments
+.RS 0
+.IP "\f2q\f1" 10n
+Pointer to the queue containing message \f2emp\f1.
+.IP "\f2emp\f1" 10n
+Pointer to the existing message before which the new message is to be inserted.
+.IP "\f2nmp\f1" 10n
+Pointer to the new message to be inserted.
+.RE
+.SH DESCRIPTION 
+\f4insq\f1 inserts a message into a queue.
+The message to be inserted,
+\f2nmp\f1, is placed in the queue pointed to by \f2q\fP,
+immediately before the message, \f2emp\f1.
+If \f2emp\f1 is \f4NULL\f1, the new message is placed at the end of the queue.
+All flow control parameters are updated.
+The service procedure is scheduled to run unless disabled by a previous call to
+\f4noenable\fP(D3).
+.SS "Return Values"
+If \f2nmp\fP was successfully enqueued, \f4insq\f1 returns 1.
+Otherwise, \f4insq\fP returns 0.
+.SH USAGE
+Messages are ordered in the queue based on their priority, as described in
+\f4srv\fP(D2).
+If an attempt is made to insert a message out of order in the queue, then
+\f2nmp\fP is not enqueued.
+.P
+The insertion can fail if there is not enough memory to allocate the accounting
+data structures used with messages whose priority bands are greater than zero.
+.P
+If \f2emp\f1 is non-\f4NULL\f1, it must point to a
+message in the queue pointed to by \f2q\f1, or a system panic could result.
+.SS Level
+Base or Interrupt.
+.SS "Synchronization Constraints"
+Does not sleep.
+.P
+Driver-defined basic locks, read/write locks, and sleep locks
+may be held across calls to this function.
+.SS "Example"
+This routine illustrates the use of \f4insq\fP to insert a message into the
+middle of a queue.
+This routine can be used to strip all the \f4M_PROTO\fP
+headers off all messages on a queue.
+We traverse the list of messages on
+the queue, looking for \f4M_PROTO\fP messages (line 9).
+When one is found,
+we remove it from the queue using \f4rmvq\fP(D3) (line 10).
+If there
+is no data portion to the message (line 11), we free the entire message
+using \f4freemsg\fP(D3).
+Otherwise, for every \f4M_PROTO\fP message block in the message, we strip the
+\f4M_PROTO\fP block off using \f4unlinkb\fP(D3) (line 15)
+and free the message block using
+\f4freeb\fP(D3).
+When the header has been stripped, the data portion of the message is inserted back
+into the queue where it was originally found (line 19).
+.sp 0.4
+.nf
+.ft 4
+.ps -1
+.vs -1
+ 1  void
+ 2  striproto(q)
+ 3	queue_t *q;
+ 4  {
+ 5	mblk_t *emp, *nmp, *mp;
+.sp 0.4
+ 6	mp = q->q_first;
+ 7	while (mp) {
+ 8		emp = mp->b_next;
+ 9		if (mp->b_datap->db_type == M_PROTO) {
+10			rmvq(q, mp);
+11			if (msgdsize(mp) == 0) {
+12				freemsg(mp);
+13			} else {
+14				while (mp->b_datap->db_type == M_PROTO) {
+15					nmp = unlinkb(mp);
+16					freeb(mp);
+17					mp = nmp;
+18				}
+19				insq(q, emp, mp);
+20			}
+21		}
+22		mp = emp;
+23	}
+24  }
+.vs
+.ps
+.ft 1
+.fi
+.sp 0.4
+.IX "\f4insq\fP(D3), example"
+.IX "\f4msgdsize\fP(D3), example"
+.IX "\f4rmvq\fP(D3), example"
+.IX "\f4unlinkb\fP(D3), example"
+.SH REFERENCES
+.na
+\f4getq\fP(D3),
+\f4putbq\fP(D3),
+\f4putq\fP(D3),
+\f4rmvq\fP(D3),
+\f4srv\fP(D2)
+.ad

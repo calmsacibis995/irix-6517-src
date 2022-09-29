@@ -1,0 +1,480 @@
+.TH tps 7M
+.SH NAME
+tps, tpsc \- \&SCSI tape interface
+.SH SYNOPSIS
+.nf
+\f3/dev/rmt/tps*\f1
+\f3/dev/rmt/*/lun*/c*p*\f1
+.fi
+.SH DESCRIPTION
+Silicon Graphics systems support the Small Computer System
+Interface (SCSI) for various tape drives, including
+QIC24 and QIC150 1/4" cartridges, 9-track, 8 mm video,
+Ampex DIS/DST series,
+DLT (digital linear tape), IBM 3590 and 3570, STK 9490 and 9840, STK SD3, 
+Sony GY-10 and GY-2120,
+and DAT (digital audio tape) tape drives.
+Not all systems support all tape drives.
+Since so many different types of devices are
+supported, and not all their features can be determined directly
+from the drive, a configuration table defines their capabilities.
+This
+is usually found in the file
+.IR /var/sysgen/master.d/scsi .
+.P
+The special files are named according to this convention:
+.P
+.B Parallel SCSI and FC-AL
+.Ex
+
+\f3/dev/\f1{\f3r\f1}\f3mt/tps\f1\f2controller\f1\f3d\f1\f2ID\f1{\f3nr\f1}{\f3ns\f1}{\f3s\f1}{\f3v\f1}{\f3.\f1\f2density\f1}{\f3c\f1}
+.Ee
+.P
+.B Fibre Channel Fabric
+.Ex
+
+\f3/dev/\f1{\f3r\f1}\f3mt/\f1\f2nodename\f1\f3/lun\f1\f2lun\f1{\f3nr\f1}{\f3ns\f1}{\f3s\f1}{\f3v\f1}{\f3.\f1\f2density\f1}{\f3c\f1}\f3/c\f1\f2controller\f1\f3p\f1\f2port\f1
+.Ex
+
+Note that the Fabric device names always specify the \f2lun\f1, even
+if it is zero.
+\f2controller\f1 is the SCSI controller number and \f2ID\f1 is variously
+known as the SCSI ID, the SCSI address, the drive address, and the unit number.
+The \f2nodename\f1 and \f2port\f1 are used to indicate the Fibre Channel
+world wide name (WWN) and the device port number. A Fibre Channel Fabric
+device may have multiple special filenames. If the \f1\f2nodename\f1 and 
+\f1\f2lun\f1 of different filenames are the same, respectively, these
+filenames represent the same physical device. Care should be taken not 
+to use the same device at the same time by unintentionally opening
+different filenames of the same device.
+
+The device types are:
+.TP 13
+{\f3nr\f1}
+no-rewind on close device
+.TP
+{\f3ns\f1}
+non-byte swapping device
+.TP
+{\f3s\f1}
+byte swapping device
+.TP
+{\f3v\f1}
+variable block size device. This feature is present on most current
+generation tape drives, including those from STK, IBM, Sony, Quantum
+and others. 
+.TP
+{\f3stat\f1}
+a special purpose device;
+it can be used even when
+one of the other names for the same physical device is already
+opened (see below)
+.TP
+{\f3.\f1\f2density\f1}
+for 9-track tape it is one of 800, 1600,
+3200, or 6250; for the Exabyte 8500 it is one of 8200 and 8500;
+for DLT7000 it is one of 4000 and 7000
+.TP
+{\f3c\f1}
+data compression is supported for Archive Python 01931 DDS-2 DAT,
+Sony SDT-9000 DDS-3 DAT, the various DLTs, IBM Magstar 3590
+and IBM Magstar MP 3570, EXABYTE 8900, STK 9490 and 9840,
+STK SD3, Sony GY-2120,
+and Fujitsu M1016/M1017 3480 devices as shipped.
+Compression is not
+the same as density and should not be confused
+with density. The degree to which compression increases capacity is
+data dependent.
+.P
+These special devices are accessible by only one program
+at a time, except for the {\f3stat\f1} device.
+Opens on the {\f3stat\f1} device
+can block for several seconds, if another name for the same devices
+is being opened or closed at the same time.
+Similarly, the
+MTIOCGET
+ioctl on the {\f3stat\f1} device can block if long operations are in progress via
+one of the other names for the same device.
+.PP
+The only operation the {\f3stat\f1} device supports is the
+MTIOCGET
+ioctl, open, and close; all other attempted operations cause the EINVAL
+errno to be returned.
+It never causes any tape movement of any
+kind (in particular, it never tries to load the tape, even if
+media is present).
+.P
+Typically, if this tape drive is used as the system tape drive,
+the device-specific names described above are
+linked to user-friendly names in the \f2/dev\f1 directory.
+See
+.B NOTES
+below and
+.IR mtio (7)
+for a description of the user-friendly names.
+.SH SPECIAL FEATURES
+The different devices support a multitude of capabilities.
+In particular,
+some support multiple densities, some support fixed block size only,
+many support variable block sizes, some support multiple speeds, some
+support direct transfer of audio data over the SCSI bus.
+Most of these
+features are selected by which minor device is opened, and others must
+be set via ioctl commands.
+The list of capabilities that a particular drive
+supports is set by the
+.B MTCAN_*
+bits set in the
+.I master.d/scsi
+file for that drive.
+When a capability required for
+an operation is not set, the
+EINVAL error code is returned for the request.
+.P
+In particular, in audio mode the variable block size device must always
+be used for I/O, and parameters such as the recording frequency, program
+number, and so on
+are all part of the data stream.
+Additionally, when in audio
+mode the rewind and seek commands return immediately.
+If the drive
+is closed in this state, subsequent opens block until they are
+completed.
+If the drive remains open, certain commands, such
+as
+MTIOCGET
+and
+MTIOCAUDPOSN,
+can be used to determine the current position of the tape during the
+seek or rewind operation; the third argument is a pointer to a
+struct mtaudio.
+The
+MTAUD
+tape op is used to enable and disable audio mode.
+The third argument
+is 0 to use data mode and 1 to use audio mode.
+.P
+Many of the features that require ioctls can
+be set or changed via the
+.IR mt (1)
+command.
+.P
+The data structures and values for these ioctls can be found
+in the include file
+.IR /usr/include/sys/mtio.h ,
+which is shipped with all systems.
+There are extensive comments in this file, and at this time no attempt
+has been made to document most of them here or in the
+.IR mtio (7)
+reference page.
+.P
+However, there are a few surprising return values that are mentioned here.
+In particular, when using partitioned tapes (see \f3mt setpart\f1, or the
+MTSETPART
+ioctl), partition 0 is the 'main' partition, which is the final part of the
+tape, and partition 1 is the partition closest to BOT.
+Partitioned tapes are
+intended primarily so that a tape directory can be written at the beginning
+of the tape, without any worry of overwriting the data portion of the tape.
+In addition, partitioned tapes indicate BOT (EOT) when at beginning (end)
+of partition, rather than the 'real' BOT (EOT).
+.P
+Some devices support overwrite at arbitrary tape positions, while others
+require that the tape be at BOT or EOD (end of data).
+Others allow
+overwrite at any filemark (that is, 8mm from the BOT side of any filemark).
+Some experimentation may be necessary to
+decide what your particular drive supports; all drives support at a minimum
+writing at both BOT and EOD, assuming the media isn't write protected.
+.SH TAPE MOVEMENT CRITERIA
+The only time the driver
+ever moves a tape is when told to, with the exceptions listed below.
+A command that causes tape
+movement is always issued, assuming that it is a valid command and
+the media is loaded.
+.PP
+A significant change from IRIX releases prior to 4.0 is that the
+driver does NOT automatically position to the next filemark on the first command
+that does I/O to the tape.
+This means that \f3mt bsr\f1, and \f3mt fsr\f1 now have
+meaning since the tape is in fact left where it is positioned.
+It is
+now the programmer's or user's responsibility to ensure that the tape is in
+a valid state for I/O.
+The drive or driver still detects and prevents
+operations not valid for the current tape position, returning an
+appropriate error in
+.IR errno .
+.RE
+.IP 1. 4
+If the first read after an open encounters a filemark before transferring
+any data and the tape was not known to be at the top of a filemark or
+BOT, the filemark is skipped and the read retried.
+Any further errors are reported exactly as they occur.
+In particular, if two sequential filemarks are found, the tape is
+positioned between them.
+.IP 2. 4
+If a read command encounters a filemark, that read
+returns a short count (if any data was read) or 0.
+If a short count
+is returned, the next read returns 0, allowing detection of filemarks.
+An MTFSF ioctl should not be done at this point, as the tape drive itself
+has already passed over the filemark.
+If an MTFSF is done at this
+point, the count should be decremented by one.
+The driver attempts to
+deal with this case, but can not always do so, due to differences in
+drive firmware.
+.IP
+The read following the read that returns 0 returns the data in the
+next tape file, if any.
+Note that this is a change from earlier IRIX releases, which required
+an explicit MTFSF
+or other tape ioctl to move the tape before further
+reads could be done.
+The new behavior is consistent with most actual
+tape drives and tape drivers in most BSD-derived UNIX systems.
+Similarly, if an MTFSR
+ioctl encounters a filemark, it stops at the filemark and subsequent
+reads return data from the next tapefile, if any.
+.IP 3. 4
+If early warning is encountered on a write or write filemark, the
+driver does not allow further writes or write filemarks, unless
+the MTANSI ioctl is issued.
+Any data remaining is flushed to
+tape, if possible.
+For the QIC tape drives and the 8mm drives, an error
+is returned on both read and write unless all the data was transferred when
+early warning is encountered.
+This is so that older multi-volume
+backups continue to work and new ones can be read on
+older releases.
+All newer drives (9 track, DAT, and future drive
+types) return a short count if not all the data could be transferred.
+Requests other than read or write are sent to the tape drive as usual.
+.IP 4. 4
+On close, if the last tape movement operation was a successful write
+(not a write filemark), the following happens:
+.RS 4
+.TP 4
+a)
+Half-inch tape drives write two filemarks and then backspace
+one file, so that the tape is positioned between the two filemarks
+just written.
+If, however, the tape is not in ansi mode and
+early warning has been encountered, no write filemark or
+backspace is done; filemarks are never written in audio mode.
+.TP 4
+b)
+Other tape drives write one filemark.
+No backspace is
+done.
+.RE
+.IP 5. 4
+On the first status request or request that does tape motion after a
+system boot, a SCSI bus reset, or a tape cartridge insertion, the tape
+is rewound and loaded; this occurs even for the norewind devices.
+[Note: This can be suppressed via master.d/scsi changes (e.g. Ampex drives)].
+In addition, most drives rewind a tape when it is ejected.
+This means that if you wish to append a new
+dataset to a tape that already contains datasets, you should always
+issue the \f3mt feom\f1 command AFTER loading the tape, just prior to
+using the program that will append to the tape.
+Do not count
+on a tape remaining at EOD, just because that is where it was before
+it was removed.
+.P
+For devices that support it, the prevent media removal command is
+sent to the drive on open and released on close, so that eject
+buttons (when present) are disabled.
+.SH ERROR RETURNS
+The following errors are returned by this driver; other errors can also
+be returned by higher levels of the operating system.
+.IP EAGAIN 10
+The drive returned an error indicating it was not ready (tape ejected,
+drive taken offline, and so on).
+.IP EBUSY 10
+Returned on opens when the drive has already been opened.
+.IP EFAULT 10
+A bad address was passed in a call that required a data transfer.
+.IP EINVAL 10
+This is returned for requests that are invalid for one reason or
+another including:
+.RS
+.IP \(bu 3
+Attempting to write or write file-mark after reading (except in audio
+mode, for devices that support it) without an intervening close, or
+ioctl to re-position the tape.
+.IP \(bu 3
+Attempting to read after writing (same exceptions as for writing).
+.IP \(bu 3
+Using an invalid count on read, write, write file-mark, and so on.
+.IP \(bu 3
+Attempting to do MTAFILE on a drive that doesn't support it
+(the MTCAN_APPEND bit is not set in the \f2master.d/scsi\f1 file).
+.IP \(bu 3
+Attempting to do an ioctl on a drive that doesn't support it (such
+as MTBSR on Cipher 540S) or
+attempting to do an unsupported MTOP operation or other
+unsupported ioctl's.
+.IP \(bu 3
+Attempting to write to a QIC24 cartridge from a QIC150 drive (an
+MTIOCGET
+should be done, and the *QIC* bits should be checked
+for in mt_dposn to confirm this error).
+.IP \(bu 3
+Attempting to do something when not at BOT that can only be done
+at BOT, such as writing or reading a Kennedy tape drive at a
+different speed than was previously used or switching
+from the variable block size device to the fixed block size device.
+(In IRIX 4.0, an attempt to use a different density is allowed,
+but the drive continues to use the original density.)
+.IP \(bu 3
+Attempting to perform reads, writes, or ioctls other than
+MTIOCGET
+on the {\f3stat\f1} device.
+.RE
+.IP EIO 10
+A generic error occurred, such as a SCSI bus reset, unrecoverable
+media error, and so on.
+Also occurs on close or read/write if the media has
+been unloaded while the device is open.
+.IP ENOMEM 10
+An attempt was made to read data with a count less than that at
+which the block was written.
+This can only happen with drives that
+support variable block sizes.
+It can also occur if the kernel memory
+allocator is not able to allocate memory for the driver structures,
+or the request exceeds maxdmasize for the system.
+.IP ENOSPC 10
+Occurs on read or space commands that encounter end of tape or end of data,
+on writes that are attempted at end of tape, and also on some other commands
+that encounter EOT or EOD.
+.IP EROFS 10
+A write or write file-mark was attempted to a write-protected tape.
+.IP ENODEV 10
+An open was attempted on a device with an invalid SCSI controller
+or SCSI ID specified (that is, a mknod with the wrong arguments was
+used to create the device special file) or an attempt to open a tape
+in variable blocksize mode when the device doesn't support it.
+Also occurs when the
+SCSI inquiry command fails or returns indicating that the device
+is not a tape device (media not removable, or not a sequential
+access device).
+.SH NOTES
+High density tape cartridges such as the DC6150 (originally called 600
+XTD) written on a system equipped with QIC 150 tape drives can NOT be
+read on older systems.
+Even if a low density tape (such as DC 600A)
+is used, it is still written at a higher density (QIC 120) than older
+tape drives can read.
+Tapes written on the older systems can still be
+read on the new tape drives, however.
+Systems with QIC 150 cartridge
+tape drives such as the Personal IRIS are able to read QIC24 tapes (310
+oersted) such as the DC 300XL, but are not able to write them.
+.PP
+All tape devices other than the QIC (quarter-inch) tape drives have
+\f2/dev/tape\f1 linked to the {\f3ns\f1} device for performance,
+since there is no compatibility issue, and byte swapping is done
+in software.
+Most newer drives support variable block size devices,
+and the \f2/dev/tape\f1 link uses those by default; when multiple densities
+are supported, as with 9-track, the link is to the highest capacity
+device.
+For compatibility with earlier IRIX releases, the 8mm device is linked to the
+fixed block device.
+See the (unfortunately somewhat confusing) script
+.I /dev/MAKEDEV
+for details; in particular, look at the
+.B tapelinks
+target.
+.PP
+Each time the tape drive is closed and the drive has reported recovered error,
+the driver reports to the console and (as normally configured) to
+.I /var/adm/SYSLOG
+the number of recovered errors, if any.
+A small number is not
+indicative of problems, but a large number (somewhere above about 2-5%
+errors as a percentage of I/Os,
+depending on media age and quality) probably indicates that the media
+is approaching the end of its lifetime, that the drive read/write
+heads are dirty, or that the heads need to be realigned.
+A typical
+recovered error message might look like:
+.Ex
+NOTICE: tps0d7 had 8 successfully retried commands (1% of r/w)
+.Ee
+The first number is the controller number, the second is the SCSI ID on
+that controller.
+.PP
+It is important to realize that these are
+.I recovered
+errors (at the drive level) and therefore do not result in errors
+being reported to the program doing the tape I/O.
+.PP
+It should be noted that the reported percentage of retried errors for
+some devices, most notably EXABYTE, may be shown to be orders of
+magnitude larger than the actual number of I/Os. This is not
+necessarily indicative of a serious problem when one realizes how this
+value is derived. The EXABYTE 8505, for example, when returning the
+number of retried I/Os will report the number of retried 1Kbyte
+blocks, and hence an alarmingly large reported percentage of retried
+errors.
+.PP
+With more recent versions of microcode, the Ampex DIS/DST series of
+drives support variable length blocks. These should be detected as
+such and the appropriate device names created. It is important to note
+that even though variable blocks are supported, blocks smaller than
+1,199,840 bytes will reduce cartridge capacity and throughput.
+.PP
+Nine track tape users wishing to read large blocks (i.e. "gapless") tapes
+should obtain their drive from the M4 Data Corporation in Florida. They
+should request the "SGI Long Block" feature to insure that the proper
+microcode is installed in the 9914 drive. These drives will identify themselves
+as "SGI" for the vendor and "GOLD SEAL" for the model.
+The default master.d/scsi supplied by SGI includes a definition for this
+drive.  It is also important
+to check that maxdmasize is set correctly for the system.
+.SH FILES
+.PD 0
+.TP 16
+/dev/rmt/tps*
+.TP
+/dev/rmt/*/lun*/c*p*\f1
+.TP
+/dev/mt
+exists as a symlink to \f2/dev/rmt\f1;
+the use of the \f2/dev/mt\f1
+pathname is deprecated and is supported only for compatibility
+.TP
+/dev/tape, /dev/nrtape, /dev/tapens, /dev/nrtapens
+convenience
+links to the "preferred" device in \f2/dev/rmt\f1 (highest SCSI ID on
+lowest numbered SCSI bus, for tps devices only)
+.TP
+/var/sysgen/master.d/scsi
+contains a configuration table indicating what
+devices support what features and what string should be matched against
+the string returned by the SCSI inquiry command and the
+.IR hinv (1M)
+command;
+this was formerly in \f2master.d/tpsc\f1
+.TP
+/dev/MAKEDEV
+a makefile (normally invoked by the superuser in the
+\f2/dev\f1 directory only) that creates devices that match the
+installed tape drives if invoked as
+\f3cd /dev; ./MAKEDEV tape\f1
+.SH "SEE ALSO"
+MAKEDEV(1M),
+bru(1),
+cpio(1),
+hinv(1M),
+mt(1),
+tar(1),
+ioctl(2),
+rmtops(3),
+datframe(4),
+mtio(7).

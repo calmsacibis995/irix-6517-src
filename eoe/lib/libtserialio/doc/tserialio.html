@@ -1,0 +1,949 @@
+
+<TITLE>How to Do tserialio</TITLE>
+<H2>How to Do tserialio</H2>
+
+By Chris Pirazzi.<P>
+
+This file lives in <A HREF="/hosts/jake.engr/proj/irix6.5/isms/eoe/lib/libtserialio/doc/tserialio.html">eoe/lib/libtserialio/doc/tserialio.html</A>.<P>
+
+I am not at SGI any more.  By the time you read this, there may be a
+new tserialio expert.  Check the rlog for the files below.  If not,
+best bet for reaching me is cpirazzi@cs.princeton.edu.  But please
+read everything here before you try and get a hold of me!<P>
+
+Read this document before attempting to modify tserialio.
+It will teach you what you need to know to avoid introducing bugs.<P>
+
+This document was written on 12/19/97.  At this point there is a
+compiling tserialio driver in the kudzu tree, however it contains
+many serious problems and will not work in any useful sense.<P>
+
+Below, I will explain the proper steps to port tserialio from bonsai
+(6.3) to kudzu (6.5).<P>
+
+<H4>Where it is</H4>
+
+On 12/18/97, tserialio consists of:<P>
+
+<UL>
+<LI><A HREF="/hosts/jake.engr/proj/irix6.5/isms/eoe/lib/libtserialio">eoe/lib/libtserialio/</A> - user-mode library
+<LI><A HREF="/hosts/jake.engr/proj/irix6.5/isms/irix/kern/io/tserialio.c">irix/kern/io/tserialio.c</A> - kernel driver
+<LI><A HREF="/hosts/jake.engr/proj/irix6.5/isms/eoe/man/man3/tserialio.3">eoe/man/man3/tserialio.3</A> - developer documentation
+</UL><P>
+
+Unlike the standard STREAMS or other interface, the user does not open
+tserialio's device node (/dev/tty*) directly.  Instead, the user links
+with the user-mode library libtserialio.c, and uses only its documented
+API entry points.<P>
+
+Tserialio does not have or need any flow control of any kind (not
+hardware/sofware, not XON/XOFF).<P>
+
+<H4>How to Learn tserialio</H4>
+
+Read these things in this order:
+
+<UL>
+
+<LI>First you need to learn about serialio, the scheme used in our
+kernel to abstract the platform-specific serial hardware (the lower
+layer) from the user-mode interface to that hardware (the upper
+layer).  tserialio is an upper layer.  The serialio scheme is
+described in <A
+HREF="/hosts/jake.engr/proj/irix6.5/isms/irix/kern/ksys/serialio.h">irix/kern/ksys/serialio.h</A>.  Read that now.<P>
+
+Example lower layers include:<P>
+
+<UL>
+<LI><A
+HREF="/hosts/jake.engr/proj/irix6.5/isms/irix/kern/io/sio_16550.c">irix/kern/io/sio_16550.c</A> - O2<P>
+
+<LI><A
+HREF="/hosts/jake.engr/proj/irix6.5/isms/irix/kern/io/sio_ioc3.c">irix/kern/io/sio_ioc3.c</A> - Octane, Onyx2, Origin<P>
+
+</UL>
+
+Example upper layers include:<P>
+
+<UL>
+
+<LI><A
+HREF="/hosts/jake.engr/proj/irix6.5/isms/irix/kern/io/tserialio.c">irix/kern/io/tserialio.c</A> - timestamped serial I/O: tserialio! (/dev/ttyts#)<P>
+
+<LI><A
+HREF="/hosts/jake.engr/proj/irix6.5/isms/irix/kern/io/serialio.c">irix/kern/io/serialio.c</A> - standard STREAMS interface (/dev/tty[df]#)<P>
+
+<LI><A
+HREF="/hosts/jake.engr/proj/irix6.5/isms/irix/kern/io/cserialio.c">irix/kern/io/cserialio.c</A> - simple charater interface: (/dev/ttyc#)<P>
+
+<LI><A
+HREF="/hosts/jake.engr/proj/irix6.5/isms/irix/kern/io/userialio.c">irix/kern/io/userialio.c</A> - Octane/Onyx2/Origin-specific, non-backwards-compatible, non-forwards-compatible, very high performance mapped hardware interface (/dev/ttyu#)<P>
+
+<LI><A
+HREF="/hosts/jake.engr/proj/irix6.5/isms/dmedia/devices/midi/kern/nsdriver/nsmidi.c">dmedia/devices/midi/kern/nsdriver/nsmidi.c</A> - MIDI interface (/dev/ttymidi#)<P>
+
+</UL>
+
+Note that <A
+HREF="/hosts/jake.engr/proj/irix6.5/isms/irix/kern/io/serialio.c">irix/kern/io/serialio.c</A>
+also contains the support code for the serialio infrastructure.  This
+code is not specific to the STREAMS upper layer.<P>
+
+<LI>
+
+Next, you need to find out how the tserialio API works.  Read the
+entire tserialio man page at <A
+HREF="/hosts/jake.engr/proj/irix6.5/isms/eoe/man/man3/tserialio.3">eoe/man/man3/tserialio.3</A>
+(for readability, cd to that directory and do "make tserialio.z" and
+then do "pcat tserialio.z | more".  or just go to a kudzu system and do
+man tserialio!).  Especially important is the section called "ACCURACY
+AND LATENCY."  You absolutely must understand the distinction
+described here in order to successfully work on tserlialio.<P>
+
+<LI>
+
+Next, you need to find out how tserialio works internally.  Go to <A
+HREF="/hosts/jake.engr/proj/irix6.5/isms/irix/kern/io/tserialio.c">irix/kern/io/tserialio.c</A>
+and read all of the big comments at the beginning.  Those comments
+have not (but should have) changed between bonsai and kudzu, so you
+can look at either one.  Note that tserialio is loosely based on the
+way the SGI audio driver works, and the SGI MIDI driver of IRIX 6.5
+beyond is based on (read: cut and pasted from) tserialio.  So you may
+be able to get help by talking to an audio or MIDI person.  Bruce
+Karsh created much of the original design (since it was based on the
+audio driver!) so you might try him too.<P>
+
+</UL>
+
+<H4>tserialio and Timeliness: How Applications Use tserialio</H4>
+
+Before modifying tserialio, you need to think extra carefully about
+timeliness.<P>
+
+tserialio is unlike any other driver in irix/kern.  In fact, it is
+more like the audio and MIDI driver.  typically in a driver, we do all
+we can to optimize bandwidth (throughput), sometimes at the cost of
+latency.  tserialio needs <STRONG>exactly the opposite</STRONG>.
+tserialio is used for applications like deck control, which involve
+absolutely miniscule amounts of data (38400 baud, and the serial line
+is often not at all saturated), but involve extremely tight accuracy
+constraints.  tserialio is 100% completely useless unless it can
+deliver the stated accuracy guarantees, 100% of the time.  a failure
+means that video deck control overwrites customer data, which in the
+video industry means you send it back (no, it's not like Microsoft).
+tserialio uses a guaranteed low latency event in the kernel to run
+every millisecond so that it can deliver the very high accuracy
+timestamping and scheduling described in the tserialio man page.<P>
+
+If it were possible to run every millisecod, guaranteed, 100% of the
+time from a user-mode thread, we wouldn't need the tserialio driver,
+and the tserialio user-mode API would be more of a convenience than
+any kind of new functionality for the developer.<P>
+
+However, as of 12/19/97, the company has decided not to allocate the
+engineering resources necessary to guarantee that a user-mode thread
+can run every millisecond on O2 and Octane for IRIX 6.5.  So O2 and
+Octane need the tserialio driver.<P>
+
+The event which the tserialio driver uses is called the millisecond
+profiler tick.  There is a nasty, kludgy hook from irix/kern/ml called
+tsio_timercallback_ptr which tserialio hooks into.  This tick comes at
+splprof, which is higher than splhi.  This interrupt is <STRONG>not
+threaded,</STRONG> nor could it be threaded and deliver the required
+latencies on O2/Octane.  splprof is so high that almost none of the
+standard kernel facilities which you're used to (semaphores, memory
+allocation, address space manipulation (memory mapping and unmapping),
+sleeping) work.  About the only kernel facility which the interrupt
+can do is to schedule a lower-priority timeout routine (known as a
+timepoke), from which tserialio can use other kernel facilities such
+as pollwakeup().<P>
+
+In tserialio, as described in the comment you should have read above,
+the interrupt routine reads (for serial TX) or writes (for serial RX)
+an area of main memory containing a ringbuffer.  That ringbuffer is
+mapped into the address space of the user process using the tserialio
+API.  So once a TSport is set up, there is actually very little
+tserialio needs to do in terms of using kernel facilities.<P>
+
+On Onyx2/Origin, the company has promised millisecond schedulability
+of a user-mode process.  So on those platforms, don't bother porting
+the tserialio driver.  Instead, you should write a very simple (should
+be at most a few hundred lines of code) "tserialio veneer" DSO in
+user-mode.  This veneer will have the exact same API as the
+driver-based tserialio.so, but it will spawn off a sproc/pthread
+thread which runs every millisecond (which you can do by making it pri
+255 and SCHED_RR or SCHED_FIFO (see sched_setscheduler(2))) and polls
+the serial device using any serial interface (presumably userualio or
+cserialio).  The veneer will use some selectable object (semaphores,
+pipes, ...) to implement the tserialio API's selectable file
+descriptor.  Semaphores would be the obvious choice, but due to the
+bizarre semantics of us selectable semaphores, you may find that you
+need to find another mechanism.  You may find pipes to be of use.  For
+communication between the veneer thread and the API thread, the veneer
+can use the same mapped ringbuffer trick as the current API and driver
+do.  The only difference is that the whole shebang will reside in the
+address space of one share group (sproc) or process (pthread).<P>
+
+As other platforms take on the millisecond schedulability guarantees,
+you can discard their tserialio driver and go with the veneer.<P>
+
+<I>Update: 1998 October 27</I>
+<P>Chris Pirazzi and I had an email exchange about latency tolerance in the tserialio driver. Below is some additional information to help clarify the scheduling needs to the tserialio driver.</P>
+
+<P>The tserialio driver requires a one millisecond scheduling period with one millisecond scheduling latency. So, at the extreme, the tserialio driver can tollerate no more than 2 ms betweeen its execution. This scheduling requirement also applies to the midi and audio drivers.</P>
+
+<P>Chris agreed to a more strict definition:
+
+<BLOCKQUOTE>
+      The tserialio timeout must be scheduled to run every 1000 us with no skew in scheduling frequency, and the maximum holdoff, i.e., the time from when a timer expires until the affected thread runs, that the tserialio timeout can tollerate is 1000 us.
+</BLOCKQUOTE>
+
+Based on testing with real video decks, the above definition is overly strict, but the remainder of the statement is correct.</P>
+
+<P>As of IRIX 6.5.2, the OCTANE platform has guaranteed one millisecond bounded response time, in contrast to Chris's comment on 1997 December 19. The tserialio driver runs as a periodic xthread on the IP27 (Onyx2, Origin200, Origin2000) and IP30 (OCTANE). Other platforms may be added over time by defining TSERIALIO_TIMEOUT_IS_THREADED in irix/kern/kcommondefs for each additional platform. Note: One millisecond bounded response for a platform is a prerequesite to proper execution of a threaded tserialio driver, so ensure proper bounded response before defining TSERIALIO_TIMEOUT_IS_THREADED.</P>
+
+<P><I>--Brian Forney (bforney@sgi.com)</I></P>
+
+
+
+<H4>tserialio and Bandwidth</H4>
+
+People use tserialio for video deck control and MIDI.  Both are
+puny in bandwidth:
+
+<PRE>
+MIDI == 31250 sym/sec / (1start+8data+1stop)=10 sym/byt 
+     == 3125... bytes/second
+
+deck == 38400 sym/sec / (1start+8data+1par+1stop)=11 sym/byt
+     == 3491... byt/sec
+</PRE>
+
+As described above, latency and accuracy are what is important to the
+tserialio driver.<P>
+
+<H4>Accuracy and Latency Requirements for Video Deck Control and Video
+Deck Emulation</H4>
+
+It will help you quite a bit if you understand the kinds of applications
+for which tserialio is used.<P>
+
+tserialio is used for <STRONG>video deck control.</STRONG> Video deck
+control needs highly accurate scheduling and timestamping of serial
+bytes.<P>
+
+Another extremely popular application is <STRONG>video deck
+emulation.</STRONG> Its requirements are stricter.  Video deck
+emulation requires low latency user-thread scheduling in addition to
+the high accuracy of video deck control.<P>
+
+Please read the following blurb about these two applications.  This
+blurb was written with someone in mind who is stronger with OS
+concepts than they are with video concepts: <A HREF="millideck">click
+here for millideck.</A><P>
+
+There is some other information about video deck control, including
+sample code using tserialio, in the <A
+HREF="http://collabmed.engr.sgi.com/projects/lurker/">Lurker's Guide
+to Video at http://collabmed.engr.sgi.com/projects/lurker/</A>.<P>
+
+<H4>tserialio and Mountaingate</H4>
+
+Mountaingate is a customer with one of those "special" relationships
+with SGI.  They want to make an O2 do video deck emulation and will
+supposedly sell lots of systems.  Yeah we've heard it before.<P>
+
+Anyway, back when it seemed likely that they will sell lots of
+systems, we did a very carefully crafted and limited hack to the
+tserialio IRIX 6.3 driver which would allow them to have a small part
+of their driver run from tserialio's millisecond callback in the
+kernel.  Mountaingate was extremely limited as to what they could do
+from this callback.<P>
+
+To see the contract and the precise hack, see the file mgate1.9 (or
+whatever the highest-numbered mgate* is right now) in <A
+HREF="/hosts/jake.engr/proj/irix6.5/isms/eoe/lib/libtserialio/mountaingate">eoe/lib/libtserialio/mountaingate</A>.<P>
+
+As you can see, we explicitly said we were not on the hook for IRIX
+6.5 support.  So you can choose to omit the mountaingate hacks if you
+want when porting to IRIX 6.5.  As you can see by diffing the "with"
+and "without" tserialio.c in <A
+HREF="/hosts/jake.engr/proj/irix6.5/isms/eoe/lib/libtserialio/mountaingate/tserialio_driver_hack">eoe/lib/libtserialio/mountaingate/tserialio_driver_hack</A>,
+they are not that complex.<P>
+
+There is one very lightweight support issue with Mountaingate.
+Because we provide them with a custom tserialio.o, we need to make
+sure that any patches they install do not conflict with the
+tserialio.o we provided.  Part of our contract with Mountaingate is
+that we will qualify or disqualify any patches they want to install.
+Examples of patches which Mountaingate should not be allowed to
+install:<P>
+
+<UL>
+
+<LI>patches which include tserialio.o
+
+<LI>patches which change the serialio upper/lower layer interface.
+there have been several of these including 1993 and 2796.
+
+<LI>patches which cause the timercallback used by tserialio.o not to
+fire every millisecond.  these patches are bugs in general since they
+would also break audio, but are particularly bad for mountaingate.
+
+<LI>patches which change the kernel interfaces used by tserialio, 
+including (but not limited to) kvpalloc, dotimeout, v_mapphys,
+semaphores, mutexes, and atomic operations.
+
+</UL><P>
+
+Qualifying a patch usually consists of looking at its idb file
+(/hosts/dist/test/patches/patchXXXX/dist/*.idb) to see what it
+includes, and if it includes something suspicious in the kernel, going
+to its source files (find /hosts/jake/proj/patches/patchXXXX -type
+file -print) and seeing what changed.<P>
+
+Mountaingate asks for a set of patches to be qualified once every
+few months.<P>
+
+<H4>Porting tserialio to IRIX 6.5</H4>
+
+The current 12/19/97 TOT irix/kern/tserialio.c for kudzu is 1.7.  This
+file compiles but has many severe problems.  The port to kudzu was
+done based on a non-top-of-trunk bonsai tserialio.c, so many critical
+changes and fixes from bonsai did not make it into the kudzu source.
+In addition, several kudzu updates were done in an incorrect
+manner.<P>
+
+After surveying the changes for a week I am absolutely, 100% sure
+that it is worth starting over from scratch with the bonsai source.
+This is definitely the fastest way to get kudzu tserialio working.<P>
+
+Some of the items below are such that it takes me longer to explain
+them than it would for me to do them before I leave.  But this would
+be a short-sighted strategy.  If tserialio is to survive in the long
+term, or even if it is to ever get ported to NT, you need to
+understand the intricacies of the driver, and so I will spend my
+time explaining it and not putzing with it.<P>
+
+So here's the process you need to do unless otherwise specified, all
+changes are to the driver.  Do these things in this order:<P>
+
+<UL>
+
+<LI>Start with rev 1.4 tserialio.c from the bonsai (IRIX 6.3) tree.<P>
+
+<LI>Add in the small changes necessary to fix pv bug 460909.  add this
+in global scope:<P>
+
+<PRE>
+#if IP22 || IP32
+extern int fastclock;                            /* from ml/timer.c */
+#endif
+</PRE><P>
+
+and then add this in start_tsio_ticks():
+
+<PRE>
+#if defined(MP)
+    startaudioclock();
+#else
+    if (!fastclock) {
+        enable_fastclock();
+    }
+#endif
+</PRE><P>
+
+The bug is that the fastclock must be started, and the bonsai and kudzu
+code weren't starting it.  This bug often was masked because any use
+of audio (including keyboard beep on many platforms) would also 
+start the clock.<P>
+
+The Mountaingate source code in <A
+HREF="/hosts/jake.engr/proj/irix6.5/isms/eoe/lib/libtserialio/mountaingate/tserialio_driver_hack">eoe/lib/libtserialio/mountaingate/tserialio_driver_hack</A>
+also fixes 460909 but in a bonsai-only way.  <STRONG>do not copy the
+460909 fix from the Mountaingate code</STRONG>.<P>
+
+<LI>If you want to include the Mountaingate entry points (see above), do
+it now by gdiffing with <A
+HREF="/hosts/jake.engr/proj/irix6.5/isms/eoe/lib/libtserialio/mountaingate/tserialio_driver_hack/tserialio.c.bonsai.MOUNTAINGATE.and.460909">eoe/lib/libtserialio/mountaingate/tserialio_driver_hack/tserialio.c.bonsai.MOUNTAINGATE.and.460909</A>.  do not include the 460909 fix.  only bring over the changes that
+are marked as Mountaingate changes.<P>
+
+<LI>Add in the tserialio.c tsiopoll() change made between rev 1.2 and
+1.3 of kudzu, except this time do it right!!  To understand what casey
+was trying to do, see the file <A
+HREF="casey.VOP_SELECT.desc">casey.VOP_SELECT.desc</A> and also look
+at the POLLGEN() macro in <A
+HREF="/hosts/jake.engr/proj/irix6.5/isms/irix/kern/sys/poll.h">/hosts/jake.engr/proj/irix6.5/isms/irix/kern/sys/poll.h</A>.<P>
+
+The key part is this:
+
+<PRE>
+    The generation value must be taken either while a state lock is held
+    that will hold off any call to pollwakeup(D3) on the pollhead, or it
+    must be taken before the check is made for any pending events.  The
+</PRE>
+
+Because of the lock-free way tserialio is designed, it is not possible or
+desirable to hold off a call to pollwakeup() (which in the case of
+tserialio comes from the timepoke).  Instead, we need to take the
+generation number before we check the ringbuffers:<P>
+
+<PRE>
+#include &lt;sys/poll.h&gt; /* ADD THIS */
+
+int
+tsiopoll(dev_t dev,
+           register short events,
+           int anyyet,
+           short *reventsp,
+           struct pollhead **phpp,
+           unsigned int *genp) /* loadable module entry point */
+{
+  ...
+
+  if (fillunits != TSIO_FILLUNITS_BYTES &&
+      fillunits != TSIO_FILLUNITS_UST)
+    {
+      cmn_err(CE_WARN, "tsio poll: port 0x%x fillunits corrupted\n",
+              upper);
+      UNLOCK_TSIO();
+      return EINVAL;
+    }
+
+  /* ADD THIS */
+  /*
+   * Snapshot pollhead generation number before checking event state
+   * since we don't hold a lock while doing the check.
+   */
+  *genp = POLLGEN(&urb->pq);
+  /* UP TO HERE */
+  
+  if (urb->direction == TSIO_TOMIPS) /* RX, input */
+    {
+      int n_filled;
+      int tail = urb->TXheadRXtail; /* tail for RX */
+    ...
+  ...
+}
+</PRE>
+
+<A
+HREF="/hosts/jake.engr/proj/irix6.5/isms/dmedia/devices/midi/kern/nsdriver/nsmidi.c">dmedia/devices/midi/kern/nsdriver/nsmidi.c</A> is an example
+which gets it right.<P>
+
+There is no need to add any code later in the function as casey did.<P>
+
+<LI>Bring in the change that nigel did between rev 1.4 and 1.5 in
+kudzu.  Go to kudzu irix/kern/io and do a:<P>
+
+<PRE>
+p_rdiff -g -r 1.4 -r 1.5 tserialio.c 
+</PRE><P>
+
+to see the change (but don't gdiff kudzu against your working copy;
+there will be too many differences).  The old code used the unexported
+dotimeout() because for some reason itimeout() couldn't be called from
+splprof.  This is now possible in kudzu.<P>
+
+<LI>Bring in the change from rev 1.6 to 1.7 in kudzu.  to see this change,
+do:
+
+<PRE>
+p_rdiff -g -r 1.6 -r 1.7 tserialio.c 
+</PRE><P>
+
+but don't gdiff kudzu against your working copy; there will be too
+many differences.  The issue here is that there are now more drivers
+using this 1ms hook.  The midi hook used to be unused in bonsai.  Now
+tsio needs its own hook.<P>
+
+<LI>Change all references to spl7 in tserialio.c to splprof (comments
+and code).  Using spl7 is not correct. spl7 and splprof differ in some
+cases.  Both of them always have the desired 1ms property.<P>
+
+<LI>There are some massive changes that were made in kudzu to
+tserialio (1.3 to 1.4 and 1.5 to 1.6). You should <STRONG>not</STRONG>
+replicate them when you re-do the port.  They are the main reason you
+should start with bonsai code, not kudzu code.  Read them now just
+to see what you should avoid when you do your port:<P>
+	
+<UL>
+
+<LI>All of the basic typedefs (urb, ...) were putzed (urb_t, ...) and
+then putzed <STRONG>again</STRONG> (tsiourb_t, ...) for no apparent
+reason.  <STRONG>Please do not do this!!!!!!!</STRONG> It made the
+diffing I had to do take days when it should have taken hours, and
+fixed no problem.<P>
+
+<LI>All the loops were changed from array indexing to pointer
+increment, again for no apparent reason.  As described in <A
+HREF="pointerputz">pointerputz</A>, this added no performance
+whatsoever and again made diffing incredibly difficult.<P>
+
+This performance reality of our SGI compilers is relevant for the
+tserialio driver as well.  keep it in mind when optimizing the
+driver.<P>
+
+<LI>#ifdef IP32 was added around tserialio.c.  this object file
+is only included for IP32, so this is not necessary.<P>
+
+<LI>When adding hardware graph support and hardware node
+initialization, tserialio.c pulled the minor_to_port function up from
+the lower layer, and made some O2-specific assumptions (2 ports).
+this is wrong and not necessary.  Also, the driver created /hw/tsio
+even though tserlialio can be treated like a normal serial port upper
+layer for device nodes.  See below for the correct way to initialize
+nodes which will work on any system.  The correct way is actually less
+code!<P>
+
+<LI>Some of the cmn_err's which print integer offets in urbtab or
+porttab were changed to print pointers, and the format string was
+changed to %x.  this is incorrect. %x is always 32 bits, but a pointer
+may be 64 bits on some platforms.  use %p instead.<P>
+
+<LI>The crucial serialio LOCK_PORT() and UNLOCK_PORT() macros
+were defined to be nothing!  this is very bad.  it should be clear
+from the discussion in the big tserialio.c comment how the locking
+is supposed to work.  The actual name of the serialio macros
+also changed to SIO_LOCK_*() in kudzu.  we'll talk more about SIO
+locking later.<P>
+
+</UL>
+
+<LI>In bonsai, there was only irix/kern/sys/serialio.h.  in kudzu
+the bits private to the kernel are in irix/kern/ksys/serialio.h
+and the ones which user mode cares about are in irix/kern/sys/serialio.h.
+so include the ksys file from the driver.<P>
+
+<LI>In bonsai, the serialio LOCK_PORT() was a spinlock at a selectable
+spl.  tserialio chose spl7 for reasons detailed in the comment at the
+beginning of tserialio.c.  in kudzu, you need to do the same thing,
+but the mechanism to use when first setting up the port is slightly
+different.  When you claim the port in tsioopen() by setting sio_callup,
+also do:
+
+<PRE>
+  port->sio_callup = &tsio_callup;
+  ...
+  port->sio_lock->spinlock = SIO_LOCK_SPL7; /* we need spl7 spinlock, sigh */
+</PRE>
+
+Also, the lock macros are now called SIO_LOCK_*() in kudzu.<P>
+
+<LI>Modify your driver to correctly initialize the serial device nodes
+in /hw.  To do this:<P>
+
+<UL>
+
+<LI>You need to understand the hardware graph, including
+hwgraph_vertex_clone().  Ask your friendly neighborhood OS person for
+some pointers to documentation.<P>
+
+<LI>You need to understand how serial devices get themselves added
+to various places in /hw, and how later MAKEDEV creates links to serial
+devices from /dev.  Tom Lawrence is the expert on this.  The mechanism
+is rather twisted and hard to follow, but here's your cheat sheet:<P>
+
+<UL>
+
+<LI>When the system is booting and attaching all the hardware to the
+kernel (or when hardware is added later on a lego), the serialio lower
+layer attach routine gets called.  Its job is to populate some very
+platform-specific place in the /hw hardware graph.  For example, on an
+Octane it might be asked to populate /hw/node/xtalk/15/pci/4/.  For
+each physical port serviced by that point on the hardware graph, the
+lower layer attach routine will:<P>
+
+<UL>
+
+<LI>Create an edge "tty/#" where # is the port number, as in<P>
+
+<PRE>
+/hw/node/xtalk/15/pci/4/tty/1
+</PRE><P>
+
+<LI>Call sio_initport() with that new edge. sio_initport() is part of
+the serialio infrastructure and not part of any upper or lower layer.
+sio_initport() knows about all the upper layers and it will populate
+the new directory with nodes for each upper layer, as in:<P>
+
+<PRE>
+/hw/node/xtalk/15/pci/4/tty/1/4d
+/hw/node/xtalk/15/pci/4/tty/1/4f
+/hw/node/xtalk/15/pci/4/tty/1/c
+/hw/node/xtalk/15/pci/4/tty/1/d
+/hw/node/xtalk/15/pci/4/tty/1/f
+/hw/node/xtalk/15/pci/4/tty/1/m
+/hw/node/xtalk/15/pci/4/tty/1/midi
+</PRE><P>
+
+In some cases (4d, 4f, d, f, m) one upper layer (serialio) wants to
+have several different /hw nodes per port.<P>
+
+<LI>Call device_controller_num_set() on each edge (tty/1, tty/2) to
+set the serial port number in that node.<P>
+
+</UL>
+
+<LI>At some later point during bootup, possibly during the very same
+lower layer attach routine (for console ports) or possibly during an
+SIOC_MKHWG ioctl() from the ioconfig system utility (for non-console
+ports), there will be call to sio_make_hwgraph_nodes() on each sioport
+set up by a lower layer attach routine (for example, tty/1 and tty/2
+from our example above).<P>
+
+sio_make_hwgraph_nodes()'s job is to populate /hw/ttys, a
+system-global directory of ttys, with one node for each physical
+serial port and upper layer combination.  It does this by simply
+concatenating the port number, retrieved with---you guessed
+it---device_controller_num_get() with the letters identifying the
+upper layer.  So the nodes from the above example would generate: <P>
+
+<PRE>
+/hw/ttys/tty4d1
+/hw/ttys/tty4f1
+/hw/ttys/ttyc1
+/hw/ttys/ttyd1
+/hw/ttys/ttyf1
+/hw/ttys/ttym1
+/hw/ttys/ttymidi1
+</PRE><P>
+
+so, by the time the system is booted, /hw/ttys contains every tty
+on the system.<P>
+
+<LI>finally, at a late point in bootup, MAKEDEV runs.  it simply iterates
+through every node in /dev/ttys and creates a corresponding entry in /dev
+pointing to it.<P>
+
+</UL>
+
+Told you it was twisted...<P>
+
+Note that the kudzu rev 1.7 tserialio does not use anything
+approaching the right method; you should instead mimic what is done by
+the other upper layers (cserialio, serialio, nsmidi: pointers are
+above).<P>
+
+The correct procedure is:<P>
+
+<LI>Go to irix/kern/ksys/serialio.h and add NODE_TYPE_TIMESTAMPED.
+add NODE_TYPE_TIMESTAMPED to the NODE_TYPE_ALL_RS232 and
+NODE_TYPE_ALL_RS422 masks.<P>
+
+<LI>Go to irix/kern/io/serialio.c.  Look at sio_initport().  Add a
+case for NODE_TYPE_TIMESTAMPED which follows the model for MIDI.  You
+want a device prefix of "tsio" instead of "midi_".  You will have your
+own tsio-specific data structure to kmem_zalloc() and initialize here
+(in the MIDI case it is miditype_t) which we will discuss below.  For
+now, just remember that this is the "per-physical-port" tsio data
+structure.<P>
+
+<LI>Go to eoe/cmd/dev/MAKEDEV.  Remove the special case for tserialio.
+tserialio nodes will automatically be created in /dev/ttyts* along
+with nodes for all the other upper layers (remove the lines shown as
+AXE):<P>
+
+<PRE>
+    # Standard on-cpu tty's
+    # Create symlinks to any tty files that exist in the hwgraph, as well as any
+    # input directories. Also provide direct symlinks /dev/keybd /dev/mouse
+    # /dev/dials and /dev/tablet for backward compatibility.
+AXE # For O2, create timestamped serial io driver, /dev/ttyts*
+AXE # (an alternate serialio upper layer).
+    ttys:   anything
+AXE         @if hinv -c processor | grep -s IP32 > /dev/null; then \
+AXE                 rm -rf ttyts* ; \
+AXE                 ln -s /hw/tsio/ttyts1 ttyts1 ; \
+AXE                 ln -s /hw/tsio/ttyts2 ttyts2 ; \
+AXE         fi
+            @for tty_file in /hw/ttys/* ; do \
+                    bname="`basename $$tty_file`" ; \
+             ....
+</PRE>
+
+<LI>Every time the user successfully opens your driver, you will want
+to call hwgraph_vertex_clone().  hwgraph_vertex_clone() allows you to
+specify a pointer which you can retrieve in all subsequent toplevel
+entry points on this open() of the driver.  You can take this
+opportunity to kmem_zalloc() and initialize a data structure that is
+tsio-specific.  This is called the "per-driver-open" tsio data
+structure.<P>
+
+<LI>When the user closes your driver, do hwgraph_node_destroy() to
+close your cloned node.  Ask an OS person for the correct way to
+interpret the return value from hwgraph_node_destroy() in this case.
+There is some fairly fishy code for this in the MIDI driver.<P>
+
+</UL>
+
+<P>
+
+<LI>Now you have to address the issue of urbtab[] and porttab[].<P> 
+
+In bonsai, there was no hardware graph, and so the driver maintained
+its own array of "per-physical-port" data structues (porttab) and
+"per-driver-open" data structures (urbtab).  The fact that these were
+statically allocated arrays was lame.  It meant you always had to
+allocate the worst-case amount of urbs (which is eight times the
+number of physical ports on the machine).  For O2 this is a not a
+problem, but for higher-end machines it may be a problem.<P>
+
+In kudzu, the hardware graph automatically gives us a convenient
+place to store a "per-physical-port" pointer and a "per-driver-open"
+pointer.  We identified these places just above when we discussed
+how to create the hardware graph nodes.  There are no static 
+array limitations, because all of these data structures are
+dynamically initialized.<P>
+
+It would be a very good idea if you could do away with urbtab[] and
+porttab[].  They are not necessary.  Note that the rev 1.7 kudzu
+tserialio still has porttab[] and urbtab[], while also using the
+hardware graph pointers.  This makes the code very confusing to read
+and more bug-prone.<P>
+
+Brief side note: even if you choose to keep porttab[] and urbtab[],
+you should make them kmem_zalloc'ed to a fixed size by the driver init
+instead of statically allocated.  This is to work around the extreme
+lameness of the R10000 O2 kernel, where K0/K1 space under 8MB is at an
+extreme premium due to the R10000 speculative store workaround.  Ask
+your friendly neighborhood OS person for more on that.<P>
+
+If you got rid of porttab[] and urbtab[], you would need:<P>
+
+<UL>
+
+<LI>a way for the interrupt routine to iterate through all open ports.
+
+<LI>a way for the interrupt routine to iterate through all open urbs on
+a given port.
+
+<LI>a way for the timepoke routine to iterate through all open urbs
+(it doesn't care about ports).
+
+<LI>tsioopen() would need to add things to the port and urb list.
+
+<LI>tsioclose() would need to remove things from the port and urb lists.
+
+</UL><P>
+
+The obvious choice in this case is a singly linked list structure.<P>
+
+There would be one global pointer that pointed to a linked list of
+open ports.  Each element of that linked list would be a
+"per-physical-point" structure, allocated during hardware graph setup
+time.  The "per-physical-point" structure would be the equivalent of
+the tsio_upper structure in bonsai tserialio.  When tsioopen() is
+called, it retrieves the "per-physical-point" structure, and if that
+port is not already open, it adds the port to the linked list.  You
+could embed the "next" pointer for the linked list in the
+"per-physical-point" structure itself.  tsioclose() would remove the
+port from the global linked list of open ports when the last urb on
+that port is closed.<P>
+
+Each "per-physical-point" structure would contain a pointer to a
+linked list of open urbs on that port.  Following the same model, each
+element of that urb list would be a "per-driver-open" structure,
+allocated at hwgraph_vertex_clone() time.  That is, the
+"per-driver-open" structure would be the equivalent of the "urb"
+structure in bonsai tserialio.  tsioopen() does the clone so it
+enqueues the "per-driver-open" structure on the linked list of the
+appropriate "per-physical-point" structure.  tsioclose() would then
+remove the "per-driver-open" structure from the list.<P>
+
+While all this is going on, the interrupt and timepoke routines
+will be walking the lists to do their job.<P>
+
+This scheme has the advantages that the interrupt and timepoke
+routines waste no time on unopen ports or urbs, that there are no
+static limits on ports or urbs, and that the number of data structures
+is kept to the same minimal level as bonsai: 2.<P>
+
+The tricky part, of course, is the coordination of these linked list
+data structures between the interrupt/timepoke and toplevel.  In order
+for tserialio to work with 1ms guarantees, you cannot use any locking
+scheme which could hold off the profiler tick for anywhere near that
+long.  You must also use a locking scheme where the interrupt and
+timepoke are guaranteed to walk over each open port/urb on each call.
+In theory, you could use spl7 spinlocks, but for reasons described in
+the long comment at the beginning of tserialio.c, this is overkill.
+Ideally, you would choose a spinlock-free coordination method.  For
+the bonsai driver with its porttab[] and urbtab[] arrays, Mike
+Thompson helped me cook up the intrflags scheme.  There is almost
+definitely a similar scheme that will work for linked lists.  It could
+be extremely fun to find such a scheme.  Contact Mike Thompson for
+invaluable help: he eats this stuff for breakfast.  There may be a
+pre-cooked answer to this problem with code ready to steal.<P>
+
+If it will take you too long to cook up a spinlock-free coordination
+scheme, alternatives are:
+
+<UL>
+
+<LI>use spinlocks.  may not be so bad.
+
+<LI>leave the old porttab[] and urbtab[] mechanism for communication
+between intr/timepoke and toplevel, and add on other data structures
+which hang off the hwgraph objects. this way you'll have to duplicate
+every data structure twice in your toplevel processing.  It won't
+necessarily save you time to keep porttab[] and urbtab[], you will
+continue to have the static limitation on ports and urbs, and it will
+most definitely be inefficient and harder to maintain.  I'd avoid
+this.<P>
+
+</UL>
+
+<LI>The tsio_timepoke_to_wake_rbs() has a very single-processor,
+pre-IRIX-6.4 construct using spl in it.  This is one of the few parts
+of tserialio that aren't MP/kudzu-ready.  The construct is there to
+prevent the routine from getting re-entered.  Now that timepokes are
+interrupt threads in kudzu, you should replace the kludgy spl1() with
+a real IRIX sleeping mutex.  Note that this mutex only protects
+tsio_timepoke_to_wake_rbs() against itself; it is not used between
+tsio_timepoke_to_wake_rbs() and the splprof interrupt or toplevel.  I
+added this mutex in bonsai because the situation described in the
+comment really actually did happen, when you have a small fillpoint
+and you do saturated serial port input.<P>
+
+<LI>Here's a nasty race condition which I fixed in the bonsai
+tserialio.c code, but I forgot to fix in the bonsai tserialio.c
+comments.  If you can understand this race, then you have a good grasp
+of how the intr and timepoke coordinate with toplevel in tserialio.
+Look at the comments which describe how compare_and_swap_int() is used
+in the interrupt and timepoke (here's an example using the interrupt):
+
+<PRE>
+ *       if (compare_and_swap_int(&urbtab[i].intrflags,
+ *                                (urbtab[i].intrflags & URB_INUSE_BY_TIMEPOKE)
+ *                                  | URB_ACTIVE,
+ *                                (urbtab[i].intrflags & URB_INUSE_BY_TIMEPOKE)
+ *                                  | URB_ACTIVE | URB_INUSE_BY_INTR))
+</PRE>
+
+Here's how it's actually used in the (interrupt) code:<P>
+
+<PRE>
+      int other = (urb->intrflags & URB_INUSE_BY_TIMEPOKE);
+      if (compare_and_swap_int(&urb->intrflags,
+                               other | URB_ACTIVE,
+                               other | URB_ACTIVE | URB_INUSE_BY_INTR))
+</PRE>
+
+Note the difference: the race is that the former code (which is still
+in the comments) could grab intrflags twice (based on compiler whim).
+The unlikely but possible failure scenario is:
+<UL>
+<LI>timepoke and intr running on different CPUs
+<LI>intr reads intrflags to construct argument 2 == URB_ACTIVE
+<LI>timepoke compares and swaps in URB_ACTIVE | URB_INUSE_BY_TIMEPOKE
+<LI>intr reads intrflags <STRONG>again</STRONG> to construct argument 3 ==
+(URB_ACTIVE | URB_INUSE_BY_INTR | URB_INUSE_BY_TIMEPOKE)
+<LI>timepoke finishes its job and sets intrflags back to URB_ACTIVE
+<LI>intr calls compare_and_swap_int(), sees that intrflags is indeed
+URB_ACTIVE, and so swaps it for (URB_ACTIVE | URB_INUSE_BY_INTR | URB_INUSE_BY_TIMEPOKE)
+<LI>intr finishes its job and clears only its URB_INUSE_BY_INTR bit
+<LI>now the URB_INUSE_BY_TIMEPOKE bit is stuck on, possibly indefinitely,
+until the next timepoke.  this causes an attempt to close the port
+(tsioclose()) to spin forever trying to deactivate the port.
+</UL><P>
+
+Once you understand this you should update the comment so it reflects
+the code.<P>
+
+<LI>You need to address bug 556311.  To do this, you will need to get
+the MACE spec and a 16550 spec and understand really well how they
+transfer bytes back and forth, and under what circumstances delays are
+introduced.  There is a super-easy way to do the loopthrough test: the
+sample code provided with the Mountaingate package (see Mountaingate
+above) does exactly that!!  So just compile driver.c as a loadable
+driver and load it, run the sample user.c and you're there!<P>
+
+<LI>there are a few XXXes in activate_urb() and deactivate_urb()
+pertaining to flushing RX and TX queues which you need to address.
+kudzu serialio has some new downcalls which may help this (I haven't
+looked into them in deatail).  one of the downcalls is for software
+flow control, but you don't want that so be sure and call
+DOWN_ENABLE_TX() from activate_urb().  there is some kind of flush
+downcall now.  you might be able to use that to drain TX.  But if you
+do this, make sure you can guarantee that the device is internally
+clocked so that the flush will happen in finite time!  Some SGI
+systems like Indy/Indigo/Indigo2 support external clocking.<P>
+
+<LI>check over the other XXXes in tserailio.c for areas of
+uncertainty.  if there are bugs, these may be good places to look.  a
+bunch of the XXXes say "we could ifdef this [something] out for SP."
+<STRONG>Most of these comments are no longer valid on kudzu, even
+on SP platforms, because of kernel preemption.</STRONG>  Be sure
+you understand why, then remove the bogus comments.<P>
+
+<LI>you may run across some compiler warnings and want to change
+a few of the chars in the interrupt routine to unsigned chars.<P>
+
+<LI>Fix a couple of tserialio.so user-mode library issues:<P>
+
+<UL>
+
+<LI>Change the Makefile and idb files so that library gets installed in
+every ABI.<P>
+
+<LI>Deal with the FD_CLOEXEC issue described in <A
+HREF="cloexec">cloexec.</A><P>
+
+</UL>
+
+</UL>
+
+There are a few features you might want to add and optimizations you might
+want to do.  Some of these optimizations you'll definitely want to do
+if you run on platforms with many serial ports:
+
+<UL>
+
+<LI>Rick Reed did an informal port of tserialio to IRIX 6.4 (again I
+would not recommend taking this as a base either, since the process of
+porting from IRIX 6.3 TOT should be just the thing to teach you about
+tserialio and allow you to avoid pitfalls made in other ports).  He had
+some good optimization ideas:<P>
+
+<PRE>
+  Incidentally, I have some optimizations for the tick processing that
+  you might want to incorporate.  I was having performance problems with
+  7 audio streams and 7 tsio streams (sometimes the tick processing
+  would take an inordinately long time, and there's a bug in the
+  profiling tick -- on 6.4, at least -- that if the tick processing
+  takes just less than 1ms, it misses the next interrupt and goes away
+  until the counter wraps -- 57 minutes).
+  
+  We got the audio down to avg approx. 100us, max approx. 450us, but
+  although the tsio avg was 113us, at least once a second it was more
+  like 600us.  With the optimizations, the avg is the same, but the max
+  is more like 220us with an occasional 400us.
+  
+  There are two optimizations.  One is to tighten up the rxbytes ->
+  urb's loop a little by removing the byte-by-byte copy.  The timestamp
+  is only stored for the first byte copied.  The user lib handles
+  replicating that stamp to the rest of the bytes.
+  
+  I suspect that most of the time is lost in the write loop.  The
+  optimization is to send the write bytes to the lower layer in one
+  downcall (or two if the data wraps around the urb) rather than
+  byte-by-byte.
+</PRE><P>
+
+I have made absolutely no attempt to optimize tserialio, beyond
+assuring that the worst-case execution time in bonsai (where there are
+at most 2 ports and 16 urbs) did not blow the millisecond guarantees.
+I focused on simplicity and correctness instead.  So you should really
+be able to optimize the heck out of tsio_tick()!<P>
+
+<LI>You might want to add some documentation in the tserialio man
+page, to allow applications to enumerate all of the available
+tserialio ports in a platform-independent way that will continue to
+work on later platforms.<P>
+
+<LI>The original idea we had with tsio and midi was to make them
+one driver.  Given NT stuff, this may not be worth the effort anymore,
+but if you redo this driver in NT, you might want to do it that way.<P>
+
+</UL>
+

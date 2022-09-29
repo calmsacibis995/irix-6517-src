@@ -1,0 +1,895 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	vmDetDlg
+# Version:	$Revision: 1.8 $
+# Synopsis:	Encapsulates the dialog that allows the user to detach/remove
+#		a plex/ve from a volume or a ve from a stand-alone plex.
+# Functions:	vmDet:realize
+#		vmDet:manage
+#		vmDet:fill
+#		vmDet:getData
+#		vmDet:chkData
+#		vmDet:_create
+#		vmDet:_setMode
+#		vmDet:_dialogCb
+#		vmDet:_accept
+#		vmDet:_doAccept
+#		vmDet:_cancel
+#		vmDet:_subvCb
+#		vmDet:_textFieldCb
+#		vmDet:_removeToggleCb
+#		vmDet:_graphicSelect
+#		vmDet:_startDrop
+#		vmDet:_doTransfer
+#%COMMENT_END
+
+global	G_data
+if {! [info exists G_data(source,vmPlxGraphPnl)]} {
+	source $G_data(sourcedir)/vmPlxGraphPnl
+	set G_data(source,vmPlxGraphPnl) true
+}
+if {! [info exists G_data(source,vmPlxSumPnl)]} {
+	source $G_data(sourcedir)/vmPlxSumPnl
+	set G_data(source,vmPlxSumPnl) true
+}
+if {! [info exists G_data(source,vmVolSumPnl)]} {
+	source $G_data(sourcedir)/vmVolSumPnl
+	set G_data(source,vmVolSumPnl) true
+}
+
+#########################################
+#		Public			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vmDet:realize
+# Synopsis:	Creates an instance of the dialog.  On the first call, any
+#		class-wide data is initialized.  If an instance of this
+#		dialog already exists for the given handle, no action is taken.
+# Arguments:	- handle	An identifier that is used as a key for storing
+#				(and later retrieving) the created widgets and
+#				any instance specific data.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc vmDet:realize { handle parent } \
+{
+	global		_GW_det _GD_det
+
+	####	One time initialization
+	if {! [info exists _GD_det(initialized)]} {
+		####	Make sure we don't go through this again
+		set _GD_det(initialized) true
+
+		set _GD_det(buttons)	{accept cancel help}
+		set _GD_det(labels)	{XFS_HOST XLV_VOL_NAME}
+		set _GD_det(toggles)	{REMOVE}
+		set _GD_det(texts)	{name plex ve}
+		set _GD_det(subvs)	{data log rt}
+		set _GD_det(type)	{plex ve}
+	}
+
+	if {! [info exists _GW_det($handle,dialog)]} {
+		set _GD_det($handle,confirm) 	false
+		trace variable _GD_det($handle,confirm) w vmDet:_doAccept
+
+		set _GD_det($handle,mode) ""
+		set _GD_det($handle,obj,class) ""
+		set _GD_det($handle,obj,hfn) ""
+		set _GD_det($handle,obj,hpd) ""
+		set _GD_det($handle,obj,nm) ""
+		set _GD_det($handle,obj,type) ""
+
+		set _GD_det($handle,type) data
+
+		set _GW_det($handle,dialog) [vmDet:_create $handle $parent]
+		set item plex
+		$_GW_det($handle,$item)-label getValues \
+				-labelString _GD_det($item,baselabel)
+
+		####    This must happen after the dialog is realized
+		$_GW_det($handle,dialog) realizeWidget
+		$_GW_det($handle,dialog) getValues -height height -width width
+		set gw(current) [plxGrph:getWidth $handle current]
+		set gw(desired) [plxGrph:getWidth $handle desired]
+		plxGrph:setWidth $handle $gw(desired)
+		set width [expr $width + ($gw(desired) - $gw(current))]
+
+		.$_GW_det($handle,dialog) setValues \
+				-minHeight [expr $height + 20] \
+				-minWidth $width
+
+		$_GW_det($handle,buttons) getValues -height height
+		$_GW_det($handle,buttons) setValues \
+				-paneMinimum $height \
+				-paneMaximum $height
+
+		####    Register for Drag and Drop
+		$_GW_det($handle,dialog) dropSiteRegister -dropProc \
+				"vmDet:_startDrop $handle %dragContext \
+						$_GW_det($handle,dialog)" \
+				-numImportTargets 1 \
+				-importTargets "COMPOUND_TEXT"
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	vmDet:manage
+# Synopsis:	Manages an instance of the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vmDet:manage { handle } \
+{
+	global	_GW_det
+
+	if {[info exists _GW_det($handle,dialog)]} {
+		$_GW_det($handle,dialog) manageChild
+		$_GW_det($handle,name) processTraversal current
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	vmDet:fill
+# Synopsis:	Validates that the object that this dialog is to operate on
+#		is either a volume or a plex.  It then gathers information
+#		about the object and displays that information in the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vmDet:fill { handle obj_list } \
+{
+	global		_GW_det _GD_det _GD_resources
+
+	set obj [lindex $obj_list 0]
+	obj:parse $obj o_class o_host o_nm o_type
+
+	####
+	####	Validate the object
+	####
+	if {$o_class != "VOL"} {
+		em:simpleMsg $handle error \
+		"Only volumes or plexes are valid for the detach operation."
+		return 0
+	} elseif {$o_host == "_TEMPLATE_"} {
+		em:simpleMsg $handle error \
+		"Templates cannot be used for the detach operation."
+		return 0
+	} elseif {$o_type == "VE"} {
+		em:simpleMsg $handle error \
+		"Only volumes or plexes are valid for the detach operation."
+		return 0
+	}
+
+	####
+	####	Get the information for the object
+	####
+	if {[catch {set objdata [xlvCmd objInfo $obj]} error]} {
+		if {$o_type == "VOL"} {
+			set str volume
+		} else {
+			set str plex
+		}
+		regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		em:storeMsg $handle warning \
+			"Could not get $str data for $o_nm.\n\t$nerror"
+		return 0
+	}
+
+	if {[catch {set synopsis [xlvCmd synopsis $obj]} error]} {
+		if {$o_type == "VOL"} {
+			set str volume
+		} else {
+			set str plex
+		}
+		regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		em:storeMsg $handle warning \
+			"Could not get $str data for $o_nm.\n\t$nerror"
+		return 0
+	}
+	if {[llength $synopsis] == 1} {
+		set synopsis [lindex $synopsis 0]
+	}
+
+	####
+	####	Set global variables
+	####
+	if {[hu:getIpAddress $o_host hfn hpd hip _GD_resources(hostsFile)]} {
+		set o_host $hfn
+	}
+	set curr_host $_GD_det($handle,obj,hfn)
+	set _GD_det($handle,obj) $obj
+	set _GD_det($handle,obj,class) $o_class
+	set _GD_det($handle,obj,hfn) $hfn
+	set _GD_det($handle,obj,hpd) $hpd
+	set _GD_det($handle,obj,nm) $o_nm
+	set _GD_det($handle,obj,type) $o_type
+
+	####
+	####	Fill in the dialog
+	####
+	vmDet:_setMode $handle $o_type
+
+	$_GW_det($handle,XFS_HOST) setValues \
+			-labelString $hpd
+	$_GW_det($handle,XLV_VOL_NAME) setValues \
+			-labelString $o_nm
+
+	vmDet:_removeToggleCb $handle false
+	$_GW_det($handle,REMOVE) setValues -set false
+
+	foreach item $_GD_det(texts) {
+		$_GW_det($handle,$item) setString ""
+	}
+	plxGrph:deselect $handle
+
+	####	Fill in the summary and graphic panels
+	set s_plexes [lassign $synopsis s_name s_type]
+	set _GD_det($handle,data,plexes) ""
+	set _GD_det($handle,log,plexes) ""
+	set _GD_det($handle,rt,plexes) ""
+	set _GD_det($handle,plex,plexes) ""
+	foreach item $s_plexes {
+		lappend _GD_det($handle,[lindex $item 0],plexes) $item
+	}
+
+	if {$o_type == "VOL"} {
+		volSum:setData $handle $synopsis [split $objdata \n]
+		vmDet:_subvCb $handle $_GD_det($handle,type) true
+
+	} else {
+		plxSum:setData $handle $synopsis [split $objdata \n]
+		plxGrph:fillPlexes $handle $_GD_det($handle,plex,plexes) blocks
+	}
+
+	return 1
+}
+
+#%COMMENT_BEGIN
+# Function:	vmDet:getData
+# Synopsis:	Reads the data from the dialog and stores it in keyword/value
+#		pair format.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- data		A reference to a variable in which to store
+#				the data.
+#		- check		An optional parameter that indicates whether
+#				or not to check the data for completeness.
+#				(default value: true)
+#%COMMENT_END
+proc vmDet:getData { handle data {check true} } \
+{
+	global		_GW_det _GD_det
+	upvar $data	dat
+
+	if {$check} {
+		if {! [vmDet:chkData $handle]} {
+			return 0
+		}
+	}
+	if {$_GD_det($handle,mode) == "vol"} {
+		lappend dat SVOL:$_GD_det($handle,type)
+		set val [$_GW_det($handle,plex) getString]
+		if {$val != ""} {
+			lappend dat PLEX:$val
+		}
+	}
+	set val [$_GW_det($handle,ve) getString]
+	if {$val != ""} {
+		lappend dat VE:$val
+		lappend dat DETACH_TYPE:VE
+	}  else {
+		lappend dat DETACH_TYPE:PLEX
+	}
+	set val [$_GW_det($handle,name) getString]
+	if {$val != ""} {
+		lappend dat NAME:$val
+	}
+
+	return 1
+}
+
+#%COMMENT_BEGIN
+# Function:	vmDet:chkData
+# Synopsis:	Ensures that the entered data is valid and complete.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vmDet:chkData { handle } \
+{
+	global		_GW_det _GD_det
+	set rval	1
+
+	foreach item $_GD_det(texts) {
+		set data($item) [$_GW_det($handle,$item) getString]
+	}
+	$_GW_det($handle,REMOVE) getValues -set data(REMOVE)
+	
+	set item name
+	if {$data(REMOVE) == "false" && $data($item) == ""} {
+		$_GW_det($handle,$item)-label getValues -labelString s
+		em:storeMsg $handle error "\"$s\" is a required field."
+		set rval 0
+	}
+
+	if {$_GD_det($handle,mode) == "vol"} {
+		if {$data(plex) == ""} {
+			$_GW_det($handle,plex)-label getValues -labelString s
+			em:storeMsg $handle error "\"$s\" is a required field."
+			set rval 0
+		} elseif {! [plxGrph:validSelection $handle \
+					$data(plex) $data(ve)]} {
+			if {$data(ve) != ""} {
+				em:storeMsg $handle error \
+				"Plex \"$data(plex)\" VE \"$data(ve)\" does not exist."
+			} else {
+				em:storeMsg $handle error \
+				"Plex \"$data(plex)\" does not exist."
+			}
+			set rval 0
+		}
+	} else {
+		if {$data(ve) == ""} {
+			$_GW_det($handle,ve)-label getValues -labelString s
+			em:storeMsg $handle error "\"$s\" is a required field."
+			set rval 0
+		} elseif {! [plxGrph:validSelection $handle 0 $data(ve)]} {
+			em:storeMsg $handle error \
+			"VE \"$data(ve)\" does not exist."
+			set rval 0
+		}
+	}
+
+	if {! $rval} {
+		em:setMessageString $handle "Unable to execute detach."
+	}
+
+	return $rval
+}
+
+#########################################
+#		Private			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vmDet:_create
+# Synopsis:	Creates an instance of the dialog.
+# Arguments:	- handle	The identifier for the new instance.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc vmDet:_create { handle parent } \
+{
+	global		_GW_det _GD_det
+	set name	vmDet
+
+	set dialog [xmFormDialog $parent.$name]
+	set pane [xmPanedWindow $dialog.$handle \
+			-sashWidth 1 \
+			-sashHeight 1 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form]
+
+	set form1 [xmForm $pane.form]
+	set form2 [xmForm $form1.form2 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_none \
+			-bottomAttachment attach_form]
+	set plxpnl [plxGrph:realize $handle $form1]
+	$plxpnl setValues \
+			-topAttachment attach_form \
+			-leftAttachment attach_widget \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form \
+			-leftWidget $form2
+	plxGrph:registerPlexAction $handle vmDet:_graphicSelect
+	plxGrph:registerVeAction $handle vmDet:_graphicSelect
+
+	set grid1 [sgiGrid $form2.grid1 -numRows 2 -numColumns 2 \
+			-defaultSpacing 2 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none \
+			-leftOffset 5 \
+			-rightOffset 5]
+
+	set form2a [xmForm $form2.form2a \
+			-topAttachment attach_widget \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none \
+			-topWidget $grid1 \
+			-topOffset 10]
+
+	set _GW_det($handle,volsum) [volSum:realize $handle $form2a]
+	$_GW_det($handle,volsum) setValues \
+			-mappedWhenManaged false \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none
+	foreach item $_GD_det(subvs) {
+		volSum:addSubvTbCallback $handle $item vmDet:_subvCb
+	}
+	set _GW_det($handle,plxsum) [plxSum:realize $handle $form2a]
+	$_GW_det($handle,plxsum) setValues \
+			-mappedWhenManaged false \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_none \
+			-bottomAttachment attach_none \
+			-leftOffset 20
+
+	set grid2 [sgiGrid $form2.grid2 -numRows 4 -numColumns 2 \
+			-defaultSpacing 2 \
+			-topAttachment attach_widget \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none \
+			-topWidget $form2a \
+			-topOffset 20 \
+			-leftOffset 5 \
+			-rightOffset 5]
+	set row 0
+	foreach item $_GD_det(labels) {
+		xmLabel $grid1.$item-label managed \
+				-column 0 -row $row \
+				-alignment alignment_beginning
+		set _GW_det($handle,$item) [xmLabel $grid1.$item managed \
+				-column 1 -row $row \
+				-alignment alignment_beginning]
+		
+		incr row
+	}
+
+	set row 0
+	foreach item $_GD_det(toggles) {
+		set _GW_det($handle,$item) [xmToggleButton $grid2.$item \
+				 managed \
+				-row $row -column 1 \
+				-alignment alignment_beginning]
+		$_GW_det($handle,$item) valueChangedCallback \
+				"vmDet:_removeToggleCb $handle %set"
+	incr row
+	}
+
+	foreach item $_GD_det(texts) {
+		xmLabel $grid2.$item-label managed \
+				-row $row -column 0 \
+				-alignment alignment_beginning
+		set _GW_det($handle,$item) [xmTextField $grid2.$item managed \
+				-row $row -column 1 \
+				-marginHeight 3]
+		if {$item == "name" } {
+			$_GW_det($handle,$item) setValues \
+				-columns 20 -maxLength 32
+			$_GW_det($handle,$item) modifyVerifyCallback \
+					"xlv:validNameCb %doit %ptr %length"
+		} else {
+			$_GW_det($handle,$item) setValues \
+				-columns 3 -maxLength 3 \
+				-resizeHorizontal false
+			$_GW_det($handle,$item) activateCallback \
+					"vmDet:_textFieldCb $handle"
+			$_GW_det($handle,$item) losingFocusCallback \
+					"vmDet:_textFieldCb $handle"
+		}
+		incr row
+	}
+	$_GW_det($handle,plex) modifyVerifyCallback \
+		"tfu:onlyIntsCb %w %ptr %length %startPos %endPos %doit  0 3"
+	$_GW_det($handle,ve) modifyVerifyCallback \
+		"tfu:onlyIntsCb %w %ptr %length %startPos %endPos %doit 0 127"
+
+	####	Dialog buttons
+	set _GW_det($handle,buttons) \
+		 [xfs:createDialogButtons $pane $_GD_det(buttons)]
+	foreach i $_GD_det(buttons) {
+		$_GW_det($handle,buttons).$i \
+				activateCallback "vmDet:_dialogCb $handle $i"
+	}
+
+	$plxpnl manageChild
+	$grid1 manageChild
+	$_GW_det($handle,volsum) manageChild
+	$_GW_det($handle,plxsum) manageChild
+	$form2a manageChild
+	$grid2 manageChild
+
+	$_GW_det($handle,buttons) manageChild
+	$form2 manageChild
+	$form1 manageChild
+	$pane manageChild
+
+	$grid1 columnResizable 0 false
+	$grid2 columnResizable 0 false
+
+	return $dialog
+}
+
+#%COMMENT_BEGIN
+# Function:	vmDet:_setMode
+# Synopsis:	Sets the mode for the dialog depending upon the type of object
+#		being operated on (volume or plex).
+# Arguments:	- handle	The identifier for the new instance.
+#		- mode		The type of object.  Valid values are the
+#				strings "plex" or "vol".
+#%COMMENT_END
+proc vmDet:_setMode { handle mode } \
+{
+	global		_GW_det _GD_det
+
+	set mode [string tolower $mode]
+
+	if {$mode == $_GD_det($handle,mode)} {
+		return
+	}
+	set _GD_det($handle,mode) $mode
+
+	if {$mode == "plex"} {
+		$_GW_det($handle,volsum) unmapWidget
+		$_GW_det($handle,plxsum) mapWidget
+
+		$_GW_det($handle,XLV_VOL_NAME)-label setValues \
+				-labelString "Plex Name:"
+
+		$_GW_det($handle,plex)-label unmanageChild
+		$_GW_det($handle,plex) unmanageChild
+		$_GW_det($handle,ve)-label setValues -row 2
+		$_GW_det($handle,ve) setValues -row 2
+
+	} elseif {$mode == "vol"} {
+		$_GW_det($handle,plxsum) unmapWidget
+		$_GW_det($handle,volsum) mapWidget
+
+		$_GW_det($handle,XLV_VOL_NAME)-label setValues \
+				-labelString "Volume Name:"
+
+		$_GW_det($handle,ve)-label setValues -row 3
+		$_GW_det($handle,ve) setValues -row 3
+		$_GW_det($handle,plex)-label manageChild
+		$_GW_det($handle,plex) manageChild
+	}
+}
+
+#########################################
+#	Dialog Callbacks		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vmDet:_dialogCb
+# Synopsis:	The callback function defined on the dialog buttons.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- op		Indicates which button the user selected.
+#%COMMENT_END
+proc vmDet:_dialogCb { handle op } \
+{
+	global		_GW_det _GD_det
+
+	switch $op {
+		accept { vmDet:_accept $handle }
+		cancel { vmDet:_cancel $handle }
+		help   { sgiHelpMsg $_GW_det($handle,dialog) }
+	}
+}
+
+#########################################
+#	Callback Utilities		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vmDet:_accept
+# Synopsis:	This is called when the user presses the "Accept" dialog
+#		button.  It creates a confirmation dialog (if one does not
+#		already exist), fills the dialog, and stores the data gathered
+#		from the "Detach" dialog for use after the user has confirmed
+#		the action.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vmDet:_accept { handle } \
+{
+	global	_GW_det _GD_det _GD_vmmCfrm _GD_resources
+
+	if {! [vmDet:getData $handle data]} {
+		return
+	}
+
+	if {! [info exists _GW_det($handle,confirm)]} {
+		set _GW_det($handle,confirm) [xmQuestionDialog \
+				$_GW_det($handle,dialog).confirm \
+				-messageAlignment alignment_beginning \
+				-okLabelString Yes \
+				-cancelLabelString No \
+				-dialogStyle dialog_full_application_modal \
+				-noResize true]
+		$_GW_det($handle,confirm) okCallback \
+			"set _GD_det($handle,confirm) true"
+		$_GW_det($handle,confirm) cancelCallback \
+			"set _GD_det($handle,confirm) false"
+	}
+
+	set idx [lsearch $data "NAME:*"]
+	set nm [lindex [split [lindex $data $idx] :] 1]
+	set idx [lsearch $data "PLEX:*"]
+	set plex [lindex [split [lindex $data $idx] :] 1]
+	set idx [lsearch $data "VE:*"]
+	if {$idx != -1} {
+		set ve [lindex [split [lindex $data $idx] :] 1]
+	} else {
+		set ve ""
+	}
+
+	$_GW_det($handle,REMOVE) getValues -set set
+	if {$set} {
+		set action remove
+	} else {
+		set action detach
+	}
+
+	if {$_GD_det($handle,mode) == "vol"} {
+		if {$ve == ""} {
+			set msg [format $_GD_vmmCfrm(v$action,msg,plex) \
+				$_GD_det($handle,obj,hpd) \
+				$_GD_det($handle,obj,nm) \
+				$_GD_resources($_GD_det($handle,type),string) \
+				$plex $nm]
+			set _GD_det($handle,obj,new) \
+				[obj:unparse "VOL" $_GD_det($handle,obj,hfn) $nm "PLEX"]
+		} else {
+			set msg [format $_GD_vmmCfrm(v$action,msg,ve) \
+				$_GD_det($handle,obj,hpd) \
+				$_GD_det($handle,obj,nm) \
+				$_GD_resources($_GD_det($handle,type),string) \
+				$ve $plex $nm]
+			set _GD_det($handle,obj,new) \
+				[obj:unparse "VOL" $_GD_det($handle,obj,hfn) $nm "VE"]
+		}
+	} else {
+		set _GD_det($handle,obj,new) \
+			[obj:unparse "VOL" $_GD_det($handle,obj,hfn) $nm "VE"]
+
+		set msg [format $_GD_vmmCfrm(p$action,msg,ve) \
+			$_GD_det($handle,obj,hpd) \
+			$_GD_det($handle,obj,nm) \
+			$ve $nm]
+	}
+
+	$_GW_det($handle,confirm) setValues -messageString $msg
+
+	$_GW_det($handle,confirm) manageChild
+
+	set _GD_det(confirm,handle) $handle
+	set _GD_det($handle,confirm,action) $action
+	set _GD_det($handle,confirm,data) $data
+}
+
+#%COMMENT_BEGIN
+# Function:	vmDet:_doAccept
+# Synopsis:	This is called when the user confirms the accept action.  It
+#		is called by setting a trace on a variable which is updated
+#		when the user presses a dialog button in the confirmation
+#		dialog.  If the user accepts the action, the detach is
+#		performed.
+#		If the user indicated that the detached item was NOT to be
+#		removed, then an icon representing the detached item is
+#		added to the icon panel.
+# Arguments:	- vname		The name of the traced variable.
+#		- element	The variables element name if it is an array
+#				element, otherwise an empty string.
+#		-op		"r" for read, "w" for write, "u" for unset.
+#%COMMENT_END
+proc vmDet:_doAccept { vname element op} \
+{
+	global	_GW_det _GD_det
+
+	if {$element != ""} {
+		set vname ${vname}($element)
+	}
+	upvar $vname x
+
+	if {$x} {
+	    set handle	$_GD_det(confirm,handle)
+	    set action	$_GD_det($handle,confirm,action)
+	    set data	$_GD_det($handle,confirm,data)
+
+	    $_GW_det($handle,dialog) defineCursor watch
+	    $_GW_det($handle,confirm) defineCursor watch
+
+	    obj:parse $_GD_det($handle,obj) o_class o_host o_nm o_type
+	    set got_parts [xlv:objPartList $_GD_det($handle,obj) parts]
+	    if {[catch {set ec [xlvCmd $action $_GD_det($handle,obj) \
+					[join $data \n]]} error]} {
+
+		regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		em:setMessageString $handle "Unable to execute $action."
+		em:storeMsg $handle error \
+		    "Unable to $action object from $o_nm.\n\t$nerror"
+	    } else {
+		if {$action == "detach"} {
+		    ####	Add the newly detached object
+		    ####	to the icon panel
+		    vmSrch:addObjects vm [list $_GD_det($handle,obj,new)]
+		} else {
+		    if {$got_parts} {
+			ptSrch:markRawPartsAvail vm $o_host $parts
+		    } else {
+			em:storeMsg vm warning \
+			"Unable to mark partitions used by $o_nm as available."
+		    }
+		}
+		$_GW_det($handle,dialog) unmanageChild
+	    }
+	    $_GW_det($handle,confirm) defineCursor ""
+	    $_GW_det($handle,dialog) defineCursor ""
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	vmDet:_cancel
+# Synopsis:	This is called when the user presses the "Cancel" dialog
+#		button.  It currently unmanages the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vmDet:_cancel { handle } \
+{
+	global	_GW_det; $_GW_det($handle,dialog) unmanageChild
+}
+
+#########################################
+#	Other Callbacks			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vmDet:_subvCb
+# Synopsis:	This is called when the user presses one of the toggle buttons
+#		in the volume summary representing a sub-volume.  It updates
+#		the sub-volume graphic with the information from the chosen
+#		sub-volume.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- type		Identifies the selected subvolume.
+#		- set		The value of the XmNset resource.
+#		- w		An optional parameter that is the widget id of
+#				the selected toggle button.
+#%COMMENT_END
+proc vmDet:_subvCb { handle type set {w ""} } \
+{
+	global	_GW_det _GD_det _GD_resources
+
+	if {$set == "true" } {
+		set item plex
+		set lbl "$_GD_resources($type,string) $_GD_det($item,baselabel)"
+		$_GW_det($handle,$item)-label setValues -labelString $lbl
+
+		plxGrph:fillPlexes $handle $_GD_det($handle,$type,plexes) blocks
+
+		set _GD_det($handle,type) $type
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	vmDet:_textFieldCb
+# Synopsis:	This is called when the user (a) enters a <CR> in one of the
+#		text fields or (b) the focus leaves one of the text fields.
+#		It is used to ensure that the highlighted plex/ve in the
+#		sub-volume/plex graphic remains consistent with what is entered
+#		in the text fields.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vmDet:_textFieldCb { handle } \
+{
+	global	_GW_det
+
+	set plex [$_GW_det($handle,plex) getString]
+	set ve [$_GW_det($handle,ve) getString]
+
+	if {! [cequal $plex ""]} { set plex [int $plex] }
+	if {! [cequal $ve ""]} { set ve [int $ve] }
+
+	if {$plex == ""} {
+		plxGrph:deselect $handle
+	} elseif {$ve == ""} {
+		plxGrph:selectPlex $handle $plex
+	} else {
+		plxGrph:selectVe $handle $plex $ve
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	vmDet:_removeToggleCb
+# Synopsis:	This is called when the value of the "Remove" toggle button is
+#		changed.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- set		This is "true" if the object is to be removed
+#				from the system and "false" if the object
+#				is to be detached and retained.
+#%COMMENT_END
+proc vmDet:_removeToggleCb { handle set } \
+{
+	global	_GW_det
+
+	if {$set} {
+		$_GW_det($handle,name) setSensitive false
+		$_GW_det($handle,name)-label setSensitive false
+	} else {
+		$_GW_det($handle,name) setSensitive true
+		$_GW_det($handle,name)-label setSensitive true
+	}
+}
+
+#########################################
+#	Plex Graph Panel Actions	#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vmDet:_graphicSelect
+# Synopsis:	This is called when a plex or ve is selected in the sub-volume/
+#		plex graphic.  It updates the text fields in the dialog to
+#		contain the information describing the selected item.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- plex		The number of the plex selected.
+#		- ve		An optional argument representing the number
+#				of the ve selected.
+#%COMMENT_END
+proc vmDet:_graphicSelect { handle plex {ve ""} } \
+{
+	global	_GW_det
+
+	$_GW_det($handle,plex) setString $plex
+	$_GW_det($handle,ve) setString $ve
+}
+
+#########################################
+#	Drag and Drop			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vmDet:_startDrop
+# Synopsis:	This is called when icons are dropped on the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- dragContext	The Motif drag context widget id.
+#		- w		The widget id for the matrix.
+#%COMMENT_END
+proc vmDet:_startDrop { handle dragContext w } \
+{
+	$dragContext dropTransferStart \
+		-dropTransfers {{COMPOUND_TEXT .vmDet}} \
+		-numDropTransfers 1 \
+		-transferProc "vmDet:_doTransfer $handle %closure {%value}"
+}
+
+#%COMMENT_BEGIN
+# Function:	vmDet:_doTransfer
+# Synopsis:	The function that is called when the drop transfer is
+#		completed.  It converts the information to the proper internal
+#		format and then calls vmDet:fill() to fill the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- destination	Unused
+#		- value		The data for the dropped objects.
+#%COMMENT_END
+proc vmDet:_doTransfer { handle destination value } \
+{
+	if {! [ip:uniqueToObject [lindex $value 0] obj]} {
+	    set errmsg "An Illegal icon was dropped on this dialog."
+	} elseif {[llength $value] == 1} {
+	    if {! [obj:isXfsmObject [lindex $obj 0] VOL VOL] &&
+	        ! [obj:isXfsmObject [lindex $obj 0] VOL PLEX]} {
+		set errmsg "An Illegal icon was dropped on this dialog."
+	    } else {
+		set no_msg 1
+		set rval [vmDet:fill $handle $obj]
+	    }   
+	}
+
+	if {! [info exists no_msg]} {
+	    set rval 0
+	    set msg "Only one volume/plex icon may be dropped on this dialog."
+	    if {[info exists errmsg]} {
+		set msg "$errmsg @n @n $msg"
+	    }
+	    em:simpleMsg $handle error $msg
+	}
+
+	return $rval
+}

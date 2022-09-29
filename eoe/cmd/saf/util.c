@@ -1,0 +1,346 @@
+/*	Copyright (c) 1990 UNIX System Laboratories, Inc.	*/
+/*	Copyright (c) 1984, 1986, 1987, 1988, 1989, 1990 AT&T	*/
+/*	  All Rights Reserved  	*/
+
+/*	THIS IS UNPUBLISHED PROPRIETARY SOURCE CODE OF     	*/
+/*	UNIX System Laboratories, Inc.                     	*/
+/*	The copyright notice above does not evidence any   	*/
+/*	actual or intended publication of such source code.	*/
+
+# ident	"@(#)saf:util.c	1.8"
+
+# include <stdio.h>
+# include <ctype.h>
+# include <sys/types.h>
+# include <unistd.h>
+# include "extern.h"
+# include "misc.h"
+# include <sac.h>
+# include "structs.h"
+#ifdef sgi
+#include "msgs.h"
+#else
+# ifdef SAC
+# include "msgs.h"
+# endif
+#endif /* sgi */
+
+char	Comment[SIZE];	/* place holder for comments */
+
+
+/*
+ * nexttok - return next token, essentially a strtok, but it can
+ *	deal with null fields and strtok can not
+ *
+ *	args:	str - the string to be examined, NULL if we should
+ *		      examine the remembered string
+ *		delim - the list of valid delimiters
+ *		ros - rest of string flag (1 for rest of string, 0 for
+ *		      normal processing)
+ */
+
+
+char *
+nexttok(str, delim, ros)
+char *str;
+register char *delim;
+int ros;
+{
+	static char *savep;	/* the remembered string */
+	register char *p;	/* pointer to start of token */
+	register char *ep;	/* pointer to end of token */
+
+	p = (str == NULL) ? savep : str ;
+	if (ros)
+		return(p);
+	if (p == NULL)
+		return(NULL);
+	ep = strpbrk(p, delim);
+	if (ep == NULL) {
+		savep = NULL;
+		return(p);
+	}
+	savep = ep + 1;
+	*ep = '\0';
+	return(p);
+}
+
+
+/*
+ * parse - parse a line from _sactab.  This routine will return if the parse
+ *		was successful, otherwise it will output an error and exit.
+ *
+ *	args:	p - pointer to the data read from the file
+ *		sp - pointer to a structure in which the separated fields
+ *		     are placed
+ *
+ *	A line in the file has the following format:
+ *
+ *	tag:type:flags:restart_count:command_string	#comment
+ */
+
+
+void
+parse(p, sp)
+register char *p;
+register struct sactab *sp;
+{
+	char scratch[SIZE];	/* a scratch buffer */
+
+/*
+ * get the PM tag
+ */
+
+	p = nexttok(p, DELIM, FALSE);
+	if (p == NULL) {
+#ifdef sgi
+		error(E_BADFILE, EXIT);
+#else
+# ifdef SAC
+		error(E_BADFILE, EXIT);
+# else
+		Saferrno = E_SAFERR;
+		error("_sactab file is corrupt");
+# endif /* SAC */
+#endif /* sgi */
+	}
+	if (strlen(p) > PMTAGSIZE) {
+		p[PMTAGSIZE] = '\0';
+#ifdef sig
+		(void) sprintf(scratch, "tag too long, truncated to <%s>", p);
+		log(scratch);
+#else
+# ifdef SAC
+		(void) sprintf(scratch, "tag too long, truncated to <%s>", p);
+		log(scratch);
+# else
+		(void) fprintf(stderr, "tag too long, truncated to <%s>", p);
+# endif
+#endif /* sgi */
+	}
+	(void) strcpy(sp->sc_tag, p);
+
+/*
+ * get the PM type
+ */
+
+	p = nexttok(NULL, DELIM, FALSE);
+	if (p == NULL) {
+#ifdef sgi
+		error(E_BADFILE, EXIT);
+#else
+# ifdef SAC
+		error(E_BADFILE, EXIT);
+# else
+		Saferrno = E_SAFERR;
+		error("_sactab file is corrupt");
+# endif /* SAC */
+#endif /* sgi */
+	}
+	if (strlen(p) > PMTYPESIZE) {
+		p[PMTYPESIZE] = '\0';
+#ifdef sgi
+		(void) sprintf(scratch, "type too long, truncated to <%s>", p);
+		log(scratch);
+#else
+# ifdef SAC
+		(void) sprintf(scratch, "type too long, truncated to <%s>", p);
+		log(scratch);
+# else
+		(void) fprintf(stderr, "type too long, truncated to <%s>", p);
+# endif
+#endif /* sgi */
+	}
+	(void) strcpy(sp->sc_type, p);
+
+/*
+ * get the flags
+ */
+
+	p = nexttok(NULL, DELIM, FALSE);
+	if (p == NULL) {
+# ifdef sgi
+		error(E_BADFILE, EXIT);
+# else
+# ifdef SAC
+		error(E_BADFILE, EXIT);
+# else
+		Saferrno = E_SAFERR;
+		error("_sactab file is corrupt");
+# endif
+#endif /* sgi */
+	}
+	sp->sc_flags = 0;
+	while (*p) {
+		switch (*p++) {
+		case 'd':
+			sp->sc_flags |= D_FLAG;
+			break;
+		case 'x':
+			sp->sc_flags |= X_FLAG;
+			break;
+		default:
+			(void) sprintf(scratch, "Unrecognized flag <%c>", *(p - 1));
+#ifdef sgi
+			log(scratch);
+# else
+# ifdef SAC
+			log(scratch);
+# else
+			Saferrno = E_SAFERR;
+			error(scratch);
+# endif
+#endif /* sgi */
+			break;
+		}
+	}
+
+/*
+ * get the restart count
+ */
+
+	p = nexttok(NULL, DELIM, FALSE);
+	if (p == NULL) {
+#ifdef sgi
+		error(E_BADFILE, EXIT);
+# else
+# ifdef SAC
+		error(E_BADFILE, EXIT);
+# else
+		Saferrno = E_SAFERR;
+		error("_sactab file is corrupt");
+# endif
+#endif /* sgi */
+	}
+	sp->sc_rsmax = atoi(p);
+
+/*
+ * get the command string
+ */
+
+	p = nexttok(NULL, DELIM, FALSE);
+	if (p == NULL) {
+#ifdef sgi
+		error(E_BADFILE, EXIT);
+# else
+# ifdef SAC
+		error(E_BADFILE, EXIT);
+# else
+		Saferrno = E_SAFERR;
+		error("_sactab file is corrupt");
+# endif
+#endif /* sgi */
+	}
+	if ((sp->sc_cmd = malloc((unsigned) (strlen(p) + 1))) == NULL) {
+#ifdef sgi
+		error(E_MALLOC, EXIT);
+#else
+# ifdef SAC
+		error(E_MALLOC, EXIT);
+# else
+		Saferrno = E_SAFERR;
+		error("malloc failed");
+# endif
+#endif /* sgi */
+	}
+	(void) strcpy(sp->sc_cmd, p);
+
+/*
+ * remember the comment string
+ */
+
+	if ((sp->sc_comment = malloc((unsigned) (strlen(Comment) + 1))) == NULL) {
+#ifdef sgi
+		error(E_MALLOC, EXIT);
+#else
+# ifdef SAC
+		error(E_MALLOC, EXIT);
+# else
+		Saferrno = E_SAFERR;
+		error("malloc failed");
+# endif
+#endif /* sgi */
+	}
+	(void) strcpy(sp->sc_comment, Comment);
+}
+
+
+/*
+ * trim - remove comments, trim off trailing white space, done in place
+ *	args:	p - string to be acted upon
+ */
+
+char *
+trim(p)
+register char *p;
+{
+	register char *tp;	/* temp pointer */
+
+/*
+ * remove comments, if any, but remember them for later
+ */
+
+	tp = strchr(p, COMMENT);
+	Comment[0] = '\0';
+	if (tp) {
+		(void) strcpy(Comment, tp + 1);	/* skip the '#' */
+		*tp = '\0';
+		tp = strchr(Comment, '\n');
+		if (tp)
+			*tp ='\0';
+	}
+
+/*
+ * remove trailing whitespace, if any
+ */
+
+	for (tp = p + strlen(p) - 1; tp >= p && isspace(*tp); --tp)
+		*tp = '\0';
+	return(p);
+}
+
+
+/*
+ * pstate - put port monitor state into intelligible form for output
+ *	SSTATE is only used by sacadm
+ *
+ *	args:	state - binary representation of state
+ */
+
+char *
+pstate(state)
+unchar state;
+{
+	switch (state) {
+	case NOTRUNNING:
+		return("NOTRUNNING");
+	case STARTING:
+		return("STARTING");
+	case ENABLED:
+		return("ENABLED");
+	case DISABLED:
+		return("DISABLED");
+	case STOPPING:
+		return("STOPPING");
+	case FAILED:
+		return("FAILED");
+	case UNKNOWN:
+		return("UNKNOWN");
+# ifndef SAC
+	case SSTATE:
+		return("NO_SAC");
+# endif
+	default:
+#ifdef sgi
+		error(E_BADSTATE, EXIT);
+#else
+# ifdef SAC
+		error(E_BADSTATE, EXIT);
+# else
+		Saferrno = E_SAFERR;
+		error("Improper message from SAC\n");
+# endif
+#endif /* sgi */
+	}
+	/* NOTREACHED */
+}

@@ -1,0 +1,245 @@
+/* $Id: example,v 1.1 1999/04/28 10:06:17 kenmcd Exp $ */
+
+// -----
+// HOSTS
+// -----
+
+collectors = ":moomba";
+monitors = ":splat :wobbly :sandpit :gonzo";
+hosts   = "$collectors $monitors";
+
+
+// ---
+// CPU
+// ---
+
+delta = 1 sec;
+
+// for each processor
+// sys > %usr * 1.25 && %usr > 20
+
+per	= "kernel.percpu";
+percpu	= "$per.cpu";
+
+high_sys_overhead =
+    some_inst ($percpu.sys > $percpu.user * 1.25 && $percpu.user > 0.2)
+    ->  alarm "system hogging CPU";
+
+
+// over all cpus
+// syscall_rate > 2000 * no_of_cpus
+
+all = "kernel.all";
+
+acute_syscall =
+    $all.syscall > 10000 count/sec * hinv.ncpu
+    ->  print "acute syscall load";
+
+
+delta = 30 sec;
+
+// syscall_rate > 5000 for any cpu, sustained for at least 30 seconds
+
+chronic_syscall =
+    some_inst ($per.syscall > 50000 count/sec)
+    ->	alarm "chronic syscall load";
+
+
+// the 1 minute load average exceeds 5 * no_of_cpus on any host
+
+high_load =
+    $all.load #'1 minute' > 5 * hinv.ncpu
+    -> alarm "lots of CPU contention";
+
+
+
+// ----
+// DISK
+// ----
+
+delta = 10 sec;
+
+// any disk performing more than 40 I/Os per second, sustained over
+// at least 30 seconds
+
+disk_busy =
+    some_inst (sum_sample disk.dev.total @0..2 > 400 count/sec)
+    -> alarm "heavy disk I/O";
+
+
+// any SCSI disk controller performing more than 200 I/Os per
+// second, sustained over at least 20 seconds (a little over
+// 3 Mbytes per sec for 16 Kbyte I/Os)
+
+controller_busy =
+    some_inst sum_sample disk.ctl.total @0..1 > 200 count/sec;
+
+
+
+// -----------
+// FILESYSTEMS
+// -----------
+
+delta = 20 min;
+
+// either the /tmp or the /usr filesystem being
+// more than 95% full (check every 20 minutes)
+
+tmp_full =
+    filesys.free #'/dev/root' / filesys.capacity #'/dev/root' < 0.05
+    -> syslog "/dev/root filesystem (almost) full";
+
+usr_full =
+    filesys.free #'/dev/usr' / filesys.capacity #'/dev/usr' < 0.05
+    -> syslog "/dev/usr filesystem (almost) full";
+
+
+delta = 10 sec;
+
+// buffer cache hit ratio for reads is less than 90%
+bc = "buffer_cache";
+buffer_cache =
+    $bc.getblks > 100 && $bc.getfound / $bc.getblks < 0.8
+    -> alarm "poor buffer cache hit rate";
+
+
+// for a lv = disk1 + disk2 + disk5
+//    if reads(lv) + writes(lv) > 100 or
+//	 (reads(lv) + writes(lv) > 80 and
+//	     writes(lv) / (reads(lv) + writes(lv)) > 0.75)
+//    then
+//	raise alarm
+
+cluster = ":moomba #dks1d1 #dks1d2 #dks3d2";
+total = "sum_inst disk.dev.total $cluster";
+writes = "sum_inst disk.dev.write  $cluster";
+
+disk_cluster_alarm =
+    $total > 100 count/sec ||
+    ($total > 80 count/sec && $writes / $total > 0.75)
+    -> alarm "disk cluster alarm";
+
+
+
+// -----
+// CISCO
+// -----
+
+/*
+delta = 1 hour;
+
+// rate-in + rate-out for serial port 1 on sydcisco.sydney > 5500
+cisco_busy =
+    cisco.rate_in #'sydcisco.sydney:s1' +
+    cisco.rate_out #'sydcisco.sydney:s1' > 5500 byte/sec
+    -> note "sydney CISCO busy for last hour";
+*/
+
+
+// -----------
+// ENVIRONMENT
+// -----------
+
+/*
+delta = 10 min;
+
+// temperature rise of more than 2 degrees over a 10 minute interval
+
+temp = "environ.temp :moomba";
+
+temp_rise = $temp @1 - $temp @0 > 2 ->
+	    note "temperature rising fast";
+
+
+// temperature ever exceeds 30
+high_temp = $temp > 30 -> shell "shutdown moomba";
+*/
+
+
+/*************************************************************************
+
+GENERAL MODUS OPERANDI
+
+    [cwilson]
+    Currently, I'm using crude tools to keep an eye on
+    systems; xmeter, which watches rpc.statd type of things, and netgraph
+    to watch network traffic.  Xmeter has several 'states' that the meters
+    can go into, ok, warn, error, and fatal.  I simply watch the load on
+    various machines, and when something goes into a fatal state,
+    indicating that an rpc query timed out, a program gets run that pages
+    me if the fatal state hasn't cleared in 5 minutes.  Netgraph is used
+    to keep an eye on network traffic, if the % of capacity stays over 70%
+    for very long, I go poke around.   I do something similar with Xmeter;
+    if a machine enters the 'warn' state, it indicates the load is above
+    10, and I go poke around to see what's up.
+
+    [cwilson]
+    Well, I'd like to know if the number of sendmails running on
+    relay.engr exceeds 10.  I'd like to make sure ypserv is always
+    running.   It'd be nice if disks that had high levels of activity were
+    automatically tracked and noticed, as well as users that are taking up
+    an inordinate amount of disk space or whose usage has increased (or
+    decreased) in the past X amount of time.
+
+    [akmal] (subject pending to clarification)
+    Memory distribution across nodes: i.e. some nodes
+    with fully utilized memory while neighboring nodes
+    still have free memory.
+    + for some N: mem_util[N] > 0.95 and
+	( for some X in neighbour(N): mem_util[X] < 0.8 )
+    + for some N: mem_util[N] > 0.95 and
+	( for all X in neighbour(N): mem_util[X] < 0.8 )
+    + for some N: mem_util[N] > 0.95 and
+	( avg(for all X in neighbour(N): mem_util[X]) < 0.8 )
+    .. or  min() or max() in place of avg()
+
+    [akmal] (subject pending to clarification)
+    Processor distribution: analogous to memory distribution,
+    except with CPUs. A related metric is the percentage of
+    threads with non-local memory as well the amount of non-local,
+    non-shared memory.
+    + for each thread, the count of pages (or some other unit) of non-local
+      memory ... is this pro-rated to account for sharing?
+    + for each thread, the count of pages of non-shared memory ... does
+      this mean "non-shared between nodes", "non-shared between processes"
+      or "non-shared between threads"?
+    + a binary attribute "has non-local pages" per thread
+    + count of threads with non-local pages
+    + aggregate count of pages in various states on this node
+    And if the metrics are per thread, how are these extracted?
+
+
+    [akmal] (subject pending to clarification)
+    Interconnect hot spots: similar to Netvisualyzer but
+    flagging high contention on the specific interconnects.
+    This can be extended to show hot spots in other resources
+    such as devices (disk), filesystems (/, /usr), or even
+    specific files (/etc/passwd) when you have a Single-System
+    Image (SSI).
+    + How is a "hot spot" defined?
+      Do you have in mind instrumentation or event traces to drive this?
+    + For example to do interconnect traffic density
+      requires either (a) event notices shipped for every message to some
+      central monitoring node ... impractical, or (b) at each node you keep
+      a count of incoming messages for each of the N-1 other nodes in the
+      machine (or for outgoing messages, but not both), and then periodically
+      poll all nodes for their slice of the N x N matrix of interconnect
+      traffic.
+    + Disks should be no problem.  To identify file systems, volume
+      components, files, needs either (a) traces of access activity ...
+      probably impractical, or (b) object-level instrumentation to
+      count accesses, and periodic scaning of the counts for all
+      objects of interest (may be a daunting task).
+
+    [akmal] (subject pending to clarification)
+    Frequency of I/O from processors to local devices vs. those
+    to remote devices in the cluster. Other related metrics such
+    as frequency of PIOs vs. DMAs.
+    + Similar issues to 3.
+
+    [akmal]
+    Total consumption of system-wide resources in the cluster:
+    e.g. memory, cpu, etc.
+
+*************************************************************************/
+

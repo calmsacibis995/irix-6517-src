@@ -1,0 +1,69 @@
+#!/bin/sh
+#
+# script to convert scans header file to an sgi .rgb file by creating a
+# C program which includes the header pcbm file, which is compiled, and
+# then spits out the .rgb file.
+
+create_cfile () {
+cat << EOF
+/* temp file for fromspans $1 */
+
+#include <gl/image.h>
+#include "$1.h"
+
+short data[512][1280];
+
+int
+main(int argc, char ** argv)
+{
+	char *p = clogo_data;
+	int px, y, i, ccol;
+	int w = clogo_w; 
+	int h = clogo_h;
+	IMAGE *img;
+
+
+	for (y=0; y < clogo_h; y++) {
+		for (px=ccol=0; px < clogo_w; px += *p++) {
+			if (*p) {
+				for (i=px; i <= (px + *p - 1); i++)
+					data[y][i] = ccol ? 0 : 255;
+			}
+			ccol = !ccol;
+		}
+	}
+
+	img = iopen("spans.bw","w",RLE(1),3,clogo_w,clogo_h,1);
+
+	for (y=0; y < clogo_h; y++)
+		putrow(img,data[y],y,0);
+
+	iclose(img);
+}
+EOF
+}
+
+if [ -z "$1" ]
+then
+	echo "usage: fromspans headername"
+	exit 1
+fi
+
+SPANFILE=$1
+BASENAME=`echo $1 | sed 's%\.h$%%'`
+RGBFILE=${BASENAME}.rgb
+CONVBIN=tmp_fromspans$$
+CONVCFILE=${CONVBIN}.c
+
+create_cfile $BASENAME > $CONVCFILE
+
+cc -g -I ${ROOT}/stand/arcs/include $CONVCFILE -limage -o $CONVBIN
+
+if [ -x $CONVBIN ]
+then
+	$CONVBIN $RGBFILE
+fi
+
+rm -f $CONVCFILE $CONVBIN
+
+exit 0

@@ -1,0 +1,1091 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	fsMntDlg
+# Version:	$Revision: 1.9 $
+# Synopsis:	Encapsulates the dialog that allows the user to mount a
+#		filesystem.
+# Functions:	mntDlg:realize
+#		mntDlg:manage
+#		mntDlg:fill
+#		mntDlg:newRemoteHost
+#		mntDlg:getData
+#		mntDlg:_create
+#		mntDlg:_createGeneralArea
+#		mntDlg:_createAdvArea
+#		mntDlg:_createNfsArea
+#		mntDlg:_dialogCb
+#		mntDlg:_accept
+#		mntDlg:_cancel
+#		mntDlg:_save
+#		mntDlg:_fsTypeCb
+#		mntDlg:_advancedCb
+#		mntDlg:_comboActivateCb
+#		mntDlg:_comboSelectCb
+#		mntDlg:_comboAction
+#		mntDlg:_comboFill
+#		mntDlg:_setXfsEfsValue
+#		mntDlg:_fsTypeLocal
+#		mntDlg:_fsTypeNfs
+#		mntDlg:_newRemoteHost
+#		mntDlg:_newFsName
+#		mntDlg:_findListItem
+#		mntDlg:_findObject
+#		mntDlg:_fetchLocalFS
+#		mntDlg:_fetchExportFS
+#%COMMENT_END
+
+#########################################
+global G_data
+foreach item {mntPtPnl advNfsPnl} {
+	if {! [info exists G_data(source,$item)]} {
+		source $G_data(sourcedir)/$item
+		set G_data(source,$item) true
+	}
+}
+
+#########################################
+#		Public			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	mntDlg:realize
+# Synopsis:	Creates an instance of the dialog.  On the first call, any
+#		class-wide data is initialized.  If an instance of this
+#		dialog already exists for the given handle, no action is taken.
+# Arguments:	- handle	An identifier that is used as a key for storing
+#				(and later retrieving) the created widgets and
+#				any instance specific data.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc mntDlg:realize { handle parent } \
+{
+	global		_GW_mnt _GD_mnt
+
+	if {! [info exists _GD_mnt(initialized)]} {
+		set _GD_mnt(initialized) true
+		set _GD_mnt(buttons)  {accept apply cancel help}
+		set _GD_mnt(combos)   {XFS_FS_NAME XFS_REMOTE_HOST}
+		set _GD_mnt(labels)   {XFS_FS_HOST}
+		set _GD_mnt(radios)   {XFS_FS_TYPE}
+		set _GD_mnt(XFS_FS_TYPE,opts)	{XFS EFS NFS}
+		set _GD_mnt(list_font)	\
+			"-*-fixed-medium-r-normal--15-*-*-*-c-90-iso8859-1"
+	}
+
+	if {! [info exists _GW_mnt($handle,dialog)]} {
+		set _GD_mnt($handle,hfn) ""
+		set _GD_mnt($handle,remote,hfn) ""
+		set _GD_mnt($handle,XFS_FS_TYPE) XFS
+		foreach item $_GD_mnt(combos) {
+			set _GD_mnt($handle,cvalue,$item) ""
+		}
+
+		set _GW_mnt($handle,dialog) [mntDlg:_create $handle $parent]
+
+		####	Set the Host label
+		$_GW_mnt($handle,XFS_FS_HOST) setValues \
+				-labelString [fsSrch:getHost fs]
+
+		####	Initialize Widgets
+		$_GW_mnt($handle,XFS-tb) setValues -set true
+		$_GW_mnt($handle,XFS_REMOTE_HOST)-label unmanageChild
+		$_GW_mnt($handle,XFS_REMOTE_HOST) unmanageChild
+
+		mntDlg:_comboFill $handle XFS_REMOTE_HOST \
+				[fsSrch:getHostList fs]
+
+		####	This must happen after the dialog is realized
+		$_GW_mnt($handle,dialog) realizeWidget
+                $_GW_mnt($handle,dialog) getValues \
+				-height _GD_mnt(default,min,height) \
+				-width _GD_mnt(default,min,width)
+		xfs:setDialogMinMax $_GW_mnt($handle,dialog) \
+				$_GD_mnt(default,min,height) \
+				$_GD_mnt(default,min,height) \
+				$_GD_mnt(default,min,width)
+
+		####	Panes
+		$_GW_mnt($handle,ga) getValues -height height
+		$_GW_mnt($handle,ga) setValues -paneMinimum $height
+
+		$_GW_mnt($handle,buttons) getValues -height height
+		$_GW_mnt($handle,buttons) setValues \
+				-paneMinimum $height \
+				-paneMaximum $height
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	mntDlg:manage
+# Synopsis:	Manages an instance of the dialog and sets the default
+#		values in the "Advanced NFS" panel.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc mntDlg:manage { handle } \
+{
+	global	_GW_mnt;
+
+	advNfsPnl:setDefaults $handle
+	mntPt:manage $handle
+	$_GW_mnt($handle,dialog) manageChild
+}
+
+#%COMMENT_BEGIN
+# Function:	mntDlg:unmanage
+# Synopsis:	Unmanages an instance of the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc mntDlg:unmanage { handle } \
+{
+	global	_GW_mnt; $_GW_mnt($handle,dialog) unmanageChild
+}
+
+#########################################
+#	Public: Data In Routines	#
+#########################################
+#%COMMENT_BEGIN
+# Function:	mntDlg:fill
+# Synopsis:	Given an object signature, retrieve the mount information
+#		for that object and fill the dialog
+# Arguments:	- handle	The identifier for the desired instance.
+#		- obj		The object signature for the icon that was
+#				selected in the icon panel when the dialog
+#				was managed.
+#%COMMENT_END
+proc mntDlg:fill { handle obj } \
+{
+	global		_GW_mnt _GD_mnt _GD_resources
+
+	if {[llength $obj] == 1} {
+		set obj [lindex $obj 0]
+		obj:parse $obj o_class o_host o_nm o_type
+		if {[fsu:isMounted $obj mntpt]} {
+			em:simpleMsg $handle error \
+				"$o_nm is already mounted as $mntpt."
+			return 0
+		}
+		set o_type [string toupper $o_type]
+		if {$o_type != "XFS" && $o_type != "EFS" && $o_type != "NFS"} {
+			set o_type XFS
+		}
+		hu:getIpAddress $o_host hfn hpd hip $_GD_resources(hostsFile)
+	} else {
+		set hfn [fsSrch:getHost fs]
+		set hpd [hu:getHostPlusDom $hfn]
+		set o_type $_GD_mnt($handle,XFS_FS_TYPE)
+		set o_nm ""
+	}
+
+	####	Host Name
+	if {$hfn != $_GD_mnt($handle,hfn)} {
+		set _GD_mnt($handle,hfn) $hfn
+		$_GW_mnt($handle,XFS_FS_HOST) setValues -labelString $hpd
+	}
+
+	####	Get the filesystems local to the designated host
+	mntDlg:_fetchLocalFS $handle $hfn unmounted true
+
+	if {$o_type != $_GD_mnt($handle,XFS_FS_TYPE)} {
+		$_GW_mnt($handle,$_GD_mnt($handle,XFS_FS_TYPE)-tb) \
+				setValues -set false
+		$_GW_mnt($handle,$o_type-tb) setValues -set true
+		set _GD_mnt($handle,XFS_FS_TYPE) $o_type
+	}
+
+	####	Type
+	if {$o_type == "NFS"} {
+		lassign [split $o_nm :] rhost o_nm
+		mntDlg:newRemoteHost $handle $rhost
+	} else {
+		mntDlg:_fsTypeLocal $handle $_GD_mnt($handle,hfn)
+	}
+
+	if {$o_nm != ""} {
+		mntDlg:_newFsName $handle $o_nm
+	} else {
+		set val [combo:getSelectedItem $_GW_mnt($handle,XFS_FS_NAME)]
+		mntDlg:_newFsName $handle [lindex $val 0]
+	}
+
+	return 1
+}
+
+#%COMMENT_BEGIN
+# Function:	mntDlg:newRemoteHost
+# Synopsis:	Given a hostname, get the list of filesystems/directories
+#		exported by that host and load them into the filesystem
+#		combo-box.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- host		The hostname of the remote host.
+#%COMMENT_END
+proc mntDlg:newRemoteHost { handle host } \
+{
+	global		_GW_mnt _GD_mnt _GD_resources
+
+	hu:getIpAddress $host hfn hpd hip $_GD_resources(hostsFile)
+	
+	set item XFS_REMOTE_HOST
+	combo:selectItem $_GW_mnt($handle,$item) $hfn
+	mntDlg:_comboAction $handle $item $_GW_mnt($handle,$item) $hfn
+
+	mntDlg:_fsTypeNfs $handle $hfn
+}
+
+#########################################
+#	Public: Data Out Routines	#
+#########################################
+#%COMMENT_BEGIN
+# Function:	mntDlg:getData
+# Synopsis:	Reads the data from the dialog and stores it in keyword/value
+#		pair format.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- data		A reference to a variable in which to store
+#				the data.
+#		- check		An optional parameter that indicates whether
+#				or not to check the data for completeness.
+#				(default value: true)
+#%COMMENT_END
+proc mntDlg:getData { handle data {check true} } \
+{
+	global		_GW_mnt _GD_mnt
+	upvar $data	dat
+	set rval	1
+
+	foreach key $_GD_mnt(combos) {
+	    if {[$_GW_mnt($handle,$key) isManaged]} {
+		set val [string trim [combo:getValue $_GW_mnt($handle,$key)]]
+		if {[cequal $val ""]} {
+		    if {[cequal $check "true"]} {
+			$_GW_mnt($handle,$key)-label getValues -labelString str
+			lappend errs $str
+		    }
+		} else {
+			lappend dat "$key:[lindex $val 0]"
+		}
+	    }
+	}
+
+	set key XFS_FS_HOST
+	lappend dat "$key:$_GD_mnt($handle,hfn)"
+
+	set key XFS_FS_TYPE
+	lappend dat "$key:[string tolower $_GD_mnt($handle,$key)]"
+
+	####	Get Mount Point data
+	if {! [mntPt:getData $handle dat $check]} {
+		set rval 0
+	}
+
+	####	Get NFS data
+	if {! [advNfsPnl:getData $handle dat $check]} {
+		set rval 0
+	}
+
+	if {[info exists errs]} {
+		em:storeMsg fs error \
+		"The following fields are required:\n\t[join $errs "\n\t"]"
+		set rval 0
+	}
+
+	return $rval
+}
+
+#########################################
+#		Private			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	mntDlg:_create
+# Synopsis:	Creates an instance of the dialog.
+# Arguments:	- handle	The identifier for the new instance.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc mntDlg:_create { handle parent } \
+{
+	global		_GW_mnt _GD_mnt
+	set name	mntDlg
+
+	set dialog [xmFormDialog $parent.$name]
+	set pane [xmPanedWindow $dialog.$handle \
+			-sashWidth 1 \
+			-sashHeight 1 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form]
+
+	set _GW_mnt($handle,ga) [$name:_createGeneralArea $handle $pane]
+	set _GW_mnt($handle,aa) [$name:_createAdvArea $handle $pane]
+	set _GW_mnt($handle,nfs) [$name:_createNfsArea $handle $pane]
+	set _GW_mnt($handle,buttons) \
+		[xfs:createDialogButtons $pane $_GD_mnt(buttons)]
+
+	foreach i $_GD_mnt(buttons) {
+		$_GW_mnt($handle,buttons).$i \
+				activateCallback "$name:_dialogCb $handle $i"
+	}
+
+	$_GW_mnt($handle,aa) setValues -skipAdjust true
+	$_GW_mnt($handle,nfs) setValues -skipAdjust true
+
+	$_GW_mnt($handle,ga) manageChild
+	$_GW_mnt($handle,aa) manageChild
+	$_GW_mnt($handle,buttons) manageChild
+	$pane manageChild
+
+	return $dialog
+}
+
+#%COMMENT_BEGIN
+# Function:	mntDlg:_createGeneralArea
+# Synopsis:	Creates the data entry fields for the basic part of the dialog.
+#		This includes the hostname, filesystem type, filesystem name,
+#		and remote host name fields.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- parent	The parent for the created widgets.
+#%COMMENT_END
+proc mntDlg:_createGeneralArea { handle parent } \
+{
+	global		_GW_mnt _GD_mnt
+
+	set container [xmForm $parent.ga]
+
+	set grid1 [sgiGrid $container.grid1 -numRows 4 -numColumns 2 \
+			-defaultSpacing 2 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_none \
+			-bottomAttachment attach_none]
+	set _GW_mnt($handle,mntMntPt) [mntPt:realize $handle $container false true]
+	$_GW_mnt($handle,mntMntPt) setValues \
+			-topAttachment attach_form \
+			-leftAttachment attach_widget \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none \
+			-leftWidget $grid1 \
+			-leftOffset 10]
+
+	set row 0; set item XFS_FS_HOST
+	xmLabel $grid1.$item-label managed -row $row -column 0
+	set _GW_mnt($handle,$item) [xmLabel $grid1.$item managed \
+			-row $row -column 1 \
+			-alignment alignment_beginning \
+			-marginHeight 4]
+
+	set row 1; set item XFS_FS_TYPE
+	xmLabel $grid1.$item-label managed -row $row -column 0
+	set rc [xmRowColumn $grid1.$item-rc managed -row $row -column 1 \
+			-orientation horizontal \
+			-radioBehavior true \
+			-radioAlwaysOne true \
+			-marginHeight 0 \
+			-spacing 20]
+	foreach opt $_GD_mnt($item,opts) {
+		set _GW_mnt($handle,$opt-tb) [xmToggleButton $rc.$opt managed \
+				-indicatorType one_of_many]
+		$_GW_mnt($handle,$opt-tb) valueChangedCallback \
+				"mntDlg:_fsTypeCb $handle $opt %set"
+	}
+
+	set row 2
+	foreach item $_GD_mnt(combos) {
+		xmLabel $grid1.$item-label managed -row $row -column 0
+		set _GW_mnt($handle,$item) [dtDropDownComboBox $grid1.$item \
+				 managed \
+				-row $row -column 1 \
+				-columns 26 \
+				-listFontList $_GD_mnt(list_font)]
+		$_GW_mnt($handle,$item) selectionCallback \
+			"mntDlg:_comboSelectCb $handle $item %w {%item_or_text}"
+		$_GW_mnt($handle,$item) activateCallback \
+			"mntDlg:_comboActivateCb $handle $item %w"
+		incr row
+	}
+
+	$grid1 columnResizable 0 false
+	$grid1 manageChild
+	mntPt:manage $handle
+
+	return $container
+}
+
+#%COMMENT_BEGIN
+# Function:	mntDlg:_createAdvArea
+# Synopsis:	Creates the labels and arrow buttons that allow access to
+#		the advanced features panels.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- parent	The parent for the created widgets.
+#%COMMENT_END
+proc mntDlg:_createAdvArea { handle parent } \
+{
+	global		_GW_mnt _GD_mnt
+
+	set container [xmRowColumn $parent.aa \
+			-orientation horizontal \
+			-spacing 10]
+
+	set _GW_mnt($handle,arrow,nfs) \
+			[xmArrowButton $container.advoptions managed \
+			-width 22 -height 22 \
+			-arrowDirection arrow_down]
+	xmLabel $container.advoptions-label managed 
+
+	$_GW_mnt($handle,arrow,nfs) activateCallback \
+			"mntDlg:_advancedCb $handle %w nfs"
+
+	return $container
+}
+
+#%COMMENT_BEGIN
+# Function:	mntDlg:_createNfsArea
+# Synopsis:	Creates an instance of the "Advanced NFS" features panel.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- parent	The parent for the created widgets.
+#%COMMENT_END
+proc mntDlg:_createNfsArea { handle parent } \
+{
+	return [advNfsPnl:realize $handle $parent]
+}
+
+#########################################
+#	Dialog Callbacks		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	mntDlg:_dialogCb
+# Synopsis:	The callback function defined on the dialog buttons.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- op		Indicates which button the user selected.
+#%COMMENT_END
+proc mntDlg:_dialogCb { handle op } \
+{
+	global		_GW_mnt _GD_mnt
+
+	switch $op {
+		accept {
+			if {[mntDlg:_accept $handle]} {
+				mntDlg:unmanage $handle
+			}
+		}
+		apply  { mntDlg:_accept $handle }
+		cancel { mntDlg:_cancel $handle }
+		help   { sgiHelpMsg $_GW_mnt($handle,dialog) }
+	}
+}
+
+#########################################
+#	Dialog Callback Utilities	#
+#########################################
+#%COMMENT_BEGIN
+# Function:	mntDlg:_accept
+# Synopsis:	This is called when the user presses the "Accept" dialog
+#		button.  It gets the data from the dialog and then calls
+#		the server to perform the appropriate action.  If there is
+#		no icon in the icon panel representing the newly mounted
+#		filesystem, then one is created.  It also sets the display
+#		name for the icon to be the mount point.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc mntDlg:_accept { handle } \
+{
+	global		_GW_mnt _GD_mnt
+
+	set rval 0
+	if {! [mntDlg:getData $handle data true]} {
+		return 0
+	}
+
+	$_GW_mnt($handle,dialog) defineCursor watch
+
+	set o_host [join [lassign [split [lmatch $data XFS_FS_HOST:*] :] key] :]
+	set o_nm   [join [lassign [split [lmatch $data XFS_FS_NAME:*] :] key] :]
+	set o_type [join [lassign [split [lmatch $data XFS_FS_TYPE:*] :] key] :]
+	set object "$o_host FS $o_nm $o_type"
+
+	if {[string toupper $o_type] != "NFS"} {
+	    set query "NAME_TO_DEVICE:$o_nm"
+	    if {[catch {set device [fsInfoCmd simple $object $query]} error]} {
+		regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		em:setMessageString fs \
+		    "An error occured while mounting the filesystem."
+		em:storeMsg fs error "Unable to mount $o_nm:\n\t$nerror"
+		$_GW_mnt($handle,dialog) defineCursor ""
+		return $rval
+	    }
+	    set object "$o_host FS $device $o_type"
+	} else {
+	}
+
+	if {[catch {set ec [fsCmd mount $object [join $data \n]]} error]} {
+		regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		em:setMessageString fs \
+		    "An error occured while mounting the filesystem."
+		em:storeMsg fs error "Unable to mount $o_nm:\n\t$nerror"
+	} else {
+		if {$o_type == "nfs"} {
+			set o_rhost [lindex [split \
+				[lmatch $data XFS_REMOTE_HOST:*] :] 1]
+			set object "$o_host FS $o_rhost:$o_nm $o_type"
+		}
+
+		set mntpt [lindex [split [lmatch $data XFS_MNT_DIR:*] :] 1]
+
+		####	Check to see if the object already exists
+		if {! [fsSrch:objectExists fs $object real_obj]} {
+			####	Add the object to the icon panel
+			fsSrch:addObjects fs [list $object]
+			fsSrch:setMountPoint fs $object $mntpt
+		} else {
+			fsSrch:setMountPoint fs $real_obj $mntpt
+		}
+
+		set rval 1
+	}
+
+	$_GW_mnt($handle,dialog) defineCursor ""
+
+	return $rval
+}
+
+#%COMMENT_BEGIN
+# Function:	mntDlg:_cancel
+# Synopsis:	This is called when the user presses the "Cancel" dialog
+#		button.  It currently unmanages the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc mntDlg:_cancel { handle } \
+{
+	global	_GW_mnt
+	$_GW_mnt($handle,dialog) unmanageChild
+}
+
+#%COMMENT_BEGIN
+# Function:	mntDlg:_save
+# Synopsis:	This is called when the user presses the "Save" dialog
+#		button.  It gets the data from the dialog, creates an object
+#		signature and writes out the information to the given file
+#		name in the template directory.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- nm		The file name chosen by the user in which
+#				to store the template.
+#		- unique	Whether or not this template already exists
+#				in the template directory.
+#%COMMENT_END
+proc mntDlg:_save { handle nm unique } \
+{
+	mntDlg:getData $handle data false
+	if {$data != ""} {
+		set type [string tolower $_GD_mnt($handle,XFS_FS_TYPE)]
+		set obj [list [list _TEMPLATE_ FS $nm $type]]
+
+		if {[tu:write FS $nm $obj [join $data \n]]} {
+			if {$unique} {
+				ip:fillPanel fs $obj
+			}
+		} else {
+			set rval 0
+		}
+	}
+
+	return $rval
+}
+
+#########################################
+#	Other Callbacks			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	mntDlg:_fsTypeCb
+# Synopsis:	This is called when the user chooses one of the filesystem
+#		type XmToggleButtons.  It stores the value so that it can
+#		display the correct "Advanced" features panel.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- op		A key indicating which type was selected.
+#		- set		The value of the XmNset resource.
+#%COMMENT_END
+proc mntDlg:_fsTypeCb { handle op set } \
+{
+	global	_GD_mnt
+
+	if {$set == "true" && $_GD_mnt($handle,XFS_FS_TYPE) != $op} {
+	    set old $_GD_mnt($handle,XFS_FS_TYPE)
+	    set _GD_mnt($handle,XFS_FS_TYPE) $op
+
+	    if {$op != "NFS"} {
+		if {$old == "NFS"} {
+		    mntDlg:_fsTypeLocal $handle $_GD_mnt($handle,hfn)
+		}
+	    } else {
+		mntDlg:_fsTypeNfs $handle $_GD_mnt($handle,remote,hfn)
+	    }
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	mntDlg:_advancedCb
+# Synopsis:	This is called when the user chooses one of the advanced
+#		features arrow buttons.  It either displays or hides the
+#		panel based upon the XmNarrowDirection resource for the arrow.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- w		The widget id for the arrow button.
+#		- op		A key indicating which type panel the arrow
+#				button corresponds to.
+#%COMMENT_END
+proc mntDlg:_advancedCb { handle w op } \
+{
+	global	_GW_mnt _GD_mnt
+
+	xfs:setDialogMinMax $_GW_mnt($handle,dialog) \
+			$_GD_mnt(default,min,height) 32767
+
+	$w getValues -arrowDirection dir
+	if {$dir == "arrow_up"} {
+		$w setValues -arrowDirection arrow_down
+		$_GW_mnt($handle,$op) unmanageChild
+		xfs:setDialogMinMax $_GW_mnt($handle,dialog) \
+				$_GD_mnt(default,min,height) \
+				$_GD_mnt(default,min,height)
+	} else {
+		$w setValues -arrowDirection arrow_up
+		$_GW_mnt($handle,$op) manageChild
+		if {! [info exists _GD_mnt($op,min,width)]} {
+			$_GW_mnt($handle,dialog) getValues \
+					-width _GD_mnt($op,min,width) \
+					-height _GD_mnt($op,min,height)
+		}
+		xfs:setDialogMinMax $_GW_mnt($handle,dialog) \
+				$_GD_mnt($op,min,height) \
+				$_GD_mnt($op,min,height)
+
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	mntDlg:_comboActivateCb
+# Synopsis:	This is called when the user enters a <CR> in the combo-box.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- item		A key that identifies the combo-box.
+#		- w		The widget id for the combo-box.
+#%COMMENT_END
+proc mntDlg:_comboActivateCb { handle item w } \
+{
+	set value [combo:getValue $w]
+	if {$value != ""} {
+		mntDlg:_comboAction $handle $item $w $value false
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	mntDlg:_comboSelectCb
+# Synopsis:	This is called when the user selects an item in the
+#		combo-box list.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- item		A key that identifies the combo-box.
+#		- w		The widget id for the combo-box.
+#		- value		The selected value.
+#%COMMENT_END
+proc mntDlg:_comboSelectCb { handle item w value } \
+{
+	mntDlg:_comboAction $handle $item $w $value true
+}
+
+#########################################
+#	Combo Utilities			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	mntDlg:_comboAction
+# Synopsis:	This is called by both mntDlg:_comboActivateCb() and
+#		mntDlg:_comboSelectCb().  It provides a central place from
+#		which to deal with changes to the combo-box.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- item		A key that identifies the combo-box.
+#		- w		The widget id for the combo-box.
+#		- value		The current value of the combo-box.
+#%COMMENT_END
+proc mntDlg:_comboAction { handle item w value {select false} } \
+{
+	global		_GD_mnt
+
+	if {[info exists _GD_mnt($handle,cvalue,$item)] && \
+	    $value == $_GD_mnt($handle,cvalue,$item) && \
+	    [info exists _GD_mnt($handle,$value,remote,cooked)]} {
+		return
+	}
+
+	switch $item {
+		XFS_REMOTE_HOST {
+			mntDlg:_newRemoteHost $handle $value
+		}
+		XFS_FS_NAME {
+			mntDlg:_newFsName $handle $value
+			if {$select} {
+				mntDlg:_setXfsEfsValue $handle
+			}
+		}
+	}
+
+	set _GD_mnt($handle,cvalue,$item) $value
+}
+
+#%COMMENT_BEGIN
+# Function:	mntDlg:_comboFill
+# Synopsis:	Sets the items in the list of a combo-box and optionally
+#		selects one of the items.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- item		A key that identifies the combo-box.
+#		- list		The list of items for the combo-box.
+#		- sitem		An optional parameter indicating which item
+#				in the new list should be the selected item.
+#		- vitems	An optional parameter indicating how many
+#				items should be visible in the combo-box drop
+#				down list.
+#%COMMENT_END
+proc mntDlg:_comboFill { handle item list {sitem ""} {vitems 8} } \
+{
+	global		_GW_mnt _GD_mnt
+
+	if {$sitem == ""} {
+		set sitem [lindex $list 0]
+	}
+	combo:setItems $_GW_mnt($handle,$item) $list $vitems
+	combo:selectItem $_GW_mnt($handle,$item) $sitem
+	set _GD_mnt($handle,cvalue,$item) [string trim $sitem \"]
+}
+
+#########################################
+#	General Utilities		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	mntDlg:_setXfsEfsValue
+# Synopsis:	
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc mntDlg:_setXfsEfsValue { handle } \
+{
+	global		_GW_mnt _GD_mnt
+
+	if {$_GD_mnt($handle,XFS_FS_TYPE) == "NFS"} {
+		return
+	}
+
+	set hfn $_GD_mnt($handle,hfn)
+	$_GW_mnt($handle,XFS_FS_NAME) getValues -selectedPosition sp
+
+	set obj [lindex $_GD_mnt($handle,$hfn,local,raw) $sp]
+	obj:parse $obj o_class o_host o_nm o_type
+	set o_type [string toupper $o_type]
+
+	if {$o_type != "XFS" && $o_type != "EFS"} {
+		set o_type XFS
+	}
+
+	if {$o_type != $_GD_mnt($handle,XFS_FS_TYPE)} {
+		$_GW_mnt($handle,$_GD_mnt($handle,XFS_FS_TYPE)-tb) \
+				setValues -set false
+		$_GW_mnt($handle,$o_type-tb) setValues -set true
+		set _GD_mnt($handle,XFS_FS_TYPE) $o_type
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	mntDlg:_fsTypeLocal
+# Synopsis:	Called when the filesystem type is changed from remote (NFS)
+#		to local (XFS/EFS).
+# Arguments:	- handle	The identifier for the desired instance.
+#		- hfn		The hostname used as an index into the cache
+#				of filesystems.
+#		- force		Unused
+#%COMMENT_END
+proc mntDlg:_fsTypeLocal { handle hfn {force false} } \
+{
+	global		_GW_mnt _GD_mnt
+
+	mntDlg:_comboFill $handle XFS_FS_NAME \
+			$_GD_mnt($handle,$hfn,local,cooked)
+	mntDlg:_newFsName $handle \
+		[lindex $_GD_mnt($handle,$hfn,local,cooked) 0]
+
+	$_GW_mnt($handle,XFS_REMOTE_HOST)-label unmanageChild
+	$_GW_mnt($handle,XFS_REMOTE_HOST) unmanageChild
+}
+
+#%COMMENT_BEGIN
+# Function:	mntDlg:_fsTypeNfs
+# Synopsis:	Called when the filesystem type is changed from local (XFS/EFS)
+#		to remote (NFS).
+# Arguments:	- handle	The identifier for the desired instance.
+#		- hfn		The hostname used as an index into the cache
+#				of remote filesystems.
+#		- force		Unused
+#%COMMENT_END
+proc mntDlg:_fsTypeNfs { handle hfn {force false} } \
+{
+	global		_GW_mnt _GD_mnt
+
+	if {$hfn == ""} {
+		mntDlg:_newRemoteHost $handle ""
+	} else {
+		mntDlg:_comboFill $handle XFS_FS_NAME \
+			$_GD_mnt($handle,$hfn,remote,cooked)
+		mntDlg:_newFsName $handle \
+			[lindex $_GD_mnt($handle,$hfn,remote,cooked) 0]
+
+		$_GW_mnt($handle,XFS_REMOTE_HOST)-label manageChild
+		$_GW_mnt($handle,XFS_REMOTE_HOST) manageChild
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	mntDlg:_newRemoteHost
+# Synopsis:	This is called when the value of the "Remote Host" combo-box
+#		is changed.  It gets the list of exported filesystems from
+#		the new remote host.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- host		The hostname used as an index into the cache
+#				of remote filesystems.
+#		- force		Unused
+#%COMMENT_END
+proc mntDlg:_newRemoteHost { handle {host ""} {force false} } \
+{
+	global		_GW_mnt _GD_mnt _GD_resources
+
+	if {$host == ""} {
+		set hfn [fsSrch:getHost fs]
+		combo:selectItem $_GW_mnt($handle,XFS_REMOTE_HOST) $hfn
+		set _GD_mnt($handle,cvalue,XFS_REMOTE_HOST) $hfn
+	} else {
+		hu:getIpAddress $host hfn hpd hip $_GD_resources(hostsFile)
+	}
+
+	mntDlg:_fetchExportFS $handle $hfn
+	mntDlg:_fsTypeNfs $handle $hfn true
+}
+
+#%COMMENT_BEGIN
+# Function:	mntDlg:_newFsName
+# Synopsis:	This is called when the value of the "Filesystem" combo-box
+#		is changed.  It finds the data associated with the new file
+#		system name and sets the type and mount point input fields.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- nm		The filesystem name.
+#%COMMENT_END
+proc mntDlg:_newFsName { handle nm } \
+{
+	global		_GW_mnt _GD_mnt
+
+	set nm [string trim $nm \"]
+	set mntpt ""
+
+	if {[llength $nm] == 1} {
+	    if {[set item [mntDlg:_findListItem $handle $nm]] != ""} {
+		set item [lindex $item 0]
+		combo:selectItem $_GW_mnt($handle,XFS_FS_NAME) $item
+		mntDlg:_setXfsEfsValue $handle
+		lassign [string trim $item \"] device mntpt
+	    }
+	} else {
+	    lassign $nm device mntpt
+	}
+
+	if {$mntpt == "(-)"} {
+		set mntpt ""
+	} else {
+		set mntpt [string trimright [string trimleft $mntpt (] )]
+	}
+	mntPt:setData $handle "XFS_MNT_DIR:$mntpt"
+}
+
+#%COMMENT_BEGIN
+# Function:	mntDlg:_findListItem
+# Synopsis:	Given the name or device of a filesystem, finds the cached
+#		data for it.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- nm		The filesystem name / device.
+#%COMMENT_END
+proc mntDlg:_findListItem { handle nm } \
+{
+	global		_GW_mnt _GD_mnt
+
+	regsub -- "^/dev/dsk/" $nm "" o_nm
+	if {$_GD_mnt($handle,XFS_FS_TYPE) != "NFS"} {
+	    set v $_GD_mnt($handle,$_GD_mnt($handle,hfn),local,cooked)
+	} else {
+	    set v $_GD_mnt($handle,$_GD_mnt($handle,remote,hfn),remote,cooked)
+	}
+
+	if {[set item [lmatch $v "\"$o_nm *"]] != ""} {
+	} elseif {[set item [lmatch $v "* ($o_nm)\""]] != ""} {
+	} elseif {[set item [lmatch $v "* ($o_nm) *\""]] != ""} {
+	} elseif {[set item [lmatch $v "$o_nm"]] != ""} {
+	}
+
+	return $item
+}
+
+#%COMMENT_BEGIN
+# Function:	mntDlg:_findObject
+# Synopsis:	Not Implemented
+# Arguments:	- handle	The identifier for the desired instance.
+#		- nm		The filesystem name / device.
+#		- type		The filesystem type (XFS/EFS/NFS).
+#%COMMENT_END
+proc mntDlg:_findObject { handle nm type } \
+{
+	if {$type != "NFS"} {
+	} else {
+	}
+}
+
+#########################################
+#	Caching Utilities		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	expDlg:_fetchLocalFs
+# Synopsis:	Gets the list of filesystems local to the current host.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- hfn		Hostname
+#		- state		An optional parameter that allows the caller
+#				to restrict the query to filesystems that
+#				are in the given state (any, mounted,
+#				unmounted).  The default is "unmounted".
+#		- force		An optional parameter that indicates whether
+#				or not to use the cache for the given host
+#				(if it exists).  The default value is "false"
+#				which means: use the cache.
+#%COMMENT_END
+proc mntDlg:_fetchLocalFS { handle hfn {state unmounted} {force false} } \
+{
+	global		_GD_mnt
+
+	if {$force == "false" && \
+	    [info exists _GD_mnt($handle,$hfn,local,cooked)]} {
+		return
+	}
+
+	####	Get the list of local/unmounted filesystems
+	set _GD_mnt($handle,hfn) $hfn
+	set _GD_mnt($handle,$hfn,local,cooked) ""
+	set _GD_mnt($handle,$hfn,local,names) ""
+	set _GD_mnt($handle,$hfn,local,mntpts) ""
+	set _GD_mnt($handle,$hfn,local,raw) [fsu:getLocalObjs $hfn $state]
+	if {$_GD_mnt($handle,$hfn,local,raw) == ""} {
+		return
+	}
+
+	foreach obj $_GD_mnt($handle,$hfn,local,raw) {
+
+		obj:parse $obj o_class o_host o_nm o_type
+		regsub -- "^/dev/dsk/" $o_nm "" nm
+		lappend _GD_mnt($handle,$hfn,local,names) $nm
+
+		set query "MOUNT_POINT:$o_nm"
+		if {[catch {set mp [fsInfoCmd simple $obj $query]} error]} {
+			lappend _GD_mnt($handle,$hfn,local,mntpts) (-)
+		} else {
+			lappend _GD_mnt($handle,$hfn,local,mntpts) ($mp)
+		}
+	}
+	set list_list [list $_GD_mnt($handle,$hfn,local,names) \
+			    $_GD_mnt($handle,$hfn,local,mntpts)]
+	set sep_list {"" " " ""}
+	set justify_list {left left}
+	set fmt [lu:getFormatString list_list justify_list]
+	set _GD_mnt($handle,$hfn,local,cooked) \
+			[lu:format $fmt list_list sep_list]
+}
+
+#%COMMENT_BEGIN
+# Function:	mntDlg:_fetchExportFs
+# Synopsis:	Gets the list of exported filesystems/directories from
+#		a given host.  For each item retrieved, it gets the export
+#		options.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- hfn		Hostname
+#		- state		An optional parameter that allows the caller
+#				to restrict the query to filesystems that
+#				are in the given state (any, mounted,
+#				unmounted).
+#		- force		An optional parameter that indicates whether
+#				or not to use the cache for the given host
+#				(if it exists).  The default value is "false"
+#				which means: use the cache.
+#%COMMENT_END
+proc mntDlg:_fetchExportFS { handle hfn {state any} {force false} } \
+{
+	global		_GD_mnt
+
+	####	TODO:	For now turn off caching
+	set force true
+
+	if {$force == "false" && [info exists _GD_mnt($handle,$hfn,cooked)]} {
+		return
+	}
+
+	####	Get the list of remote/exported filesystems
+	set _GD_mnt($handle,remote,hfn) $hfn
+	set _GD_mnt($handle,$hfn,remote,cooked) ""
+	set _GD_mnt($handle,$hfn,remote,names) ""
+	set _GD_mnt($handle,$hfn,remote,mntpts) ""
+	# set _GD_mnt($handle,$hfn,remote,raw) [fsu:getExportObjs $hfn $state]
+	set _GD_mnt($handle,$hfn,remote,raw) ""
+	if {$_GD_mnt($handle,$hfn,remote,raw) != ""} {
+	    foreach obj $_GD_mnt($handle,$hfn,remote,raw) {
+
+		obj:parse $obj o_class o_host o_nm o_type
+		regsub -- "^/dev/dsk/" $o_nm "" nm
+		lappend _GD_mnt($handle,$hfn,remote,names) $nm
+
+		set object [obj:unparse FS $_GD_mnt($handle,hfn) $o_nm nfs]
+		set query "MOUNT_POINT:$hfn:$o_nm"
+		if {[catch {set mp [fsInfoCmd simple $object $query]} error]} {
+			lappend _GD_mnt($handle,$hfn,remote,mntpts) (-)
+		} else {
+			lappend _GD_mnt($handle,$hfn,remote,mntpts) ($mp)
+		}
+	    }
+	}
+
+	if {[catch {set data [fsInfoCmd export "XFS_HOST:$hfn"]} error]} {
+		em:setMessageString fs \
+		    "Unable to get exported directories."
+		em:storeMsg fs error \
+		    "Unable to get exported directories from $hfn.\n\t$error"
+	} else {
+	    set data [split $data \n]
+	    foreach item $data {
+		set val [join [lassign [split $item :] key] :]
+		if {$key != "XFS_MNT_DIR"} {
+			continue
+		}
+		if {[lsearch -exact $_GD_mnt($handle,$hfn,remote,mntpts) \
+							$val] == -1} {
+
+		    set obj [obj:unparse FS $_GD_mnt($handle,hfn) $val nfs]
+		    set query "MOUNT_POINT:$hfn:$val"
+		    if {[catch {set mp [fsInfoCmd simple $obj $query]} error]} {
+			set mp -
+		    }
+		    lappend _GD_mnt($handle,$hfn,remote,raw) $val
+		    lappend _GD_mnt($handle,$hfn,remote,names) $val
+		    lappend _GD_mnt($handle,$hfn,remote,mntpts) ($mp)
+		}
+	    }
+	}
+
+	if {$_GD_mnt($handle,$hfn,remote,raw) != ""} {
+		set list_list [list $_GD_mnt($handle,$hfn,remote,names) \
+				    $_GD_mnt($handle,$hfn,remote,mntpts)]
+		set sep_list {"" " " ""}
+		set justify_list {left left}
+		set fmt [lu:getFormatString list_list justify_list]
+		set _GD_mnt($handle,$hfn,remote,cooked) \
+				[lu:format $fmt list_list sep_list]
+	}
+}

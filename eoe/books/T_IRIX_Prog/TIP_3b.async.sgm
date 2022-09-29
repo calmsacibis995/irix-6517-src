@@ -1,0 +1,1198 @@
+<!-- Produced by version 3.14 (11/22/96) of SGI Frame/SGML translator -->
+<CHAPTER LBL="8"><TITLE><XREFTARGET ID="78875">Using Asynchronous I/O</TITLE><PARAGRAPH>When you use asynchronous I/O, the work of buffering data and reading or writing a device is carried out in a parallel process or thread, while the process or thread that requested the I/O can continue doing other work. In a multiprocessor system, I/O can be fully overlapped with processing.<INDEXTARGET ID="TIP_3b.async1"><!-- POSTPROCESSDATA: TIP_3b.async1|asynchronous I/O --></PARAGRAPH>
+<SECTION1 LBL="" HELPID = ""><TITLE>About Synchronous and Asynchronous I/O</TITLE><PARAGRAPH>Conventional I/O in UNIX is <ITALICS>synchronous</ITALICS>; that is, the process or thread that requests the I/O is blocked until the I/O has completed. The effects are different for input and for output.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>About Synchronous Input</TITLE><PARAGRAPH>The normal sequence of operations for input is as follows:</PARAGRAPH>
+<ORDEREDLIST><LIST><PARAGRAPH>A process invokes the system function <INDEXTARGET ID="TIP_3b.async2"><!-- POSTPROCESSDATA: TIP_3b.async2|<FUNCTION>read()</FUNCTION> --><FUNCTION>read()</FUNCTION>, either directly or indirectly&mdash;for example, by accessing a new page of a memory-mapped file, or by calling a library function that calls <FUNCTION>read()</FUNCTION>.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>The kernel, operating under the identity of the calling process, enters the read entry point of a device driver.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>The device driver initiates an input operation and blocks the calling process, for example by waiting on a semaphore in the kernel address space.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>The kernel schedules another process to use the CPU.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Later, the device completes the input operation and causes a hardware interrupt.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>The kernel interrupt handler enters the device driver interrupt entry point.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>The device driver, finding that the data has been received, unblocks the sleeping process, for example by posting a semaphore.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>The kernel notes that the blocked process can now run.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Then or perhaps later, depending on scheduling priorities, the kernel schedules the process to run on some CPU.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>The unblocked process exits the <FUNCTION>read()</FUNCTION> system call and returns to user code, the read being complete.</PARAGRAPH>
+</LIST>
+</ORDEREDLIST>
+<PARAGRAPH>During steps 4-8, the process that requested input is blocked. The duration of the delay is unpredictable. For example, the delay can be negligible if the data is already in a buffer in memory. It can be as long as one rotation time of a disk, if the disk is positioned on the correct cylinder. It can be longer still, if the disk has to seek, or if the disk controller or bus adapter is busy with other transfers.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>About Synchronous Output</TITLE><PARAGRAPH>For disk files, a process that calls <INDEXTARGET ID="TIP_3b.async3"><!-- POSTPROCESSDATA: TIP_3b.async3|<FUNCTION>write()</FUNCTION> --><FUNCTION>write()</FUNCTION> is normally delayed only as long as it takes to copy the output data to a buffer in the kernel address space. The kernel asks the device driver to schedule the device write. The actual disk output is asynchronous. As a result, a process that requests output is usually blocked for only a short time. However, a number of disk write requests could be pending, so the true state of a file on disk is unknown until the file is closed.</PARAGRAPH>
+<PARAGRAPH>In order to make sure that all data has been written to disk successfully, a program calls <INDEXTARGET ID="TIP_3b.async4"><!-- POSTPROCESSDATA: TIP_3b.async4|<FUNCTION>fsync()</FUNCTION> --><FUNCTION>fsync()</FUNCTION> for a conventional file or <FUNCTION>msync()</FUNCTION> for a memory-mapped file (see the <REFPAGE>fsync(2)</REFPAGE> and <REFPAGE>msync(2)</REFPAGE> reference pages). The process that calls these functions is blocked until all buffered data has been written. (An alternative for disk output is to use direct output, discussed under <XREF IDREF="29205" TYPE="TITLE">&ldquo;Using Direct I/O&rdquo;</XREF>.)</PARAGRAPH>
+<PARAGRAPH>Devices other than disks may block the calling process until the output is complete. It is the device driver logic that determines whether a call to <FUNCTION>write()</FUNCTION> blocks the caller, and for how long.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="73732">About Asynchronous I/O</TITLE><PARAGRAPH>Some processes should never be blocked for the unpredictable times that I/O can require. One obvious solution can be summarized as &ldquo;call <FUNCTION>read()</FUNCTION> or <FUNCTION>write()</FUNCTION> from a different process, and run that process in a different CPU.&rdquo; This is the essence of asynchronous I/O. You could implement an asynchronous I/O scheme of your own design, and you may wish to do so in order to integrate the I/O closely with your own design of processes and data structures. However, a standard solution is available.</PARAGRAPH>
+<PARAGRAPH>IRIX supports asynchronous I/O library calls conforming to POSIX document 1003.1b-1993. You use relatively simple calls to initiate input or output. The library package handles the details of<INDEXTARGET ID="TIP_3b.async5"><!-- POSTPROCESSDATA: TIP_3b.async5|asynchronous I/O:POSIX 1003.1b-1993 --></PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>Creating asynchronous processes or threads to perform the I/O.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Allocating a shared memory arena and the locks, semaphores, and other structures used to coordinate the I/O processes or threads.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Queueing multiple input or output requests to each of multiple file descriptors.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Reporting results back to your program, either on request, through signals, or through callback functions.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="35900">Asynchronous I/O Functions</TITLE><PARAGRAPH>Once you have opened the files and initialized asynchronous I/O, you perform asynchronous I/O by calling some of these functions: </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH>aio_read(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="261"><PARAGRAPH>Initiates asynchronous input from a file or device.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH>aio_write(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="261"><PARAGRAPH>Initiates asynchronous output to a file or device.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH>lio_listio(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="261"><PARAGRAPH>Initiates a list of operations to one or more files or devices.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH>aio_error(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="261"><PARAGRAPH>Returns the status of an asynchronous operation.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH>aio_fsync(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="261"><PARAGRAPH>Waits for all scheduled output for a file to complete.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH>aio_cancel(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="261"><PARAGRAPH>Cancels pending, scheduled operations.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>Each of these functions is described in detail in a reference page.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Asynchronous I/O Control Block</TITLE><PARAGRAPH>Each asynchronous I/O request is represented by an instance of <INDEXTARGET ID="TIP_3b.async6"><!-- POSTPROCESSDATA: TIP_3b.async6|asynchronous I/O:<VARIABLE>aiocb</VARIABLE> structure --><VARIABLE>struct aiocb</VARIABLE>, a data structure that your program must allocate. The important fields are as follows.</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>The file descriptor that is the target of the operation.<INDEXTARGET ID="TIP_3b.async7"><!-- POSTPROCESSDATA: TIP_3b.async7|file descriptor:with asynchronous I/O --></PARAGRAPH>
+<PARAGRAPH>File descriptors are returned by <FUNCTION>open()</FUNCTION> (see the <REFPAGE>open(2)</REFPAGE> reference page). A file descriptor used for asynchronous I/O can represent any file or device&mdash;not only a disk file.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The address and size of a buffer to supply or receive the data.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The file position for the operation as it would be passed to <INDEXTARGET ID="TIP_3b.async8"><!-- POSTPROCESSDATA: TIP_3b.async8|<FUNCTION>lseek()</FUNCTION>:with asynchronous I/O --><FUNCTION>lseek()</FUNCTION> (see the <REFPAGE>lseek(2)</REFPAGE> reference page)</PARAGRAPH>
+<PARAGRAPH>The use of this value is discussed under <XREF IDREF="92621" TYPE="TITLE">&ldquo;Multiple Operations to One File&rdquo;</XREF>.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>A <INDEXTARGET ID="TIP_3b.async9"><!-- POSTPROCESSDATA: TIP_3b.async9|<VARIABLE>sigevent</VARIABLE> structure --><VARIABLE>sigevent</VARIABLE> structure, whose contents indicate what, if anything, should be done to notify your program of the completion of the I/O.</PARAGRAPH>
+<PARAGRAPH>The use of the <VARIABLE>sigevent</VARIABLE> is discussed under <XREF IDREF="67166" TYPE="TITLE">&ldquo;Checking for Completion&rdquo;</XREF>.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<NOTE><PREFIX>Note</PREFIX>The IRIX 5.2 implementation also accepted a request priority value. Request priorities are no longer supported. The request-priority field of <INDEXTARGET ID="TIP_3b.async10"><!-- POSTPROCESSDATA: TIP_3b.async10|asynchronous I/O:request priority no longer supported --><VARIABLE>aiocb</VARIABLE> exists for compatibility and for possible future use, but must currently contain zero.</NOTE>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Initializing Asynchronous I/O</TITLE><PARAGRAPH>You can initialize asynchronous I/O in either of two ways. One way is simple; the other gives you control over the initialization.<INDEXTARGET ID="TIP_3b.async11"><!-- POSTPROCESSDATA: TIP_3b.async11|asynchronous I/O:initializing --></PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE>Implicit Initialization</TITLE><PARAGRAPH>You can initialize asynchronous I/O simply by starting an operation with <INDEXTARGET ID="TIP_3b.async12"><!-- POSTPROCESSDATA: TIP_3b.async12|<FUNCTION>aio_write()</FUNCTION>:implies <FUNCTION>aio_init()</FUNCTION> --><INDEXTARGET ID="TIP_3b.async13"><!-- POSTPROCESSDATA: TIP_3b.async13|<FUNCTION>aio_read()</FUNCTION>:implies <FUNCTION>aio_init()</FUNCTION> --><FUNCTION>aio_read()</FUNCTION>, <FUNCTION>lio_listio()</FUNCTION>, or <FUNCTION>aio_write()</FUNCTION>. The first such call causes default initialization. This is the only form of initialization described by the POSIX standard. However, you may need to control at least the timing of initialization.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Initializing with aio_sgi_init()</TITLE><PARAGRAPH>You can control initialization of asynchronous I/O by calling <INDEXTARGET ID="TIP_3b.async14"><!-- POSTPROCESSDATA: TIP_3b.async14|asynchronous I/O:<VARIABLE>aioinit_t</VARIABLE>structure --><INDEXTARGET ID="TIP_3b.async15"><!-- POSTPROCESSDATA: TIP_3b.async15|<FUNCTION>aio_sgi_init()</FUNCTION> --><FUNCTION>aio_sgi_init()</FUNCTION> (refer to the <REFPAGE>aio_sgi_init(3)</REFPAGE> reference page and to the declarations in <FILENAME>/usr/include/aio.h</FILENAME>). The argument to this call can be a null pointer, indicating you want default values, or you can pass an <VARIABLE>aioinit_t</VARIABLE> structure. The principal fields of this structure specify</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>the number of asynchronous processes or threads to execute I/O (<VARIABLE>aio_threads</VARIABLE>)</PARAGRAPH>
+<PARAGRAPH>The asynchronous I/O library creates asynchronous processes or threads to perform the I/O. It uses <FUNCTION>sproc()</FUNCTION> in normal programs, or <FUNCTION>pthread_create()</FUNCTION> in a pthread program.</PARAGRAPH>
+<PARAGRAPH>In either case, the default of asynchronous threads is 5 and the minimum is 2. Specify 1 more than the number of I/O operations that could reasonably be executed in parallel on the available hardware. For example if you will be doing asynchronous I/O to one disk file and one tape drive, there could be at most two concurrent I/O operations, so there is no need to have more than 3 (1 more than 2) asynchronous processes.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>the number of locks that the asynchronous I/O processes should preallocate (<VARIABLE>aio_locks</VARIABLE>)</PARAGRAPH>
+<PARAGRAPH>The default used by <FUNCTION>aio_init()</FUNCTION> is 3 locks; the minimum is 1. Specify the maximum number of simultaneous <FUNCTION>lio_listio(</FUNCTION>LIO_NOWAIT<FUNCTION>)</FUNCTION>, <FUNCTION>aio_fsync()</FUNCTION>, and <FUNCTION>aio_suspend()</FUNCTION> calls that your program could execute concurrently. If in doubt, specify the number of subprocesses your program contains.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>the number of processes or threads that will be sharing the use of asynchronous I/O (<VARIABLE>aio_numusers</VARIABLE>)</PARAGRAPH>
+<PARAGRAPH>The default is 5; the minimum is 2. Specify 1 more than the number of different processes or pthreads that will be requesting asynchronous I/O.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>Other fields of the <VARIABLE>aioinit_t</VARIABLE> structure such as <VARIABLE>aio_num</VARIABLE> and <VARIABLE>aio_usedba</VARIABLE> are not used at this time and must be zero. Zero-valued fields are taken as a request for the default for that field. <XREF IDREF="48164" TYPE="TEXT">Example&nbsp;8-1</XREF> shows a subroutine to initialize asynchronous I/O, given counts of devices and calling processes.</PARAGRAPH>
+<CODE><CAPTION LBL="8-1"><PREFIX>Example 8-1 </PREFIX><XREFTARGET ID="48164">Initializing Asynchronous I/O</CAPTION>int initAIO(int numDevs, int numSprocs, int maxOps)
+{
+aioinit_t A = {0}; /* ensure zero'd fields */
+if (numDevs) /* we do know how many devices */
+A.aio_threads = 1+numDevs;
+if (numSprocs) /* we do know how many sprocs */
+A.aio_locks = A.aio_numusers = 1+numSprocs;
+if (maxOps) /* we do know max aiocbs at 1 time */
+A.aio_num = maxOps;
+return aioinit(&amp;A);
+}
+</CODE>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>When to Initialize</TITLE><PARAGRAPH>The time at which initialization occurs is important. If you initialize in a process that has been assigned to run on an isolated CPU, the asynchronous I/O processes will also run on that CPU. You probably want the I/O processes to run under normal dispatching on unrestricted CPUs. In that case, the proper sequence of initialization is:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>Open all file descriptors and verify that files and devices are ready.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Initialize asynchronous I/O. The lightweight processes created by <FUNCTION>aioinit()</FUNCTION> inherit the attributes of the calling process, including its current priority and access to open file descriptors.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Isolate any CPUs that are to be dedicated.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Create child processes and assign them to their CPUs.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>The asynchronous I/O processes created by <FUNCTION>aioinit()</FUNCTION> continue to be scheduled according to their priority in whatever CPUs remain available.</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Scheduling Asynchronous I/O</TITLE><PARAGRAPH>You schedule an input or output operation by calling <INDEXTARGET ID="TIP_3b.async16"><!-- POSTPROCESSDATA: TIP_3b.async16|asynchronous I/O:scheduling operations --><INDEXTARGET ID="TIP_3b.async17"><!-- POSTPROCESSDATA: TIP_3b.async17|<FUNCTION>aio_write()</FUNCTION> --><INDEXTARGET ID="TIP_3b.async18"><!-- POSTPROCESSDATA: TIP_3b.async18|<FUNCTION>aio_read()</FUNCTION> --><FUNCTION>aio_read()</FUNCTION> or <FUNCTION>aio_write()</FUNCTION>, passing an <VARIABLE>aiocb</VARIABLE> structure to describe the operation (see the <REFPAGE>aio_read(3)</REFPAGE> and <REFPAGE>aio_write(3)</REFPAGE> reference pages). The operation is queued to that file descriptor. It will be executed when one of the asynchronous I/O processes or threads is available. The return code from the library call says nothing about the I/O operation itself; it merely indicates whether or not the <VARIABLE>aiocb</VARIABLE> could be queued.</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>It is important to use a given <VARIABLE>aiocb</VARIABLE> for only one operation at a time, and to not modify an <VARIABLE>aiocb</VARIABLE> until its operation is complete.</NOTE>
+<PARAGRAPH>You can schedule a list of operations using <INDEXTARGET ID="TIP_3b.async19"><!-- POSTPROCESSDATA: TIP_3b.async19|asynchronous I/O:list I/O --><INDEXTARGET ID="TIP_3b.async20"><!-- POSTPROCESSDATA: TIP_3b.async20|<FUNCTION>lio_listio()</FUNCTION> --><FUNCTION>lio_listio()</FUNCTION> (see the <REFPAGE>lio_listio(3)</REFPAGE> reference page). The advantage of this function is that you can request a single notification (either a signal or a callback) when all of the operations in the list are complete. Alternatively, you can be notified of the completion of each one as it happens.</PARAGRAPH>
+<PARAGRAPH>When an asynchronous I/O thread is free, it takes a queued <VARIABLE>aiocb</VARIABLE> and performs the equivalent function to <FUNCTION>lseek()</FUNCTION> (if a file position is specified), then the equivalent of <FUNCTION>read()</FUNCTION> or <FUNCTION>write()</FUNCTION>. The asynchronous process may be blocked for some time. That depends on the file or device and on the options that were specified when it was opened. When the operation is complete, the asynchronous process notifies the initiating process using the method requested in the <VARIABLE>aiocb</VARIABLE>.</PARAGRAPH>
+<PARAGRAPH>You can cancel a started operation, or all pending operations for a given file descriptor, using <INDEXTARGET ID="TIP_3b.async21"><!-- POSTPROCESSDATA: TIP_3b.async21|asynchronous I/O:cancelling --><INDEXTARGET ID="TIP_3b.async22"><!-- POSTPROCESSDATA: TIP_3b.async22|<FUNCTION>aio_cancel()</FUNCTION> --><FUNCTION>aio_cancel()</FUNCTION> (see the <REFPAGE>aio_cancel(3)</REFPAGE> reference page).</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="63791">Assuring Data Integrity</TITLE><PARAGRAPH>With sequential output, you call <INDEXTARGET ID="TIP_3b.async23"><!-- POSTPROCESSDATA: TIP_3b.async23|asynchronous I/O:file sync --><INDEXTARGET ID="TIP_3b.async24"><!-- POSTPROCESSDATA: TIP_3b.async24|<FUNCTION>aio_fsync()</FUNCTION> --><FUNCTION>fsync()</FUNCTION> to ensure that all buffered data has been written. However, you cannot use <FUNCTION>fsync()</FUNCTION> with asynchronous I/O, since you are not sure when the <FUNCTION>write()</FUNCTION> calls will execute.</PARAGRAPH>
+<PARAGRAPH>The <FUNCTION>aio_fsync()</FUNCTION> function queues the equivalent of an <FUNCTION>fsync()</FUNCTION> call for asynchronous execution (see the <REFPAGE>aio_fsync(3)</REFPAGE> reference page). This function takes an <VARIABLE>aiocb</VARIABLE>. The file descriptor in it specifies which file is to be synchronized. The <FUNCTION>fsync()</FUNCTION> operation is done following all other asynchronous operations that are pending when <FUNCTION>aio_fsync()</FUNCTION> is called. The synchronize operation can take considerable time, depending on how much output data has been buffered. Its completion is reported in the same ways as completion of a read or write (see the next topic).</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Checking the Progress of Asynchronous Requests</TITLE><PARAGRAPH>You can test the progress and completion of an asynchronous operation by polling; or your program can be informed of the completion of an operation in a variety of ways. In the <INDEXTARGET ID="TIP_3b.async25"><!-- POSTPROCESSDATA: TIP_3b.async25|asynchronous I/O:notification methods --><INDEXTARGET ID="TIP_3b.async26"><!-- POSTPROCESSDATA: TIP_3b.async26|asynchronous I/O:<VARIABLE>aiocb</VARIABLE> structure --><VARIABLE>aiocb</VARIABLE>, the program can specify one of three things to be done when the operation is complete:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>Nothing; take no action.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Send a signal of a specified number.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Invoke a callback function directly from the asynchronous process. </PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>In addition, the <INDEXTARGET ID="TIP_3b.async27"><!-- POSTPROCESSDATA: TIP_3b.async27|<FUNCTION>aio_suspend()</FUNCTION> --><FUNCTION>aio_suspend()</FUNCTION> function blocks its caller until one of a list of pending operations is complete.</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE>Polling for Status</TITLE><PARAGRAPH>You can check the progress of any asynchronous operation (including <INDEXTARGET ID="TIP_3b.async28"><!-- POSTPROCESSDATA: TIP_3b.async28|<FUNCTION>aio_error()</FUNCTION> --><FUNCTION>aio_fsync()</FUNCTION>) by calling <FUNCTION>aio_error()</FUNCTION>, passing the <VARIABLE>aiocb</VARIABLE> for that operation.</PARAGRAPH>
+<PARAGRAPH>While the operation is incomplete, <FUNCTION>aio_error()</FUNCTION> returns EIINPROGRESS. When the operation is complete, you can check the final return code from <FUNCTION>read()</FUNCTION>, <FUNCTION>write()</FUNCTION>, or <FUNCTION>fsync()</FUNCTION> using <FUNCTION>aio_return()</FUNCTION> (see the <REFPAGE>aio_error(3)</REFPAGE> and <REFPAGE>aio_return(3)</REFPAGE> reference pages).</PARAGRAPH>
+<PARAGRAPH>To see in an example of polling for status, see function <FUNCTION>inWait0()</FUNCTION> under <XREF IDREF="74464" TYPE="TITLE">&ldquo;Asynchronous I/O Example&rdquo;</XREF>. This function is used when the <VARIABLE>aiocb</VARIABLE> is initialized with SIGEV_NONE, meaning that no notification is to be returned at the completion of the operation. The function waits for an asynchronous operation to complete using a loop in the general form shown in <XREF IDREF="19338" TYPE="TEXT">Example&nbsp;8-2</XREF>.</PARAGRAPH>
+<CODE><CAPTION LBL="8-2"><PREFIX>Example 8-2 </PREFIX><XREFTARGET ID="19338">Polling for Asynchronous Completion</CAPTION>int waitForEndOfAsyncOp(aiocb *pab)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;while (EINPROGRESS == (ret = aio_error(pab)))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;sginap(0);
+&nbsp;&nbsp;&nbsp;&nbsp;return ret;
+}
+</CODE>
+<PARAGRAPH>The function result is the final return code from the read, write, or sync operation that was started.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="67166">Checking for Completion</TITLE><PARAGRAPH>You have a wide variety of design options other than polling. Your program can:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>Use <FUNCTION>aio_suspend()</FUNCTION> to wait until one of a list of operations completes.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Set up an empty signal handler function and use <INDEXTARGET ID="TIP_3b.async29"><!-- POSTPROCESSDATA: TIP_3b.async29|asynchronous I/O:signal use --><INDEXTARGET ID="TIP_3b.async30"><!-- POSTPROCESSDATA: TIP_3b.async30|signal:asynchronous I/O use --><FUNCTION>sigsuspend()</FUNCTION> or <FUNCTION>sigwait()</FUNCTION> to wait until a signal arrives (see the <REFPAGE>sigsuspend(2)</REFPAGE> and <REFPAGE>sigwait(3)</REFPAGE> reference pages).</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Use either a signal handler function or a callback function to report completion&mdash;for example, the function can post a semaphore.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>Most of these methods are demonstrated in the example program under <XREF IDREF="74464" TYPE="TITLE">&ldquo;Asynchronous I/O Example&rdquo;</XREF>.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Establishing a Completion Signal</TITLE><PARAGRAPH>You request a signal from an asynchronous operation by setting these values in the <VARIABLE>aiocb</VARIABLE> (refer to <FILENAME>/usr/include/aio.h</FILENAME> and <FILENAME>/usr/include/sys/signal.h</FILENAME>):</PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="110"><PARAGRAPH><VARIABLE>aio_sigevent.sigev_notify</VARIABLE></PARAGRAPH>
+</CELL>
+<CELL LEFT="115" WIDTH="220"><PARAGRAPH>Set to SIGEV_SIGNAL.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="110"><PARAGRAPH></PARAGRAPH>
+<PARAGRAPH><VARIABLE>aio_sigevent.sigev_signo</VARIABLE></PARAGRAPH>
+</CELL>
+<CELL LEFT="115" WIDTH="220"><PARAGRAPH>The number of the signal. This should be one of 
+the POSIX real-time signal numbers (see <XREF IDREF="90328" TYPE="TITLE">&ldquo;Signal 
+Numbers&rdquo;</XREF>).</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="110"><PARAGRAPH></PARAGRAPH>
+<PARAGRAPH><VARIABLE>aio_sigevent.sigev_value</VARIABLE></PARAGRAPH>
+</CELL>
+<CELL LEFT="115" WIDTH="220"><PARAGRAPH>A value to be passed to the signal handler. This 
+can be used to inform the signal handler of which 
+I/O operation has completed; for example, it 
+could be the address of the <VARIABLE>aiocb</VARIABLE>.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>When you set up a signal handler for asynchronous completion, do so using <FUNCTION>sigaction()</FUNCTION> and specify the SA_SIGINFO flag (see the <REFPAGE>sigaction(2)</REFPAGE> reference page). This has two benefits: any new completion signal that arrives while the first is being handled is queued; and the <VARIABLE>aio_sigev.sigev_value</VARIABLE> word is passed to the handler in a <VARIABLE>siginfo</VARIABLE> structure.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Establishing a Callback Function</TITLE><PARAGRAPH>You request a callback at the end of an asynchronous operation by setting the following values in the <VARIABLE>aiocb</VARIABLE>:</PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="108"><PARAGRAPH><VARIABLE>aio_sigevent.sigev_notify</VARIABLE></PARAGRAPH>
+</CELL>
+<CELL LEFT="115" WIDTH="224"><PARAGRAPH>Set to SIGEV_CALLBACK.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="108"><PARAGRAPH></PARAGRAPH>
+<PARAGRAPH><VARIABLE>aio_sigevent.sigev_func</VARIABLE></PARAGRAPH>
+</CELL>
+<CELL LEFT="115" WIDTH="224"><PARAGRAPH>The address of the callback function. Its prototype 
+must be</PARAGRAPH>
+ void <PARAGRAPH><VARIABLE>functionName</VARIABLE>(union sigval);</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="108"><PARAGRAPH><VARIABLE>aio_sigevent.sigev_value</VARIABLE></PARAGRAPH>
+</CELL>
+<CELL LEFT="115" WIDTH="224"><PARAGRAPH>A word to be passed to the callback function. This 
+can be used to inform the function of which I/O 
+operation has completed; for example, it could be 
+the address of the <VARIABLE>aiocb</VARIABLE>.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>The callback function is invoked from the asynchronous I/O thread when the <FUNCTION>read()</FUNCTION>, <FUNCTION>write()</FUNCTION> or <FUNCTION>fsync()</FUNCTION> operation finishes. This notification method has the lowest overhead and shortest latency, but it requires careful design to avoid race conditions in the use of shared variables.</PARAGRAPH>
+<PARAGRAPH>The asynchronous I/O threads share the address space of the processes or threads that initialize asynchronous I/O. They may execute in a different CPU. Since the callback function could be entered at any time, it must coordinate its use of shared data structures. This is a good place to use a lock (see <XREF IDREF="62937" TYPE="TITLE">&ldquo;Locks&rdquo;</XREF>). Locks have very low overhead in cases such as this, where there is likely to be little contention for the use of the lock.</PARAGRAPH>
+<TIP><PREFIX>Tip</PREFIX>You can call <FUNCTION>aio_read()</FUNCTION> or <FUNCTION>aio_write()</FUNCTION> from within a callback function or within a signal handler. This lets you start another operation with the least delay.</TIP>
+<PARAGRAPH>The code in <XREF IDREF="42900" TYPE="TEXT">Example&nbsp;8-3</XREF> demonstrates a hypothetical set of subroutines to schedule asynchronous reads and writes using a single <VARIABLE>aiocb</VARIABLE>. The principle functions and global variables it uses are: </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="108"><PARAGRAPH><VARIABLE>pendingIO</VARIABLE></PARAGRAPH>
+</CELL>
+<CELL LEFT="115" WIDTH="278"><PARAGRAPH>An array of records, each holding one request for an I/O 
+operation.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="108"><PARAGRAPH></PARAGRAPH>
+<PARAGRAPH><VARIABLE>dontTouchThatStuff</VARIABLE></PARAGRAPH>
+</CELL>
+<CELL LEFT="115" WIDTH="278"><PARAGRAPH>A lock used to gain exclusive use of <VARIABLE>pendingIO</VARIABLE>.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="108"><PARAGRAPH><FUNCTION>scheduleRead()</FUNCTION></PARAGRAPH>
+</CELL>
+<CELL LEFT="115" WIDTH="278"><PARAGRAPH>A function that accepts a request to read some amount of data, 
+from a specified file descriptor, at a specified file offset. It 
+places the request in <VARIABLE>pendingIO</VARIABLE> and then, if no asynchronous 
+operation is under way, initiates it.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="108"><PARAGRAPH><FUNCTION>yeahWeFinishedOne</FUNCTION>()</PARAGRAPH>
+</CELL>
+<CELL LEFT="115" WIDTH="278"><PARAGRAPH>The callback function that is entered when an asynchronous 
+operation completes. If any more operations are pending, it 
+initiates one.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="108"><PARAGRAPH><FUNCTION>initiatePending</FUNCTION>()</PARAGRAPH>
+</CELL>
+<CELL LEFT="115" WIDTH="278"><PARAGRAPH>A function that initiates one selected pending operation. It 
+prepares the <VARIABLE>aiocb</VARIABLE> structure, including the specification of 
+<FUNCTION>yeahWeFinishedOne()</FUNCTION> as the callback function. The lock 
+<VARIABLE>dontTouchThatStuff</VARIABLE> must be held before this function is called.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<NOTE><PREFIX>Note</PREFIX>The code in <XREF IDREF="42900" TYPE="TEXT">Example&nbsp;8-3</XREF> is not intended to be realistic and is not recommended as a model. In order to demonstrate the use of callback functions and the <VARIABLE>aiocb</VARIABLE>, it essentially duplicates work that could be done by the<FUNCTION>&space;lio_listio()</FUNCTION> feature of asynchronous I/O.</NOTE>
+<CODE><CAPTION LBL="8-3"><PREFIX>Example 8-3 </PREFIX><XREFTARGET ID="42900">Set of Functions to Schedule Asynchronous I/O</CAPTION>#define _ABI_SOURCE
+#include &lt;signal.h>
+#include &lt;aio.h>
+#include &lt;ulocks.h>
+#define MAX_PENDING 10
+#define STATUS_EMPTY 0
+#define STATUS_ACTIVE 1
+#define STATUS_PENDING 2
+static struct onePendingIO {
+&nbsp;&nbsp;&nbsp;&nbsp;int status;
+&nbsp;&nbsp;&nbsp;&nbsp;int theFile;
+&nbsp;&nbsp;&nbsp;&nbsp;void *theData;
+&nbsp;&nbsp;&nbsp;&nbsp;off_t theSize;
+&nbsp;&nbsp;&nbsp;&nbsp;off_t theSeek;
+&nbsp;&nbsp;&nbsp;&nbsp;int readNotWrite;
+&nbsp;&nbsp;&nbsp;&nbsp;} pendingIO[MAX_PENDING];
+static unsigned numPending;
+static struct aiocb theAiocb;
+static ulock_t dontTouchThatStuff;
+static unsigned scanner;
+static void initiatePending(int P);
+static void
+yeahWeFinishedOne(union sigval S)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;ussetlock(dontTouchThatStuff);
+&nbsp;&nbsp;&nbsp;&nbsp;pendingIO[S.sival_int].status = STATUS_EMPTY;
+&nbsp;&nbsp;&nbsp;&nbsp;if (numPending)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;while (pendingIO[scanner].status != STATUS_PENDING)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if (++scanner >= MAX_PENDING)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;scanner = 0;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;initiatePending(scanner);
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;usunsetlock(dontTouchThatStuff);
+}
+static void
+initiatePending(int P) /* lock must be held on entry */
+{
+&nbsp;&nbsp;&nbsp;&nbsp;theAiocb.aio_fildes = pendingIO[P].theFile;
+&nbsp;&nbsp;&nbsp;&nbsp;theAiocb.aio_buf = pendingIO[P].theData;
+&nbsp;&nbsp;&nbsp;&nbsp;theAiocb.aio_nbytes = pendingIO[P].theSize;
+&nbsp;&nbsp;&nbsp;&nbsp;theAiocb.aio_offset = pendingIO[P].theSeek;
+&nbsp;&nbsp;&nbsp;&nbsp;theAiocb.aio_sigevent.sigev_notify = SIGEV_CALLBACK;
+&nbsp;&nbsp;&nbsp;&nbsp;theAiocb.aio_sigevent.sigev_func = yeahWeFinishedOne;
+&nbsp;&nbsp;&nbsp;&nbsp;theAiocb.aio_sigevent.sigev_value.sival_int = P;
+&nbsp;&nbsp;&nbsp;&nbsp;if (pendingIO[P].readNotWrite)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;aio_read(&amp;theAiocb);
+&nbsp;&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;aio_write(&amp;theAiocb);
+&nbsp;&nbsp;&nbsp;&nbsp;pendingIO[P].status = STATUS_ACTIVE;
+&nbsp;&nbsp;&nbsp;&nbsp;--numPending;
+}
+/*public*/ int 
+scheduleRead( int FD, void *pdata, off_t len, off_t pos )
+{
+&nbsp;&nbsp;&nbsp;&nbsp;int j;
+&nbsp;&nbsp;&nbsp;&nbsp;if (numPending >= MAX_PENDING)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;likeTotallyFreakOut();
+&nbsp;&nbsp;&nbsp;&nbsp;ussetlock(dontTouchThatStuff);
+&nbsp;&nbsp;&nbsp;&nbsp;for(j=0; pendingIO[j].status != STATUS_EMPTY; ++j)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;;
+&nbsp;&nbsp;&nbsp;&nbsp;pendingIO[j].theFile = FD;
+&nbsp;&nbsp;&nbsp;&nbsp;pendingIO[j].theData = pdata;
+&nbsp;&nbsp;&nbsp;&nbsp;pendingIO[j].theSize = len;
+&nbsp;&nbsp;&nbsp;&nbsp;pendingIO[j].theSeek = pos;
+&nbsp;&nbsp;&nbsp;&nbsp;pendingIO[j].readNotWrite = 1;
+&nbsp;&nbsp;&nbsp;&nbsp;pendingIO[j].status = STATUS_PENDING;
+&nbsp;&nbsp;&nbsp;&nbsp;if (1 == ++numPending)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;initiatePending(j);
+&nbsp;&nbsp;&nbsp;&nbsp;usunsetlock(dontTouchThatStuff);
+}
+</CODE>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Holding Callbacks Temporarily</TITLE><PARAGRAPH>You can temporarily prevent callback functions from being entered using the <FUNCTION>aio_hold()</FUNCTION> function. This function is not defined in the POSIX standard; it is added by the MIPS ABI standard. Use it as follows:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>Call <FUNCTION>aio_hold</FUNCTION>(AIO_HOLD_CALLBACK) to prevent any callback function from being invoked.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Call <FUNCTION>aio_hold</FUNCTION>(AIO_RELEASE_CALLBACK) to allow callback functions to be invoked. Any that were held are now called.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Call <FUNCTION>aio_hold</FUNCTION>(AIO_ISHELD_CALLBACK) returns 1 if callbacks are currently being held; otherwise it returns 0.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="92621">Multiple Operations to One File</TITLE><PARAGRAPH>When you queue multiple operations to a single file descriptor, the asynchronous I/O&nbsp;package does not always guarantee the order of their execution. There are three ways you can ensure the sequence of operations.<INDEXTARGET ID="TIP_3b.async31"><!-- POSTPROCESSDATA: TIP_3b.async31|asynchronous I/O:multiple operations to one file --></PARAGRAPH>
+<PARAGRAPH>You can open any output file descriptor passing the flag O_APPEND (see the <REFPAGE>open(1)</REFPAGE> reference page). Asynchronous write requests to a file opened with O_APPEND are executed in the sequence of the calls to <FUNCTION>aio_write()</FUNCTION> or the sequence they are listed for <FUNCTION>lio_listio()</FUNCTION>. You can use this feature to ensure that a sequence of records is appended to a file in sequence.</PARAGRAPH>
+<PARAGRAPH>For files that support <FUNCTION>lseek()</FUNCTION>, you can specify any order of operations by specifying the file offset in the <VARIABLE>aiocb</VARIABLE>. The asynchronous process executes an absolute seek to that offset as part of the operation. Even if the operations are not performed in the sequence they were requested, the data is transferred in sequence. You can use this feature to ensure that multiple requests for sequential disk input are stored in sequential locations.</PARAGRAPH>
+<PARAGRAPH>For non-disk input operations, the only way you can be certain that operations are done in sequence is to schedule them one at a time, waiting for each one to complete.</PARAGRAPH>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="74464">Asynchronous I/O Example</TITLE><PARAGRAPH>The following source displays a highly artificial program whose purpose is to exercise most options of asynchronous I/O. The program syntax is:</PARAGRAPH>
+<EXAMPLE>
+aiocat [ -o <VARIABLE>outfile</VARIABLE> ] [-a {0|1|2|3} ] <VARIABLE>infilename...</VARIABLE>&space;
+</EXAMPLE>
+<PARAGRAPH>The actual output of the program is the concatenation of all the one or more files <VARIABLE>infilename...</VARIABLE>, written to the file <VARIABLE>outfile</VARIABLE>. The default outfile is $TEMPDIR<FILENAME>/aiocat.out</FILENAME>. In effect, the program is an overcomplicated version of the standard <COMMAND>cat</COMMAND> command.</PARAGRAPH>
+<PARAGRAPH>When you compile it with the variable DO_SPROCS defined as 1, the program creates one process for each <VARIABLE>infilename</VARIABLE>. Each of these processes uses asynchronous I/O requests to read its corresponding input file, and to write that data to the correct offset in <VARIABLE>outfile</VARIABLE>.</PARAGRAPH>
+<PARAGRAPH>After all the files have been read and written, the program reports the CPU time charged for each file, and the effective data transfer rate in bytes per microsecond.</PARAGRAPH>
+<PARAGRAPH>The -a parameter specifies which of four methods is used to wait for I/O completion: </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH>-a 0</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="337"><PARAGRAPH>Poll for completion with <FUNCTION>aio_error()</FUNCTION>.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH>-a 1</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="337"><PARAGRAPH>Wait for completion with <FUNCTION>aio_suspend()</FUNCTION>.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH>-a 2</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="337"><PARAGRAPH>Wait on a semaphore posted from a signal handler.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH>-a 3</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="337"><PARAGRAPH>Wait on a semaphore posted from a callback routine.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>Execution of <COMMAND>aiocat</COMMAND> can resemble the following (from an Origin2000 with 8 CPUs):</PARAGRAPH>
+<CODE>
+> ls -l incat?
+-rwxr-xr-x    1 cortesi  nuucp     234964 Jun  4 10:17 incat1
+-rwxr-xr-x    1 cortesi  nuucp     234964 Jun  4 10:17 incat2
+-rwxr-xr-x    1 cortesi  nuucp     234964 Jun  4 10:18 incat3
+-rwxr-xr-x    1 cortesi  nuucp     234964 Jun  4 10:19 incat4
+> aiocat -o outcat -a 0 incat?
+&space;   procid   time     fsize     filename
+&space;0: 920      440000   234964    incat1
+&space;1: 939      480000   234964    incat2
+&space;2: 940      510000   234964    incat3
+&space;3: 936      530000   234964    incat4
+total time 1960000 usec, total bytes 939856, 0.479518 bytes/usec
+> aiocat -o outcat -a 1 incat?
+&space;   procid   time     fsize     filename
+&space;0: 942      350000   234964    incat1
+&space;1: 944      370000   234964    incat2
+&space;2: 949      370000   234964    incat3
+&space;3: 946      370000   234964    incat4
+total time 1460000 usec, total bytes 939856, 0.643737 bytes/usec
+> aiocat -o outcat -a 2 incat?
+&space;   procid   time     fsize     filename
+&space;0: 962      90000    234964    incat1
+&space;1: 955      80000    234964    incat2
+&space;2: 967      90000    234964    incat3
+&space;3: 960      90000    234964    incat4
+total time 350000 usec, total bytes 939856, 2.6853 bytes/usec
+> aiocat -o outcat -a 3 incat?
+&space;   procid   time     fsize     filename
+&space;0: 909      50000    234964    incat1
+&space;1: 969      50000    234964    incat2
+&space;2: 966      60000    234964    incat3
+&space;3: 972      60000    234964    incat4
+total time 220000 usec, total bytes 939856, 4.27207 bytes/usec
+</CODE>
+<PARAGRAPH>&nbsp;</PARAGRAPH>
+<CODE><CAPTION LBL="8-4"><PREFIX>Example 8-4 </PREFIX>Source Code of aiocat</CAPTION>/* ============================================================================
+||&nbsp;&nbsp;aiocat.c&nbsp;:&nbsp;This&nbsp;highly&nbsp;artificial&nbsp;example&nbsp;demonstrates&nbsp;asynchronous&nbsp;I/O.&nbsp;
+||
+||&nbsp;The&nbsp;command&nbsp;syntax&nbsp;is:
+||&nbsp;&nbsp;aiocat&nbsp;[&nbsp;-o&nbsp;outfile&nbsp;]&nbsp;[-a&nbsp;{0|1|2|3}&nbsp;]&nbsp;infilename...
+||
+||&nbsp;The&nbsp;output&nbsp;file&nbsp;is&nbsp;given&nbsp;by&nbsp;-o,&nbsp;with&nbsp;$TMPDIR/aiocat.out&nbsp;by&nbsp;default.
+||&nbsp;The&nbsp;aio&nbsp;method&nbsp;of&nbsp;waiting&nbsp;for&nbsp;completion&nbsp;is&nbsp;given&nbsp;by&nbsp;-a&nbsp;as&nbsp;follows:
+||&nbsp;&nbsp;-a&nbsp;0&nbsp;poll&nbsp;for&nbsp;completion&nbsp;with&nbsp;aio_error()&nbsp;(default)
+||&nbsp;&nbsp;-a&nbsp;1&nbsp;wait&nbsp;for&nbsp;completion&nbsp;with&nbsp;aio_suspend()
+||&nbsp;&nbsp;-a&nbsp;2&nbsp;wait&nbsp;on&nbsp;a&nbsp;semaphore&nbsp;posted&nbsp;from&nbsp;a&nbsp;signal&nbsp;handler
+||&nbsp;&nbsp;-a&nbsp;3&nbsp;wait&nbsp;on&nbsp;a&nbsp;semaphore&nbsp;posted&nbsp;from&nbsp;a&nbsp;callback&nbsp;routine
+||
+||&nbsp;Up&nbsp;to&nbsp;MAX_INFILES&nbsp;input&nbsp;files&nbsp;may&nbsp;be&nbsp;specified.&nbsp;Each&nbsp;input&nbsp;file&nbsp;is
+||&nbsp;read&nbsp;in&nbsp;BLOCKSIZE&nbsp;units.&nbsp;The&nbsp;output&nbsp;file&nbsp;contains&nbsp;the&nbsp;data&nbsp;from
+||&nbsp;the&nbsp;input&nbsp;files&nbsp;in&nbsp;the&nbsp;order&nbsp;they&nbsp;were&nbsp;specified.&nbsp;Thus&nbsp;the
+||&nbsp;output&nbsp;should&nbsp;be&nbsp;the&nbsp;same&nbsp;as&nbsp;"cat&nbsp;infilename...&nbsp;>outfile".
+||
+||&nbsp;When&nbsp;DO_SPROCS&nbsp;is&nbsp;compiled&nbsp;true,&nbsp;all&nbsp;I/O&nbsp;is&nbsp;done&nbsp;asynchronously
+||&nbsp;and&nbsp;concurrently&nbsp;using&nbsp;one&nbsp;sproc'd&nbsp;process&nbsp;per&nbsp;file.&nbsp;&nbsp;Thus&nbsp;in&nbsp;a
+||&nbsp;multiprocessor&nbsp;concurrent&nbsp;input&nbsp;can&nbsp;be&nbsp;done.
+============================================================================&nbsp;*/
+#define&nbsp;_SGI_MP_SOURCE&nbsp;&nbsp;/*&nbsp;see&nbsp;the&nbsp;"Caveats"&nbsp;section&nbsp;of&nbsp;sproc(2)&nbsp;*/
+#include&nbsp;&lt;sys/time.h>&nbsp;&nbsp;&nbsp;/*&nbsp;for&nbsp;clock()&nbsp;*/
+#include&nbsp;&lt;errno.h>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;for&nbsp;perror()&nbsp;*/
+#include&nbsp;&lt;stdio.h>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;for&nbsp;printf()&nbsp;*/
+#include&nbsp;&lt;stdlib.h>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;for&nbsp;getenv(),&nbsp;malloc(3c)&nbsp;*/
+#include&nbsp;&lt;ulocks.h>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;usinit()&nbsp;&amp;&nbsp;friends&nbsp;*/
+#include&nbsp;&lt;bstring.h>&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;for&nbsp;bzero()&nbsp;*/
+#include&nbsp;&lt;sys/resource.h>&nbsp;/*&nbsp;for&nbsp;prctl,&nbsp;get/setrlimit()&nbsp;*/
+#include&nbsp;&lt;sys/prctl.h>&nbsp;&nbsp;/*&nbsp;for&nbsp;prctl()&nbsp;*/
+#include&nbsp;&lt;sys/types.h>&nbsp;&nbsp;/*&nbsp;required&nbsp;by&nbsp;lseek(),&nbsp;prctl&nbsp;*/
+#include&nbsp;&lt;unistd.h>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;ditto&nbsp;*/
+#include&nbsp;&lt;sys/types.h>&nbsp;&nbsp;/*&nbsp;wanted&nbsp;by&nbsp;sproc()&nbsp;*/
+#include&nbsp;&lt;sys/prctl.h>&nbsp;&nbsp;/*&nbsp;ditto&nbsp;*/
+#include&nbsp;&lt;signal.h>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;for&nbsp;signals&nbsp;-&nbsp;gets&nbsp;sys/signal&nbsp;and&nbsp;sys/siginfo&nbsp;*/
+#include&nbsp;&lt;aio.h>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;async&nbsp;I/O&nbsp;*/
+#define&nbsp;BLOCKSIZE&nbsp;2048&nbsp;&nbsp;/*&nbsp;input&nbsp;units&nbsp;--&nbsp;play&nbsp;with&nbsp;this&nbsp;number&nbsp;*/
+#define&nbsp;MAX_INFILES&nbsp;10&nbsp;&nbsp;/*&nbsp;max&nbsp;sprocs:&nbsp;anything&nbsp;from&nbsp;4&nbsp;to&nbsp;20&nbsp;or&nbsp;so&nbsp;*/
+#define&nbsp;DO_SPROCS&nbsp;1&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;set&nbsp;0&nbsp;to&nbsp;do&nbsp;all&nbsp;I/O&nbsp;in&nbsp;a&nbsp;single&nbsp;process&nbsp;*/
+#define&nbsp;QUITIFNULL(PTR,MSG)&nbsp;if&nbsp;(NULL==PTR)&nbsp;{perror(MSG);return(errno);}
+#define&nbsp;QUITIFMONE(INT,MSG)&nbsp;if&nbsp;(-1==INT)&nbsp;{perror(MSG);return(errno);}
+/*****************************************************************************
+||&nbsp;The&nbsp;following&nbsp;structure&nbsp;contains&nbsp;the&nbsp;info&nbsp;needed&nbsp;by&nbsp;one&nbsp;child&nbsp;proc.
+||&nbsp;The&nbsp;main&nbsp;program&nbsp;builds&nbsp;an&nbsp;array&nbsp;of&nbsp;MAX_INFILES&nbsp;of&nbsp;these.
+||&nbsp;The&nbsp;reason&nbsp;for&nbsp;storing&nbsp;the&nbsp;actual&nbsp;filename&nbsp;here&nbsp;(not&nbsp;a&nbsp;pointer)&nbsp;is
+||&nbsp;to&nbsp;force&nbsp;the&nbsp;struct&nbsp;to&nbsp;>128&nbsp;bytes.&nbsp;&nbsp;Then,&nbsp;when&nbsp;the&nbsp;procs&nbsp;run&nbsp;in&nbsp;
+||&nbsp;different&nbsp;CPUs&nbsp;on&nbsp;a&nbsp;CHALLENGE,&nbsp;the&nbsp;info&nbsp;structs&nbsp;will&nbsp;be&nbsp;in&nbsp;different
+||&nbsp;cache&nbsp;lines,&nbsp;and&nbsp;a&nbsp;store&nbsp;by&nbsp;one&nbsp;proc&nbsp;will&nbsp;not&nbsp;invalidate&nbsp;a&nbsp;cache&nbsp;line
+||&nbsp;for&nbsp;its&nbsp;neighbor&nbsp;proc.
+*/
+typedef&nbsp;struct&nbsp;child
+{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;read-only&nbsp;to&nbsp;child&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;char&nbsp;fname[100];&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;input&nbsp;filename&nbsp;from&nbsp;argv[n]&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;fd;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;FD&nbsp;for&nbsp;this&nbsp;file&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;void*&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;buffer;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;buffer&nbsp;for&nbsp;this&nbsp;file&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;procid;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;process&nbsp;ID&nbsp;of&nbsp;child&nbsp;process&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;off_t&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;fsize;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;size&nbsp;of&nbsp;this&nbsp;input&nbsp;file&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;read-write&nbsp;to&nbsp;child&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;usema_t*&nbsp;&nbsp;&nbsp;&nbsp;sema;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;semaphore&nbsp;used&nbsp;by&nbsp;methods&nbsp;2&nbsp;&amp;&nbsp;3&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;off_t&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;outbase;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;starting&nbsp;offset&nbsp;in&nbsp;output&nbsp;file&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;off_t&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;inbase;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;current&nbsp;offset&nbsp;in&nbsp;input&nbsp;file&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;clock_t&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;etime;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;sum&nbsp;of&nbsp;utime/stime&nbsp;to&nbsp;read&nbsp;file&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;aiocb_t&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;acb;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;aiocb&nbsp;used&nbsp;for&nbsp;reading&nbsp;and&nbsp;writing&nbsp;*/
+}&nbsp;child_t;
+/******************************************************************************
+||&nbsp;Globals,&nbsp;accessible&nbsp;to&nbsp;all&nbsp;processes
+*/
+char*&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ofName&nbsp;=&nbsp;NULL;&nbsp;&nbsp;/*&nbsp;output&nbsp;file&nbsp;name&nbsp;string&nbsp;*/
+int&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;outFD;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;output&nbsp;file&nbsp;descriptor&nbsp;*/
+usptr_t*&nbsp;&nbsp;&nbsp;&nbsp;arena;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;arena&nbsp;where&nbsp;everything&nbsp;is&nbsp;built&nbsp;*/
+barrier_t*&nbsp;&nbsp;convene;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;barrier&nbsp;used&nbsp;to&nbsp;sync&nbsp;up&nbsp;*/
+int&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;nprocs&nbsp;=&nbsp;1;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;1&nbsp;+&nbsp;number&nbsp;of&nbsp;child&nbsp;procs&nbsp;*/
+child_t*&nbsp;&nbsp;&nbsp;&nbsp;array;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;array&nbsp;of&nbsp;child_t&nbsp;structs&nbsp;in&nbsp;arena&nbsp;*/
+int&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;errors&nbsp;=&nbsp;0;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;always&nbsp;incremented&nbsp;on&nbsp;an&nbsp;error&nbsp;*/
+/******************************************************************************
+||&nbsp;forward&nbsp;declaration&nbsp;of&nbsp;the&nbsp;child&nbsp;process&nbsp;functions
+*/
+void&nbsp;inProc0(void&nbsp;*arg,&nbsp;size_t&nbsp;stk);&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;polls&nbsp;with&nbsp;aio_error()&nbsp;*/
+void&nbsp;inProc1(void&nbsp;*arg,&nbsp;size_t&nbsp;stk);&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;uses&nbsp;aio_suspend()&nbsp;*/
+void&nbsp;inProc2(void&nbsp;*arg,&nbsp;size_t&nbsp;stk);&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;uses&nbsp;a&nbsp;signal&nbsp;and&nbsp;semaphore&nbsp;*/
+void&nbsp;inProc3(void&nbsp;*arg,&nbsp;size_t&nbsp;stk);&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;uses&nbsp;a&nbsp;callback&nbsp;and&nbsp;semaphore&nbsp;*/
+/******************************************************************************
+//&nbsp;The&nbsp;main()
+*/
+int&nbsp;main(int&nbsp;argc,&nbsp;char&nbsp;**argv)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;char*&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;tmpdir;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;->name&nbsp;string&nbsp;of&nbsp;temp&nbsp;dir&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;nfiles;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;how&nbsp;many&nbsp;input&nbsp;files&nbsp;on&nbsp;cmd&nbsp;line&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;argno;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;loop&nbsp;counter&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;child_t*&nbsp;&nbsp;&nbsp;&nbsp;pc;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;->child_t&nbsp;of&nbsp;current&nbsp;file&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;void&nbsp;(*method)(void&nbsp;*,size_t)&nbsp;=&nbsp;inProc0;&nbsp;/*&nbsp;->chosen&nbsp;input&nbsp;method&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;char&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;arenaPath[128];&nbsp;/*&nbsp;build&nbsp;area&nbsp;for&nbsp;arena&nbsp;pathname&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;char&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;outPath[128];&nbsp;&nbsp;&nbsp;/*&nbsp;build&nbsp;area&nbsp;for&nbsp;output&nbsp;pathname&nbsp;*/&nbsp;&nbsp;&nbsp;&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Ensure&nbsp;the&nbsp;name&nbsp;of&nbsp;a&nbsp;temporary&nbsp;directory.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;tmpdir&nbsp;=&nbsp;getenv("TMPDIR");
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!tmpdir)&nbsp;tmpdir&nbsp;=&nbsp;"/var/tmp";
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Build&nbsp;a&nbsp;name&nbsp;for&nbsp;the&nbsp;arena&nbsp;file.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;strcpy(arenaPath,tmpdir);
+&nbsp;&nbsp;&nbsp;&nbsp;strcat(arenaPath,"/aiocat.wrk");
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Create&nbsp;the&nbsp;arena.&nbsp;First,&nbsp;call&nbsp;usconfig()&nbsp;to&nbsp;establish&nbsp;the
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;minimum&nbsp;size&nbsp;(twice&nbsp;the&nbsp;buffer&nbsp;size&nbsp;per&nbsp;file,&nbsp;to&nbsp;allow&nbsp;for&nbsp;misc&nbsp;usage)
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;and&nbsp;the&nbsp;(maximum)&nbsp;number&nbsp;of&nbsp;processes&nbsp;that&nbsp;may&nbsp;later&nbsp;use
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;this&nbsp;arena.&nbsp;&nbsp;For&nbsp;this&nbsp;program&nbsp;that&nbsp;is&nbsp;MAX_INFILES+10,&nbsp;allowing
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;for&nbsp;our&nbsp;sprocs&nbsp;plus&nbsp;those&nbsp;done&nbsp;by&nbsp;aio_sgi_init().
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;These&nbsp;values&nbsp;apply&nbsp;to&nbsp;any&nbsp;arenas&nbsp;made&nbsp;subsequently,&nbsp;until&nbsp;changed.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ptrdiff_t&nbsp;ret;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ret&nbsp;=&nbsp;usconfig(CONF_INITSIZE,2*BLOCKSIZE*MAX_INFILES);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;QUITIFMONE(ret,"usconfig&nbsp;size")
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ret&nbsp;=&nbsp;usconfig(CONF_INITUSERS,MAX_INFILES+10);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;QUITIFMONE(ret,"usconfig&nbsp;users")
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;arena&nbsp;=&nbsp;usinit(arenaPath);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;QUITIFNULL(arena,"usinit")
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Allocate&nbsp;the&nbsp;barrier.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;convene&nbsp;=&nbsp;new_barrier(arena);
+&nbsp;&nbsp;&nbsp;&nbsp;QUITIFNULL(convene,"new_barrier")
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Allocate&nbsp;the&nbsp;array&nbsp;of&nbsp;child&nbsp;info&nbsp;structs&nbsp;and&nbsp;zero&nbsp;it.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;array&nbsp;=&nbsp;(child_t*)usmalloc(MAX_INFILES*sizeof(child_t),arena);
+&nbsp;&nbsp;&nbsp;&nbsp;QUITIFNULL(array,"usmalloc")
+&nbsp;&nbsp;&nbsp;&nbsp;bzero((void&nbsp;*)array,MAX_INFILES*sizeof(child_t));
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Loop&nbsp;over&nbsp;the&nbsp;arguments,&nbsp;setting&nbsp;up&nbsp;child&nbsp;structs&nbsp;and
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;counting&nbsp;input&nbsp;files.&nbsp;&nbsp;Quit&nbsp;if&nbsp;a&nbsp;file&nbsp;won't&nbsp;open&nbsp;or&nbsp;seek,
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;or&nbsp;if&nbsp;we&nbsp;can't&nbsp;get&nbsp;a&nbsp;buffer&nbsp;or&nbsp;semaphore.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;(nfiles=0,&nbsp;argno=1;&nbsp;argno&nbsp;&lt;&nbsp;argc;&nbsp;++argno&nbsp;)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(0&nbsp;==&nbsp;strcmp(argv[argno],"-o"))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{&nbsp;/*&nbsp;is&nbsp;the&nbsp;-o&nbsp;argument&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;++argno;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(argno&nbsp;&lt;&nbsp;argc)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ofName&nbsp;=&nbsp;argv[argno];
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;fprintf(stderr,"-o&nbsp;must&nbsp;have&nbsp;a&nbsp;filename&nbsp;after\n");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;-1;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;else&nbsp;if&nbsp;(0&nbsp;==&nbsp;strcmp(argv[argno],"-a"))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{&nbsp;/*&nbsp;is&nbsp;the&nbsp;-a&nbsp;argument&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;char&nbsp;c&nbsp;=&nbsp;argv[++argno][0];
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;switch(c)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'0'&nbsp;:&nbsp;method&nbsp;=&nbsp;inProc0;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'1'&nbsp;:&nbsp;method&nbsp;=&nbsp;inProc1;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'2'&nbsp;:&nbsp;method&nbsp;=&nbsp;inProc2;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'3'&nbsp;:&nbsp;method&nbsp;=&nbsp;inProc3;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;default:
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;fprintf(stderr,"unknown&nbsp;method&nbsp;-a&nbsp;%c\n",c);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;-1;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;else&nbsp;if&nbsp;('-'&nbsp;==&nbsp;argv[argno][0])
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{&nbsp;/*&nbsp;is&nbsp;unknown&nbsp;-option&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;fprintf(stderr,"aiocat&nbsp;[-o&nbsp;outfile]&nbsp;[-a&nbsp;0|1|2|3]&nbsp;infiles...\n");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;-1;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;else&nbsp;&nbsp;&nbsp;&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{&nbsp;/*&nbsp;neither&nbsp;-o&nbsp;nor&nbsp;-a,&nbsp;assume&nbsp;input&nbsp;file&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(nfiles&nbsp;&lt;&nbsp;MAX_INFILES)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;save&nbsp;the&nbsp;filename
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pc&nbsp;=&nbsp;&amp;array[nfiles];
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;strcpy(pc->fname,argv[argno]);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;allocate&nbsp;a&nbsp;buffer&nbsp;and&nbsp;a&nbsp;semaphore.&nbsp;&nbsp;Not&nbsp;all
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;child&nbsp;procs&nbsp;use&nbsp;the&nbsp;semaphore&nbsp;but&nbsp;so&nbsp;what?
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pc->buffer&nbsp;=&nbsp;usmalloc(BLOCKSIZE,arena);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;QUITIFNULL(pc->buffer,"usmalloc(buffer)")
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pc->sema&nbsp;=&nbsp;usnewsema(arena,0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;QUITIFNULL(pc->sema,"usnewsema")
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;open&nbsp;the&nbsp;file
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pc->fd&nbsp;=&nbsp;open(pc->fname,O_RDONLY);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;QUITIFMONE(pc->fd,"open")
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;get&nbsp;the&nbsp;size&nbsp;of&nbsp;the&nbsp;file.&nbsp;This&nbsp;leaves&nbsp;the&nbsp;file
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;positioned&nbsp;at-end,&nbsp;but&nbsp;there&nbsp;is&nbsp;no&nbsp;need&nbsp;to&nbsp;reposition&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;because&nbsp;all&nbsp;aio_read&nbsp;calls&nbsp;have&nbsp;an&nbsp;implied&nbsp;lseek.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;NOTE:&nbsp;there&nbsp;is&nbsp;no&nbsp;check&nbsp;for&nbsp;zero-length&nbsp;file;&nbsp;that
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;is&nbsp;a&nbsp;valid&nbsp;(and&nbsp;interesting)&nbsp;test&nbsp;case.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pc->fsize&nbsp;=&nbsp;lseek(pc->fd,0,SEEK_END);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;QUITIFMONE(pc->fsize,"lseek")
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;set&nbsp;the&nbsp;starting&nbsp;base&nbsp;address&nbsp;of&nbsp;this&nbsp;input&nbsp;file
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;in&nbsp;the&nbsp;output&nbsp;file.&nbsp;&nbsp;The&nbsp;first&nbsp;file&nbsp;starts&nbsp;at&nbsp;0.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Each&nbsp;one&nbsp;after&nbsp;starts&nbsp;at&nbsp;prior&nbsp;base&nbsp;+&nbsp;prior&nbsp;size.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(nfiles)&nbsp;/*&nbsp;not&nbsp;first&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pc->outbase&nbsp;=
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;array[nfiles-1].fsize&nbsp;+&nbsp;array[nfiles-1].outbase;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;++nfiles;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;printf("Too&nbsp;many&nbsp;files,&nbsp;%s&nbsp;ignored\n",argv[argno]);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;}&nbsp;/*&nbsp;end&nbsp;for(argc)&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;If&nbsp;there&nbsp;was&nbsp;no&nbsp;-o&nbsp;argument,&nbsp;construct&nbsp;an&nbsp;output&nbsp;file&nbsp;name.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!ofName)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;strcpy(outPath,tmpdir);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;strcat(outPath,"/aiocat.out");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ofName&nbsp;=&nbsp;outPath;
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Open,&nbsp;creating&nbsp;or&nbsp;truncating,&nbsp;the&nbsp;output&nbsp;file.
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Do&nbsp;not&nbsp;use&nbsp;O_APPEND,&nbsp;which&nbsp;would&nbsp;constrain&nbsp;aio&nbsp;to&nbsp;doing
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;operations&nbsp;in&nbsp;sequence.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;outFD&nbsp;=&nbsp;open(ofName,&nbsp;O_WRONLY+O_CREAT+O_TRUNC,0666);
+&nbsp;&nbsp;&nbsp;&nbsp;QUITIFMONE(outFD,"open(output)")
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;If&nbsp;there&nbsp;were&nbsp;no&nbsp;input&nbsp;files,&nbsp;just&nbsp;quit,&nbsp;leaving&nbsp;empty&nbsp;output
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!nfiles)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;0;
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Note&nbsp;the&nbsp;number&nbsp;of&nbsp;processes-to-be,&nbsp;for&nbsp;use&nbsp;in&nbsp;initializing
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;aio&nbsp;and&nbsp;for&nbsp;use&nbsp;by&nbsp;each&nbsp;child&nbsp;in&nbsp;a&nbsp;barrier()&nbsp;call.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;nprocs&nbsp;=&nbsp;1+nfiles;
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Initialize&nbsp;async&nbsp;I/O&nbsp;using&nbsp;aio_sgi_init(),&nbsp;in&nbsp;order&nbsp;to&nbsp;specify
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;a&nbsp;number&nbsp;of&nbsp;locks&nbsp;at&nbsp;least&nbsp;equal&nbsp;to&nbsp;the&nbsp;number&nbsp;of&nbsp;child&nbsp;procs
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;and&nbsp;in&nbsp;order&nbsp;to&nbsp;specify&nbsp;extra&nbsp;sproc&nbsp;users.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;aioinit_t&nbsp;ainit&nbsp;=&nbsp;{0};&nbsp;/*&nbsp;all&nbsp;fields&nbsp;initially&nbsp;zero&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Go&nbsp;with&nbsp;the&nbsp;default&nbsp;5&nbsp;for&nbsp;the&nbsp;number&nbsp;of&nbsp;aio-created&nbsp;procs,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;as&nbsp;we&nbsp;have&nbsp;no&nbsp;way&nbsp;of&nbsp;knowing&nbsp;the&nbsp;number&nbsp;of&nbsp;unique&nbsp;devices.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+#define&nbsp;AIO_PROCS&nbsp;5
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ainit.aio_threads&nbsp;=&nbsp;AIO_PROCS;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Set&nbsp;the&nbsp;number&nbsp;of&nbsp;locks&nbsp;aio&nbsp;needs&nbsp;to&nbsp;the&nbsp;number&nbsp;of&nbsp;procs
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;we&nbsp;will&nbsp;start,&nbsp;minimum&nbsp;3.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ainit.aio_locks&nbsp;=&nbsp;(nprocs&nbsp;>&nbsp;2)?nprocs:3;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Warn&nbsp;aio&nbsp;of&nbsp;the&nbsp;number&nbsp;of&nbsp;user&nbsp;procs&nbsp;that&nbsp;will&nbsp;be
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;using&nbsp;its&nbsp;arena.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ainit.aio_numusers&nbsp;=&nbsp;nprocs;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;aio_sgi_init(&amp;ainit);
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Process&nbsp;each&nbsp;input&nbsp;file,&nbsp;either&nbsp;in&nbsp;a&nbsp;child&nbsp;process&nbsp;or&nbsp;in
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;a&nbsp;subroutine&nbsp;call,&nbsp;as&nbsp;specified&nbsp;by&nbsp;the&nbsp;DO_SPROCS&nbsp;variable.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;(argno&nbsp;=&nbsp;0;&nbsp;argno&nbsp;&lt;&nbsp;nfiles;&nbsp;++argno)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pc&nbsp;=&nbsp;&amp;array[argno];
+#if&nbsp;DO_SPROCS
+#define&nbsp;CHILD_STACK&nbsp;64*1024
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;For&nbsp;each&nbsp;input&nbsp;file,&nbsp;start&nbsp;a&nbsp;child&nbsp;process&nbsp;as&nbsp;an&nbsp;instance
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;of&nbsp;the&nbsp;selected&nbsp;method&nbsp;(-a&nbsp;argument).
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;If&nbsp;an&nbsp;error&nbsp;occurs,&nbsp;quit.&nbsp;That&nbsp;will&nbsp;send&nbsp;a&nbsp;SIGHUP&nbsp;to&nbsp;any
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;already-started&nbsp;child,&nbsp;which&nbsp;will&nbsp;kill&nbsp;it,&nbsp;too.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pc->procid&nbsp;=&nbsp;sprocsp(method&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;function&nbsp;to&nbsp;start&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;,PR_SALL&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;share&nbsp;all,&nbsp;keep&nbsp;FDs&nbsp;sync'd&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;,(void&nbsp;*)pc&nbsp;/*&nbsp;argument&nbsp;to&nbsp;child&nbsp;func&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;,NULL&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;absolute&nbsp;stack&nbsp;seg&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;,CHILD_STACK);&nbsp;&nbsp;/*&nbsp;max&nbsp;stack&nbsp;seg&nbsp;growth&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;QUITIFMONE(pc->procid,"sproc")
+#else
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;For&nbsp;each&nbsp;input&nbsp;file,&nbsp;call&nbsp;the&nbsp;selected&nbsp;(-a)&nbsp;method&nbsp;as&nbsp;a
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;subroutine&nbsp;to&nbsp;copy&nbsp;its&nbsp;file.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;fprintf(stderr,"file&nbsp;%s...",pc->fname);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;method((void*)pc,0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(errors)&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;fprintf(stderr,"done\n");
+#endif
+&nbsp;&nbsp;&nbsp;&nbsp;}
+#if&nbsp;DO_SPROCS
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Wait&nbsp;for&nbsp;all&nbsp;the&nbsp;kiddies&nbsp;to&nbsp;get&nbsp;themselves&nbsp;initialized.
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;When&nbsp;all&nbsp;have&nbsp;started&nbsp;and&nbsp;reached&nbsp;barrier(),&nbsp;all&nbsp;continue.
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;If&nbsp;any&nbsp;errors&nbsp;occurred&nbsp;in&nbsp;initialization,&nbsp;quit.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;barrier(convene,nprocs);
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Child&nbsp;processes&nbsp;are&nbsp;executing&nbsp;now.&nbsp;Reunite&nbsp;the&nbsp;family&nbsp;round&nbsp;the
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;old&nbsp;hearth&nbsp;one&nbsp;last&nbsp;time,&nbsp;when&nbsp;their&nbsp;processing&nbsp;is&nbsp;complete.
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Each&nbsp;child&nbsp;ensures&nbsp;that&nbsp;all&nbsp;its&nbsp;output&nbsp;is&nbsp;complete&nbsp;before&nbsp;it
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;invokes&nbsp;barrier().
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;barrier(convene,nprocs);
+#endif
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Close&nbsp;the&nbsp;output&nbsp;file&nbsp;and&nbsp;print&nbsp;some&nbsp;statistics.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;close(outFD);
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;clock_t&nbsp;timesum;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;long&nbsp;&nbsp;&nbsp;&nbsp;bytesum;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;double&nbsp;&nbsp;bperus;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;printf("&nbsp;&nbsp;&nbsp;&nbsp;procid&nbsp;&nbsp;&nbsp;time&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;fsize&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;filename\n");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for(argno&nbsp;=&nbsp;0,&nbsp;timesum&nbsp;=&nbsp;bytesum&nbsp;=&nbsp;0&nbsp;;&nbsp;argno&nbsp;&lt;&nbsp;nfiles&nbsp;;&nbsp;++argno)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pc&nbsp;=&nbsp;&amp;array[argno];
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;timesum&nbsp;+=&nbsp;pc->etime;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;bytesum&nbsp;+=&nbsp;pc->fsize;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;printf("%2d:&nbsp;%-8d&nbsp;%-8d&nbsp;%-8d&nbsp;&nbsp;%s\n"
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;,argno,pc->procid,pc->etime,pc->fsize,pc->fname);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;bperus&nbsp;=&nbsp;((double)bytesum)/((double)timesum);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;printf("total&nbsp;time&nbsp;%d&nbsp;usec,&nbsp;total&nbsp;bytes&nbsp;%d,&nbsp;%g&nbsp;bytes/usec\n"
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;,timesum&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;,&nbsp;bytesum&nbsp;,&nbsp;bperus);
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Unlink&nbsp;the&nbsp;arena&nbsp;file,&nbsp;so&nbsp;it&nbsp;won't&nbsp;exist&nbsp;when&nbsp;this&nbsp;progam&nbsp;runs
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;again.&nbsp;If&nbsp;it&nbsp;did&nbsp;exist,&nbsp;it&nbsp;would&nbsp;be&nbsp;used&nbsp;as&nbsp;the&nbsp;initial&nbsp;state&nbsp;of
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;the&nbsp;arena,&nbsp;which&nbsp;might&nbsp;or&nbsp;might&nbsp;not&nbsp;have&nbsp;any&nbsp;effect.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;unlink(arenaPath);
+&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;0;
+}
+/******************************************************************************
+||&nbsp;inProc0()&nbsp;alternates&nbsp;polling&nbsp;with&nbsp;aio_error()&nbsp;with&nbsp;sginap().&nbsp;Under
+||&nbsp;the&nbsp;Frame&nbsp;Scheduler,&nbsp;it&nbsp;would&nbsp;use&nbsp;frs_yield()&nbsp;instead&nbsp;of&nbsp;sginap().
+||&nbsp;The&nbsp;general&nbsp;pattern&nbsp;of&nbsp;this&nbsp;function&nbsp;is&nbsp;repeated&nbsp;in&nbsp;the&nbsp;other&nbsp;three;
+||&nbsp;only&nbsp;the&nbsp;wait&nbsp;method&nbsp;varies&nbsp;from&nbsp;function&nbsp;to&nbsp;function.
+*/
+int&nbsp;inWait0(child_t&nbsp;*pch)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;ret;
+&nbsp;&nbsp;&nbsp;&nbsp;aiocb_t*&nbsp;pab&nbsp;=&nbsp;&amp;pch->acb;
+&nbsp;&nbsp;&nbsp;&nbsp;while&nbsp;(EINPROGRESS&nbsp;==&nbsp;(ret&nbsp;=&nbsp;aio_error(pab)))
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;sginap(0);
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;ret;
+}
+void&nbsp;inProc0(void&nbsp;*arg,&nbsp;size_t&nbsp;stk)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;child_t&nbsp;*pch&nbsp;=&nbsp;arg;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;starting&nbsp;arg&nbsp;is&nbsp;->child_t&nbsp;for&nbsp;my&nbsp;file&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;aiocb_t&nbsp;*pab&nbsp;=&nbsp;&amp;pch->acb;&nbsp;&nbsp;&nbsp;/*&nbsp;base&nbsp;address&nbsp;of&nbsp;the&nbsp;aiocb_t&nbsp;in&nbsp;child_t&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;ret;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;as&nbsp;long&nbsp;as&nbsp;this&nbsp;is&nbsp;0,&nbsp;all&nbsp;is&nbsp;ok&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;bytes;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;#bytes&nbsp;read&nbsp;on&nbsp;each&nbsp;input&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Initialize&nbsp;--&nbsp;no&nbsp;signals&nbsp;or&nbsp;callbacks&nbsp;needed.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_sigevent.sigev_notify&nbsp;=&nbsp;SIGEV_NONE;
+&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_buf&nbsp;=&nbsp;pch->buffer;&nbsp;/*&nbsp;always&nbsp;the&nbsp;same&nbsp;*/
+#if&nbsp;DO_SPROCS
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Wait&nbsp;for&nbsp;the&nbsp;starting&nbsp;gun...
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;barrier(convene,nprocs);
+#endif
+&nbsp;&nbsp;&nbsp;&nbsp;pch->etime&nbsp;=&nbsp;clock();
+&nbsp;&nbsp;&nbsp;&nbsp;do&nbsp;/*&nbsp;read&nbsp;and&nbsp;write,&nbsp;read&nbsp;and&nbsp;write...&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Set&nbsp;up&nbsp;the&nbsp;aiocb&nbsp;for&nbsp;a&nbsp;read,&nbsp;queue&nbsp;it,&nbsp;and&nbsp;wait&nbsp;for&nbsp;it.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_fildes&nbsp;=&nbsp;pch->fd;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_offset&nbsp;=&nbsp;pch->inbase;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_nbytes&nbsp;=&nbsp;BLOCKSIZE;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(ret&nbsp;=&nbsp;aio_read(pab))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;&nbsp;&nbsp;/*&nbsp;unable&nbsp;to&nbsp;schedule&nbsp;a&nbsp;read&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ret&nbsp;=&nbsp;inWait0(pch);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(ret)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;&nbsp;&nbsp;/*&nbsp;nonzero&nbsp;read&nbsp;completion&nbsp;status&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;get&nbsp;the&nbsp;result&nbsp;of&nbsp;the&nbsp;read()&nbsp;call,&nbsp;the&nbsp;count&nbsp;of&nbsp;bytes&nbsp;read.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Since&nbsp;aio_error&nbsp;returned&nbsp;0,&nbsp;the&nbsp;count&nbsp;is&nbsp;nonnegative.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;It&nbsp;could&nbsp;be&nbsp;0,&nbsp;or&nbsp;less&nbsp;than&nbsp;BLOCKSIZE,&nbsp;indicating&nbsp;EOF.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;bytes&nbsp;=&nbsp;aio_return(pab);&nbsp;/*&nbsp;actual&nbsp;read&nbsp;result&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!bytes)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;&nbsp;&nbsp;/*&nbsp;no&nbsp;need&nbsp;to&nbsp;write&nbsp;a&nbsp;last&nbsp;block&nbsp;of&nbsp;0&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pch->inbase&nbsp;+=&nbsp;bytes;&nbsp;&nbsp;&nbsp;/*&nbsp;where&nbsp;to&nbsp;read&nbsp;next&nbsp;time&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Set&nbsp;up&nbsp;the&nbsp;aiocb&nbsp;for&nbsp;a&nbsp;write,&nbsp;queue&nbsp;it,&nbsp;and&nbsp;wait&nbsp;for&nbsp;it.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_fildes&nbsp;=&nbsp;outFD;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_nbytes&nbsp;=&nbsp;bytes;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_offset&nbsp;=&nbsp;pch->outbase;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(ret&nbsp;=&nbsp;aio_write(pab))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ret&nbsp;=&nbsp;inWait0(pch);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(ret)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pch->outbase&nbsp;+=&nbsp;bytes;&nbsp;&nbsp;/*&nbsp;where&nbsp;to&nbsp;write&nbsp;next&nbsp;time&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;}&nbsp;while&nbsp;((!ret)&nbsp;&amp;&amp;&nbsp;(bytes&nbsp;==&nbsp;BLOCKSIZE));
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;The&nbsp;loop&nbsp;is&nbsp;complete.&nbsp;&nbsp;If&nbsp;no&nbsp;errors&nbsp;so&nbsp;far,&nbsp;use&nbsp;aio_fsync()
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;to&nbsp;ensure&nbsp;that&nbsp;output&nbsp;is&nbsp;complete.&nbsp;&nbsp;This&nbsp;requires&nbsp;waiting
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;yet&nbsp;again.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!ret)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!(ret&nbsp;=&nbsp;aio_fsync(O_SYNC,pab)))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ret&nbsp;=&nbsp;inWait0(pch);
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Flag&nbsp;any&nbsp;errors&nbsp;for&nbsp;the&nbsp;parent&nbsp;proc.&nbsp;If&nbsp;none,&nbsp;count&nbsp;elapsed&nbsp;time.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(ret)&nbsp;++errors;
+&nbsp;&nbsp;&nbsp;&nbsp;else&nbsp;pch->etime&nbsp;=&nbsp;(clock()&nbsp;-&nbsp;pch->etime);
+#if&nbsp;DO_SPROCS
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Rendezvous&nbsp;with&nbsp;the&nbsp;rest&nbsp;of&nbsp;the&nbsp;family,&nbsp;then&nbsp;quit.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;barrier(convene,nprocs);
+#endif
+&nbsp;&nbsp;&nbsp;&nbsp;return;
+}&nbsp;/*&nbsp;end&nbsp;inProc1&nbsp;*/
+/******************************************************************************
+||&nbsp;inProc1&nbsp;uses&nbsp;aio_suspend()&nbsp;to&nbsp;await&nbsp;the&nbsp;completion&nbsp;of&nbsp;each&nbsp;operation.
+||&nbsp;Otherwise&nbsp;it&nbsp;is&nbsp;the&nbsp;same&nbsp;as&nbsp;inProc0,&nbsp;above.
+*/
+&nbsp;
+int&nbsp;inWait1(child_t&nbsp;*pch)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;ret;
+&nbsp;&nbsp;&nbsp;&nbsp;aiocb_t*&nbsp;susplist[1];&nbsp;/*&nbsp;list&nbsp;of&nbsp;1&nbsp;aiocb&nbsp;for&nbsp;aio_suspend()&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;susplist[0]&nbsp;=&nbsp;&amp;pch->acb;
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Note:&nbsp;aio.h&nbsp;declares&nbsp;the&nbsp;1st&nbsp;argument&nbsp;of&nbsp;aio_suspend()&nbsp;as&nbsp;"const."
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;The&nbsp;C&nbsp;compiler&nbsp;requires&nbsp;the&nbsp;actual-parameter&nbsp;to&nbsp;match&nbsp;in&nbsp;type,
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;so&nbsp;the&nbsp;list&nbsp;we&nbsp;pass&nbsp;must&nbsp;either&nbsp;be&nbsp;declared&nbsp;"const&nbsp;aiocb_t*"&nbsp;or
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;must&nbsp;be&nbsp;cast&nbsp;to&nbsp;that&nbsp;--&nbsp;else&nbsp;cc&nbsp;gives&nbsp;a&nbsp;warning.&nbsp;&nbsp;The&nbsp;cast
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;in&nbsp;the&nbsp;following&nbsp;statement&nbsp;is&nbsp;only&nbsp;to&nbsp;avoid&nbsp;this&nbsp;warning.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;ret&nbsp;=&nbsp;aio_suspend(&nbsp;(const&nbsp;aiocb_t&nbsp;**)&nbsp;susplist,1,NULL);
+&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;ret;
+}
+void&nbsp;inProc1(void&nbsp;*arg,&nbsp;size_t&nbsp;stk)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;child_t&nbsp;*pch&nbsp;=&nbsp;arg;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;starting&nbsp;arg&nbsp;is&nbsp;->child_t&nbsp;for&nbsp;my&nbsp;file&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;aiocb_t&nbsp;*pab&nbsp;=&nbsp;&amp;pch->acb;&nbsp;&nbsp;&nbsp;/*&nbsp;base&nbsp;address&nbsp;of&nbsp;the&nbsp;aiocb_t&nbsp;in&nbsp;child_t&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;ret;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;as&nbsp;long&nbsp;as&nbsp;this&nbsp;is&nbsp;0,&nbsp;all&nbsp;is&nbsp;ok&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;bytes;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;#bytes&nbsp;read&nbsp;on&nbsp;each&nbsp;input&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Initialize&nbsp;--&nbsp;no&nbsp;signals&nbsp;or&nbsp;callbacks&nbsp;needed.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_sigevent.sigev_notify&nbsp;=&nbsp;SIGEV_NONE;
+&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_buf&nbsp;=&nbsp;pch->buffer;&nbsp;/*&nbsp;always&nbsp;the&nbsp;same&nbsp;*/
+#if&nbsp;DO_SPROCS
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Wait&nbsp;for&nbsp;the&nbsp;starting&nbsp;gun...
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;barrier(convene,nprocs);
+#endif
+&nbsp;&nbsp;&nbsp;&nbsp;pch->etime&nbsp;=&nbsp;clock();
+&nbsp;&nbsp;&nbsp;&nbsp;do&nbsp;/*&nbsp;read&nbsp;and&nbsp;write,&nbsp;read&nbsp;and&nbsp;write...&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Set&nbsp;up&nbsp;the&nbsp;aiocb&nbsp;for&nbsp;a&nbsp;read,&nbsp;queue&nbsp;it,&nbsp;and&nbsp;wait&nbsp;for&nbsp;it.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_fildes&nbsp;=&nbsp;pch->fd;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_offset&nbsp;=&nbsp;pch->inbase;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_nbytes&nbsp;=&nbsp;BLOCKSIZE;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(ret&nbsp;=&nbsp;aio_read(pab))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ret&nbsp;=&nbsp;inWait1(pch);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;If&nbsp;the&nbsp;aio_suspend()&nbsp;return&nbsp;is&nbsp;nonzero,&nbsp;it&nbsp;means&nbsp;that&nbsp;the&nbsp;wait
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;did&nbsp;not&nbsp;end&nbsp;for&nbsp;i/o&nbsp;completion&nbsp;but&nbsp;because&nbsp;of&nbsp;a&nbsp;signal.&nbsp;Since&nbsp;we
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;expect&nbsp;no&nbsp;signals&nbsp;here,&nbsp;we&nbsp;take&nbsp;that&nbsp;as&nbsp;an&nbsp;error.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!ret)&nbsp;/*&nbsp;op&nbsp;is&nbsp;complete&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ret&nbsp;=&nbsp;aio_error(pab);&nbsp;&nbsp;/*&nbsp;read()&nbsp;status,&nbsp;should&nbsp;be&nbsp;0&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(ret)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;&nbsp;&nbsp;/*&nbsp;signal,&nbsp;or&nbsp;nonzero&nbsp;read&nbsp;completion&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;get&nbsp;the&nbsp;result&nbsp;of&nbsp;the&nbsp;read()&nbsp;call,&nbsp;the&nbsp;count&nbsp;of&nbsp;bytes&nbsp;read.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Since&nbsp;aio_error&nbsp;returned&nbsp;0,&nbsp;the&nbsp;count&nbsp;is&nbsp;nonnegative.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;It&nbsp;could&nbsp;be&nbsp;0,&nbsp;or&nbsp;less&nbsp;than&nbsp;BLOCKSIZE,&nbsp;indicating&nbsp;EOF.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;bytes&nbsp;=&nbsp;aio_return(pab);&nbsp;/*&nbsp;actual&nbsp;read&nbsp;result&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!bytes)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;&nbsp;&nbsp;/*&nbsp;no&nbsp;need&nbsp;to&nbsp;write&nbsp;a&nbsp;last&nbsp;block&nbsp;of&nbsp;0&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pch->inbase&nbsp;+=&nbsp;bytes;&nbsp;&nbsp;&nbsp;/*&nbsp;where&nbsp;to&nbsp;read&nbsp;next&nbsp;time&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Set&nbsp;up&nbsp;the&nbsp;aiocb&nbsp;for&nbsp;a&nbsp;write,&nbsp;queue&nbsp;it,&nbsp;and&nbsp;wait&nbsp;for&nbsp;it.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_fildes&nbsp;=&nbsp;outFD;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_nbytes&nbsp;=&nbsp;bytes;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_offset&nbsp;=&nbsp;pch->outbase;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(ret&nbsp;=&nbsp;aio_write(pab))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ret&nbsp;=&nbsp;inWait1(pch);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!ret)&nbsp;/*&nbsp;op&nbsp;is&nbsp;complete&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ret&nbsp;=&nbsp;aio_error(pab);&nbsp;&nbsp;/*&nbsp;should&nbsp;be&nbsp;0&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(ret)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pch->outbase&nbsp;+=&nbsp;bytes;&nbsp;&nbsp;/*&nbsp;where&nbsp;to&nbsp;write&nbsp;next&nbsp;time&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;}&nbsp;while&nbsp;((!ret)&nbsp;&amp;&amp;&nbsp;(bytes&nbsp;==&nbsp;BLOCKSIZE));
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;The&nbsp;loop&nbsp;is&nbsp;complete.&nbsp;&nbsp;If&nbsp;no&nbsp;errors&nbsp;so&nbsp;far,&nbsp;use&nbsp;aio_fsync()
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;to&nbsp;ensure&nbsp;that&nbsp;output&nbsp;is&nbsp;complete.&nbsp;&nbsp;This&nbsp;requires&nbsp;waiting
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;yet&nbsp;again.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!ret)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!(ret&nbsp;=&nbsp;aio_fsync(O_SYNC,pab)))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ret&nbsp;=&nbsp;inWait1(pch);
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Flag&nbsp;any&nbsp;errors&nbsp;for&nbsp;the&nbsp;parent&nbsp;proc.&nbsp;If&nbsp;none,&nbsp;count&nbsp;elapsed&nbsp;time.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(ret)&nbsp;++errors;
+&nbsp;&nbsp;&nbsp;&nbsp;else&nbsp;pch->etime&nbsp;=&nbsp;(clock()&nbsp;-&nbsp;pch->etime);
+#if&nbsp;DO_SPROCS
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Rendezvous&nbsp;with&nbsp;the&nbsp;rest&nbsp;of&nbsp;the&nbsp;family,&nbsp;then&nbsp;quit.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;barrier(convene,nprocs);
+#endif
+}&nbsp;/*&nbsp;end&nbsp;inProc0&nbsp;*/
+/******************************************************************************
+||&nbsp;inProc2&nbsp;requests&nbsp;a&nbsp;signal&nbsp;upon&nbsp;completion&nbsp;of&nbsp;an&nbsp;I/O.&nbsp;After&nbsp;starting
+||&nbsp;an&nbsp;operation,&nbsp;it&nbsp;P's&nbsp;a&nbsp;semaphore&nbsp;which&nbsp;is&nbsp;V'd&nbsp;from&nbsp;the&nbsp;signal&nbsp;handler.
+*/
+#define&nbsp;AIO_SIGNUM&nbsp;SIGRTMIN+1&nbsp;/*&nbsp;arbitrary&nbsp;choice&nbsp;of&nbsp;signal&nbsp;number&nbsp;*/
+void&nbsp;sigHandler2(const&nbsp;int&nbsp;signo,&nbsp;const&nbsp;struct&nbsp;siginfo&nbsp;*sif&nbsp;)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;In&nbsp;this&nbsp;minimal&nbsp;signal&nbsp;handler&nbsp;we&nbsp;pick&nbsp;up&nbsp;the&nbsp;address&nbsp;of&nbsp;the
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;child_t&nbsp;info&nbsp;structure&nbsp;--&nbsp;which&nbsp;was&nbsp;put&nbsp;in&nbsp;aio_sigevent.sigev_value
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;field&nbsp;during&nbsp;initialization&nbsp;--&nbsp;and&nbsp;use&nbsp;it&nbsp;to&nbsp;find&nbsp;the&nbsp;semaphore.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;child_t&nbsp;*pch&nbsp;=&nbsp;sif->si_value.sival_ptr&nbsp;;
+&nbsp;&nbsp;&nbsp;&nbsp;usvsema(pch->sema);
+&nbsp;&nbsp;&nbsp;&nbsp;return;&nbsp;/*&nbsp;stop&nbsp;here&nbsp;with&nbsp;dbx&nbsp;to&nbsp;print&nbsp;the&nbsp;above&nbsp;address&nbsp;*/
+}
+int&nbsp;inWait2(child_t&nbsp;*pch)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Wait&nbsp;for&nbsp;any&nbsp;signal&nbsp;handler&nbsp;to&nbsp;post&nbsp;the&nbsp;semaphore.&nbsp;&nbsp;The&nbsp;signal
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;handler&nbsp;could&nbsp;have&nbsp;been&nbsp;entered&nbsp;before&nbsp;this&nbsp;function&nbsp;is&nbsp;called,
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;or&nbsp;it&nbsp;could&nbsp;be&nbsp;entered&nbsp;afterward.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;uspsema(pch->sema);
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Since&nbsp;this&nbsp;process&nbsp;executes&nbsp;only&nbsp;one&nbsp;aio&nbsp;operation&nbsp;at&nbsp;a&nbsp;time,
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;we&nbsp;can&nbsp;return&nbsp;the&nbsp;status&nbsp;of&nbsp;that&nbsp;operation.&nbsp;&nbsp;In&nbsp;a&nbsp;more&nbsp;complicated
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;design,&nbsp;if&nbsp;a&nbsp;signal&nbsp;could&nbsp;arrive&nbsp;from&nbsp;more&nbsp;than&nbsp;one&nbsp;pending
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;operation,&nbsp;this&nbsp;function&nbsp;could&nbsp;not&nbsp;return&nbsp;status.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;aio_error(&amp;pch->acb);
+}
+void&nbsp;inProc2(void&nbsp;*arg,&nbsp;size_t&nbsp;stk)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;child_t&nbsp;*pch&nbsp;=&nbsp;arg;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;starting&nbsp;arg&nbsp;is&nbsp;->child_t&nbsp;for&nbsp;my&nbsp;file&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;aiocb_t&nbsp;*pab&nbsp;=&nbsp;&amp;pch->acb;&nbsp;&nbsp;&nbsp;/*&nbsp;base&nbsp;address&nbsp;of&nbsp;the&nbsp;aiocb_t&nbsp;in&nbsp;child_t&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;ret;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;as&nbsp;long&nbsp;as&nbsp;this&nbsp;is&nbsp;0,&nbsp;all&nbsp;is&nbsp;ok&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;bytes;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;#bytes&nbsp;read&nbsp;on&nbsp;each&nbsp;input&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Initialize&nbsp;--&nbsp;request&nbsp;a&nbsp;signal&nbsp;in&nbsp;aio_sigevent.&nbsp;The&nbsp;address&nbsp;of
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;the&nbsp;child_t&nbsp;struct&nbsp;is&nbsp;passed&nbsp;as&nbsp;the&nbsp;siginfo&nbsp;value,&nbsp;for&nbsp;use
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;in&nbsp;the&nbsp;signal&nbsp;handler.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_sigevent.sigev_notify&nbsp;=&nbsp;SIGEV_SIGNAL;
+&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_sigevent.sigev_signo&nbsp;=&nbsp;AIO_SIGNUM;
+&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_sigevent.sigev_value.sival_ptr&nbsp;=&nbsp;(void&nbsp;*)pch;
+&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_buf&nbsp;=&nbsp;pch->buffer;&nbsp;/*&nbsp;always&nbsp;the&nbsp;same&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Initialize&nbsp;--&nbsp;set&nbsp;up&nbsp;a&nbsp;signal&nbsp;handler&nbsp;for&nbsp;AIO_SIGNUM.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;struct&nbsp;sigaction&nbsp;sa&nbsp;=&nbsp;{SA_SIGINFO,sigHandler2};
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ret&nbsp;=&nbsp;sigaction(AIO_SIGNUM,&amp;sa,NULL);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(ret)&nbsp;++errors;&nbsp;/*&nbsp;parent&nbsp;will&nbsp;shut&nbsp;down&nbsp;ASAP&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;}&nbsp;&nbsp;&nbsp;
+#if&nbsp;DO_SPROCS
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Wait&nbsp;for&nbsp;the&nbsp;starting&nbsp;gun...
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;barrier(convene,nprocs);
+#else
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(ret)&nbsp;return;
+#endif
+&nbsp;&nbsp;&nbsp;&nbsp;pch->etime&nbsp;=&nbsp;clock();
+&nbsp;&nbsp;&nbsp;&nbsp;do&nbsp;/*&nbsp;read&nbsp;and&nbsp;write,&nbsp;read&nbsp;and&nbsp;write...&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Set&nbsp;up&nbsp;the&nbsp;aiocb&nbsp;for&nbsp;a&nbsp;read,&nbsp;queue&nbsp;it,&nbsp;and&nbsp;wait&nbsp;for&nbsp;it.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_fildes&nbsp;=&nbsp;pch->fd;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_offset&nbsp;=&nbsp;pch->inbase;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_nbytes&nbsp;=&nbsp;BLOCKSIZE;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!(ret&nbsp;=&nbsp;aio_read(pab)))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ret&nbsp;=&nbsp;inWait2(pch);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(ret)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;&nbsp;&nbsp;/*&nbsp;could&nbsp;not&nbsp;start&nbsp;read,&nbsp;or&nbsp;it&nbsp;ended&nbsp;badly&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;get&nbsp;the&nbsp;result&nbsp;of&nbsp;the&nbsp;read()&nbsp;call,&nbsp;the&nbsp;count&nbsp;of&nbsp;bytes&nbsp;read.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Since&nbsp;aio_error&nbsp;returned&nbsp;0,&nbsp;the&nbsp;count&nbsp;is&nbsp;nonnegative.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;It&nbsp;could&nbsp;be&nbsp;0,&nbsp;or&nbsp;less&nbsp;than&nbsp;BLOCKSIZE,&nbsp;indicating&nbsp;EOF.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;bytes&nbsp;=&nbsp;aio_return(pab);&nbsp;/*&nbsp;actual&nbsp;read&nbsp;result&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!bytes)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;&nbsp;&nbsp;/*&nbsp;no&nbsp;need&nbsp;to&nbsp;write&nbsp;a&nbsp;last&nbsp;block&nbsp;of&nbsp;0&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pch->inbase&nbsp;+=&nbsp;bytes;&nbsp;&nbsp;&nbsp;/*&nbsp;where&nbsp;to&nbsp;read&nbsp;next&nbsp;time&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Set&nbsp;up&nbsp;the&nbsp;aiocb&nbsp;for&nbsp;a&nbsp;write,&nbsp;queue&nbsp;it,&nbsp;and&nbsp;wait&nbsp;for&nbsp;it.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_fildes&nbsp;=&nbsp;outFD;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_nbytes&nbsp;=&nbsp;bytes;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_offset&nbsp;=&nbsp;pch->outbase;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!(ret&nbsp;=&nbsp;aio_write(pab)))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ret&nbsp;=&nbsp;inWait2(pch);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(ret)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pch->outbase&nbsp;+=&nbsp;bytes;&nbsp;&nbsp;/*&nbsp;where&nbsp;to&nbsp;write&nbsp;next&nbsp;time&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;}&nbsp;while&nbsp;((!ret)&nbsp;&amp;&amp;&nbsp;(bytes&nbsp;==&nbsp;BLOCKSIZE));
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;The&nbsp;loop&nbsp;is&nbsp;complete.&nbsp;&nbsp;If&nbsp;no&nbsp;errors&nbsp;so&nbsp;far,&nbsp;use&nbsp;aio_fsync()
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;to&nbsp;ensure&nbsp;that&nbsp;output&nbsp;is&nbsp;complete.&nbsp;&nbsp;This&nbsp;requires&nbsp;waiting
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;yet&nbsp;again.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!ret)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!(ret&nbsp;=&nbsp;aio_fsync(O_SYNC,pab)))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ret&nbsp;=&nbsp;inWait2(pch);
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Flag&nbsp;any&nbsp;errors&nbsp;for&nbsp;the&nbsp;parent&nbsp;proc.&nbsp;If&nbsp;none,&nbsp;count&nbsp;elapsed&nbsp;time.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(ret)&nbsp;++errors;
+&nbsp;&nbsp;&nbsp;&nbsp;else&nbsp;pch->etime&nbsp;=&nbsp;(clock()&nbsp;-&nbsp;pch->etime);
+#if&nbsp;DO_SPROCS
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Rendezvous&nbsp;with&nbsp;the&nbsp;rest&nbsp;of&nbsp;the&nbsp;family,&nbsp;then&nbsp;quit.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;barrier(convene,nprocs);
+#endif
+}&nbsp;/*&nbsp;end&nbsp;inProc2&nbsp;*/
+&nbsp;
+/******************************************************************************
+||&nbsp;inProc3&nbsp;uses&nbsp;a&nbsp;callback&nbsp;and&nbsp;a&nbsp;semaphore.&nbsp;It&nbsp;waits&nbsp;with&nbsp;a&nbsp;P&nbsp;operation.
+||&nbsp;The&nbsp;callback&nbsp;function&nbsp;executes&nbsp;a&nbsp;V&nbsp;operation.&nbsp;&nbsp;This&nbsp;may&nbsp;come&nbsp;before&nbsp;or
+||&nbsp;after&nbsp;the&nbsp;P&nbsp;operation.
+*/
+void&nbsp;callBack3(union&nbsp;sigval&nbsp;usv)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;The&nbsp;callback&nbsp;function&nbsp;receives&nbsp;the&nbsp;pointer&nbsp;to&nbsp;the&nbsp;child_t&nbsp;struct,
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;as&nbsp;prepared&nbsp;in&nbsp;aio_sigevent.sigev_value.sival_ptr.&nbsp;&nbsp;Use&nbsp;this&nbsp;to&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;post&nbsp;the&nbsp;semaphore&nbsp;in&nbsp;the&nbsp;child_t&nbsp;struct.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;child_t&nbsp;*pch&nbsp;=&nbsp;usv.sival_ptr;
+&nbsp;&nbsp;&nbsp;&nbsp;usvsema(pch->sema);
+&nbsp;&nbsp;&nbsp;&nbsp;return;
+}
+int&nbsp;inWait3(child_t&nbsp;*pch)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Suspend,&nbsp;if&nbsp;necessary,&nbsp;by&nbsp;polling&nbsp;the&nbsp;semaphore.&nbsp;&nbsp;The&nbsp;callback
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;function&nbsp;might&nbsp;be&nbsp;entered&nbsp;before&nbsp;we&nbsp;reach&nbsp;this&nbsp;point,&nbsp;or&nbsp;after.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;uspsema(pch->sema);
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Return&nbsp;the&nbsp;status&nbsp;of&nbsp;the&nbsp;aio&nbsp;operation&nbsp;associated&nbsp;with&nbsp;the&nbsp;sema.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;aio_error(&amp;pch->acb);&nbsp;&nbsp;&nbsp;&nbsp;
+}
+void&nbsp;inProc3(void&nbsp;*arg,&nbsp;size_t&nbsp;stk)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;child_t&nbsp;*pch&nbsp;=&nbsp;arg;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;starting&nbsp;arg&nbsp;is&nbsp;->child_t&nbsp;for&nbsp;my&nbsp;file&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;aiocb_t&nbsp;*pab&nbsp;=&nbsp;&amp;pch->acb;&nbsp;&nbsp;&nbsp;/*&nbsp;base&nbsp;address&nbsp;of&nbsp;the&nbsp;aiocb_t&nbsp;in&nbsp;child_t&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;ret;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;as&nbsp;long&nbsp;as&nbsp;this&nbsp;is&nbsp;0,&nbsp;all&nbsp;is&nbsp;ok&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;bytes;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;#bytes&nbsp;read&nbsp;on&nbsp;each&nbsp;input&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Initialize&nbsp;--&nbsp;request&nbsp;a&nbsp;callback&nbsp;in&nbsp;aio_sigevent.&nbsp;The&nbsp;address&nbsp;of
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;the&nbsp;child_t&nbsp;struct&nbsp;is&nbsp;passed&nbsp;as&nbsp;the&nbsp;siginfo&nbsp;value&nbsp;to&nbsp;be&nbsp;passed
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;into&nbsp;the&nbsp;callback.&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_sigevent.sigev_notify&nbsp;=&nbsp;SIGEV_CALLBACK;
+&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_sigevent.sigev_func&nbsp;=&nbsp;callBack3;
+&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_sigevent.sigev_value.sival_ptr&nbsp;=&nbsp;(void&nbsp;*)pch;
+&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_buf&nbsp;=&nbsp;pch->buffer;&nbsp;/*&nbsp;always&nbsp;the&nbsp;same&nbsp;*/
+#if&nbsp;DO_SPROCS
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Wait&nbsp;for&nbsp;the&nbsp;starting&nbsp;gun...
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;barrier(convene,nprocs);
+#endif
+&nbsp;&nbsp;&nbsp;&nbsp;pch->etime&nbsp;=&nbsp;clock();
+&nbsp;&nbsp;&nbsp;&nbsp;do&nbsp;/*&nbsp;read&nbsp;and&nbsp;write,&nbsp;read&nbsp;and&nbsp;write...&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Set&nbsp;up&nbsp;the&nbsp;aiocb&nbsp;for&nbsp;a&nbsp;read,&nbsp;queue&nbsp;it,&nbsp;and&nbsp;wait&nbsp;for&nbsp;it.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_fildes&nbsp;=&nbsp;pch->fd;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_offset&nbsp;=&nbsp;pch->inbase;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_nbytes&nbsp;=&nbsp;BLOCKSIZE;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!(ret&nbsp;=&nbsp;aio_read(pab)))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ret&nbsp;=&nbsp;inWait3(pch);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(ret)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;&nbsp;&nbsp;/*&nbsp;read&nbsp;error&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;get&nbsp;the&nbsp;result&nbsp;of&nbsp;the&nbsp;read()&nbsp;call,&nbsp;the&nbsp;count&nbsp;of&nbsp;bytes&nbsp;read.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Since&nbsp;aio_error&nbsp;returned&nbsp;0,&nbsp;the&nbsp;count&nbsp;is&nbsp;nonnegative.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;It&nbsp;could&nbsp;be&nbsp;0,&nbsp;or&nbsp;less&nbsp;than&nbsp;BLOCKSIZE,&nbsp;indicating&nbsp;EOF.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;bytes&nbsp;=&nbsp;aio_return(pab);&nbsp;/*&nbsp;actual&nbsp;read&nbsp;result&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!bytes)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;&nbsp;&nbsp;/*&nbsp;no&nbsp;need&nbsp;to&nbsp;write&nbsp;a&nbsp;last&nbsp;block&nbsp;of&nbsp;0&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pch->inbase&nbsp;+=&nbsp;bytes;&nbsp;&nbsp;&nbsp;/*&nbsp;where&nbsp;to&nbsp;read&nbsp;next&nbsp;time&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Set&nbsp;up&nbsp;the&nbsp;aiocb&nbsp;for&nbsp;a&nbsp;write,&nbsp;queue&nbsp;it,&nbsp;and&nbsp;wait&nbsp;for&nbsp;it.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_fildes&nbsp;=&nbsp;outFD;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_nbytes&nbsp;=&nbsp;bytes;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pab->aio_offset&nbsp;=&nbsp;pch->outbase;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!(ret&nbsp;=&nbsp;aio_write(pab)))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ret&nbsp;=&nbsp;inWait3(pch);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(ret)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pch->outbase&nbsp;+=&nbsp;bytes;&nbsp;&nbsp;/*&nbsp;where&nbsp;to&nbsp;write&nbsp;next&nbsp;time&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;}&nbsp;while&nbsp;((!ret)&nbsp;&amp;&amp;&nbsp;(bytes&nbsp;==&nbsp;BLOCKSIZE));
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;The&nbsp;loop&nbsp;is&nbsp;complete.&nbsp;&nbsp;If&nbsp;no&nbsp;errors&nbsp;so&nbsp;far,&nbsp;use&nbsp;aio_fsync()
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;to&nbsp;ensure&nbsp;that&nbsp;output&nbsp;is&nbsp;complete.&nbsp;&nbsp;This&nbsp;requires&nbsp;waiting
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;yet&nbsp;again.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!ret)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!(ret&nbsp;=&nbsp;aio_fsync(O_SYNC,pab)))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ret&nbsp;=&nbsp;inWait3(pch);
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Flag&nbsp;any&nbsp;errors&nbsp;for&nbsp;the&nbsp;parent&nbsp;proc.&nbsp;If&nbsp;none,&nbsp;count&nbsp;elapsed&nbsp;time.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(ret)&nbsp;++errors;
+&nbsp;&nbsp;&nbsp;&nbsp;else&nbsp;pch->etime&nbsp;=&nbsp;(clock()&nbsp;-&nbsp;pch->etime);
+#if&nbsp;DO_SPROCS
+&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;||&nbsp;Rendezvous&nbsp;with&nbsp;the&nbsp;rest&nbsp;of&nbsp;the&nbsp;family,&nbsp;then&nbsp;quit.
+&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;barrier(convene,nprocs);
+#endif
+} /* end inProc3 */ 
+</CODE>
+</SECTION1>
+</CHAPTER>

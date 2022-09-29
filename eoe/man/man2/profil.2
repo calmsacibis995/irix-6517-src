@@ -1,0 +1,163 @@
+'\"macro stdmacro
+.if n .pH g2.profil @(#)profil	40.15 of 10/10/89
+.\" Copyright 1989 AT&T
+.nr X
+.if \nX=0 .ds x} profil 2 "" "\&"
+.if \nX=1 .ds x} profil 2 ""
+.if \nX=2 .ds x} profil 2 "" "\&"
+.if \nX=3 .ds x} profil "" "" "\&"
+.TH \*(x}
+.SH NAME
+.B profil \- execution time profile
+.Op c p a
+.SH C SYNOPSIS
+.B "int profil (unsigned short \(**buff, unsigned int bufsiz,"
+.br
+.B "		unsigned int offset, unsigned int scale);"
+.Op
+.Op f
+.SH FORTRAN SYNOPSIS
+.B "integer *4 function profil (buff, buffsiz, offset, scale)"
+.br
+.B "integer *2 (*) buff"
+.br
+.B "integer *4 bufsiz, offset, scale"
+.Op
+.SH DESCRIPTION
+.B profil
+provides CPU-use statistics by profiling the amount of
+CPU
+time expended by a program.  
+.B profil
+generates the
+statistics by creating an execution histogram for a current process.
+The histogram is defined for a specific region of program code to
+be profiled, and the identified region is logically broken up into
+a set of equal size subdivisions, each of which corresponds to a count
+in the histogram.  With each clock tick, the current subdivision
+is identified and its corresponding histogram count is incremented.
+These counts establish a relative measure of how much time is being
+spent in each code subdivision.  The resulting histogram counts for
+a profiled region can be used to identify those functions that consume
+a disproportionately high percentage of
+.SM CPU
+time.
+.PP
+.I buff
+is a buffer of 
+.I bufsiz
+bytes in which the histogram
+counts are stored in an array of 
+.B unsigned short int.
+.PP
+.I offset, 
+.I scale,
+and 
+.I bufsiz
+specify the region to be profiled.
+.PP
+.I offset
+is effectively the start address of the region to be profiled.
+.PP
+
+.I scale,
+broadly speaking, is a contraction factor
+that indicates how much smaller
+the histogram buffer is than the region to be profiled.
+More precisely, 
+.I scale
+is interpreted as an unsigned 16-bit
+fixed-point fraction with the decimal point implied on the left.
+Its value is the reciprocal of the number of instructions in a subdivision,
+per counter of histogram buffer.
+.P
+Several observations can be made:
+.RS 3
+.TP
+\-
+the maximal value of \f2scale\fP, 0x10000, gives a 1-1 mapping of pc's to
+4-byte words in \f2buff\fP.
+This value makes no sense for the default 16-bit (2-byte) counters,
+since this means 2 bytes of wasted space for every 2 bytes of counter.
+.TP
+\-
+the minimum value of 
+.I scale
+(for which profiling is performed),
+0x0002 (1/32,768), maps (by convention) the entire region starting with 
+.I offset
+to the first counter in 
+.I buff.
+.TP
+\-
+a \f2scale\fP value of 0x8000 specifies a contraction of two,
+which means every 4-byte instruction maps to 2 bytes of counter space.
+For 16-bit counters this means a 1-1 mapping of instructions to counters.
+For 32-bit counters (see \f3sprofil(2)\fP) this means two 4-byte instructions
+map to each 4-byte counter.
+.RE
+.P
+The values are used within the kernel as follows:  when the process
+is interrupted for a clock tick (once every 10 milliseconds),
+the value of 
+.I offset
+is subtracted
+from the current value of the program counter (pc), and the remainder
+is multiplied by 
+.I scale
+to derive a result.  That result is used
+as an index into the histogram array to locate the cell to be incremented.
+Therefore, the cell count represents the number of times that the process
+was executing code in the subdivision associated with that cell when the
+process was interrupted.
+.PP
+Since each cell is only 16 bits wide, it is conceivable for it to overflow. 
+No indication that this has occurred is given.
+If an overflow is likely, it is recommended that the alternative
+\f3sprofil(2)\fP be used, which supports a superset of \f3profil(2)\fP
+functionality and supports using optional 32-bit cells.
+.PP
+.\".I scale
+.\"can be computed as (
+.\".I RATIO
+.\"\(** 0200000L)
+.\", where
+.\".I RATIO
+.\"is the desired ratio of 
+.\".I bufsiz
+.\"to profiled region size,
+.\"and has a value between 0 and 1.
+.\"Qualitatively speaking, the closer 
+.\".I RATIO
+.\"is to 1, the higher
+.\"the resolution of the profile information.
+.\".PP
+.\".I bufsiz
+.\"can be computed as (size_of_region_to_be_profiled \(** 
+.\".I RATIO
+.\").
+.SH "SEE ALSO"
+sprofil(2), prof(1), times(2), monitor(3X),
+fork(2), sproc(2).
+.SH NOTES
+Profiling is turned off by giving a
+.I scale\^
+of 0 or 1,
+and is rendered
+ineffective by giving a
+.I bufsiz\^
+of 0.
+Profiling is turned off when an
+.B exec(2)
+is executed, but remains on in both child and parent 
+processes after a
+.B fork
+(2) or
+.B sproc(2).
+Profiling is turned off if a
+.I buff\^
+update would cause a memory fault.
+.SH DIAGNOSTICS
+A 0, indicating success, is always returned.
+.\"	@(#)profil.2	6.2 of 9/6/83
+.Ee

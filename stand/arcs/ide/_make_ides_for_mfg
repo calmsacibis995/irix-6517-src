@@ -1,0 +1,219 @@
+#!/bin/csh -x
+#
+# Last Edited: Wed Mar 18 14:27:48 PST 1998
+#
+# _make_ides_for_mfg
+#
+# Called by make_ides_for_mfg
+#
+# Usage: _make_ides_for_mfg [purge] [update] [clobber] [logfile <path>] 
+#	[workarea <path>] [root <path>] [toolroot <path>]
+#
+#	purge	-- 1=> purge, 0=> don't purge
+#	update	-- 1=> update, 0=> don't update
+#	clobber	-- 1=> cloober, 0=> don't clobber
+#
+# This script does the following tasks:
+#
+#	0. Save the current shell.ide to shell.ide.<date_of_creation>
+#	1. p_check and p_purge obsolete files in $WORKAREA/stand which affect
+#		building the mardi gras ide.
+#	2. p_tupdate $WORKAREA/stand  files which affect the mardi gras ide
+#		(e.g. lib, ide/IP22, ide_alloc.c, etc)
+#
+#	All the actions of the script are kept in log files stored at:
+#		$WORKAREA/stand/arcs/ide/buildlog/*
+#	
+#		where the files will be stored as timestamps, e.g. 941130_1034
+#		will represent the log file from Nov 11, 1994 1034.
+#
+#	3. Check the log file for any build errors by grepping for strings
+#		like: error, warning, etc
+#
+
+echo; echo "Script started at `date`"; echo
+
+#
+# Set some env vars
+#
+
+#
+# Get arguments, $1 = nopurge, $2 = noupdate, $3 = noclobber
+#
+unalias rm
+setenv INSTOPTS -t
+setenv PURGE   	$1
+setenv UPDATE  	$2
+setenv CLOBBER 	$3
+setenv LOGFILE 	$4
+setenv WORKAREA $5
+setenv ROOT 	$6
+setenv TOOLROOT $7
+
+set path = ($path /usr/local/bin/ptools .)
+
+switch ($PRODUCT)
+	case "RACER":
+		setenv cpuboard ip30
+		breaksw;
+	case "4DACE1":
+	case "4DACE1_O32":
+		setenv cpuboard ip22
+		breaksw;
+	case "T5I2":
+		setenv cpuboard ip28
+		breaksw;
+endsw
+
+echo "CLOBBER: $CLOBBER"
+echo "UPDATE: $UPDATE"
+echo "PURGE: $PURGE"
+echo "LOGFILE: $LOGFILE"
+echo "WORKAREA: $WORKAREA"
+echo "ROOT: $ROOT"
+echo "TOOLROOT: $TOOLROOT"
+echo "PRODUCT: $PRODUCT"
+echo "cpuboard: $cpuboard"
+
+#
+# make appropriate subdirs
+#
+foreach dir (stand/arcs/include stand/arcs/scripts stand/arcs/lib)
+	mkdir -p $WORKAREA/$dir
+end
+
+#
+# Don't save shell.ide right now since it takes too  much space
+#
+
+#
+# Save the current shell.ide
+#
+#if (-d $WORKAREA/stand/arcs/ide/$PRODUCT.O) then
+#	cd $WORKAREA/stand/arcs/ide/$PRODUCT.O
+#	if (-e shell.ide) then
+#		setenv olddate `ls -al shell.ide | awk '{printf("%s_%d_%s", $6,$7,$8)}'`
+#		echo "Copying the current shell.ide to shell.ide.$olddate"
+#		cp shell.ide /usr/local/boot/shell.ide.$olddate
+#	endif
+#endif
+#
+#
+# Check stand/arcs/* top-level files
+#
+echo "Checking $WORKAREA/stand/arcs top-level files"
+cd $WORKAREA/stand
+
+if ($PURGE) then
+	echo "Checking and purging files..."
+	p_check -v -s | p_purge -u -v -y -i	
+endif
+if ($UPDATE) then
+   p_tupdate -v 
+endif
+#
+#
+# doing a make in arcs/lib, arcs/ide
+#
+if ($CLOBBER) then
+	echo "Doing a make clobber in arcs/lib and arcs/ide"
+	cd $WORKAREA/stand/arcs/lib
+	make clobber &
+	cd $WORKAREA/stand/arcs/ide
+	make clobber &
+	wait
+endif
+
+echo "Doing a make in arcs/lib/libwarsc"
+cd $WORKAREA/stand/arcs/lib/libwarsc
+make
+
+echo "Doing a make in arcs/lib"
+cd $WORKAREA/stand/arcs/lib
+make
+
+echo "Doing a make in arcs/tools/elf2coff to build the conversion tool"
+cd $WORKAREA/stand/arcs/tools/elf2coff
+make
+
+echo "Doing a make in arcs/ide to build shell.ide"
+cd $WORKAREA/stand/arcs/ide
+\rm *.c
+make 
+
+#echo "Doing a make to build the mfg ide's "
+#	cd $WORKAREA/stand/arcs/ide/$PRODUCT.O
+#	mv field.ide field.ide.good
+#	mv shell.ide shell.ide.good
+
+if ($PRODUCT == RACER) then
+	cd $WORKAREA/stand/arcs/ide/godzilla/util
+	make clobber
+	make mfgstuff
+	cd $WORKAREA/stand/arcs/ide/godzilla/uif
+	make clobber
+	make mfgstuff
+else
+	cd $WORKAREA/stand/arcs/ide/fforward/graphics/EXPRESS
+	make clobber
+	make mfgstuff
+endif
+	cd $WORKAREA/stand/arcs/ide/isddevices/graphics/MGRAS
+	make clobber
+	make mfgstuff
+
+	cd $WORKAREA/stand/arcs/lib/libsk/graphics/MGRAS
+	make clobber
+	make mfgstuff
+
+	cd $WORKAREA/stand/arcs/lib/libsk/cmd
+	make clobber
+	make mfgstuff
+
+	cd $WORKAREA/stand/arcs/lib
+	make
+
+if (($PRODUCT == RACER10) || ($PRODUCT == RACER)) then
+	cd $WORKAREA/stand/arcs/ide/IP30/pon
+	make clobber
+	make mfgstuff
+endif
+
+	cd $WORKAREA/stand/arcs/ide
+	\rm *.c
+
+if (($PRODUCT != RACER10) && ($PRODUCT != RACER)) then
+	\rm *.c
+	make -f Makefile.exp ${cpuboard}exp.ide
+endif
+	\rm *.c
+	make -f Makefile.imp ${cpuboard}imp.ide
+	make -f Makefile.imp mfgoptstuff
+
+
+if ($PRODUCT == RACER) then
+	make -f Makefile.imp mfgdebugstuff
+endif
+
+#	cd $WORKAREA/stand/arcs/ide/$PRODUCT.O
+#	\rm field.ide shell.ide
+#	mv field.ide.good field.ide
+#	mv shell.ide.good shell.ide
+
+	cd $WORKAREA/stand/arcs/ide
+	make -f Makefile.imp chkimpsize
+if ($PROM == 1) then
+   if ($PRODUCT == RACER) then
+#
+# make the debug prom
+#
+	cd $WORKAREA/stand/arcs/ide
+	echo "prom\n \n " | MfgDBGProm.sh
+	echo "ide\n \n " | MfgDBGProm.sh
+#
+# make the no-gfx prom
+#
+	cd $WORKAREA/stand/arcs/IP30prom
+	./no-gfx-prom.csh
+   endif
+endif

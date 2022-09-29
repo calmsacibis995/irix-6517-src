@@ -1,0 +1,191 @@
+#!/bin/sh
+# Note that this script is limited to SCSI drives on integral controllers
+# or raid5 controllers
+# (that is, not the jaguar or cougar VME SCSI controllers) and defaults to
+# controller 0.
+# It makes the filesystem on partition 7 (appropriate for option drives),
+# creates the mount directory, and an fstab entry for the drive, then mounts it.
+
+CTLR=0 ID=2 LUN=0 # defaults
+if [ $# -gt 3 ]
+then
+	echo "Usage $0 [controller] [disk_number] [lun_number]"
+	exit 1
+elif [ $# -eq 3 ]
+then
+	CTLR="$1" ID="$2" LUN="$3"
+elif [ $# -eq 2 ]
+then
+	CTLR="$1" ID="$2"
+elif [ $# -eq 1 ]
+then
+	ID="$1"
+fi
+
+rootdisk="`devnm /|sed 's/[ 	].*//`"
+if [ $LUN -gt 0 ]
+then
+	DS=dks${CTLR}d${ID}l${LUN}
+else
+	DS=dks${CTLR}d${ID}
+fi 
+DSK=/dev/dsk/${DS}s7
+RDSK=/dev/rdsk/${DS}s7
+
+if [ $LUN -gt 0 ]
+then
+	MOUNTPT=/disk$CTLR$ID$LUN
+else
+	MOUNTPT=/disk$CTLR$ID
+fi
+
+
+case "$rootdisk" {
+*/dev/dsk/${DS}*)
+	echo You may not use this for the system disk, only option disks
+	exit 1
+	;;
+}
+
+if [ $LUN -gt 0 ]
+then
+hinv -c disk | grep -s "unit $ID, lun $LUN on SCSI controller $CTLR" > /dev/null 2>&1
+d=$?
+else
+hinv -c disk | grep -s "unit $ID on SCSI controller $CTLR" > /dev/null 2>&1
+d=$?
+fi
+
+hinv -c scsi | grep -s "Optical disk: unit $ID on SCSI controller $CTLR" > /dev/null 2>&1
+o=$?
+if [ $d -ne 0 -a $o -ne 0 ]
+then 
+	if [ $LUN -gt 0 ]
+	then
+	echo SCSI disk $ID with lun $LUN not found on controller $CTLR in 
+	echo hardware inventory. If you are sure that you have the right SCSI 
+	echo ID, be sure that the disk is attached and powered up when the 
+	echo system is booted.
+	else
+	echo SCSI disk $ID not found on controller $CTLR in hardware inventory
+	echo If you are sure that you have the right SCSI ID, be sure that the
+	echo disk is attached and powered up when the system is booted.
+	fi
+	exit 1
+fi
+
+if [ ! -c /dev/rdsk/${DS}vh ] 
+then 
+
+	if [ $LUN -gt 0 ]
+	then
+	echo "No volume header device (/dev/rdsk/${DS}vh) found, for disk $ID"
+	echo with lun $LUN on controller $CTLR.  You may need to run the 
+	echo following commands to create the device files:
+	else
+	echo "No volume header device (/dev/rdsk/${DS}vh) found, for disk $ID"
+	echo on controller $CTLR.  You may need to run the following commands to
+	echo create the device files:
+	fi
+	echo "\tcd /dev; ./MAKEDEV disks"
+	exit 1
+fi
+
+if prtvtoc /dev/rdsk/${DS}vh > /dev/null 2>&1
+then :
+else 
+	if [ $LUN -gt 0 ]
+	then
+	echo SCSI disk $ID with lun $LUN on controller $CTLR does not appear 
+	echo to be initialized with a Silicon Graphics volume header.  You may 
+	echo need to use \"fx\" to initialize it.
+	else
+	echo SCSI disk $ID on controller $CTLR does not appear to be initialized
+	echo with a Silicon Graphics volume header.  You may need to use
+	echo \"fx\" to initialize it.
+	fi
+	exit 1
+fi
+
+if [ $LUN -gt 0 ]
+then
+echo "\nAdding SCSI disk $ID with lun $LUN on controller $CTLR"
+else
+echo "\nAdding SCSI disk $ID on controller $CTLR"
+fi
+
+/etc/fsstat $DSK > /dev/null 2>&1
+s7=$?
+/etc/fsstat /dev/dsk/${DS}s6 > /dev/null 2>&1
+s6=$?
+/etc/fsstat /dev/dsk/${DS}s0 > /dev/null 2>&1
+s0=$?
+if [ $s7 -ne 3 -o $s6 -ne 3 -o $s0 -ne 3 ]
+then
+	echo "\007SCSI disk $ID appears to have a valid filesystem, overwrite it? (n)\c"
+	read answer
+	case "$answer" {
+	y|Y|yes|Yes|YES) ;;
+	*) 
+		if [ $LUN -gt 0 ]
+		then
+		echo Disk $ID with lun $LUN on controller $CTLR not added, previous data preserved
+		else
+		echo Disk $ID with lun $LUN on controller $CTLR not added, previous data preserved
+		fi
+		exit 1;;
+	}
+fi
+
+# unmount it by disk name, in case it is mounted on a different mount pt.
+umount $DSK > /dev/null 2>&1
+
+# make the new filesystem; raw device is much faster
+mkfs $RDSK > /dev/null 2>&1
+if [ $? -ne 0 ]
+then
+	if [ $LUN -gt 0 ]
+	then
+	echo Unable to create a filesystem on SCSI disk $ID with lun $LUN on controller $CTLR
+	else
+	echo Unable to create a filesystem on SCSI disk $ID on controller $CTLR
+	fi
+	exit 1
+fi
+
+# create directory
+if [ ! -d $MOUNTPT ]
+then
+	rm -f $MOUNTPT
+	mkdir $MOUNTPT
+	if [ ! -d $MOUNTPT ]
+	then
+		echo Can not make mount directory $MOUNTPT; exit 1
+	fi
+fi
+
+# add the entry to /etc/fstab (ignore commented out lines!)
+# make sure that the mount point matches also; if it was mounted
+# as something else before, the 2nd mount attempt on next boot
+# will at least print an error message
+egrep -s "^$DSK[ 	][ 	]*$MOUNTPT[ 	]" /etc/fstab > /dev/null 2>&1
+if [ $? -ne 0 ]
+then
+	echo "$DSK $MOUNTPT xfs rw,raw=$RDSK 0 0" >> /etc/fstab
+fi
+sync
+
+# label the disk with its directory name
+## xfs doesn't support labelit
+#if [ $LUN -gt 0 ]
+#then
+#labelit $RDSK disk$CTLR$ID$LUN sgi > /dev/null 2>&1
+#else
+#labelit $RDSK disk$CTLR$ID sgi > /dev/null 2>&1
+#fi
+
+# mount the filesystem
+if mount -v $MOUNTPT
+then echo "\nNew disk ready to use as $MOUNTPT."; df -lik $MOUNTPT; exit 0
+else echo "\007Failed to mount $DSK on $MOUNTPT"; exit 1
+fi

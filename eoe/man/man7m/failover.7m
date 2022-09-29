@@ -1,0 +1,261 @@
+.TH failover 7M
+.SH NAME
+failover \- disk device alternate path support
+.SH SYNOPSIS
+.nf
+\f3/etc/init.d/failover [init|start]\f1
+.fi
+.SH DESCRIPTION
+Failover is the ability to define and manage alternate paths to a single
+disk device or lun.  At startup, failover automatically detects and 
+configures alternate paths to SGI K5 RAID devices. To configure primary and
+alternate paths to other more generic devices, failover also processes
+configuration directives contained within the
+.IR "/etc/failover.conf"
+configuration file.
+.P
+Failover works in conjuction with
+the SGI logical volume manager,  
+to automatically switch between primary and alternate paths.  Additionally, 
+failover is only possible for devices which utilize 
+.IR "dksc(7m)",
+the scsi disk driver.
+Failover uses
+.IR "/sbin/foconfig"
+to parse the configuration file and direct the creation of failover
+groups.
+.IR "/sbin/foconfig"
+should not be executed directly.
+.SS Alternate Path Configuration
+Primary and alternate paths to devices are defined by two different
+mechanisms.  Automatic detection, and definition within a configuration file.
+.P
+Configuration of SGI K5 RAID devices is automatic and happens at the time
+of device discovery during the probing of the scsi and fibre channel buses,
+making use of the dual storage processors.  Any path to the active storage processor
+can be used for I/O requests unless explicit primary configuration is used
+(see "Using Manual Configuration with SGI K5" below).
+.P
+Configuration of alternate paths to other disk storage devices is defined within
+the
+.IR "/etc/failover.conf"
+configuration file.  This file is processed during failover startup, and when the
+.IR "/etc/init.d/failover"
+script is executed.  When
+.IR "/etc/init.d/failover"
+is executed with the
+.B start
+parameter, it automatically calls
+.IR "xlv_assemble(1m)".
+When executed with the
+.B init
+parameter, the execution of 
+.IR "xlv_assemble"
+is skipped.
+.P
+An entry defining the available paths to a device
+consists of a single line, or multiple lines, all except the last ending in
+a \\ (backslash).  An entry defines an arbitrary group name, a primary
+path, and up to fifteen alternate paths.  The group name is an arbitrary string
+of up to 31 characters.  Following the group name are the
+.IR "/dev/scsi"
+names associated with the primary and alternate paths, the primary being
+the first path specified.
+.P
+With manual configuration, only the primary path to an I/O device can be
+used for I/O requests.  This is also the case if the configuration file
+is used to explicitly specify a primary path to an SGI K5 RAID.
+.SS Using Manual Configuration with SGI K5 RAID
+.P
+SGI K5 RAID devices can use the
+.IR "/etc/failover.conf"
+configuration file to explicitly specify primary paths, rather than
+letting a volume manager pick one.  This is useful, because if multiple
+controllers can each access the same storage (in a SAN environment),
+volume managers will tend to use a single controller to access all
+storage connected to a given storage network, precluding using
+different host adapters to access different devices on the storage
+network.
+Specifying a primary allows the administrator to choose different host
+adapters to access different storage devices, because the volume manager
+will not be able to access storage through the alternate paths.  This
+is particularly useful when striping.
+Only the primary
+path needs to be specified in the
+.IR "/etc/failover.conf"
+file with this option.  Alternate paths will be automatically detected.
+.SS Sample Configuration Entries
+The sample file shows failover groups, each consisting of a primary
+path and one or more alternate paths.  The sample also includes the comments placed
+in the sample configuration file which is installed on the system.
+.P
+.nf
+#ident $Revision: 1.6 $
+#
+#       This is the configuration file for table driven failover support.
+#       The entries within this file consist of a single line per
+#       failover grouping.  These lines describe up to four paths to
+#       each device.  Obviously, these paths should reference the
+#       same device!  Some sanity checking is performed, but the
+#       software is not foolproof in this area.  (If it was foolproof,
+#       the configuration file would be unnecessary!)  It is recommended
+#       that all paths to a device be listed.
+#
+#       The format of each line consists of a group name followed by
+#       up to four device names from the "/dev/scsi" directory.  If
+#       it's not in "/dev/scsi", it cannot be configured.  But, this
+#       implementation assumes that if a device is not present, its
+#       path has failed.  Consequently, no error messages will be
+#       generated for missing paths.  This means that you may have a
+#       a failover group that consists of a single primary path with
+#       no alternates.
+#
+#       Additionally, there is a configuration directive available that
+#       will cause the program to emit debug information.  Placing
+#       "#verbose" at the start of a line, without the quotes, will
+#       enable the debug output.  The debug output is displayed for
+#       all subsequent configuration directives.  Once enabled, the
+#       debug output cannot be disabled.
+#
+#       Lines that begin with a "#" are considered comment lines.
+#       A "#" anywhere within a line signals the beginning of a comment.
+#       White space must separate the last parameter of a line and the #.
+#       Blank lines are also considered a comment.
+#
+#       --> Lines that begin with 'sc' will be skipped as it's likely a
+#       --> configuration error.
+#
+#       Sample configuration.  (Remember to omit the "#" the start of
+#       the line.)
+#
+#
+#  #    Name    Pri path | alt path | alt path | alt path
+#
+#       GroupA  sc6d50l0   sc7d50l0   sc8d50l0   sc9d50l0
+#       GroupB  sc6d51l0   sc7d51l0   sc8d51l0   sc9d51l0       # Some comment
+#       GroupC  sc6d52l0   sc7d52l0   sc8d52l0   sc9d52l0
+#
+#       One word of caution.  The switch to an alternate path is
+#       choreographed by the SGI logical volume manager.   An SGI logical
+#       volume manager is a requirement for failover to function.  XLV
+#       is an SGI logical volume manager.
+#
+#       Notes:
+#
+#       It is not possible to change the primary device of a group after
+#       the initial configuration by reordering the entries on the line
+#       and running /etc/init.d/failover start.  To change the primary, 
+#       scsifo may be used to switch to the next available path.
+#
+#       It is not possible to remove the primary of a group by deleting
+#       the entry from the group and running /etc/init.d/failover start.
+#       A reboot is necessary.
+#
+#       The "DOWN" displayed by hinv for the failed path will be removed by any
+#	successful access, whether by probing (scsiha(1m) -p), ioconfig(1m),
+#       a successful inquiry performed as a result of accessing the /dev/scsi
+#	device (such as with scsicontrol(1m)), or the /dev/dsk devices, etc.
+#	Note the a disk open may fail, but if the inquiry done at disk open
+#	time succeeds, the "DOWN" indicator will still be removed.
+#
+
+A       sc7d1l0 sc8d1l0
+B       sc7d1l1 sc8d1l1
+C       sc7d1l2 sc8d1l2
+D       sc7d1l3 sc8d1l3
+E       sc7d1l4 sc8d1l4
+F       sc7d1l5 sc8d1l5
+G       sc7d1l6 sc8d1l6
+H       sc7d1l7 sc8d1l7
+I       2000002037003be2/lun0/c3p1 2000002037003be2/lun0/c5p2
+J       2000002037003c6c/lun0/c5p2 2000002037003c6c/lun0/c3p1
+lun16   2000006016fe0cc0/lun16/c104p0 2000006016fe0cc0/lun16/c108p0 \\
+        2000006016fe0cc0/lun16/c110p0 2000006016fe0cc0/lun16/c109p0 \\
+        2000006016fe0cc0/lun16/c107p0 2000006016fe0cc0/lun16/c106p0 \\
+        2000006016fe0cc0/lun16/c105p0 2000006016fe0cc0/lun16/c103p0
+
+.SS Switching to an Alternate Path
+Failover is controlled by the SGI logical volume manager.  When the logical 
+volume manager receives notification of an i/o error,
+it requests failover to switch the erring device to an available alternate path.
+If the path switch is successful, 
+the SGI logical volume manager retries the failed i/o using the new path.
+.P
+The
+.IR "scsifo" (1m)
+command is available to permit the system administrator to manually request
+a switch to an alternate path.  While the scsifo command performs a switch,
+it is not detected by the SGI logical volume manager  until the SGI 
+logical volume manager
+receives an i/o error on the current path
+due to the path no longer being available.  The SGI logical volume manager  then 
+begins utilizing the new path.
+.SS Inventory Display
+The
+.IR "hinv" (1m)
+command will display the path status of primary and alternate paths configured in
+the /etc/failover.conf configuration file.  The following sample
+.IR "hinv"
+output reflects the above
+sample configuration file.  Three of the devices have failed over to the alternate
+path, perhaps via the
+.IR "scsifo"
+command.
+.P
+.nf
+Integral SCSI controller 7: Version Fibre Channel AIC-1160, revision 1
+  Disk drive: unit 1 on SCSI controller 7 (primary path)
+  Disk drive: unit 1,lun 1, on SCSI controller 7 (primary path)
+  Disk drive: unit 1,lun 2, on SCSI controller 7 (primary path)
+  Disk drive: unit 1,lun 3, on SCSI controller 7 (primary path)
+  Disk drive: unit 1,lun 4, on SCSI controller 7 (primary path)
+  Disk drive: unit 1,lun 5, on SCSI controller 7 (alternate path) DOWN
+  Disk drive: unit 1,lun 6, on SCSI controller 7 (alternate path) DOWN
+  Disk drive: unit 1,lun 7, on SCSI controller 7 (alternate path) DOWN
+Integral SCSI controller 8: Version Fibre Channel AIC-1160, revision 1
+  Disk drive: unit 1 on SCSI controller 8 (primary path)
+  Disk drive: unit 1,lun 1, on SCSI controller 8 (alternate path)
+  Disk drive: unit 1,lun 2, on SCSI controller 8 (alternate path)
+  Disk drive: unit 1,lun 3, on SCSI controller 8 (alternate path)
+  Disk drive: unit 1,lun 4, on SCSI controller 8 (alternate path)
+  Disk drive: unit 1,lun 5, on SCSI controller 8 (primary path)
+  Disk drive: unit 1,lun 6, on SCSI controller 8 (primary path)
+  Disk drive: unit 1,lun 7, on SCSI controller 8 (primary path)
+Integral SCSI controller 3: Version Fibre Channel QL2200
+  Fabric Disk: node 2000002037003be2 port 1 lun 0 on SCSI controller 3 (primary path)
+  Fabric Disk: node 2000002037003c6c port 1 lun 0 on SCSI controller 3 (alternate path)
+Integral SCSI controller 5: Version Fibre Channel QL2200
+  Fabric Disk: node 2000002037003be2 port 2 lun 0 on SCSI controller 5 (alternate path)
+  Fabric Disk: node 2000002037003c6c port 2 lun 0 on SCSI controller 5 (primary path)
+.fi
+.P
+By using the
+.IR "scsiha" (1m)
+command to reprobe the bus to which a down device is connected, presuming the device
+is now responding on the bus, the "DOWN" indicator displayed by
+.IR "hinv"
+can be cleared.
+.SH FILES
+.nf
+/etc/failover.conf
+/etc/init.d/failover
+/etc/init.d/xlv
+/var/sysgen/master.d/failover
+.fi
+.SH SEE ALSO
+autoconfig(1m),
+dks(5m),
+ds(7m),
+hinv(1m),
+ioconfig(1m),
+scsifo(1m),
+scsiha(1m),
+xlv_assemble(1m),
+and xlv(7m).
+.SH NOTES
+The group name specified within the
+.IR "/etc/failover.conf"
+file has no external visibility.  It cannot be correlated to the
+group number information displayed by the
+.IR "scsifo"
+command.

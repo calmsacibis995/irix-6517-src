@@ -1,0 +1,58 @@
+#! /bin/sh
+#
+# Munge the memory audit output
+# Build up a history of memory allocation and frees
+# then sort the output, removing known "leaks" caused by PDUs
+#
+# $Id: audit,v 1.1 1997/12/12 04:24:09 chatz Exp $
+#
+
+nawk '
+$1 != "audit:"	{ next }
+$4 == "malloc" || $4 == "calloc" || $4 == "valloc" || $4 == "strdup" { 
+		  if ($5 in file) {
+		    printf("Leak (%s): was %s %d bytes, now %s:%s %s %d bytes\n", $5, file[$5], size[$5], $2, $3, $4, $6);
+		    delete file[$5];
+		    delete size[$5];
+		  }
+		  file[$5] = $2 ":" $3;
+		  size[$5] = $6;
+		}
+$4 == "realloc"	{
+		  if ($5 != $6) {
+		    if ($5 in file) {
+		      delete file[$5];
+		      delete size[$5];
+		    }
+		    else if ($5 != "0x0") {
+		      printf("Realloc problem (%s): %s:%s reallocd unknown address %s for %s bytes\n", $6, $2, $3, $5, $7);
+		    }
+		  }
+		  else if (!($5 in file)) {
+		    printf("Realloc problem (%s): %s:%s reallocd unknown address %s for %s bytes\n", $6, $2, $3, $5, $7);
+		  }
+		  file[$6] = $2 ":" $3;
+		  size[$6] = $7;
+		}
+$4 == "free"	{
+		  if ($5 in file) {
+		    delete file[$5];
+		    delete size[$5];
+		  }
+		  else {
+		    printf("Unallocated Free (%s): %s:%s\n", $5, $2, $3);
+		  }
+		}
+END		{
+		  total = 0;
+		  for (i in file) {
+		    printf("%s bytes at %s by %s\n", size[i], i, file[i]);
+		    total += int(size[i]);
+		  }
+		  printf("Total memory still in use = %d bytes\n", total);
+		}' \
+| sed \
+	-e "/irix\.c:189/d" \
+	-e "/indom\.c:429/d" \
+| sort -n
+

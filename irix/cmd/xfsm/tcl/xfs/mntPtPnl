@@ -1,0 +1,251 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	mntPtPnl
+# Version:	$Revision: 1.3 $
+# Synopsis:	Encapsulates the panel that allows the user to specify a
+#		mount point for a file system, mount the file system, update
+#		/etc/fstab, whether to create the directory for the mount
+#		point and if so, what the owner/group/mode for the created
+#		directory should be.
+# Functions:	mntPt:realize
+#		mntPt:manage
+#		mntPt:setData
+#		mntPt:getData
+#		mntPt:_create
+#		mntPt:_mkMntPtCb
+#%COMMENT_END
+
+
+#########################################
+#		Public			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	mntPt:realize
+# Synopsis:	Initializes any class-wide data and creates an instance of
+#		the panel.  If an instance of this panel already exists for
+#		the given handle, no action is taken other than to return
+#		the top-level widget for the panel.
+# Arguments:	- handle	An identifier that is used as a key for storing
+#				(and later retrieving) the created widgets and
+#				any instance specific data.
+#		- parent	The parent for the created panel.
+#		- showDoMount	An optional parameter that indicates whether
+#				or not to display the "Mount File System"
+#				toggle button (default: false).
+#		- showFsTab	An optional parameter that indicates whether
+#				or not to display the "Update /etc/fstab"
+#				toggle button (default: false).
+#%COMMENT_END
+proc mntPt:realize { handle parent {showDoMount false} {showFsTab false} } \
+{
+	global		_GW_mntPt _GD_mntPt
+
+	if {! [info exists _GW_mntPt($handle,panel)]} {
+		set _GD_mntPt(toggles) {XFS_MNT_DIR_CREATE XFS_MOUNT_FS XFS_UPDATE_FSTAB}
+		set _GD_mntPt(texts1)  {XFS_MNT_DIR}
+		set _GD_mntPt(texts2)  \
+			{XFS_MNT_DIR_OWNER XFS_MNT_DIR_GROUP XFS_MNT_DIR_MODE}
+
+		set _GD_mntPt($handle,show,XFS_MNT_DIR_CREATE) true
+		set _GD_mntPt($handle,show,XFS_MOUNT_FS) $showDoMount
+		set _GD_mntPt($handle,show,XFS_UPDATE_FSTAB) $showFsTab
+
+		set _GW_mntPt($handle,panel) [mntPt:_create $handle $parent]
+		mntPt:_mkMntPtCb $handle false
+	}
+
+	return $_GW_mntPt($handle,panel)
+}
+
+#%COMMENT_BEGIN
+# Function:	mntPt:manage
+# Synopsis:	Manages an instance of the panel.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc mntPt:manage { handle } \
+{
+	global	_GW_mntPt _GD_mntPt
+
+	if {[info exists _GW_mntPt($handle,panel)]} {
+		$_GW_mntPt($handle,panel) manageChild
+		if {$_GD_mntPt($handle,show,XFS_UPDATE_FSTAB)} {
+			$_GW_mntPt($handle,XFS_UPDATE_FSTAB) setValues -set true
+		}
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	mntPt:setData
+# Synopsis:	Given a list of keyword/value pairs, fill in the appropriate
+#		field with the appropriate value.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- lst		A list of keyword/value pairs.
+#%COMMENT_END
+proc mntPt:setData { handle lst } \
+{
+	global		_GW_mntPt _GD_mntPt
+
+	foreach item $lst {
+		set x   [split $item ":"]
+		set key [string trim [lindex $x 0]]
+		set val [string trim [lindex $x 1]]
+
+		if {[lsearch -exact $_GD_mntPt(texts1) $key] != -1 ||
+		    [lsearch -exact $_GD_mntPt(texts2) $key] != -1} {
+			$_GW_mntPt($handle,$key) setString $val
+		} elseif {[lsearch -exact $_GD_mntPt(toggles) $key] != -1} {
+			$_GW_mntPt($handle,$key) setValues -set $val
+		}
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	mntPt:getData
+# Synopsis:	Reads the data from the panel and stores it in keyword/value
+#		pair format.  If an XmTextField is empty, it is assumed to be
+#		the default and is ignored.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- data		A reference to an array variable in which
+#				to store the data.
+#		- check		An optional parameter that indicates whether
+#				or not to check the data for completeness.
+#				(default value: true)
+#%COMMENT_END
+proc mntPt:getData { handle data {check true} } \
+{
+	global		_GW_mntPt _GD_mntPt
+	upvar $data	dat
+
+	if {! [info exists _GW_mntPt($handle,panel)]} {
+		return 1
+	}
+
+	foreach key $_GD_mntPt(texts1) {
+	    set val [string trim [$_GW_mntPt($handle,$key) getString]]
+	    if {[cequal $val ""]} {
+		if {[cequal $check "true"]} {
+		    $_GW_mntPt($handle,$key)-label getValues -labelString str
+		    lappend errs $str
+		}
+	    } else {
+		lappend dat "$key:$val"
+	    }
+	}
+
+	foreach key $_GD_mntPt(texts2) {
+		if {[$_GW_mntPt($handle,$key) isSensitive] == "false"} {
+			continue
+		}
+		set val [string trim [$_GW_mntPt($handle,$key) getString]]
+		if {! [cequal $val ""]} {
+			lappend dat "$key:$val"
+		}
+	}
+
+	foreach key $_GD_mntPt(toggles) {
+		if {$_GD_mntPt($handle,show,$key)} {
+			$_GW_mntPt($handle,$key) getValues -set val
+			lappend dat "$key:$val"
+		}
+	}
+
+	if {[info exists errs]} {
+		em:storeMsg fs error \
+		"The following fields are required:\n\t[join $errs "\n\t"]"
+		return 0
+	}
+
+	return 1
+}
+
+#########################################
+#		Private			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	mntPt:_create
+# Synopsis:	Creates an instance of the panel.
+# Arguments:	- handle	The identifier for the new instance.
+#		- parent	The parent for the created panel.
+#%COMMENT_END
+proc mntPt:_create { handle parent } \
+{
+	global		_GW_mntPt _GD_mntPt
+
+	set panel [sgiGrid $parent.$handle -numRows 2 -numColumns 2 \
+			-defaultSpacing 2]
+
+	set item XFS_MNT_DIR
+	xmLabel $panel.$item-label managed -row 0 -column 0
+	set _GW_mntPt($handle,$item) [xmText $panel.$item managed \
+			-row 0 -column 1 \
+			-columns 30]
+	$_GW_mntPt($handle,$item) modifyVerifyCallback \
+			"tfu:dirNameMvCb %w %ptr %length %doit"
+
+	set grid2 [sgiGrid $panel.grid2 -numRows 3 -numColumns 4 \
+			-row 1 -column 1 \
+			-defaultSpacing 2]
+
+	set row 0
+	foreach item $_GD_mntPt(toggles) {
+	    if {$_GD_mntPt($handle,show,$item)} {
+		set _GW_mntPt($handle,$item) [xmToggleButton $grid2.$item \
+			 managed -row $row -column 0]
+	    }
+	    incr row
+	}
+	$_GW_mntPt($handle,XFS_MNT_DIR_CREATE) valueChangedCallback \
+			"mntPt:_mkMntPtCb $handle %set"
+
+	set row 0;
+	foreach item $_GD_mntPt(texts2) {
+		xmLabel $grid2.$item-label managed -row $row -column 2
+		set _GW_mntPt($handle,$item) [xmText $grid2.$item managed \
+				-row $row -column 3 \
+				-resizeHorizontal false \
+				-editable true \
+				-columns 10 \
+				-maxLength 10]
+		incr row
+	}
+	$_GW_mntPt($handle,XFS_MNT_DIR_MODE) setValues -columns 4 -maxLength 4
+
+	$grid2 manageChild
+
+	$grid2 columnResizable 0 false
+	$grid2 columnResizable 1 false
+	$grid2 columnResizable 2 false
+	$grid2 columnMargin 1 6
+	$panel columnResizable 0 false
+	
+	return $panel
+}
+
+#%COMMENT_BEGIN
+# Function:	mntPt:_mkMntPtCb
+# Synopsis:	This is the XmNvalueChangedCallback function for the "Create
+#		Mount Point" toggle button.  It sets the sensitivity of the
+#		owner/group/mode input fields.
+# Arguments:	- handle	The identifier for the new instance.
+#		- set		The value of the XmNset resource.
+#%COMMENT_END
+proc mntPt:_mkMntPtCb { handle set } \
+{
+	global		_GW_mntPt _GD_mntPt
+
+	foreach item $_GD_mntPt(texts2) {
+		$_GW_mntPt($handle,$item) setSensitive $set
+		$_GW_mntPt($handle,$item)-label setSensitive $set
+	}
+}

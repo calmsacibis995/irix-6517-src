@@ -1,0 +1,804 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	vmPlxGraphPnl
+# Version:	$Revision: 1.4 $
+# Synopsis:	Encapsulates the panel that displays graphic representing
+#		one or more plexes.
+# Functions:	plxGrph:realize
+#		plxGrph:setNumPlexes
+#		plxGrph:fillPlexes
+#		plxGrph:clear
+#		plxGrph:getWidth
+#		plxGrph:setWidth
+#		plxGrph:registerPlexAction
+#		plxGrph:registerVeAction
+#		plxGrph:validSelection
+#		plxGrph:selectPlex
+#		plxGrph:selectVe
+#		plxGrph:deselect
+#		plxGrph:_create
+#		plxGrph:_createVes
+#		plxGrph:_plexAction
+#		plxGrph:_veAction
+#		plxGrph:_plexSelect
+#		plxGrph:_veSelect
+#		plxGrph:_plexDeselect
+#		plxGrph:_veDeselect
+#		plxGrph:_configure
+#%COMMENT_END
+
+#########################################
+#		Public			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	plxGrph:realize
+# Synopsis:	Creates an instance of the panel.  On the first call, any
+#		class-wide data is initialized.  If an instance of this
+#		panel already exists for the given handle, no action is taken.
+#		other than to return the top-level widget for the panel.
+# Arguments:	- handle	An identifier that is used as a key for storing
+#				(and later retrieving) the created widgets and
+#				any instance specific data.
+#		- parent	The parent for the created panel.
+# Return Value:	The widget id of the panel.
+#%COMMENT_END
+proc plxGrph:realize { handle parent } \
+{
+	global		_GW_plxGrph _GD_plxGrph
+
+	####	One time initialization
+	if {! [info exists _GD_plxGrph(initialized)]} {
+		####	Make sure we don't go through this again
+		set _GD_plxGrph(initialized) true
+
+		set _GD_plxGrph(maxplexes)	4
+		set _GD_plxGrph(maxves)		128
+		set _GD_plxGrph(normal)		4000
+		set _GD_plxGrph(minpct)		1
+		set _GD_plxGrph(vechunk)	4
+
+		set _GD_plxGrph(vebg)		[matrix:getBackground bg]
+		set _GD_plxGrph(vebgs)		[matrix:getBackground ts]
+		set _GD_plxGrph(vefont)		\
+		    "-adobe-courier-bold-r-normal--12-120-75-75-m-70-iso8859-1"
+	}
+
+	####	Per instance initialization / creation
+	if {! [info exists _GW_plxGrph($handle,panel)]} {
+		set _GD_plxGrph($handle,plex,actions) ""
+		set _GD_plxGrph($handle,ve,actions) ""
+		set _GD_plxGrph($handle,min_pct) 100
+		set _GD_plxGrph($handle,numplexes) 4
+		set _GD_plxGrph($handle,posfactor)	\
+		    [expr $_GD_plxGrph(normal) / $_GD_plxGrph(maxplexes)]
+
+		loop i 0 4 1 {
+			set _GD_plxGrph($handle,plex$i,size) 0
+			set _GD_plxGrph($handle,plex$i,managed) ""
+		}
+
+		set _GW_plxGrph($handle,panel) [plxGrph:_create $handle $parent]
+	}
+
+	return $_GW_plxGrph($handle,panel)
+}
+
+#%COMMENT_BEGIN
+# Function:	plxGrph:setNumPlexes
+# Synopsis:	Sets the number of visible plexes in the graph.  The number
+#		of visible plexes should match the number of plexes in the
+#		currently graphed sub-volume.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- num		The number of visible plexes in the graph.
+# Return Value:	None
+#%COMMENT_END
+proc plxGrph:setNumPlexes { handle num } \
+{
+	global		_GW_plxGrph _GD_plxGrph
+
+	loop plex 0 $num 1 {
+		$_GW_plxGrph($handle,form$plex) manageChild
+	}
+	loop plex $num $_GD_plxGrph(maxplexes) 1 {
+		$_GW_plxGrph($handle,form$plex) unmanageChild
+	}
+	set _GD_plxGrph($handle,numplexes) $num
+}
+
+#%COMMENT_BEGIN
+# Function:	plxGrph:fillPlexes
+# Synopsis:	Displays the plex data for a sub-volume.  The ve's of all the
+#		plexes are sized proportionally to give an approximate
+#		depiction of their relative size.  The total size of each
+#		plex is displayed above the corresponding graphic.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- plexes	A list of plex descriptions.
+#		- size_unit	An optional parameter that specifies the units
+#				that the size of each plex should be displayed
+#				in.  (Default: mb)
+# Return Value:	None
+#%COMMENT_END
+proc plxGrph:fillPlexes { handle plexes {size_unit mb} } \
+{
+	global		_GW_plxGrph _GD_plxGrph
+
+	####
+	####	Unmanage everything
+	####
+	loop plex 0 $_GD_plxGrph(maxplexes) 1 {
+		$_GW_plxGrph($handle,plex$plex) unmanageChild
+		foreach item $_GD_plxGrph($handle,plex$plex,managed) {
+			$item unmanageChild
+		}
+		set _GD_plxGrph($handle,plex$plex,managed) ""
+	}
+
+	if {[llength $plexes] == 1} {
+		set plexes [lindex $plexes 0]
+	}
+
+	####
+	####	Get rid of preface
+	####
+	if {[llength $plexes]} {
+		set p_type [lvarpop plexes 0]
+		set p_size [lvarpop plexes 0]
+		set p_num [lvarpop plexes 0]
+	} else {
+		set p_type ""
+		set p_size ""
+		set p_num 0
+	}
+
+	####
+	####	Determine the largest plex
+	####
+	set maxsz 0
+	set min_pct 100
+	loop plex 0 $p_num 1 {
+		set p_data [lindex $plexes $plex]
+		if {$p_data == ""} {
+			continue
+		}
+		set ve_num [llength $p_data]
+		incr ve_num -1
+		set maxsz [max $maxsz [lindex [lindex $p_data $ve_num] 2]]
+	}
+
+	####	Set attachments
+	loop plex 0 $p_num 1 {
+		set plex_data [lvarpop plexes 0]
+		set size($plex) 0
+		if {$plex_data == ""} {
+			continue
+		}
+		foreach ve $plex_data {
+			set size($plex) [expr $size($plex) + \
+					 ([lindex $ve 2] - [lindex $ve 1])]
+		}
+		set mves [xfsTransPartTable \
+				$_GD_plxGrph(normal) \
+				$_GD_plxGrph(minpct) \
+				$maxsz \
+				$plex_data]
+
+		####
+		####	Create more ve label widgets if we don't have enough
+		####
+		set ve_cnt [lindex [lindex $mves [expr [llength $mves] - 1]] 0]
+		set cur_cnt $_GD_plxGrph($handle,plex$plex,ve_cnt)
+		if {$ve_cnt >= $cur_cnt} {
+			set new_cnt $_GD_plxGrph($handle,plex$plex,ve_cnt)
+			while {$ve_cnt >= $new_cnt} {
+				set new_cnt \
+					[expr $new_cnt + $_GD_plxGrph(vechunk)]
+			}
+			
+			plxGrph:_createVes $handle \
+					$_GW_plxGrph($handle,plex$plex) \
+					$plex \
+					$cur_cnt \
+					$new_cnt
+			set _GD_plxGrph($handle,plex$plex,ve_cnt) $new_cnt
+		}
+
+		####
+		####	Display the ve's
+		####
+		foreach item $mves {
+			lassign $item ve_num tpos bpos
+			set min_pct [min $min_pct \
+					[expr (($bpos - $tpos) * 100) / \
+					$_GD_plxGrph(normal)]]
+			lappend _GD_plxGrph($handle,plex$plex,managed) \
+					$_GW_plxGrph($handle,$plex,$ve_num)
+			$_GW_plxGrph($handle,$plex,$ve_num) setValues \
+					-topPosition $tpos \
+					-bottomPosition $bpos
+		}
+	}
+	set _GD_plxGrph($handle,min_pct) $min_pct
+
+	####
+	####	Manage what needs managing
+	####
+	loop plex 0 $p_num 1 {
+		foreach item $_GD_plxGrph($handle,plex$plex,managed) {
+			$item manageChild
+		}
+		$_GW_plxGrph($handle,form$plex) setSensitive true
+		switch $size_unit {
+			kb { set sz [expr $size($plex) / 1024.0] }
+			blocks { set sz [expr $size($plex) / 2048.0] }
+			default { set sz $size($plex) }
+		}
+		set sz [format %.2f $sz]
+		set len [string length $sz]
+		if {$len > 8} {
+			set sz [string range $sz 0 [expr $len - 2]]
+		}
+		$_GW_plxGrph($handle,plex$plex-size) setValues -labelString $sz
+		$_GW_plxGrph($handle,plex$plex) manageChild
+	}
+
+	####
+	####	Disable the label if there's no corresponding plex
+	####
+	loop plex $p_num $_GD_plxGrph(maxplexes) 1 {
+		$_GW_plxGrph($handle,form$plex) setSensitive false
+		$_GW_plxGrph($handle,plex$plex-size) setValues -labelString 0.00
+	}
+
+	####	Make sure that the height/width of the graphic is set correctly
+	plxGrph:_configure $handle
+}
+
+#%COMMENT_BEGIN
+# Function:	plxGrph:clear
+# Synopsis:	Resets the graphic to the initial values.  Each plex size is
+#		set to 0.00 with no ve's.
+# Arguments:	- handle	The identifier for the desired instance.
+# Return Value:	None
+#%COMMENT_END
+proc plxGrph:clear { handle } \
+{
+	global		_GW_plxGrph _GD_plxGrph
+
+	$_GW_plxGrph($handle,base) unmanageChild
+
+	loop plex 0 $_GD_plxGrph(maxplexes) 1 {
+		$_GW_plxGrph($handle,plex$plex-size) setValues -labelString 0.00
+		$_GW_plxGrph($handle,plex$plex) unmanageChild
+		$_GW_plxGrph($handle,form$plex) setSensitive false
+		foreach item $_GD_plxGrph($handle,plex$plex,managed) {
+			$item unmanageChild
+		}
+		set _GD_plxGrph($handle,plex$plex,managed) ""
+	}
+
+	$_GW_plxGrph($handle,base) manageChild
+}
+
+#%COMMENT_BEGIN
+# Function:	plxGrph:getWidth
+# Synopsis:	This returns the width of the graphic as modified by the
+#		second argument (opt).  If "opt" is set to desired, a fixed
+#		amount is added to account for the width of the scroll bar.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- opt		An optional parameter that specifies whether
+#				the current or the desired width is to be
+#				returned.  (Default: current)
+# Return Value:	An integer width.
+#%COMMENT_END
+proc plxGrph:getWidth { handle {opt current} } \
+{
+	global		_GW_plxGrph
+
+	switch $opt {
+		current {
+			$_GW_plxGrph($handle,panel) getValues -width width
+		}
+		desired {
+			$_GW_plxGrph($handle,base) getValues -width width
+			set width [expr $width + 48]
+		}
+	}
+
+	return $width
+}
+
+#%COMMENT_BEGIN
+# Function:	plxGrph:setWidth
+# Synopsis:	Set the width of the graphic.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- width		The desired width for the graphic.
+# Return Value:	None
+#%COMMENT_END
+proc plxGrph:setWidth { handle width } \
+{
+	global		_GW_plxGrph
+
+	$_GW_plxGrph($handle,panel) setValues -width $width
+}
+
+#########################################
+#	Public: Register for Actions	#
+#########################################
+#%COMMENT_BEGIN
+# Function:	plxGrph:registerPlexAction
+# Synopsis:	This provides a way for other procedures to register a function
+#		to be called whenever <MB1> is pressed and released on the
+#		label above a plex graphic.  The called function is passed two
+#		arguments, the handle, and the plex number.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- action	The name of the function to be called.
+# Return Value:	None
+#%COMMENT_END
+proc plxGrph:registerPlexAction { handle action } \
+{
+	global		_GD_plxGrph
+
+	lappend _GD_plxGrph($handle,plex,actions) $action
+}
+
+#%COMMENT_BEGIN
+# Function:	plxGrph:registerVeAction
+# Synopsis:	This provides a way for other procedures to register a function
+#		to be called whenever <MB1> is pressed and released on one of
+#		ve's in the plex graphic.  The called function is passed three
+#		arguments, the handle, the plex number, and the ve number.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- action	The name of the function to be called.
+# Return Value:	None
+#%COMMENT_END
+proc plxGrph:registerVeAction { handle action } \
+{
+	global		_GD_plxGrph
+
+	lappend _GD_plxGrph($handle,ve,actions) $action
+}
+
+#########################################
+#	Public: Validation		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	plxGrph:validSelection
+# Synopsis:	Check to see if the passed in values for the plex/ve are
+#		valid in the current graphic.  If the value of the argument
+#		"ve" is the empty string (""), then this will only chech
+#		to see that the plex is valid.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- plex		The plex number to check.
+#		- ve		The ve number to check.
+# Return Value:	1 if the specified plex/ve are valid, 0 otherwise.
+#%COMMENT_END
+proc plxGrph:validSelection { handle plex ve } \
+{
+	global	_GD_plxGrph
+	set	rval 0
+
+	if {$plex >= 0 && $plex < $_GD_plxGrph(maxplexes)} {
+		if {$ve != ""} {
+			if {$ve >= 0 && \
+			    $ve < $_GD_plxGrph($handle,plex$plex,ve_cnt)} {
+					set rval 1
+			}
+		} else {
+			set rval 1
+		}
+	}
+
+	return $rval
+}
+
+#########################################
+#	Public: Selection		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	plxGrph:selectPlex
+# Synopsis:	Cause the specified plex in the graphic to be selected.  This
+#		will optionally call any actions registered for plex selection
+#		through plxGrph:registerPlexAction.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- plex		The number of the plex to select.
+#		- call_actions	An optional parameter that specifies whether
+#				or not to call the actions registered for
+#				plex selection.  (Default: false)
+# Return Value:	1 if the plex is valid, 0 otherwise.
+#%COMMENT_END
+proc plxGrph:selectPlex { handle plex {call_actions false} } \
+{
+	global		_GD_plxGrph
+
+	if {[plxGrph:validSelection $handle $plex ""]} {
+		if {$call_actions} {
+			plxGrph:_plexAction $handle $plex
+		} else {
+			plxGrph:_plexSelect $handle $plex
+		}
+		return 1
+	} else {
+		return 0
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	plxGrph:selectve
+# Synopsis:	Cause the specified ve in the graphic to be selected.  This
+#		will optionally call any actions registered for ve selection
+#		through plxGrph:registerVeAction.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- plex		The number of the plex that contains the ve.
+#		- ve		The number of the ve to select.
+#		- call_actions	An optional parameter that specifies whether
+#				or not to call the actions registered for
+#				ve selection.  (Default: false)
+# Return Value:	1 if the ve is valid, 0 otherwise.
+#%COMMENT_END
+proc plxGrph:selectVe { handle plex ve {call_actions false} } \
+{
+	global		_GD_plxGrph
+
+	if {[plxGrph:validSelection $handle $plex $ve]} {
+		if {$call_actions} {
+			plxGrph:_veAction $handle $plex $ve
+		} else {
+			plxGrph:_veSelect $handle $plex $ve
+		}
+		return 1
+	} else {
+		return 0
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	plxGrph:deselect
+# Synopsis:	Deselect any currently selected plex or ve.
+# Arguments:	- handle	The identifier for the desired instance.
+# Return Value:	None
+#%COMMENT_END
+proc plxGrph:deselect { handle } \
+{
+	plxGrph:_plexDeselect $handle
+	plxGrph:_veDeselect $handle
+}
+
+#########################################
+#		Private			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	plxGrph:_create
+# Synopsis:	Creates an instance of the panel.
+# Arguments:	- handle	The identifier for the new instance.
+#		- parent	The parent for the created panel.
+#%COMMENT_END
+proc plxGrph:_create { handle parent } \
+{
+	global		_GW_plxGrph _GD_plxGrph _GD_resources
+	set name	plxGrph
+
+	set panel [xmForm $parent.$name]
+	$panel setValues -translations "#augment <Configure>: \
+				action(plxGrph:_configure $handle)"
+
+	set label [xmLabel $panel.label managed \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none]
+
+	set _GW_plxGrph($handle,sw) [xmScrolledWindow $panel.sw \
+			-scrollingPolicy automatic \
+			-topAttachment attach_widget \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form \
+			-topWidget $label \
+			-topOffset 5]
+
+	set _GW_plxGrph($handle,base) [xmForm $_GW_plxGrph($handle,sw).form \
+			-resizePolicy resize_any \
+			-marginWidth 5 \
+			-marginHeight 5]
+	$_GW_plxGrph($handle,base) getValues \
+			-background _GD_plxGrph(plex,border,desel)
+	set _GD_plxGrph(plex,border,sel) black
+	$_GW_plxGrph($handle,sw) getValues -clipWindow _GW_plxGrph($handle,cw)
+	$_GW_plxGrph($handle,cw) setValues \
+			-background $_GD_plxGrph(plex,border,desel)
+
+	set font "-adobe-helvetica-medium-r-normal--14-140-75-75-p-77-iso8859-1"
+	set bfont "-adobe-helvetica-bold-r-normal--14-140-75-75-p-82-iso8859-1"
+
+	loop i 0 $_GD_plxGrph(maxplexes) 1 {
+
+		if {$i == 0} {
+			set _GW_plxGrph($handle,form$i) \
+				[xmForm $_GW_plxGrph($handle,base).form$i \
+				-topAttachment attach_form \
+				-leftAttachment attach_form \
+				-rightAttachment attach_none]
+		} else {
+			set att_num [expr $i - 1]
+			set _GW_plxGrph($handle,form$i) \
+				[xmForm $_GW_plxGrph($handle,base).form$i \
+				-topAttachment attach_form \
+				-leftAttachment attach_widget \
+				-rightAttachment attach_none \
+				-leftWidget $_GW_plxGrph($handle,form$att_num) \
+				-leftOffset 5]
+		}
+
+		set _GW_plxGrph($handle,plex$i-label) \
+			[xmLabel $_GW_plxGrph($handle,form$i).plex$i-label \
+			 managed \
+			-translations "#augment <Btn1Down>: \
+				action(plxGrph:_plexAction $handle $i)" \
+			-fontList $bfont \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form]
+		set _GW_plxGrph($handle,plex$i-size) \
+			[xmLabel $_GW_plxGrph($handle,form$i).plex$i-size \
+			 managed \
+			-translations "#augment <Btn1Down>: \
+				action(plxGrph:_plexAction $handle $i)" \
+			-fontList $font \
+			-labelString 000000.0 \
+			-topAttachment attach_widget \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-topWidget $_GW_plxGrph($handle,plex$i-label)]
+
+		set _GW_plxGrph($handle,plex$i) \
+			[xmForm $_GW_plxGrph($handle,form$i).plex$i \
+			-resizePolicy resize_any \
+			-background #bf615a \
+			-borderWidth 2 \
+			-borderColor $_GD_plxGrph(plex,border,desel) \
+			-translations "#override <Btn1Down>: \
+				action(plxGrph:_plexAction $handle $i)" \
+			-fractionBase $_GD_plxGrph(normal) \
+			-topAttachment attach_widget \
+			-leftAttachment attach_position \
+			-rightAttachment attach_position \
+			-bottomAttachment attach_form \
+			-topWidget $_GW_plxGrph($handle,plex$i-size) \
+			-topOffset 5 \
+			-leftPosition 50 \
+			-rightPosition 50 \
+			-leftOffset -16 \
+			-rightOffset -16]
+
+		plxGrph:_createVes $handle $_GW_plxGrph($handle,plex$i) \
+				$i 0 [expr $_GD_plxGrph(vechunk)]
+		set _GD_plxGrph($handle,plex$i,ve_cnt) $_GD_plxGrph(vechunk)
+	}
+	$_GW_plxGrph($handle,plex1) getValues \
+			-background _GD_plxGrph(plex,bg,desel) \
+			-topShadowColor _GD_plxGrph(plex,bg,sel)
+
+	loop i 0 $_GD_plxGrph(maxplexes) 1 {
+		$_GW_plxGrph($handle,form$i) manageChild
+	}
+	$_GW_plxGrph($handle,base) manageChild
+	$_GW_plxGrph($handle,sw) manageChild
+
+	return $panel
+}
+
+#%COMMENT_BEGIN
+# Function:	plxGrph:_createVes
+# Synopsis:	Creates the labels that represent the ve's for a given plex.
+#		This is set up such that it can be called multiple times
+#		with increasing values for the arguments "start" and "end".
+#		This allows the application to initially create a small number
+#		of ve labels (which should satisfy most plexes), and then
+#		create more as the need arises.  This is primarily an issue
+#		of perceived performance.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- plex		A list of plex descriptions.
+#		- start		The first number to use for creating a ve label.
+#		- end		The last number to use for creating a ve label.
+# Return Value:	None
+#%COMMENT_END
+proc plxGrph:_createVes { handle parent plex start end } \
+{
+	global		_GW_plxGrph _GD_plxGrph
+
+	loop ve $start $end 1 {
+		set _GW_plxGrph($handle,$plex,$ve) [xmLabel $parent.$plex-$ve \
+				-labelString $ve \
+				-width 32 \
+				-borderWidth 1 \
+				-background $_GD_plxGrph(vebg) \
+				-marginHeight 1 \
+				-fontList $_GD_plxGrph(vefont) \
+				-translations "#augment <Btn1Down>: \
+				 action(plxGrph:_veAction $handle $plex $ve)" \
+				-topAttachment attach_position \
+				-leftAttachment attach_form \
+				-rightAttachment attach_form \
+				-bottomAttachment attach_position]
+	}
+}
+
+#########################################
+#	Private: Actions		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	plxGrph:_plexAction
+# Synopsis:	This is called when a plex is selected by pressing <MB1> on
+#		the label above the plex graphic.  It selects the plex and
+#		then calls any actions registered through calls to
+#		plxGrph:registerPlexAction.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- plex		The number of the plex that received the event.
+# Return Value:	None
+#%COMMENT_END
+proc plxGrph:_plexAction { handle plex } \
+{
+	global		_GW_plxGrph _GD_plxGrph
+
+	plxGrph:_plexSelect $handle $plex
+	foreach item $_GD_plxGrph($handle,plex,actions) {
+		$item $handle $plex
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	plxGrph:_veAction
+# Synopsis:	This is called when a ve is selected by pressing <MB1> on the
+#		label representing a ve.  It selects the a ve and then calls
+#		any actions registered through plxGrph:registerVeAction.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- plex		The number of plex that contains the ve.
+#		- ve		The number of the ve that received the event.
+# Return Value:	None
+#%COMMENT_END
+proc plxGrph:_veAction { handle plex ve } \
+{
+	global		_GW_plxGrph _GD_plxGrph
+
+	plxGrph:_veSelect $handle $plex $ve
+	foreach item $_GD_plxGrph($handle,ve,actions) {
+		$item $handle $plex $ve
+	}
+}
+
+#########################################
+#	Private: Selection		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	plxGrph:_plexSelect
+# Synopsis:	This deselects any currently selected plex or ve and then
+#		selects the specified plex in the graphic.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- plex		The number of the plex to select.
+# Return Value:	None
+#%COMMENT_END
+proc plxGrph:_plexSelect { handle plex } \
+{
+	global		_GW_plxGrph _GD_plxGrph
+
+	plxGrph:_plexDeselect $handle
+	plxGrph:_veDeselect $handle
+
+	$_GW_plxGrph($handle,plex$plex) setValues \
+			-borderColor $_GD_plxGrph(plex,border,sel) \
+			-background $_GD_plxGrph(plex,bg,sel)
+
+	set _GD_plxGrph($handle,plex,selected) $_GW_plxGrph($handle,plex$plex)
+}
+
+#%COMMENT_BEGIN
+# Function:	plxGrph:_veSelect
+# Synopsis:	This deselects any currently selected plex or ve and then
+#		selects the specified ve in the graphic.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- plex		The number of the plex that contains the ve.
+#		- ve		The number of the ve to select.
+# Return Value:	None
+#%COMMENT_END
+proc plxGrph:_veSelect { handle plex ve } \
+{
+	global		_GW_plxGrph _GD_plxGrph
+
+	plxGrph:_plexDeselect $handle
+	plxGrph:_veDeselect $handle
+
+	$_GW_plxGrph($handle,$plex,$ve) setValues \
+			-background $_GD_plxGrph(vebgs)
+	set _GD_plxGrph($handle,ve,selected) $_GW_plxGrph($handle,$plex,$ve)
+
+	if {[$_GW_plxGrph($handle,$plex,$ve) isManaged]} {
+		scrollVisible $_GW_plxGrph($handle,sw) \
+				$_GW_plxGrph($handle,$plex,$ve) 0 10
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	plxGrph:_plexDeselect
+# Synopsis:	This deselects the currently selected plex.
+# Arguments:	- handle	The identifier for the desired instance.
+# Return Value:	None
+#%COMMENT_END
+proc plxGrph:_plexDeselect { handle } \
+{
+	global	_GD_plxGrph
+
+	if {[info exists _GD_plxGrph($handle,plex,selected)]} {
+		$_GD_plxGrph($handle,plex,selected) setValues \
+			-borderColor $_GD_plxGrph(plex,border,desel) \
+			-background $_GD_plxGrph(plex,bg,desel)
+		unset _GD_plxGrph($handle,plex,selected)
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	plxGrph:_veDeselect
+# Synopsis:	This deselects plex currently selected ve.
+# Arguments:	- handle	The identifier for the desired instance.
+# Return Value:	None
+#%COMMENT_END
+proc plxGrph:_veDeselect { handle } \
+{
+	global	_GD_plxGrph
+
+	if {[info exists _GD_plxGrph($handle,ve,selected)]} {
+		$_GD_plxGrph($handle,ve,selected) setValues \
+				-background $_GD_plxGrph(vebg)
+		unset _GD_plxGrph($handle,ve,selected)
+	}
+}
+
+#########################################
+#	Private: Utilities		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	plxGrph:_configure
+# Synopsis:	This is called whenever the panel is resized.  It makes sure
+#		that the graphic is sized correctly.
+# Arguments:	- handle	The identifier for the desired instance.
+# Return Value:	None
+#%COMMENT_END
+proc plxGrph:_configure { handle } \
+{
+	global		_GW_plxGrph _GD_plxGrph
+
+	$_GW_plxGrph($handle,cw) getValues \
+			-height cw_height \
+			-width cw_width
+	$_GW_plxGrph($handle,plex0-label) getValues -height h1
+	$_GW_plxGrph($handle,plex0-size) getValues -height h2
+	set minh [expr $cw_height - 15 - $h1 - $h2]
+	set minh [max $minh [expr (100 / $_GD_plxGrph($handle,min_pct)) * 16]]
+
+	loop plex 0 $_GD_plxGrph(maxplexes) 1 {
+		$_GW_plxGrph($handle,plex$plex) setValues -height $minh
+	}
+
+	set base_width 0
+	loop plex 0 $_GD_plxGrph($handle,numplexes) 1 {
+		$_GW_plxGrph($handle,form$plex) getValues -width width
+		set base_width [expr $base_width + $width]
+	}
+	set spacing [expr ($cw_width - $base_width) / \
+			($_GD_plxGrph($handle,numplexes) + 1)]
+
+	loop plex 0 $_GD_plxGrph($handle,numplexes) 1 {
+		$_GW_plxGrph($handle,form$plex) setValues \
+				-leftOffset $spacing
+	}
+}

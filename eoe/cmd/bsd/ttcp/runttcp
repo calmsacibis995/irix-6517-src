@@ -1,0 +1,142 @@
+#!/bin/sh
+#
+# runttcp -p proto [-d dest] [-R remote] [-L local] [-r run tag] [-N nBytes]
+#		   [-B singlesendsize]
+#
+# Executes a ttcp session both locally and remotely. Not all ttcp arguments are
+# used by this script - it's intended to be a simple performance neasurement 
+# tool. Hence, sink mode is used.
+# 
+# Arguments include:
+# -p	Protocol (tcp or udp)
+# -d	Destination (hostname, host alias, fully qualified domain name, or
+#	IP address in dot format) to which the local host will send. 
+# -R	Address of the remote host (hostname, host alias, fully qualified 
+#	domain name, or IP address in dot format) which will send to the
+#	local host. 
+# -L 	Address of the local host (hostname, host alias, fully qualified 
+#	domain name, or IP address in dot format) which the remote host
+#	will send to.
+# -r	Run tag. An integer which will be used to label output files and
+#	generate non-colliding port numbers if bidirectional tests are
+#	being run. A tag of "5" will generate local output files t5 (sender's
+#	output) and r5 (receiver's output) for tests where the local host is 
+#	the sender, and rt5 and rr5 for tests where the remote host is the 
+#	sender.  Defaults to 1.
+# -N    Total number of bytes to send. Defaults to 8 Meg (8*1024*1024, or
+#       8388608) in the 3.3-comparison case, to slightly more than 8 Meg
+#       (4*1460*1460, or 8526400) in the optimized Ethernet TCP case, and
+#       to slightly more than 8 meg (2000*4352, or 8704000) in the optimized
+#       FDDI TCP case. Optimized cases send only MTU-multiples for send
+#	sizes of 1 MTU or greater, so each packet will be MTU-sized.
+# -B    Buffer size to send when only a single run is desired. Defaults to the
+#       uncommented standard series defined below by "lengths".
+# 
+# Examples:
+# runttcp -p tcp -r 1 -d speaker 	: runs a TCP test with speaker as 
+# 					  the target host, and locally generates
+#					  output files called t1 and r1.
+#
+# runttcp -p udp -r 4 -R foo -L speaker : runs a UDP testfrom the remote host
+#					  foo to the local host speaker, and 
+#					  locally generates output files called
+#					  rt4 and rr4 .
+#
+# runttcp assumes that ttcp resides in /usr/etc on all hosts, and also assumes
+# that any remote hosts have an open guest account. Should that not be the case
+# (that is, if the remote hosts(s) are not SGI machines), edit the rsh command 
+# lines to use appropriate remote logins and the correct remote directory path
+# to ttcp.
+#
+# Bidirectional tests may be run by specifying -d , -R , and -L .
+# If -R is specified but -L is not, -L defaults to the system hostname
+# (which may not be on the same network as the -R IP address).
+#
+# The number of cases to be run and the send size per case are specified 
+# in the defined character string "lengths" below. Choose the "lengths" and
+# "nbytes" pair appropriate to your test. Edit lengths to add or remove 
+# send-size cases - customization is encouraged.
+
+USAGE="$0 -p proto [-d dest] [-L locaddr] [-R remaddr] [-r run] [-N nBytes] [-B single_sendsize]"
+
+# for comparison with 3.3 figures, uncomment only the next two lines
+lengths="128 256 512 1024 1460 2048 3072 3584 4096 5120 5400 6144 7168 8192"
+nBytes=`expr 8 \* 1024 \* 1024`
+
+# for Ethernet TCP optimum sends, uncomment only the next two lines
+#lengths="128 256 512 1024 1460 2920 5840 7300 8760 11680 14600 17520 35040 43800 58400 61320"
+#nBytes=`expr 4 \* 1460 \* 1460`
+
+# for FDDI TCP tests, uncomment only the next two lines.
+#lengths="128 256 512 1024 2048 4352 8704 13056 21760 30464 43520 52224 60928" 
+#nBytes=`expr 20000 \* 4352`
+
+myname=`hostname`
+run=1
+while getopts "p:d:r:L:R:N:B:" c; do
+    case $c in
+    p) proto="$OPTARG";;
+    d) dest="$OPTARG"; destination=yes;;
+    r) run="$OPTARG";;
+    R) hisname="$OPTARG"; remote=yes;;
+    L) myname="$OPTARG";; 
+    N) nBytes="$OPTARG";;
+    B) lengths="$OPTARG";;
+    \?) echo $USAGE; exit 1;;
+    esac
+done
+shift `expr $OPTIND - 1`
+if test "$#" != 0; then
+    echo $USAGE
+    exit 1
+fi
+if test "$proto" = "udp"; then
+   udp="-u"
+else
+   udp=""
+fi
+port=4000
+port=`expr $port + 100 \* $run`
+bport=`expr $port + 200 \* $run`
+echo "Starting $proto run $run"
+if test "$destination" = "yes"; then
+   op=t
+   output=$op$run
+   op=r
+   rout=$op$run
+   cp /dev/null $output
+   cp /dev/null $rout
+fi
+if test "$remote" = "yes"; then
+   bop=rt
+   bout=$bop$run
+   bop=rr
+   brout=$bop$run
+   cp /dev/null $bout
+   cp /dev/null $brout
+fi
+for buflen in $lengths; do
+   nBuf=`expr $nBytes / $buflen`
+   if test "$destination" = "yes"; then
+      echo "" >> $rout
+      rsh guest@$dest -n /usr/etc/ttcp -r -s $udp -p$port -n$nBuf -l$buflen >> $rout &
+   fi
+   if test "$remote" = "yes"; then
+      echo "" >> $brout
+      ttcp -r -s $udp -p$bport -n$nBuf -l$buflen >> $brout &
+   fi
+   sleep 2
+   echo "$buflen * $nBuf, port = $port"
+   if test "$remote" = "yes"; then
+      echo "" >> $bout
+      rsh guest@$hisname -n /usr/etc/ttcp -t -s $udp -p$bport -n$nBuf -l$buflen $myname >> $bout &
+   fi
+   if test "$destination" = "yes"; then
+      echo "" >> $output
+      ttcp -t -s $udp -p$port -n$nBuf -l$buflen $dest >> $output
+   fi
+   wait
+   sleep 4
+   port=`expr $port + 1`
+   bport=`expr $bport + 1`
+done

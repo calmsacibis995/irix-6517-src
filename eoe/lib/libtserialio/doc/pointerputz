@@ -1,0 +1,113 @@
+From cpirazzi Mon Nov 24 23:42:36 1997
+Subject: tserialio loops
+
+I noticed that you changed all the for loops from this sort of
+thing:
+
+ 1612:   urbidx = -1;
+ 1613:   for(i=0; i < N_URB; i++) 
+ 1614:     {
+ 1615:       if (urbtab[i].allocated == 0)
+ 1616:         {
+ 1617:           urbidx = i;
+ 1618:           break;
+ 1619:         }
+ 1620:     }
+
+to this sort of thing
+
+ 1629:   urb = (tsio_urb_t *)urbtab;
+ 1630:   urbidx = -1;
+ 1631:   for(i=0; i < N_URB; i++, urb++) 
+ 1632:     {
+ 1633:       if (urb->allocated == 0)
+ 1634:         {
+ 1635:           urbidx = i;
+ 1636:           break;
+ 1637:         }
+ 1638:     }
+
+despite what is commonly taught in compiler classes these days, I have
+found that our compilers generate as good or better code with the
+first form than the second form.
+
+I discovered that one reason for this is that all our compiler people
+are ex-fortran heads, and in fortran the first form is the only
+choice, so they spent all their time optimizing the first form :)
+
+for example, I put the two code segments above in tserialio.c and compiled
+it non-debug.
+
+here is the resulting assembly.  i rearranged a few instructions
+used by both loops to form the preamble:
+
+preamble (used equally by both):
+
+[1613] 0x f54:  ff b4 00 40           sd        s4,64(sp)       
+[1613] 0x f58:  24 14 00 10           li        s4,16
+[1613] 0x f5c:  ff b6 00 48           sd        s6,72(sp)       
+[1613] 0x f7c:  ff b1 00 30           sd        s1,48(sp)       
+  
+first form:
+
+ 1612:   urbidx = -1;
+ 1613:   for(i=0; i < N_URB; i++) 
+[1613] 0x f38:  00 00 10 25           move      v0,zero
+[1613] 0x f50:  8f 85 88 04           lw        a1,-30716(gp)   
+         [f54 above]
+         [f58 above]
+         [f5c above]
+[1612] 0x f60:  24 16 ff ff           li        s6,-1
+[1613] 0x f64:  8c a3 00 00           lw        v1,0(a1)        
+[1613] 0x f68:  10 60 00 77           beq       v1,zero,0x1148
+[1613] 0x f6c:  24 a5 00 4c           addiu     a1,a1,76        
+[1613] 0x f70:  24 42 00 01           addiu     v0,v0,1 
+[1613] 0x f74:  54 54 ff fc           bnel      v0,s4,0xf68
+[1613] 0x f78:  8c a3 00 00           lw        v1,0(a1)        
+         [f7c above]
+ 1614:     {
+ 1615:       if (urbtab[i].allocated == 0)
+ 1616:         {
+ 1617:           urbidx = i;
+ 1618:           break;
+[1618] 0x1148:  10 00 ff 8c           b         0xf7c
+[1617] 0x114c:  00 40 b0 25           move      s6,v0
+ 1619:         }
+ 1620:     }
+ 
+second form:
+
+ 1629:   urb = (tsio_urb_t *)urbtab;
+ 1630:   urbidx = -1;
+[1630] 0x f94:  24 16 ff ff           li        s6,-1
+[1629] 0x f98:  8f 91 88 04           lw        s1,-30716(gp)   
+ 1631:   for(i=0; i < N_URB; i++, urb++) 
+[1631] 0x f9c:  00 00 10 25           move      v0,zero
+[1631] 0x fa0:  8e 26 00 00           lw        a2,0(s1)        
+[1631] 0x fa4:  10 c0 00 6a           beq       a2,zero,0x1150
+[1631] 0x fa8:  26 31 00 4c           addiu     s1,s1,76        
+[1631] 0x fac:  24 42 00 01           addiu     v0,v0,1 
+[1631] 0x fb0:  54 54 ff fc           bnel      v0,s4,0xfa4
+[1631] 0x fb4:  8e 26 00 00           lw        a2,0(s1)        
+ 1632:     {
+ 1633:       if (urb->allocated == 0)
+ 1634:         {
+ 1635:           urbidx = i;
+ 1636:           break;
+[1636] 0x1150:  10 00 ff 99           b         0xfb8
+[1635] 0x1154:  00 40 b0 25           move      s6,v0
+ 1637:         }
+ 1638:     }
+
+notice that both loops are exactly 4 instructions long, and both
+code segments are 11 instructions long.
+
+I have found that this works for longer code segments as well.
+
+--
+
+besides, all those changes you put into tserialio.c makes it really
+hard to merge the changes from bonsai :0
+
+        - Chris Pirazzi
+

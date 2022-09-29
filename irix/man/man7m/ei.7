@@ -1,0 +1,447 @@
+.\" ei external interrupts
+.TH ei 7 "5 Jan 1994"
+.SH NAME
+ei \- external interrupts interface
+.SH SYNOPSIS
+.nf
+.sp .8v
+\f3#include <sys/ei.h>
+fd = open("/dev/external_int/1", O_RDONLY);
+.fi
+.SH DESCRIPTION
+.LP
+The special files in /dev/external_int provide access to the external
+interrupt interface on those machines which have such an
+interface. This interface allows separate machines to send and receive
+interrupts over a dedicated wire for purposes of inter-machine
+synchronization.  Using this device, a user process may generate
+outgoing interrupts to other machines, or receive interrupts from
+other machines in a variety of ways: the user process may request to
+block in an ioctl() until an interrupt is received; or may request
+that a signal be sent; or for the fastest possible reaction time, a
+library call is provided to allow the process to busy wait for an
+interrupt to arrive, thus avoiding syscall overhead.  The driver
+maintains per-process state, so any number of processes may open this
+device and use it without interfering with each other.
+.LP
+On systems with only one external interrupt interface, a single file
+called "1" will be present in the directory /dev/external_int. On
+systems with more than one external interrupt interface, the file "1"
+will be guaranteed to represent the interface adjacent to the system
+console.  other interfaces will be named "2", "3" etc. as per the
+whims of ioconfig(1).
+.LP
+Some ioctls are supported only on certain systems. Such limitations
+are noted in the ioctl descriptions below.
+.SH IOCTLS
+.TP
+.B \EIIOCENABLE
+Enables incoming interrupts at the hardware level.  Interrupts are
+disabled by default and must be enabled whenever the device is opened.
+This ioctl takes no arg.
+.TP
+.B \EIIOCDISABLE
+Disables incoming interrupts at the hardware level.  Interrupts are
+automatically disabled when the device is closed by the last process.
+This ioctl takes no arg.
+.TP
+.B \EIIOCENABLELB
+Enables loopback interrupt. When the local host generates an interrupt
+via EIIOCSTROBE, the interrupt loops back to the local host in
+addition to triggering a remote interrupt. This interrupt requires no
+external cabling. This ioctl is only available on Origin2000/200.
+NOTE: see
+.I BUGS
+below.
+.TP
+.B \EIIOCDISABLELB
+Disables loopback interrupt. Outgoing interrupts generated via
+EIIOCSTROBE will no longer loop back to the local host. This ioctl is
+only available on Origin2000/200.
+.TP
+.B \EIIOCSTROBE
+Generates an outgoing interrupt pulse. The output line is left
+deasserted after this ioctl completes. See
+.B \OUTPUT SELECTION
+below.
+.TP
+.B \EIIOCSETHI
+Asserts an outgoing interrupt line. The line is left asserted after
+this ioctl completes.  This function should be used exclusively for
+debugging purposes since leaving the external interrupt input to
+another machine asserted for a long time may cause problems on the
+receiving machine. See
+.B \OUTPUT SELECTION
+below.
+.TP
+.B \EIIOCSETLO
+Deasserts an outgoing interrupt line. See
+.B \OUTPUT SELECTION
+below.
+.TP
+.B \EIIOCPULSE
+Begin cyclical pulse generation. The hardware automatically triggers
+an outgoing interrupt pulse at a predefined frequency (see
+.B \EIIOCSETPERIOD
+). Use
+.B \EIIOCSETLO
+to stop pulse generation. This ioctl is only available on
+Origin2000/200.
+.TP
+.B \EIIOCSQUARE
+Begin square wave generation. The hardware automatically toggles the
+output at a predefined frequency (see
+.B \EIIOCSETPERIOD
+). Use
+.B \EIIOCSETLO
+to stop square wave generation. This ioctl is only available on
+Origin2000/200.
+.TP
+.B \EIIOCSETPERIOD
+Set the period for cyclical pulse and square wave generation. The
+argument is an int time value in microseconds (usec). This value
+must be in the range [28-511184] inclusive and will be rounded to the
+nearest multiple of 7.8 usec. This ioctl is only available on
+Origin2000/200.
+.TP
+.B \EIIOCGETPERIOD
+Get the period used for cyclical pulse and square wave generation. The
+argument is a pointer to an int in which to place the period
+value. The period is given in microseconds. This ioctl is only
+available on Origin2000/200.
+.TP
+.B \EIIOCRECV
+Waits until an interrupt is received.  The arg is a pointer to a
+structure of type
+.sp .8v
+ struct eiargs {
+     int intval;
+     struct timeval timeval;
+ };
+.sp .8v
+which is used both for input args and a return value.
+.P
+The intval field of the input args indicates whether or not to flush
+any queued interrupts.  Incoming interrupts are queued via a counter
+which is maintained per-process within the driver, indicating how many
+interrupts have arrived but have not yet been retrieved by that
+process.  If intval is set to 0 on input, the EIIOCRECV call will
+return immediately if there is a queued interrupt for the calling
+process in the driver.  However, if the intval member of arg is set to
+1 on input, all previously queued interrupts will be discarded; that
+is, the counter will be set to 0 before the call continues with normal
+processing.
+.P
+The timeval field of the input args indicates a timeout.  If the
+timeout is 0, the call is effectively a poll.  If the tv_sec field of
+timeval is -1, the call will never timeout.
+.P
+On return, intval is set to 1 if the call returned because of an
+interrupt, or 0 if the call returned because of the timeout.
+.TP
+.B \EIIOCSETSIG
+Instructs the driver to send a signal to the calling process when each
+interrupt arrives.  The arg is the integer value of the signal to be
+sent.  It is up to the process to do something useful with this
+signal.  Setting the signal to 0 disables this feature.  A forked
+child process does not inherit this signal.
+.TP
+.B \EIIOCSETOPW EIIOCSETIPW EIIOCSETSPW
+These functions are only required for Challenge/Onyx, and are silently
+ignored for all other systems.
+
+These functions set the value in microseconds, respectively, of the
+outgoing pulsewidth, the expected incoming pulsewidth, and the
+threshold beyond which an incoming pulse is deemed "stuck."  The arg
+in each case is an int.  The default values are restored when the
+device is closed by the last process. 
+
+The outgoing pulsewidth determines how long the output lines are
+asserted when the driver generates an outgoing interrupt.  This value
+should not be set too high, since the processor busy waits with all
+interrupts blocked during this time.  Likewise, too short a pulse will
+not be received by the remote machine.  The value must be in the range
+[2-1000].  The default is 10 microseconds.
+
+The expected incoming pulsewidth determines how long the interrupt
+handler will wait before returning.  The interrupt handler must not
+return while the input line is still asserted, otherwise multiple
+interrupts are received from the same input pulse, indicating to the
+driver that the line is "stuck" (see below).  The value must be in the
+range [2-1000].  The default is 10 microseconds.
+
+The "stuck" pulsewidth defines the minimum allowable time between
+distinct input pulses.  Any two pulses that arrive within this time
+are considered to be the same pulse.  This is used to detect a "stuck"
+input line which is always asserted.  This value must be in the range
+[5-1000000].  Setting the value too low will cause a single pulse to
+be processed as more than one interrupt, while setting the value too
+high will limit the maximum rate at which interrupts can be received.
+The default is 500 microseconds.
+.TP
+.B \EIIOCGETOPW EIIOCGETIPW EIIOCGETSPW
+These functions retrieve the value in microseconds, respectively, of
+the outgoing pulsewidth, the expected incoming pulsewidth, and the
+threshold beyond which an incoming pulse is deemed "stuck."  See above
+for descriptions of these values.  The arg in each case is a pointer
+to an int in which to return the value. These values are only
+variable on Challenge/Onyx. On other systems, the output and input
+pulse widths will be returned as defined by the hardware, and the
+stuck pulse width is always returned as zero.
+.TP
+.B \EIIOCSETSYSCPU
+Sets which cpu runs system calls to the driver.  The arg is the cpu
+number.  If arg is -1, system calls to the driver will run on whatever
+cpu the calling process is on.  This call overrides the built-in
+kernel configuration.  When the device is closed by all processes, the
+configured value is restored. This ioctl is only available on
+Challenge/Onyx. 
+.TP
+.B \EIIOCSETINTRCPU
+Sets which cpu handles incoming interrupts.  The arg is the cpu
+number.  This call overrides the built-in kernel configuration.  When
+the device is closed by all processes, the configured value is
+restored. The user must be superuser or have the CAP_DEVICE_MGT
+capability to assign the interrupt to a cpu which is configured as
+NOINTR (see system(4)). This ioctl is only available on
+Challenge/Onyx. On Origin2000/200 systems the interrupt may be
+directed to a particular cpu at kernel build time only (see
+system(4)).
+.SH OUTPUT SELECTION
+.LP
+On Challenge/Onyx systems, there are 4 output jacks and all are
+accessed via the file /dev/external_int/1. All output ioctls (
+.B \EIIOCSTROBE
+, 
+.B \EIIOCSETHI
+and
+.B \EIIOCSETLO
+) take an integer argument which is a bitmask whose 4 low order bits
+specify which of the 4 output jacks to operate on. (bit 0 specifies
+output 0, etc).
+.LP
+On Origin2000/200, there is one file in /dev/external_int per output
+jack and the output ioctls take no argument. Output jack selection is
+accomplished by opening the appropriate file in /dev/external_int.
+.SH DIAGNOSTICS
+All ioctls return 0 on success, -1 on error with errno set to indicate
+the error.  Possible values of errno are:
+.TP
+.B \EFAULT
+Indicates that the caller passed an illegal address as a pointer to
+return data.
+.TP
+.B \ENOMEM
+Indicates that the requested operation required memory allocation, and
+none was available.
+.TP
+.B \EINVAL
+Indicates an invalid parameter.
+.TP
+.B \EBUSY
+Is returned by EIIOCSETINTRCPU if a user-level-interrupt (ULI) is
+currently registered to handle the external interrupt. If setting of
+the interrupt cpu is desired, it must be done before ULI registration.
+.SH LIBRARY FUNCTIONS
+.TP
+.I NOTE
+The eicinit(), eicbusywait() and eicclear() functions are obsolete but
+still provided for backward compatibility. The functions described
+below are preferred.
+.TP
+.B \ void *eicinit_f(int fd);
+Sets up some state to allow busy waiting for interrupts. The caller
+must open the device and pass in a descriptor. On success, an opaque
+handle is returned which is passed to the remaining functions
+below. If an error occurs, a null pointer is returned and errno is
+set. The function does an implicit EIIOCENABLE. If the loopback
+interrupt is desired, the caller must use the EIIOCENABLELB ioctl
+after the call to eicinit_f().
+.I NOTE
+Since eicinit_f() does an implicit EIIOCENABLE, using EIIOCENABLELB
+causes both the internal loopback and external interrupts to be
+enabled simultaneously. If the external cable loops back to the same
+machine, this will cause each interrupt to be received twice (see BUGS
+below). This is easily avoided by turning off the external interrupt
+via EIIOCDISABLE after the call to eicinit_f().
+.TP
+.B \ int eicbusywait_f(void *handle, int spin);
+.I handle
+is the return value from eicinit_f(), identifying the device to
+be used. If 
+.I spin
+is 1, this call spins until an interrupt arrives, then returns 1.  If
+spin is 0, the call immediately returns 1 if there is an interrupt
+queued; otherwise it returnes 0.  Each interrupt is returned only
+once.  This function eliminates the overhead of a system call, but the
+tradeoff is that it hogs the processor.  Interrupts are queued, so an
+interrupt that arrived after the call to eicinit_f() but before this
+call will still be returned.  This call returns -1 if not preceeded by
+eicinit_f().
+.TP
+.B \ void eicclear_f(void *handle);
+.I handle
+is the return value from eicinit_f(), identifying the device to be
+used. Any previously queued interrupts on the device are cleared, causing
+eicbusywait_f() to wait until the next interrupt arrives.
+.SH DIAGNOSTICS
+The eicinit_f() function may set errno to any of the following:
+.TP
+.B \ENOMEM
+Indicates that the kernel is short on memory.
+.TP
+.B \EACCES
+Indicates that the descriptor passed in was not opened with O_RDONLY
+permissions.
+.SH NOTE ON INTERRUPT QUEUES
+.LP
+As mentioned above, the driver maintains a queue of incoming
+interrupts on a per-process basis for all processes that have the
+driver open. These interrupts are dequeued via the EIIOCRECV
+ioctl. There is a second queue of interrupts, maintained by library
+functions, which is accessed by the eicbusywait_f() function.  Dequeuing
+an interrupt from one of these queues does not dequeue it from the
+other.  If the process wishes to intermix these two interfaces, it
+will probably be necessary to dequeue each interrupt twice, or
+periodically flush one of the queues.  The EIIOCSETSIG ioctl instructs
+the driver to send a signal when an interrupt arrives, but in no way
+modifies queue behavior.  If the process wishes to take advantage of
+the queue, the signal handler will have to manipulate the queue with
+either the EIIOCRECV ioctl or the eicbusywait_f() library routine
+(preferably the latter, since it avoids syscall overhead).  This is in
+fact very useful since signals are not queued by the system, and may
+be lost if they occur too rapidly.  Using the interrupt queue, the
+signal handler can tell exactly how many interrupts have arrived even
+if a signal was discarded.
+.LP
+The user should note that in order for the driver to maintain the
+per-process queue of interrupts which is accessed by EIIOCRECV, it
+must know of the existence of the process in question. Typically, the
+driver first learns of a process's existence when the process does an
+open() on the device. However a process may gain access to the device
+without ever calling the open() function, for example a child process
+inheriting a file descriptor opened by its parent. The driver will not
+begin queueing interrupts on behalf of a process until it learns of
+the process's existence via the first open() or ioctl() call to the
+device. Any interrupts which occur before the first of one of these
+calls is issued by a process will not be queued for that process. Thus
+a child process which inherited a file descriptor to the device from
+its parent must issue some ioctl() call to begin interrupt queueing.
+.SH HARDWARE INTERFACE
+The Challenge/Onyx L/XL chassis has four outgoing interrupt sockets
+and two incoming interrupt sockets connected to the master IO4 board.
+The sockets are located by the label "interrupts."  The outgoing
+sockets, labeled "out 0, 1, 2 and 3" are asserted, respectively, by
+bits 0, 1, 2, and 3 of the EIIOCSTROBE arg.  Note that whereas the
+outputs may be asserted separately, it is impossible to distinguish
+which input is receiving a pulse, thus it is unimportant which input
+socket is used for receiving interrupts. Origin2000/200 systems have
+one output and one input jack per IO board, each pair of jacks is
+controlled by a separate device file.  The jacks used are male
+3-conductor 1/8 inch audio jacks identical to those found on portable
+stereo headphones. 
+.I NOTE:
+The jack conductors are not the same for all systems. The jack
+conductors are as follows:
+.sp .8v
+For Challenge/Onyx systems:
+.Ex
+\f1tip	Interrupt (active low)
+ring	+5V
+sleeve	Chassis Ground/Cable Shield
+.Ee
+.sp .8v
+For Origin systems:
+.Ex
+\f1tip	+5V
+ring	Interrupt (active low)
+sleeve	Chassis Ground/Cable Shield
+.Ee
+.sp .8v
+A two conductor shielded cable is used, with the two cable conductors
+wired to the +5V and Interrupt jack conductors, and the sleeve
+connected to the cable shield at both ends to maintain EMI integrity.
+.P
+When connecting a multitester to the jack, the common lead should be
+connected to the sleeve, and the + lead should be connected to the +5V
+and interrupt conductors simultaneously.  When the line is asserted,
+the multitester should read 0 volts.  When the line is deasserted, the
+multitester should read 5 volts.
+.P
+The input signals pass through an opto-isolator that has a damping
+effect.  The input signal must be of sufficient duration to drive the
+output of the opto-isolator low in order for the interrupt to be
+recognized by the receiving machine.  Current experimentation shows
+that the threshold is about 2.5 microseconds.  To be safe, the driver
+sets its default outgoing pulse width to 10 microseconds.  Any hardware
+not from Silicon Graphics that is driving this line should do the
+same.
+.P
+.Ex
+Internal driver circuit for output connector
+.sp .8v
+     +5 ---/\\/\\/\\-------- (output +5V connector)
+.sp .8v
+               ---------- (output interrupt connector)
+              |           open collector driver
+              |
+            |/
+         ---|
+            |\\
+              v
+              |
+              = (ground)
+.sp .8v
+Internal receiver circuit for input connector
+.sp .8v
+     (input +5V connector)  -------------
+                                         |
+                                         |
+                                        ---
+                    opto isolator LED   \\ /
+                                        ---
+                                         |
+                                         |
+     (input interrupt connector) --------
+.sp .8v
+.Ee
+.P
+The output connector can be wired directly to the input connector,
+taking care to connect the +5V output to the +5V input and the
+interrupt output to the interrupt input. See above to determine which
+jack conductors correspond to +5V and interrupt depending on which
+system is used. If some other device is used to drive the input, it
+must be a +5V source current limited with a 420ohm resistor in series,
+to avoid damaging the opto isolator.
+.SH BUGS
+.LP
+On Origin systems, a missing inverter on the IO6 board causes the
+incoming interrupt to be detected on the falling edge of the input
+pulse rather than the rising edge. This should only be an issue when
+simultaneously using external cabling and the internal loopback
+capability, or when mixing Challenge and Origin systems. In this
+former case, the internal loopback interrupt is triggered on the
+rising edge of the outgoing pulse, and the external interrupt on the
+remote machine is triggered on the falling edge of the incoming
+pulse. The delay between these two events is the pulse width, 23.4
+usec. Uniformity can be ensured by using an external cable to loop
+back to the local machine rather than using the internal loopback
+interrupt. 
+.P
+.I NOTE
+If both internal and external loopbacks are used on the same machine,
+each interrupt generated will be received twice, since the 23.4 usec
+interval between them is long enough for the first interrupt to be
+completely serviced and cleared before the second interrupt is
+triggered.
+.P
+For cyclical pulse generation, the interval between interrupts is
+still correct since the interval between the falling pulse edges is
+the same as the interval between the rising pulse edges.
+.P
+When triggering external interrupts on both Origin and Challenge
+systems, using the same pulse source, the Challenge systems will
+receive the interrupt correctly on the rising edge, and the Origin
+systems will receive the interrupt on the falling edge. The pulse
+width again determines the interval separating interrupt detection on
+the two systems.

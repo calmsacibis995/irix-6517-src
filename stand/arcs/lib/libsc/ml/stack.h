@@ -1,0 +1,1 @@
+#define SCSTKSIZE 0x20000

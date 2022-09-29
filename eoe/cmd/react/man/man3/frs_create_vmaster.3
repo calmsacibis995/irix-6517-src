@@ -1,0 +1,209 @@
+'\"! tbl | mmdoc
+'\"macro stdmacro
+.TH "Frame Scheduler" 3
+.SH NAME
+\f4frs_create_vmaster\f1 \- create a variable master frame scheduler object
+.Op c p a
+.SH SYNOPSIS
+\f4#include <sys/frs.h>\f1
+.PP
+\f4frs_t\(** frs_create_vmaster (int \f2cpu\fP, int \f2n_minors\fP, int \f2n_slaves\fP, frs_intr_info_t \f2*intr_info\fP);\f1
+.fi
+.SH DESCRIPTION
+\f4frs_create_vmaster\fP creates a variable frame scheduler object, allowing
+variable length minor frames, and multiple interrupt sources. These
+characteristics are defined by the interrupt information template passed
+into \f2intr_info\fP. 
+.P
+The master frame scheduler's cpu is specified using the \f2cpu\fP parameter,
+while the number of slaves is specified using \f2n_slaves\fP.
+.P
+The number of minor frames, and therefore the number of entries in the
+interrupt information template array, is specified using the \f2n_minors\fP
+parameter.
+.P
+\f4Interrupt Information Templates\fP
+.P
+Variable frame schedulers may drive each minor frame with a different interrupt
+source, as well as, define different durations for each minor frame. These
+two characteristics may be used together or separately, and are defined using
+an interrupt information template.
+.P
+An interrupt information template consists of an array of frs_intr_info_t data
+structures. Each element in the array represents a minor frame.  For example,
+the first element in the array represents the interrupt information for the
+first minor frame, and so on for \f2n_minors\fP frames.
+.P
+The frs_intr_info_t data structure contains two fields:
+\f2intr_source\fP and \f2intr_qualifier\fP.
+.P
+The \f2intr_source\fP field defines the interrupt source, and may be one of
+the following:
+.PP
+.TP 5
+\f4FRS_INTRSOURCE_CCTIMER\fP
+Use the synchronized clock timer with a period of \f2intr_qualifier\fP
+microseconds.
+.sp
+If the synchronized clock timer is chosen as an interrupt source,
+minor frames may be assigned different durations,
+but different interrupt sources cannot be used to trigger them.
+.TP
+\f4FRS_INTRSOURCE_CPUTIMER\fP
+Use the per-cpu timer with a period of \f2intr_qualifier\fP
+microseconds.
+.sp
+If multiple interrupt sources are selected, the per-cpu timer cannot
+be used as the interrupt source for the first minor frame. 
+.TP
+\f4FRS_INTRSOURCE_DRIVER\fP
+Use interrupts triggered by a kernel-level device driver, which is registered
+with the frame scheduler. Each device driver registered with the FRS has a
+unique registration number.  When selecting device interrupts, the
+target driver's registration number is specified
+by \f2intr_qualifier\fP.
+.sp
+The kernel-level device driver and vertical retrace (FRS_INTRSOURCE_VSYNC)
+interrupt sources cannot be used together.
+.sp
+If the FRS_INTRSOURCE_DRIVER interrupt source
+is used, it must (at a minimum) trigger the first minor frame.
+.TP
+\f4FRS_INTRSOURCE_EXTINTR\fP
+Use external interrupts (see ei(7)).
+In this case the \f2intr_qualifier\fP should be set to zero.
+.sp
+For the frame scheduler to recognize an external interrupt, the interrupt
+must be routed to the cpu of the master frame scheduler.
+.TP
+\f4FRS_INTRSOURCE_ULI\fP
+Use user-level device driver interrupts (see uli(3)).
+In this case the \f2intr_qualifier\fP should be set to zero.
+.sp
+For the frame scheduler to recognize a user-level interrupt, the interrupt
+must be routed to the cpu of the master frame scheduler.
+.TP
+\f4FRS_INTRSOURCE_USER\fP
+Use user-triggered pseudo-interrupts (see frs_userintr(3)).
+In this case the \f2intr_qualifier\fP should be set to zero.
+.TP
+\f4FRS_INTRSOURCE_VSYNC\fP
+Use the vertical retrace interrupt of graphics pipe number \f2intr_qualifier\fP.
+.sp
+The vertical retrace and the kernel-level device driver
+(FRS_INTRSOURCE_DRIVER) interrupt sources cannot be used together.
+.sp
+If the FRS_INTRSOURCE_VSYNC interrupt source
+is used, it must (at a minimum) trigger the first minor frame.
+.P
+The following example demonstrates how to define an interrupt information
+template for a frame scheduler having minor frames of different durations:
+.P
+Assume the application requires four minor frames, where each
+minor frame is triggered by the synchronized clock timer, and the duration
+of each minor frame is as follows: 100ms, 150ms, 200ms and 250ms.
+The interrupt information template may be defined as:
+.RS 0.5i
+.PP
+frs_intr_info_t intr_info[4];
+.PP
+intr_info[0].intr_source    = FRS_INTRSOURCE_CCTIMER;
+intr_info[0].intr_qualifier = 100000;
+.PP
+intr_info[1].intr_source    = FRS_INTRSOURCE_CCTIMER;
+intr_info[1].intr_qualifier = 150000;
+.PP
+intr_info[2].intr_source    = FRS_INTRSOURCE_CCTIMER;
+intr_info[2].intr_qualifier = 200000;
+.PP
+intr_info[3].intr_source    = FRS_INTRSOURCE_CCTIMER;
+intr_info[3].intr_qualifier = 250000;
+.RE
+.PP
+The following example demonstrates how to define an interrupt information
+template for a frame scheduler using multiple interrupt sources:
+.P
+Assume the application requires two minor frames, where the first minor
+frame is triggered by the vertical retrace interrupt and the second minor
+frame is triggered by the CPU timer.  Also assume the vertical retrace
+interrupt is running at 60Hz (every 16.6ms).  The following interrupt
+information template defines the the CPU timer interrupt of the second
+frame to fire 8.3ms after the vertical retrace interrupt:
+.RS 0.5i
+.PP
+frs_intr_info_t intr_info[2];
+.PP
+intr_info[0].intr_source    = FRS_INTRSOURCE_VSYNC;
+intr_info[0].intr_qualifier = 0;
+.PP
+intr_info[1].intr_source    = FRS_INTRSOURCE_CPUTIMER;
+intr_info[1].intr_qualifier = 8300;
+.RE
+.P
+Note that 8.3ms was chosen in this example, because it is known that the
+timer interrupt will fire before the next major frame's vsync interrupt.
+If 20ms was chosen for the timer instead, then a sequence error will occur
+(interrupts arriving in an order other than what was defined) and an error
+signal would be sent to the controller thread. See the
+\f2REACT Real-Time Programmer's Guide\fP for information on sequence errors
+and handling signals. 
+.P
+Detailed programming examples are available, which cover the use
+of the frame scheduler interfaces (including \f4frs_create_vmaster\fP),
+and are located in the following directory: /usr/share/src/react/examples.
+.P
+\f4frs_create_vmaster\fP will fail if one or more of the following
+conditions are true:
+.TP 15
+.SM
+\%[EINVAL]
+Invalid parameter
+.TP 15
+.SM
+\%[EINVAL]
+One or more of the selected interrupt sources is not supported on
+the target platform 
+.TP 15
+.SM
+\%[EFAULT]
+Invalid frame scheduler object or interrupt information template
+.TP 15
+.SM
+\%[ENOSPC]
+The system could not allocate an interrupt group
+.TP 15
+.SM
+\%[ENOMEM]
+The system could not allocate a frame scheduler object
+.TP 15
+.SM
+\%[EEXIST]
+A frame scheduler object already exists for the specified processor
+.TP 15
+.SM
+\%[EPERM]
+No permission to execute frame scheduler functions
+.TP 15
+.SM
+\%[EPERM]
+The calling pthread is not system scope
+.TP 15
+.SM
+\%[ENODEV]
+The REACT/Pro Frame Scheduler Subsystem has not been installed
+.P
+.SH "DIAGNOSTICS"
+Upon successful completion, a pointer to a Frame Scheduler object is
+returned.  Otherwise, NULL is returned and errno is set to indicate the
+error.
+.SH "SEE ALSO"
+\f4frs_create_master\f1(3),
+\f4frs_create_slave\f1(3),
+\f4frs_destroy\f1(3),
+\f4frs_start\f1(3),
+\f4frs_enqueue\f1(3),
+\f4frs_pthread_enqueue\f1(3),
+\f4frs_setattr\f1(3)
+.P
+The REACT Real-Time Programmer's Guide (insight(1)) covers Frame Scheduler
+principles and usage in detail.

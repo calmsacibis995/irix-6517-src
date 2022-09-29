@@ -1,0 +1,423 @@
+<!-- Produced by version 3.14 (11/22/96) of SGI Frame/SGML translator -->
+<CHAPTER LBL="3"><TITLE><XREFTARGET ID="32752">Controlling CPU Workload</TITLE><PARAGRAPH>This chapter describes how to use IRIX kernel features to make the execution of a real-time program predictable. Each of these features works in some way to dedicate hardware to your program's use, or to reduce the influence of unplanned interrupts on it. The main topics covered are:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH><XREF IDREF="76094" TYPE="TITLE">&ldquo;Using Priorities and Scheduling Queues&rdquo;</XREF> describes scheduling concepts, setting real-time priorities, and affinity and gang scheduling.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="48058" TYPE="TITLE">&ldquo;Minimizing Overhead Work&rdquo;</XREF> discusses how to remove all unnecessary interrupts and overhead work from the CPUs that you want to use for real-time programs.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="71892" TYPE="TITLE">&ldquo;Minimizing Interrupt Response Time&rdquo;</XREF> discusses the components of interrupt response time and how to minimize them.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="76094">Using Priorities and Scheduling Queues</TITLE><PARAGRAPH>The default IRIX scheduling algorithm is designed for a conventional time-sharing system, where the best results are obtained by favoring I/O-bound processes and discouraging CPU-bound processes. However, IRIX supports a variety of scheduling disciplines that are optimized for parallel processes. You can take advantage of these in different ways to suit the needs of different programs.</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>You can use the methods discussed here to make a real-time program more predictable. However, to reliably achieve a high frame rate, you should plan to use the REACT/Pro Frame Scheduler described in <XREF IDREF="96303" TYPE="TITLE">Chapter&nbsp;4</XREF>.</NOTE>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="54745">Scheduling Concepts</TITLE><PARAGRAPH>In order to understand the differences between scheduling methods you need to know some basic concepts.<INDEXTARGET ID="RPPG_ch031"><!-- POSTPROCESSDATA: RPPG_ch031|kernel:scheduling --><INDEXTARGET ID="RPPG_ch032"><!-- POSTPROCESSDATA: RPPG_ch032|scheduling --></PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="52834">Tick Interrupts</TITLE><PARAGRAPH>In normal operation, the kernel pauses to make scheduling decisions every 10 milliseconds in every CPU. The duration of this interval, which is called the &ldquo;tick&rdquo; because it is the metronomic beat of the scheduler, is defined in <INDEXTARGET ID="RPPG_ch033"><!-- POSTPROCESSDATA: RPPG_ch033|<ITALICS>sys/param.h</ITALICS> --><INDEXTARGET ID="RPPG_ch034"><!-- POSTPROCESSDATA: RPPG_ch034|kernel:tick --><INDEXTARGET ID="RPPG_ch035"><!-- POSTPROCESSDATA: RPPG_ch035|kernel:time slice --><INDEXTARGET ID="RPPG_ch036"><!-- POSTPROCESSDATA: RPPG_ch036|time slice --><INDEXTARGET ID="RPPG_ch037"><!-- POSTPROCESSDATA: RPPG_ch037|tick --><FILENAME>sys/param.h</FILENAME>. Every CPU is normally interrupted by a timer every tick interval. (However, the CPUs in a multiprocessor are not necessarily synchronized. Different CPUs may take tick interrupts at a different times.)</PARAGRAPH>
+<PARAGRAPH>During the tick interrupt the kernel updates accounting values, does other housekeeping work, and chooses which process to run next&mdash;usually the interrupted process, unless a process of superior priority has become ready to run. The tick interrupt is the mechanism that makes IRIX scheduling &ldquo;preemptive&rdquo;; that is, it is the mechanism that allows a high-priority process to take a CPU away from a lower-priority process.</PARAGRAPH>
+<PARAGRAPH>Before the kernel returns to the chosen process, it checks for pending signals, and may divert the process into a signal handler.</PARAGRAPH>
+<PARAGRAPH>You can stop the tick interrupt in selected CPUs in order to keep these interruptions from interfering with real-time programs&mdash;see <XREF IDREF="27459" TYPE="TITLE">&ldquo;Making a CPU Nonpreemptive&rdquo;</XREF>.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Time Slices</TITLE><PARAGRAPH>Each process has a guaranteed time slice, which is the amount of time it is normally allowed to execute without being preempted. By default the time slice is 10 ticks, or 100 ms, on a multiprocessor system and 2 ticks, or 20 ms, on a uniprocessor system. A typical process is usually blocked for I/O before it reaches the end of its time slice.<INDEXTARGET ID="RPPG_ch038"><!-- POSTPROCESSDATA: RPPG_ch038|process:time slice --></PARAGRAPH>
+<PARAGRAPH>At the end of a time slice, the kernel chooses which process to run next on the same CPU based on process priorities. When runnable processes have the same priority, the kernel runs them in turn.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="41392">Understanding the Real-Time Priority Band<INDEXTARGET ID="RPPG_ch039"><!-- POSTPROCESSDATA: RPPG_ch039|real-time priority band --></TITLE><PARAGRAPH>A real-time thread can select one of a range of 256 priorities (0-255) in the real-time priority band, using POSIX interfaces<INDEXTARGET ID="RPPG_ch0310"><!-- POSTPROCESSDATA: RPPG_ch0310|priority --><FUNCTION>&space;sched_setparam()</FUNCTION> or <FUNCTION>sched_setscheduler()</FUNCTION>. The higher the numeric value of the priority, the more important the thread. The range of priorities is shown in <XREF IDREF="17348" TYPE="GRAPHIC">Figure&nbsp;3-1</XREF>.</PARAGRAPH>
+<PARAGRAPH>It is important to consider the needs of the application and how it should interact with the rest of the system before selecting a real-time priority. In making this decision, consider the priorities of the system threads.</PARAGRAPH>
+<PARAGRAPH>IRIX manages system threads to handle kernel tasks, such as paging and interrupts. System daemon threads execute between priority range 90 and 109, inclusive. System device driver interrupt threads execute between priority range 200 and 239, inclusive.</PARAGRAPH>
+<PARAGRAPH>An application can set the priorities of its threads above those of the system threads, but this can adversely affect the behavior of the system. For example, if the disk interrupt thread is blocked by a higher priority user thread, disk data access is delayed until the user thread completes.</PARAGRAPH>
+<PARAGRAPH>Setting the priorities of application threads within or above the system thread range requires an advanced understanding of IRIX system threads and their priorities. The priorities of the IRIX system threads are found in <FILENAME>/var/sysgen/mtune/kernel</FILENAME>. If necessary, you can change these defaults using <COMMAND>systune</COMMAND>, although this is not recommended for most users (see the <REFPAGE>systune(1M)</REFPAGE> reference page for details).</PARAGRAPH>
+<PARAGRAPH>Many soft real-time applications simply need to execute ahead of time-share applications, so priority range 0 through 89 is best suited. Since time-share applications are not priority scheduled, a thread running at the lowest real-time priority (0) still executes ahead of all time-share applications. At times, however, the operating system briefly promotes time-share threads into the real-time band to handle time-outs and avoid priority inversion. In these special cases, the promoted thread's real-time priority is never boosted higher than 1.</PARAGRAPH>
+<!-- RASTERCONVERT: RPPG_ch03.cgm2 -->
+<PARAGRAPH><FIGURE><GRAPHIC FILE="RPPG_ch03-2.gif" POSITION="INLINE" SCALE="FALSE"><CAPTION LBL="3-1"><PREFIX>Figure 3-1 </PREFIX><XREFTARGET ID="17348">Real-Time Priority Band</CAPTION>
+</FIGURE>
+</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>Applications cannot depend on system services if they are running ahead of system threads, without observing system responsiveness timing guidelines.</NOTE>
+<PARAGRAPH>Interactive real-time applications (such as digital media) need low latency response times from the operating system, but changing interrupt thread behavior is undesirable. In this case, priority range 110 through and including 199 is the best choice, allowing execution ahead of system daemons but behind interrupt threads. Applications in this range are typically cooperating with a device driver, in which case the correct priority for the application is the priority of the device driver interrupt thread minus 50. If the application is multi-threaded, and multiple priorities are warranted, then priorities of threads should be no greater than the priority of the device driver interrupt thread minus 50. Note that threads running at a higher priority than system daemon threads should never run for more than a few milliseconds at a time, in order to preserve system responsiveness.</PARAGRAPH>
+<PARAGRAPH>Hard real-time applications can use priorities 240 through 254 for the most deterministic behavior and the lowest latencies. However, if threads running at this priority range ever reach the state where they consume 100% of the system's processor cycles, the system becomes completely unresponsive. Threads running at a higher priority than the interrupt threads should never run for more that a few hundred microseconds at a time, to preserve system responsiveness.</PARAGRAPH>
+<PARAGRAPH>Priority 255, the highest real-time priority, should not be used by applications. This priority is reserved for system use to handle timers for urgent real-time applications and kernel debugger interrupts. Applications running at this priority risk hanging the system.</PARAGRAPH>
+<PARAGRAPH>The proprietary IRIX interface for selecting a real-time priority, <FUNCTION>schedctl()</FUNCTION>, is supported for binary compatibility, but is not the interface of choice. The nondegrading real-time priority range of <FUNCTION>schedctl()</FUNCTION> is remapped onto the POSIX real-time priority band as priorities 90 through 118, as shown in <XREF IDREF="18492" TYPE="TABLE">Table&nbsp;3-1</XREF>.</PARAGRAPH>
+<TABLE COLUMNS="2"><CAPTION LBL="3-1"><PREFIX>Table 3-1 </PREFIX>&space;<EMPHASIS>(continued)        </EMPHASIS><XREFTARGET ID="18492">schedctl() Real-Time Priority Range Remapping</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="49"><PARAGRAPH>schedctl() </PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="49"><PARAGRAPH>POSIX</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH>39</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="49"><PARAGRAPH>90</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH>38</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="49"><PARAGRAPH>110</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH>37</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="49"><PARAGRAPH>111</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH>36</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="49"><PARAGRAPH>112</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH>35 </PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="49"><PARAGRAPH>113 </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH>34</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="49"><PARAGRAPH>114</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH>33</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="49"><PARAGRAPH>115</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH>32</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="49"><PARAGRAPH>116</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH>31</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="49"><PARAGRAPH>117</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH>30</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="49"><PARAGRAPH>118</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>Notice the large gap between the first two priorities; it preserves the scheduling semantics of <FUNCTION>schedctl()</FUNCTION> threads and system daemons.</PARAGRAPH>
+<PARAGRAPH>Real-time users are encouraged to use tools such as <COMMAND>par</COMMAND> and <COMMAND>irixview</COMMAND> to observe the actual priorities and dynamic behaviors of all threads on a running system (see the <REFPAGE>par(1)</REFPAGE> and <REFPAGE>irixview(1)</REFPAGE> reference pages for details).</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="25533">Understanding Affinity Scheduling</TITLE><PARAGRAPH>Affinity scheduling is a special scheduling discipline used in multiprocessor systems. You do not have to take action to benefit from affinity scheduling, but you should know that it is done.<INDEXTARGET ID="RPPG_ch0311"><!-- POSTPROCESSDATA: RPPG_ch0311|kernel:affinity scheduling --><INDEXTARGET ID="RPPG_ch0312"><!-- POSTPROCESSDATA: RPPG_ch0312|multiprocessor architecture:affinity scheduling --><INDEXTARGET ID="RPPG_ch0313"><!-- POSTPROCESSDATA: RPPG_ch0313|cache:affinity scheduling --><INDEXTARGET ID="RPPG_ch0314"><!-- POSTPROCESSDATA: RPPG_ch0314|affinity scheduling --><INDEXTARGET ID="RPPG_ch0315"><!-- POSTPROCESSDATA: RPPG_ch0315|scheduling:affinity type --></PARAGRAPH>
+<PARAGRAPH>As a process executes, it causes more and more of its data and instruction text to be loaded into the processor cache. This creates an &ldquo;affinity&rdquo; between the process and the CPU. No other process can use that CPU as effectively, and the process cannot execute as fast on any other CPU.</PARAGRAPH>
+<PARAGRAPH>The IRIX kernel notes the CPU on which a process last ran, and notes the amount of the affinity between them. Affinity is measured on an arbitrary scale.<INDEXTARGET ID="RPPG_ch0316"><!-- POSTPROCESSDATA: RPPG_ch0316|affinity value --></PARAGRAPH>
+<PARAGRAPH>When the process gives up the CPU&mdash;either because its time slice is up or because it is blocked&mdash;one of three things can happen to the CPU:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>The CPU runs the same process again immediately.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The CPU spins idle, waiting for work.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The CPU runs a different process.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>The first two actions do not reduce the process's affinity. But when the CPU runs a different process, that process begins to build up an affinity while simultaneously reducing the affinity of the earlier process.</PARAGRAPH>
+<PARAGRAPH>As long as a process has any affinity for a CPU, it is dispatched only on that CPU if possible. When its affinity has declined to zero, the process can be dispatched on any available CPU. The result of the affinity scheduling policy is that:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>I/O-bound processes, which execute for short periods and build up little affinity, are quickly dispatched whenever they become ready.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>CPU-bound processes, which build up a strong affinity, are not dispatched as quickly because they have to wait for &ldquo;their&rdquo; CPU to be free. However, they do not suffer the serious delays of repeatedly &ldquo;warming up&rdquo; a cache.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="86141">Using Gang Scheduling</TITLE><PARAGRAPH>You can design a real-time program as a family of cooperating, lightweight processes, created with <INDEXTARGET ID="RPPG_ch0317"><!-- POSTPROCESSDATA: RPPG_ch0317|kernel:gang scheduling --><INDEXTARGET ID="RPPG_ch0318"><!-- POSTPROCESSDATA: RPPG_ch0318|scheduling:gang type --><INDEXTARGET ID="RPPG_ch0319"><!-- POSTPROCESSDATA: RPPG_ch0319|gang scheduling --><FUNCTION>sproc()</FUNCTION>, sharing an address space. These processes typically coordinate their actions using locks or semaphores (<XREF IDREF="42590" TYPE="TITLE">&ldquo;Synchronization and Communication&rdquo;</XREF>).</PARAGRAPH>
+<PARAGRAPH>When process A attempts to seize a lock that is held by process B, one of two things can happen, depending on whether or not process is B is running concurrently in another CPU.<INDEXTARGET ID="RPPG_ch0320"><!-- POSTPROCESSDATA: RPPG_ch0320|lock:effect of gang scheduling --></PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>If process B is not currently active, process A spends a short time in a &ldquo;spin loop&rdquo; and then is suspended. The kernel selects a new process to run. Time passes. Eventually process B runs and releases the lock. More time passes. Finally process A runs and now can seize the lock.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>When process B is concurrently active on another CPU, it typically releases the lock while process A is still in the spin loop. The delay to process A is negligible, and the overhead of multiple passes into the kernel and out again is avoided.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>In a system with many processes, the first scenario is common even when processes A, B, and their siblings have real-time priorities. Clearly it is better if processes A and B are always dispatched concurrently.</PARAGRAPH>
+<PARAGRAPH>Gang scheduling achieves this. Any process in a share group can initiate gang scheduling. Then all the processes that share that address space are scheduled as a unit, using the priority of the highest-priority process in the gang. IRIX tries to ensure that all the members of the share group are dispatched when any one of them is dispatched.<INDEXTARGET ID="RPPG_ch0321"><!-- POSTPROCESSDATA: RPPG_ch0321|process group:and gang scheduling --></PARAGRAPH>
+<PARAGRAPH>You initiate gang scheduling with a call to <INDEXTARGET ID="RPPG_ch0322"><!-- POSTPROCESSDATA: RPPG_ch0322|<FUNCTION>schedctl()</FUNCTION> --><FUNCTION>schedctl()</FUNCTION>, as sketched in <XREF IDREF="16911" TYPE="TEXT">Example&nbsp;3-1</XREF>.</PARAGRAPH>
+
+<!-- WARNING: (47) Example captions should come at end of Example - detected on page 26 -->
+<!-- WARNINGLOCATION: PAGE = "26" SRC = "RPPG_ch03.mif" TAGTYPE = "PARA" TAG = "ExampleTitle" TAGCOUNT = "1" UID = "73516" TEXT = "."-->
+<EXAMPLE><CAPTION LBL="3-1"><PREFIX>Example 3-1 </PREFIX><XREFTARGET ID="16911">Initiating Gang Scheduling <INDEXTARGET ID="RPPG_ch0323"><!-- POSTPROCESSDATA: RPPG_ch0323|<FUNCTION>schedctl()</FUNCTION>:example code --></CAPTION></EXAMPLE>
+<CODE>
+if (-1 == schedctl(SCHEDMODE,SGS_GANG))
+{
+&nbsp;&nbsp;&nbsp;if (EPERM == errno)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;fprintf(stderr,"You forget to suid again\n");
+&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("schedctl");
+}
+</CODE>
+<PARAGRAPH>You can turn gang scheduling off again with another call, passing SGS_FREE in place of SGS_GANG.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Changing the Time Slice Duration</TITLE><PARAGRAPH>You can change the length of the time slice for all processes from its default (100 ms, multiprocessor systems/20 ms, uniprocessor systems) using the <COMMAND>systune</COMMAND> command (see the <REFPAGE>systune(1)</REFPAGE> reference page). The kernel variable is <VARIABLE>slice_size</VARIABLE>; its value is the number of tick intervals that make up a slice. There is probably no good reason to make a global change of the time-slice length.</PARAGRAPH>
+<PARAGRAPH>You can change the length of the time slice for one particular process using the <FUNCTION>schedctl()</FUNCTION> function (see the <REFPAGE>schedctl(2)</REFPAGE> reference page), as shown in <XREF IDREF="12833" TYPE="TEXT">Example&nbsp;3-2</XREF>.</PARAGRAPH>
+
+<!-- WARNING: (47) Example captions should come at end of Example - detected on page 26 -->
+<!-- WARNINGLOCATION: PAGE = "26" SRC = "RPPG_ch03.mif" TAGTYPE = "PARA" TAG = "ExampleTitle" TAGCOUNT = "5" UID = "73542" TEXT = "."-->
+<EXAMPLE><CAPTION LBL="3-2"><PREFIX>Example 3-2 </PREFIX><XREFTARGET ID="12833">Setting the Time-Slice Length</CAPTION></EXAMPLE>
+<CODE>
+#include &lt;sys/schedctl.h>
+int setMyTimeSliceInTicks(const int ticks)
+{
+&nbsp;&nbsp;&nbsp;int ret = schedctl(SLICE,0,ticks)
+&nbsp;&nbsp;&nbsp;if (-1 == ret)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{ perror("schedctl(SLICE)"); }
+&nbsp;&nbsp;&nbsp;return ret;
+}
+</CODE>
+<PARAGRAPH>You can lengthen the time slice for the parent of a process group that is gang-scheduled (see <XREF IDREF="86141" TYPE="TITLE">&ldquo;Using Gang Scheduling&rdquo;</XREF>). This keeps members of the gang executing concurrently longer. </PARAGRAPH>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="48058">Minimizing Overhead Work</TITLE><PARAGRAPH>A certain amount of CPU time must be spent on general housekeeping. Since this work is done by the kernel and triggered by interrupts, it can interfere with the operation of a real-time process. However, you can remove almost all such work from designated CPUs, leaving them free for real-time work.</PARAGRAPH>
+<PARAGRAPH>First decide how many CPUs are required to run your real-time application (regardless of whether it is to be scheduled normally, or as a gang, or by the Frame Scheduler). Then apply the following steps to isolate and restrict those CPUs. The steps are independent of each other. Each needs to be done to completely free a CPU.</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH><XREF IDREF="38943" TYPE="TITLE">&ldquo;Assigning the Clock Processor&rdquo;</XREF></PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="50476" TYPE="TITLE">&ldquo;Isolating a CPU From Sprayed Interrupts&rdquo;</XREF></PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="16684" TYPE="TITLE">&ldquo;Redirecting Interrupts&rdquo;</XREF></PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="87243" TYPE="TITLE">&ldquo;Restricting a CPU From Scheduled Work&rdquo;</XREF></PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="74709" TYPE="TITLE">&ldquo;Isolating a CPU From TLB Interrupts&rdquo;</XREF></PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="27459" TYPE="TITLE">&ldquo;Making a CPU Nonpreemptive&rdquo;</XREF></PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="38943">Assigning the Clock Processor</TITLE><PARAGRAPH>Every CPU that uses normal IRIX scheduling takes a &ldquo;tick&rdquo; interrupt that is the basis of process scheduling. However, one CPU does additional housekeeping work for the whole system, on each of its tick interrupts. You can specify which CPU has these additional duties using the privileged <COMMAND>mpadmin</COMMAND> command (see the <REFPAGE>mpadmin(1)</REFPAGE> reference page). For example, to make CPU 0 the clock CPU (a common choice), use</PARAGRAPH>
+<EXAMPLE>
+mpadmin -c 0 
+<INDEXTARGET ID="RPPG_ch0324"><!-- POSTPROCESSDATA: RPPG_ch0324|<COMMAND>mpadmin</COMMAND> command:assign clock processor --></EXAMPLE>
+<PARAGRAPH>The equivalent operation from within a program uses <FUNCTION>sysmp()</FUNCTION> as shown in <XREF IDREF="60468" TYPE="TEXT">Example&nbsp;3-3</XREF> (see also the <REFPAGE>sysmp(2)</REFPAGE> reference page).</PARAGRAPH>
+
+<!-- WARNING: (47) Example captions should come at end of Example - detected on page 27 -->
+<!-- WARNINGLOCATION: PAGE = "27" SRC = "RPPG_ch03.mif" TAGTYPE = "PARA" TAG = "ExampleTitle" TAGCOUNT = "1" UID = "73595" TEXT = " reference page)."-->
+<EXAMPLE><CAPTION LBL="3-3"><PREFIX>Example 3-3 </PREFIX><XREFTARGET ID="60468">Setting the Clock CPU <INDEXTARGET ID="RPPG_ch0325"><!-- POSTPROCESSDATA: RPPG_ch0325|<FUNCTION>sysmp()</FUNCTION>:example code --></CAPTION></EXAMPLE>
+<CODE>
+#include &lt;sys/sysmp.h>
+int setClockTo(int cpu)
+{
+&nbsp;&nbsp;&nbsp;int ret = sysmp(MP_CLOCK,cpu);
+&nbsp;&nbsp;&nbsp;if (-1 == ret) perror("sysmp(MP_CLOCK)");
+&nbsp;&nbsp;&nbsp;return ret;
+}
+</CODE>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Unavoidable Timer Interrupts</TITLE><PARAGRAPH>In machines based on the R4x00 CPU, even when the clock and fast timer duties are removed from a CPU, that CPU still gets an unwanted interrupt as a 5-microsecond &ldquo;blip&rdquo; every 80 seconds. Systems based on the R8000 and R10000 CPUs are not affected, and processes running under the Frame Scheduler are not affected even by this small interrupt.<INDEXTARGET ID="RPPG_ch0326"><!-- POSTPROCESSDATA: RPPG_ch0326|timer interrupts unavoidable --><INDEXTARGET ID="RPPG_ch0327"><!-- POSTPROCESSDATA: RPPG_ch0327|interrupts:unavoidable from timer --></PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="50476">Isolating a CPU From Sprayed Interrupts</TITLE><PARAGRAPH>By default, the Origin, Onyx2, CHALLENGE, and Onyx systems direct I/O interrupts from the bus to CPUs in rotation (called <INDEXTARGET ID="RPPG_ch0328"><!-- POSTPROCESSDATA: RPPG_ch0328|NOINTR statement --><INDEXTARGET ID="RPPG_ch0329"><!-- POSTPROCESSDATA: RPPG_ch0329|interrupt:isolating CPU from --><INDEXTARGET ID="RPPG_ch0330"><!-- POSTPROCESSDATA: RPPG_ch0330|CPU:isolating from sprayed interrupts --><INDEXTARGET ID="RPPG_ch0331"><!-- POSTPROCESSDATA: RPPG_ch0331|interrupt:spraying --><GLOSSARYITEM>spraying interrupts</GLOSSARYITEM>). You do not want a real-time process interrupted at unpredictable times to handle I/O. The system administrator can isolate one or more CPUs from sprayed interrupts by placing the NOINTR directive in the configuration file <FILENAME>/var/sysgen/system/irix.sm</FILENAME>. The syntax is</PARAGRAPH>
+<EXAMPLE>
+NOINTR <VARIABLE>cpu# </VARIABLE>[<VARIABLE>cpu#</VARIABLE>]...
+</EXAMPLE>
+<PARAGRAPH>Before the NOINTR directive takes effect, the kernel must be rebuilt using the command <COMMAND>/etc/autoconfig&nbsp;-vf</COMMAND>, and rebooted. </PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="16684">Redirecting Interrupts</TITLE><PARAGRAPH>To minimize latency of real-time interrupts, it is often necessary to direct them to specific real-time processors. This process is called interrupt redirection.<INDEXTARGET ID="RPPG_ch0332"><!-- POSTPROCESSDATA: RPPG_ch0332|bus:assign interrupt to CPU --><INDEXTARGET ID="RPPG_ch0333"><!-- POSTPROCESSDATA: RPPG_ch0333|CPU:assign interrupt to --><INDEXTARGET ID="RPPG_ch0334"><!-- POSTPROCESSDATA: RPPG_ch0334|interrupt:assign to CPU --><INDEXTARGET ID="RPPG_ch0335"><!-- POSTPROCESSDATA: RPPG_ch0335|<ITALICS>irix.sm</ITALICS> configuration file --><INDEXTARGET ID="RPPG_ch0336"><!-- POSTPROCESSDATA: RPPG_ch0336|IPL statement --></PARAGRAPH>
+<PARAGRAPH>A device interrupt can be redirected to a specific processor using the DEVICE_ADMIN directive in the <FILENAME>/usr/sysgen/system/irix.sm</FILENAME> file. </PARAGRAPH>
+<PARAGRAPH>The DEVICE_ADMIN and the NOINTR directives are typically used together to guarantee that the target processor only handles the redirected interrupts.</PARAGRAPH>
+<PARAGRAPH>For example, adding the following lines to the <FILENAME>irix.sm</FILENAME> system configuration file ensures that CPU 1 handles only PCI interrupt 4:</PARAGRAPH>
+<CODE>
+NOINTR 1
+DEVICE_ADMIN: /hw/module/1/slot/io1/baseio/pci/4 INTR_TARGET=/hw/cpunum/1
+</CODE>
+<NOTE><PREFIX>Note</PREFIX>The actual DEVICE_ADMIN directive varies depending on the system's hardware configuration.</NOTE>
+<PARAGRAPH>Before the directives take effect, the kernel must be rebuilt using the command <INDEXTARGET ID="RPPG_ch0337"><!-- POSTPROCESSDATA: RPPG_ch0337|<COMMAND>/etc/autoconfig</COMMAND> command --><COMMAND>/etc/autoconfig&nbsp;-vf</COMMAND>, and rebooted. </PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="82053">Understanding the Vertical Sync Interrupt</TITLE><PARAGRAPH>In systems with dedicated graphics hardware, the graphics hardware generates a variety of hardware interrupts. The most frequent of these is the vertical sync interrupt, which marks the end of a video frame. The vertical sync interrupt can be used by the Frame Scheduler as a time base (see <INDEXTARGET ID="RPPG_ch0338"><!-- POSTPROCESSDATA: RPPG_ch0338|vertical sync interrupt --><INDEXTARGET ID="RPPG_ch0339"><!-- POSTPROCESSDATA: RPPG_ch0339|interrupt:vertical sync --><XREF IDREF="84592" TYPE="TITLE">&ldquo;Vertical Sync Interrupt&rdquo;</XREF>). Certain GL and Open GL functions are internally synchronized to the vertical sync interrupt (for an example, refer to the <REFPAGE>gsync(3g)</REFPAGE> reference page).</PARAGRAPH>
+<PARAGRAPH>All the interrupts produced by dedicated graphics hardware are at an inferior priority compared to other hardware. All graphics interrupts including the vertical sync interrupt are directed to CPU 0. They are not &ldquo;sprayed&rdquo; in rotation, and they cannot be directed to a different CPU.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="87243">Restricting a CPU From Scheduled Work</TITLE><PARAGRAPH>For best performance of a real-time process or for minimum interrupt response time, you need to use one or more CPUs without competition from other scheduled processes. You can exert three levels of increasing control: <INDEXTARGET ID="RPPG_ch0340"><!-- POSTPROCESSDATA: RPPG_ch0340|CPU:restricting to assigned processes --><INDEXTARGET ID="RPPG_ch0341"><!-- POSTPROCESSDATA: RPPG_ch0341|restricting a CPU --><ITALICS>restricted</ITALICS>, <ITALICS>isolated</ITALICS>, and <ITALICS>nonpreemptive</ITALICS>.</PARAGRAPH>
+<PARAGRAPH>In general, the IRIX scheduling algorithms run a process that is ready to run on any CPU. This is modified by considerations of</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>affinity&mdash;CPUs are made to execute the processes that have developed affinity to them</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>processor group assignments&mdash;the <COMMAND>pset</COMMAND> command can force a specified group of CPUs to service only a given scheduling queue</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>You can <ITALICS>restrict</ITALICS> one or more CPUs from running any scheduled processes at all. The only processes that can use a restricted CPU are processes that you assign to those CPUs.</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>Restricting a CPU overrides any group assignment made with <INDEXTARGET ID="RPPG_ch0342"><!-- POSTPROCESSDATA: RPPG_ch0342|<COMMAND>pset</COMMAND> command:and restricted CPU --><COMMAND>pset</COMMAND>. A restricted CPU remains part of a group, but does not perform any work you assign to the group using <COMMAND>pset</COMMAND>.</NOTE>
+<PARAGRAPH>You can find out the number of CPUs that exist, and the number that are still unrestricted, using the <INDEXTARGET ID="RPPG_ch0343"><!-- POSTPROCESSDATA: RPPG_ch0343|<FUNCTION>sysmp()</FUNCTION>:number of CPUs --><FUNCTION>sysmp()</FUNCTION> function as in <XREF IDREF="19416" TYPE="TEXT">Example&nbsp;3-4</XREF>.</PARAGRAPH>
+
+<!-- WARNING: (47) Example captions should come at end of Example - detected on page 30 -->
+<!-- WARNINGLOCATION: PAGE = "30" SRC = "RPPG_ch03.mif" TAGTYPE = "PARA" TAG = "ExampleTitle" TAGCOUNT = "1" UID = "73644" TEXT = "."-->
+<EXAMPLE><CAPTION LBL="3-4"><PREFIX>Example 3-4 </PREFIX><XREFTARGET ID="19416">Number of Processors Available and Total <INDEXTARGET ID="RPPG_ch0344"><!-- POSTPROCESSDATA: RPPG_ch0344|<FUNCTION>sysmp()</FUNCTION>:example code --></CAPTION></EXAMPLE>
+<CODE>
+#include &lt;sys/sysmp.h>
+int CPUsInSystem = sysmp(MP_NPROCS);
+int CPUsNotRestricted = sysmp(MP_NAPROCS);
+</CODE>
+<PARAGRAPH>To restrict one or more CPUs, you can use <INDEXTARGET ID="RPPG_ch0345"><!-- POSTPROCESSDATA: RPPG_ch0345|<COMMAND>mpadmin</COMMAND> command:restrict CPU --><COMMAND>mpadmin</COMMAND>. For example, to restrict CPUs 4 and 5, you can use</PARAGRAPH>
+<EXAMPLE>
+mpadmin -r 4&lbreak;mpadmin -r 5
+</EXAMPLE>
+<PARAGRAPH>The equivalent operation from within a program uses <INDEXTARGET ID="RPPG_ch0346"><!-- POSTPROCESSDATA: RPPG_ch0346|<FUNCTION>sysmp()</FUNCTION>:restrict CPU --><FUNCTION>sysmp()</FUNCTION> as in <XREF IDREF="18518" TYPE="TEXT">Example&nbsp;3-5</XREF> (see also the <REFPAGE>sysmp(2)</REFPAGE> reference page).</PARAGRAPH>
+
+<!-- WARNING: (47) Example captions should come at end of Example - detected on page 30 -->
+<!-- WARNINGLOCATION: PAGE = "30" SRC = "RPPG_ch03.mif" TAGTYPE = "PARA" TAG = "ExampleTitle" TAGCOUNT = "5" UID = "73651" TEXT = " reference page)."-->
+<EXAMPLE><CAPTION LBL="3-5"><PREFIX>Example 3-5 </PREFIX><XREFTARGET ID="18518">Restricting a CPU <INDEXTARGET ID="RPPG_ch0347"><!-- POSTPROCESSDATA: RPPG_ch0347|<FUNCTION>sysmp()</FUNCTION>:example code --></CAPTION></EXAMPLE>
+<CODE>
+#include &lt;sys/sysmp.h>
+int restrictCpuN(int cpu)
+{
+&nbsp;&nbsp;&nbsp;int ret = sysmp(MP_RESTRICT,cpu);
+&nbsp;&nbsp;&nbsp;if (-1 == ret) perror("sysmp(MP_RESTRICT)");
+&nbsp;&nbsp;&nbsp;return ret;
+}
+</CODE>
+<PARAGRAPH>You remove the restriction, allowing the CPU to execute any scheduled process, with <INDEXTARGET ID="RPPG_ch0348"><!-- POSTPROCESSDATA: RPPG_ch0348|<FUNCTION>sysmp()</FUNCTION>:restrict CPU --><INDEXTARGET ID="RPPG_ch0349"><!-- POSTPROCESSDATA: RPPG_ch0349|<COMMAND>mpadmin</COMMAND> command:unrestrict CPU --><COMMAND>mpadmin&nbsp;-u</COMMAND> or with <FUNCTION>sysmp</FUNCTION>(MP_EMPOWER).</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>The following points are important to remember:</NOTE>
+<BULLETLIST><BULLET><PARAGRAPH>The CPU assigned to handle the scheduling clock (<XREF IDREF="38943" TYPE="TITLE">&ldquo;Assigning the Clock Processor&rdquo;</XREF>) must not be restricted.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The REACT/Pro Frame Scheduler automatically restricts and isolates any CPU it uses. See <XREF IDREF="96303" TYPE="TITLE">Chapter&nbsp;4</XREF>.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="43268">Assigning Work to a Restricted CPU</TITLE><PARAGRAPH>After restricting a CPU, you can assign processes to it using the command <INDEXTARGET ID="RPPG_ch0350"><!-- POSTPROCESSDATA: RPPG_ch0350|CPU:assign process to --><INDEXTARGET ID="RPPG_ch0351"><!-- POSTPROCESSDATA: RPPG_ch0351|process:assign to CPU --><INDEXTARGET ID="RPPG_ch0352"><!-- POSTPROCESSDATA: RPPG_ch0352|<COMMAND>runon</COMMAND> command --><COMMAND>runon</COMMAND> (see the <REFPAGE>runon(1)</REFPAGE> reference page). For example, to run a program on CPU 3, you could use</PARAGRAPH>
+<EXAMPLE>
+runon 3 ~rt/bin/rtapp
+</EXAMPLE>
+<PARAGRAPH>The equivalent operation from within a program uses <INDEXTARGET ID="RPPG_ch0353"><!-- POSTPROCESSDATA: RPPG_ch0353|<FUNCTION>sysmp()</FUNCTION>:assign process to CPU --><FUNCTION>sysmp()</FUNCTION> as in <XREF IDREF="61312" TYPE="TEXT">Example&nbsp;3-6</XREF> (see also the <REFPAGE>sysmp(2)</REFPAGE> reference page).</PARAGRAPH>
+
+<!-- WARNING: (47) Example captions should come at end of Example - detected on page 31 -->
+<!-- WARNINGLOCATION: PAGE = "31" SRC = "RPPG_ch03.mif" TAGTYPE = "PARA" TAG = "ExampleTitle" TAGCOUNT = "1" UID = "73668" TEXT = " reference page)."-->
+<EXAMPLE><CAPTION LBL="3-6"><PREFIX>Example 3-6 </PREFIX><XREFTARGET ID="61312">Assigning the Calling Process to a CPU <INDEXTARGET ID="RPPG_ch0354"><!-- POSTPROCESSDATA: RPPG_ch0354|<FUNCTION>sysmp()</FUNCTION>:example code --></CAPTION></EXAMPLE>
+<CODE>
+#include &lt;sys/sysmp.h>
+int runMeOn(int cpu)
+{
+&nbsp;&nbsp;&nbsp;int ret = sysmp(MP_MUSTRUN,cpu);
+&nbsp;&nbsp;&nbsp;if (-1 == ret) perror("sysmp(MP_MUSTRUN)");
+&nbsp;&nbsp;&nbsp;return ret;
+}
+</CODE>
+<PARAGRAPH>You remove the assignment, allowing the process to execute on any available CPU, with <INDEXTARGET ID="RPPG_ch0355"><!-- POSTPROCESSDATA: RPPG_ch0355|<FUNCTION>sysmp()</FUNCTION>:run process on any CPU --><FUNCTION>sysmp</FUNCTION>(MP_RUNANYWHERE). There is no command equivalent.</PARAGRAPH>
+<PARAGRAPH>The assignment to a specified CPU is inherited by processes created by the assigned process. Thus if you assign a real-time program with <INDEXTARGET ID="RPPG_ch0356"><!-- POSTPROCESSDATA: RPPG_ch0356|<FUNCTION>sproc()</FUNCTION>:CPU assignment inherited --><COMMAND>runon</COMMAND>, all the processes it creates run on that same CPU. More often you want to run multiple processes concurrently on multiple CPUs. There are three approaches you can take:</PARAGRAPH>
+<ORDEREDLIST><LIST><PARAGRAPH>Use the REACT/Pro Frame Scheduler, letting it restrict CPUs for you.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Let the parent process be scheduled normally using a nondegrading real-time priority. After creating child processes with<INDEXTARGET ID="RPPG_ch0357"><!-- POSTPROCESSDATA: RPPG_ch0357|<FUNCTION>schedctl()</FUNCTION> --><FUNCTION>&space;sproc()</FUNCTION>, use <FUNCTION>schedctl</FUNCTION>(SCHEDMODE,SGS_GANG) to cause the share group to be gang-scheduled. Assign a processor group to service the gang-scheduled process queue.</PARAGRAPH>
+<PARAGRAPH>The CPUs that service the gang queue cannot be restricted. However, if yours is the only gang-scheduled program, those CPUs are effectively dedicated to your program.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Let the parent process be scheduled normally. Let it restrict as many CPUs as it has child processes. Have each child process invoke <INDEXTARGET ID="RPPG_ch0358"><!-- POSTPROCESSDATA: RPPG_ch0358|<FUNCTION>sysmp()</FUNCTION> --><FUNCTION>sysmp</FUNCTION>(MP_MUSTRUN,<VARIABLE>cpu</VARIABLE>) when it starts, each specifying a different restricted CPU.</PARAGRAPH>
+</LIST>
+</ORDEREDLIST>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="74709">Isolating a CPU From TLB Interrupts</TITLE><PARAGRAPH>When the kernel changes the address space in a way that could invalidate TLB entries held by other CPUs, it broadcasts an interrupt to all CPUs, telling them to update their translation lookaside buffers (TLBs).<INDEXTARGET ID="RPPG_ch0359"><!-- POSTPROCESSDATA: RPPG_ch0359|CPU:isolating from TLB interrupts --><INDEXTARGET ID="RPPG_ch0360"><!-- POSTPROCESSDATA: RPPG_ch0360|TLB update interrupt --><INDEXTARGET ID="RPPG_ch0361"><!-- POSTPROCESSDATA: RPPG_ch0361|interrupt:TLB --></PARAGRAPH>
+<PARAGRAPH>You can <INDEXTARGET ID="RPPG_ch0362"><!-- POSTPROCESSDATA: RPPG_ch0362|<FUNCTION>sysmp()</FUNCTION>:isolate TLB interrupts --><ITALICS>isolate</ITALICS> the CPU so that it does not receive broadcast TLB interrupts. When you isolate a CPU, you also restrict it from scheduling processes. Thus isolation is a superset of restriction, and the comments in the preceding topic, <XREF IDREF="87243" TYPE="TITLE">&ldquo;Restricting a CPU From Scheduled Work&rdquo;</XREF>, also apply to isolation.</PARAGRAPH>
+<PARAGRAPH>The isolate command is <COMMAND>mpadmin -I</COMMAND>; the function is <FUNCTION>sysmp</FUNCTION>(MP_ISOLATE, <VARIABLE>cpu#</VARIABLE>). After isolation, the CPU synchronizes its TLB and instruction cache only when a system call is executed. This removes one source of unpredictable delays from a real-time program and helps minimize the latency of interrupt handling.</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>The REACT/Pro Frame Scheduler automatically restricts and isolates any CPU it uses.</NOTE>
+<PARAGRAPH>When an isolated CPU executes only processes whose address space mappings are fixed, it receives no broadcast interrupts from other CPUs. Actions by processes in other CPUs that change the address space of a process running in an isolated CPU can still cause interrupts at the isolated CPU. Among the actions that change the address space are:<INDEXTARGET ID="RPPG_ch0363"><!-- POSTPROCESSDATA: RPPG_ch0363|address space:functions that change --></PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>Causing a page fault. When the kernel needs to allocate a page frame in order to read a page from swap, and no page frames are free, it invalidates some unlocked page. This can render TLB and cache entries in other CPUs invalid. However, as long as an isolated CPU executes only processes whose address spaces are locked in memory, such events cannot affect it.<INDEXTARGET ID="RPPG_ch0364"><!-- POSTPROCESSDATA: RPPG_ch0364|page fault:causes TLB interrupt --></PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Extending a shared address space with <INDEXTARGET ID="RPPG_ch0365"><!-- POSTPROCESSDATA: RPPG_ch0365|<FUNCTION>brk()</FUNCTION>:modifies address space --><FUNCTION>brk()</FUNCTION>. Allocate all heap space needed before isolating the CPU.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Using <INDEXTARGET ID="RPPG_ch0366"><!-- POSTPROCESSDATA: RPPG_ch0366|MAP_LOCAL flag --><INDEXTARGET ID="RPPG_ch0367"><!-- POSTPROCESSDATA: RPPG_ch0367|MAP_AUTOGROW flag --><INDEXTARGET ID="RPPG_ch0368"><!-- POSTPROCESSDATA: RPPG_ch0368|<FUNCTION>shmctl()</FUNCTION> --><INDEXTARGET ID="RPPG_ch0369"><!-- POSTPROCESSDATA: RPPG_ch0369|<FUNCTION>shmget()</FUNCTION> --><INDEXTARGET ID="RPPG_ch0370"><!-- POSTPROCESSDATA: RPPG_ch0370|<FUNCTION>mprotect()</FUNCTION> --><INDEXTARGET ID="RPPG_ch0371"><!-- POSTPROCESSDATA: RPPG_ch0371|<FUNCTION>munmap()</FUNCTION> --><INDEXTARGET ID="RPPG_ch0372"><!-- POSTPROCESSDATA: RPPG_ch0372|<FUNCTION>mmap()</FUNCTION> --><FUNCTION>mmap()</FUNCTION>, <FUNCTION>munmap()</FUNCTION>, <FUNCTION>mprotect()</FUNCTION>, <FUNCTION>shmget()</FUNCTION>, or <FUNCTION>shmctl()</FUNCTION> to add, change or remove memory segments from the address space; or extending the size of a mapped file segment when MAP_AUTOGROW was specified and MAP_LOCAL was not. All memory segments should be established before the CPU is isolated.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Starting a new process with <INDEXTARGET ID="RPPG_ch0373"><!-- POSTPROCESSDATA: RPPG_ch0373|<FUNCTION>sprocsp()</FUNCTION> --><INDEXTARGET ID="RPPG_ch0374"><!-- POSTPROCESSDATA: RPPG_ch0374|<FUNCTION>sproc()</FUNCTION>:modifies address space --><FUNCTION>sproc()</FUNCTION>, thus creating a new stack segment in the shared address space. Create all processes before isolating the CPU; or use <FUNCTION>sprocsp()</FUNCTION> instead, supplying the stack from space allocated previously.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Accessing a new DSO using <INDEXTARGET ID="RPPG_ch0375"><!-- POSTPROCESSDATA: RPPG_ch0375|<FUNCTION>dlopen()</FUNCTION> --><INDEXTARGET ID="RPPG_ch0376"><!-- POSTPROCESSDATA: RPPG_ch0376|DSO --><INDEXTARGET ID="RPPG_ch0377"><!-- POSTPROCESSDATA: RPPG_ch0377|dynamic shared object. <ITALICS>See</ITALICS> DSO --><FUNCTION>dlopen()</FUNCTION> or by reference to a delayed-load external symbol (see the <REFPAGE>dlopen(3)</REFPAGE> and <REFPAGE>DSO(5)</REFPAGE> reference pages). This adds a new memory segment to the address space but the addition is not reflected in the TLB of an isolated CPU.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Calling <INDEXTARGET ID="RPPG_ch0378"><!-- POSTPROCESSDATA: RPPG_ch0378|<FUNCTION>cacheflush()</FUNCTION> --><FUNCTION>cacheflush()</FUNCTION> (see the <REFPAGE>cacheflush(2)</REFPAGE> reference page).</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Using DMA to read or write the contents of a large (many-page) buffer. For speed, the kernel temporarily maps the buffer pages into the kernel address space, and unmaps them when the I/O completes. However, these changes affect only kernel code. An isolated CPU processes a pending TLB flush when the user process enters the kernel for an interrupt or service function.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<SECTION3 LBL="" HELPID = ""><TITLE>Isolating a CPU When Performer Is Used</TITLE><PARAGRAPH>The Performer graphics library supplies utility functions to isolate CPUs and to assign Performer processes to the CPUs. You can read the code of these functions in the file <FILENAME>/usr/src/Performer/src/lib/libpfutil/lockcpu.c</FILENAME>. They use CPUs starting with CPU number 1 and counting upward. The functions can restrict as many as 1+2&times;<VARIABLE>&pgr;&igr;&pgr;&egr;&sgr;</VARIABLE> CPUs, where <VARIABLE>pipes</VARIABLE> is the number of graphical pipes in use (see the <REFPAGE>pfuFreeCPUs(3pf)</REFPAGE> reference page for details). The functions assume these CPUs are available for use.</PARAGRAPH>
+<PARAGRAPH>If your real-time application uses Performer for graphics&mdash;which is the recommended approach for high-performance simulators&mdash;you should use the libpfutil functions with care. You may need to replace them with functions of your own. Your functions can take into account the CPUs you reserve for other time-critical processes. If you already restrict one or more CPUs, you can use a Performer utility function to assign Performer processes to those CPUs.</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="27459">Making a CPU Nonpreemptive</TITLE><PARAGRAPH>After a CPU has been isolated, you can turn off the dispatching &ldquo;tick&rdquo; for that CPU (see <INDEXTARGET ID="RPPG_ch0379"><!-- POSTPROCESSDATA: RPPG_ch0379|tick:disabling --><INDEXTARGET ID="RPPG_ch0380"><!-- POSTPROCESSDATA: RPPG_ch0380|CPU:making nonpreemptive --><XREF IDREF="52834" TYPE="TITLE">&ldquo;Tick Interrupts&rdquo;</XREF>). This eliminates the last source of overhead interrupts for that CPU. It also ends preemptive process scheduling for that CPU. This means that the process now running continues to run until</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>it gives up control voluntarily by blocking on a semaphore or lock, requesting I/O, or calling <FUNCTION>sginap()</FUNCTION></PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>it calls a system function and, when the kernel is ready to return from the system function, a process of higher priority is ready to run</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>Some effects of this change within the specified CPU include the following:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>IRIX no longer ages degrading priorities. Priority ageing is done on clock tick interrupts.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>IRIX no longer preempts a low-priority process when a high-priority process becomes runnable, except when the low-priority process calls a system function.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Signals (other than SIGALARM) can only be delivered after I/O interrupts or on return from system calls. This can extend the latency of signal delivery.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>Normally an isolated CPU runs only a few, related, time-critical processes that have equal priorities, and that coordinate their use of the CPU through semaphores or locks. When this is the case, the loss of preemptive scheduling is outweighed by the benefit of removing the overhead and unpredictability of interrupts.</PARAGRAPH>
+<PARAGRAPH>To make a CPU nonpreemptive you can use <INDEXTARGET ID="RPPG_ch0381"><!-- POSTPROCESSDATA: RPPG_ch0381|<COMMAND>mpadmin</COMMAND> command:make CPU nonpreemptive --><COMMAND>mpadmin</COMMAND>. For example, to isolate CPU 3 and make it nonpreemptive, you can use</PARAGRAPH>
+<CODE>
+mpadmin -I 3
+mpadmin -D 3
+</CODE>
+<PARAGRAPH>The equivalent operation from within a program uses <INDEXTARGET ID="RPPG_ch0382"><!-- POSTPROCESSDATA: RPPG_ch0382|<FUNCTION>sysmp()</FUNCTION>:make CPU nonpreemptive --><FUNCTION>sysmp()</FUNCTION> as shown in <XREF IDREF="80538" TYPE="TEXT">Example&nbsp;3-7</XREF> (see the <REFPAGE>sysmp(2)</REFPAGE> reference page).</PARAGRAPH>
+
+<!-- WARNING: (47) Example captions should come at end of Example - detected on page 34 -->
+<!-- WARNINGLOCATION: PAGE = "34" SRC = "RPPG_ch03.mif" TAGTYPE = "PARA" TAG = "ExampleTitle" TAGCOUNT = "1" UID = "73711" TEXT = " reference page)."-->
+<EXAMPLE><CAPTION LBL="3-7"><PREFIX>Example 3-7 </PREFIX><XREFTARGET ID="80538">Making a CPU nonpreemptive <INDEXTARGET ID="RPPG_ch0383"><!-- POSTPROCESSDATA: RPPG_ch0383|<FUNCTION>sysmp()</FUNCTION>:example code --></CAPTION></EXAMPLE>
+<CODE>
+#include &lt;sys/sysmp.h>
+int stopTimeSlicingOn(int cpu)
+{
+&nbsp;&nbsp;&nbsp;int ret = sysmp(MP_NONPREEMPTIVE,cpu);
+&nbsp;&nbsp;&nbsp;if (-1 == ret) perror("sysmp(MP_NONPREEMPTIVE)");
+&nbsp;&nbsp;&nbsp;return ret;
+}
+</CODE>
+<PARAGRAPH>You reverse the operation with <FUNCTION>sysmp</FUNCTION>(MP_PREEMPTIVE) or with <COMMAND>mpadmin</COMMAND>&nbsp;-C. </PARAGRAPH>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="71892">Minimizing Interrupt Response Time</TITLE><PARAGRAPH>Interrupt response time is the time that passes between the instant when a hardware device raises an interrupt signal, and the instant when&mdash;interrupt service completed&mdash;the system returns control to a user process. IRIX guarantees a maximum <INDEXTARGET ID="RPPG_ch0384"><!-- POSTPROCESSDATA: RPPG_ch0384|interrupt:response time. <ITALICS>See</ITALICS> interrupt response time --><INDEXTARGET ID="RPPG_ch0385"><!-- POSTPROCESSDATA: RPPG_ch0385|response time. <ITALICS>See</ITALICS> interrupt response time --><INDEXTARGET ID="RPPG_ch0386"><!-- POSTPROCESSDATA: RPPG_ch0386|interrupt response time --><GLOSSARYITEM>interrupt response time</GLOSSARYITEM> on certain systems, but you have to configure the system properly to realize the guaranteed time.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="23937">Maximum Response Time Guarantee</TITLE><PARAGRAPH>In CHALLENGE/Onyx and POWER-CHALLENGE systems, interrupt response time is guaranteed not to exceed 200 microseconds in a properly configured system. The guarantee for Origin2000 and Onyx2 is the same (these systems generally achieve shorter response times in practice).<INDEXTARGET ID="RPPG_ch0387"><!-- POSTPROCESSDATA: RPPG_ch0387|interrupt response time:200 microsecond guarantee --></PARAGRAPH>
+<PARAGRAPH>This guarantee is important to a real-time program because it puts an upper bound on the overhead of servicing interrupts from real-time devices. You should have some idea of the number of interrupts that will arrive per second. Multiplying this by 200 microseconds yields a conservative estimate of the amount of time in any one second devoted to interrupt handling in the CPU that receives the interrupts. The remaining time is available to your real-time application in that CPU. </PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="24810">Components of Interrupt Response Time</TITLE><PARAGRAPH>The total interrupt response time includes these sequential parts:<INDEXTARGET ID="RPPG_ch0388"><!-- POSTPROCESSDATA: RPPG_ch0388|interrupt response time:components --></PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="112"><PARAGRAPH>Hardware latency<INDEXTARGET ID="RPPG_ch0389"><!-- POSTPROCESSDATA: RPPG_ch0389|hardware latency --><INDEXTARGET ID="RPPG_ch0390"><!-- POSTPROCESSDATA: RPPG_ch0390|latency:hardware --></PARAGRAPH>
+</CELL>
+<CELL LEFT="120" WIDTH="219"><PARAGRAPH>The time required to make a CPU respond to an 
+interrupt signal.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="112"><PARAGRAPH>Software latency<INDEXTARGET ID="RPPG_ch0391"><!-- POSTPROCESSDATA: RPPG_ch0391|software latency --><INDEXTARGET ID="RPPG_ch0392"><!-- POSTPROCESSDATA: RPPG_ch0392|latency:software --></PARAGRAPH>
+</CELL>
+<CELL LEFT="120" WIDTH="219"><PARAGRAPH>The time required to dispatch an interrupt 
+thread.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="112"><PARAGRAPH>Device service time<INDEXTARGET ID="RPPG_ch0393"><!-- POSTPROCESSDATA: RPPG_ch0393|device service time --></PARAGRAPH>
+</CELL>
+<CELL LEFT="120" WIDTH="219"><PARAGRAPH>The time the device driver spends processing the 
+interrupt and dispatching a user thread.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="112"><PARAGRAPH>Mode switch<INDEXTARGET ID="RPPG_ch0394"><!-- POSTPROCESSDATA: RPPG_ch0394|dispatch cycle time --></PARAGRAPH>
+</CELL>
+<CELL LEFT="120" WIDTH="219"><PARAGRAPH>The time it takes for a thread to switch from 
+kernel mode to user mode.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>The parts are diagrammed in <XREF IDREF="37880" TYPE="GRAPHIC">Figure&nbsp;3-2</XREF> and discussed in the following topics.</PARAGRAPH>
+<PARAGRAPH><FIGURE><GRAPHIC FILE="interrt.gif" POSITION="INLINE" SCALE="FALSE"><CAPTION LBL="3-2"><PREFIX>Figure 3-2 </PREFIX><XREFTARGET ID="37880">Components of Interrupt Response Time</CAPTION>
+</FIGURE>
+</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Hardware Latency</TITLE><PARAGRAPH>When an I/O device requests an interrupt, it activates a line in the VME or PCI bus interface. The bus adapter chip places an interrupt request on the system internal bus, and a CPU accepts the interrupt request.<INDEXTARGET ID="RPPG_ch0395"><!-- POSTPROCESSDATA: RPPG_ch0395|interrupt response time:hardware latency --><INDEXTARGET ID="RPPG_ch0396"><!-- POSTPROCESSDATA: RPPG_ch0396|latency:hardware --><INDEXTARGET ID="RPPG_ch0397"><!-- POSTPROCESSDATA: RPPG_ch0397|hardware latency --></PARAGRAPH>
+<PARAGRAPH>The time taken for these events is the hardware latency, or interrupt propagation delay. In the CHALLENGE/Onyx, the typical propagation delay is 2 microseconds. The worst-case delay can be much greater. The worst-case hardware latency can be significantly reduced by not placing high-bandwidth DMA devices such as graphics or HIPPI interfaces on the same hardware unit (POWERChannel-2 in the CHALLENGE, module and hub chip in the Origin) used by the interrupting devices.<INDEXTARGET ID="RPPG_ch0398"><!-- POSTPROCESSDATA: RPPG_ch0398|propagation delay. <ITALICS>See</ITALICS> hardware latency --><INDEXTARGET ID="RPPG_ch0399"><!-- POSTPROCESSDATA: RPPG_ch0399|interrupt:propogation delay --></PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Software Latency</TITLE><PARAGRAPH>The primary function of interrupt dispatch is to determine which device triggered the interrupt and dispatch the corresponding interrupt thread. Interrupt threads are responsible for calling the device driver and executing its interrupt service routine.<INDEXTARGET ID="RPPG_ch03100"><!-- POSTPROCESSDATA: RPPG_ch03100|interrupt response time:software latency --><INDEXTARGET ID="RPPG_ch03101"><!-- POSTPROCESSDATA: RPPG_ch03101|kernel:interrupt response time --><INDEXTARGET ID="RPPG_ch03102"><!-- POSTPROCESSDATA: RPPG_ch03102|software latency --><INDEXTARGET ID="RPPG_ch03103"><!-- POSTPROCESSDATA: RPPG_ch03103|latency:software --></PARAGRAPH>
+<PARAGRAPH>While interrupt dispatch is executing, all interrupts for that processor are masked until it completes. Any pending interrupts are dispatched before interrupt threads execute. Thus, the handling of an interrupt could be delayed by one or more devices.</PARAGRAPH>
+<PARAGRAPH>In order to achieve 200-microsecond response time, you must ensure that the time-critical devices supply the only interrupts directed to that CPU (see <XREF IDREF="16684" TYPE="TITLE">&ldquo;Redirecting Interrupts&rdquo;</XREF>).</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="96374">Kernel Critical Sections</TITLE><PARAGRAPH>Most of the IRIX kernel code is noncritical and executed with interrupts enabled. However, certain sections of kernel code depend on exclusive access to shared resources. Spin locks are used to control access to these critical sections. Once in a critical section, the interrupt level is raised in that CPU. New interrupts are not serviced until the critical section is complete.<INDEXTARGET ID="RPPG_ch03104"><!-- POSTPROCESSDATA: RPPG_ch03104|kernel:critical section --></PARAGRAPH>
+<PARAGRAPH>Although most kernel critical sections are short, there is<INDEXTARGET ID="RPPG_ch03105"><!-- POSTPROCESSDATA: RPPG_ch03105|interrupt response time:kernel service not guaranteed --><ITALICS>&space;no guarantee</ITALICS> on the length of a critical section. In order to achieve 200 microsecond response time, your real-time program must avoid executing system calls on the CPU where interrupts are handled. The way to ensure this is to restrict that CPU from running normal processes (see <XREF IDREF="87243" TYPE="TITLE">&ldquo;Restricting a CPU From Scheduled Work&rdquo;</XREF>) and isolate it from TLB interrupts (see <XREF IDREF="74709" TYPE="TITLE">&ldquo;Isolating a CPU From TLB Interrupts&rdquo;</XREF>)&mdash;or to use the Frame Scheduler.</PARAGRAPH>
+<PARAGRAPH>You may need to dedicate a CPU to handling interrupts. However, if the interrupt-handling CPU has power well above that required to service interrupts&mdash;and if your real-time process can tolerate interruptions for interrupt service&mdash;you can use the isolated CPU to execute real-time processes. If you do this, the processes that use the CPU must avoid system calls that do I/O or allocate resources, for example <INDEXTARGET ID="RPPG_ch03106"><!-- POSTPROCESSDATA: RPPG_ch03106|interrupt response time:restrictions on processes --><FUNCTION>fork()</FUNCTION>, <FUNCTION>brk()</FUNCTION>, or <FUNCTION>mmap()</FUNCTION>. The processes must also avoid generating external interrupts with long pulse widths (see <XREF IDREF="78160" TYPE="TITLE">&ldquo;External Interrupts&rdquo;</XREF>).</PARAGRAPH>
+<PARAGRAPH>In general, processes in a CPU that services time-critical interrupts should avoid all system calls except those for interprocess communication and for memory allocation within an arena of fixed size.</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="44094">Device Service Time</TITLE><PARAGRAPH>The time spent servicing an interrupt should be negligible. The interrupt handler should do very little processing, only wake up a sleeping user process and possibly start another device operation. Time-consuming operations such as allocating buffers or locking down buffer pages should be done in the request entry points for <INDEXTARGET ID="RPPG_ch03107"><!-- POSTPROCESSDATA: RPPG_ch03107|interrupt response time:device service time --><INDEXTARGET ID="RPPG_ch03108"><!-- POSTPROCESSDATA: RPPG_ch03108|device service time --><FUNCTION>read()</FUNCTION>, <FUNCTION>write()</FUNCTION>, or <FUNCTION>ioctl()</FUNCTION>. When this is the case, device service time is minimal.</PARAGRAPH>
+<PARAGRAPH>Device drivers supplied by SGI indeed spend negligible time in interrupt service. Device drivers from third parties are an unknown quantity. Hence the 200-microsecond guarantee is not in force when third-party device drivers are used on the same CPU at a superior priority to the time-critical interrupts.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Dispatch User Thread</TITLE><PARAGRAPH>Typically, the result of the interrupt is to make a sleeping thread runnable. The runnable thread is entered in one of the scheduler queues. (This work may be done while still within the interrupt handler, as part of a device driver library routine such as <FUNCTION>wakeup()</FUNCTION>.)</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Mode Switch</TITLE><PARAGRAPH>A number of instructions are required to exit kernel mode and resume execution of the user thread. Among other things, this is the time the kernel looks for software signals addressed to this process, and redirects control to the signal handler. If a signal handler is to be entered, the kernel might have to extend the size of the stack segment. (This cannot happen if the stack was extended before it was locked.)</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Minimal Interrupt Response Time</TITLE><PARAGRAPH>To summarize, you can ensure interrupt response time of less than 200 microseconds for one specified device interrupt provided you configure the system as follows:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>The interrupt is directed to a specific CPU, not &ldquo;sprayed&rdquo;; and is the highest-priority interrupt received by that CPU. </PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The interrupt is handled by an SGI-supplied device driver, or by a device driver from another source that promises negligible processing time.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>That CPU does not receive any other &ldquo;sprayed&rdquo; interrupts.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>That CPU is restricted from executing general UNIX processes, isolated from TLB interrupts, and made nonpreemptive&mdash;or is managed by the Frame Scheduler.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Any process you assign to that CPU avoids system calls other than interprocess communication and allocation within an arena.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>When these things are done, interrupts are serviced in minimal time.</PARAGRAPH>
+<TIP><PREFIX>Tip</PREFIX>If interrupt service time is a critical factor in your design, consider the possibility of using VME programmed I/O to poll for data, instead of using interrupts. It takes at most 4 microseconds to poll a VME bus address (see <XREF IDREF="50284" TYPE="TITLE">&ldquo;PIO Access&rdquo;</XREF>). A polling process can be dispatched one or more times per frame by the Frame Scheduler with low overhead. </TIP>
+</SECTION2>
+</SECTION1>
+</CHAPTER>

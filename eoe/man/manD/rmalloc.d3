@@ -1,0 +1,133 @@
+.if n .pH ddi.rm/d3/gen/rmalloc @(#)rmalloc	43.9 of 11/27/92
+.\" Copyright 1992, 1991 UNIX System Laboratories, Inc.
+.TH rmalloc D3
+.IX "\f4rmalloc\fP(D3)"
+.SH NAME
+\f4rmalloc\f1 \- allocate space from a private space management map
+.SH SYNOPSIS
+.nf
+.na
+.ft 4
+#include <sys/types.h>
+.ft 4
+#include <sys/map.h>
+.ft 4
+#include <sys/ddi.h>
+.sp 0.4
+ulong_t rmalloc(struct map *\f2mp\fP, size_t \f2size\fP);
+.ft 1
+.ad
+.fi
+.SS Arguments
+.RS 0
+.IP "\f2mp\f1" 10n
+Pointer to the map from which space is to be allocated.
+.IP "\f2size\f1" 10n
+Number of units of space to allocate.
+.RE
+.SH DESCRIPTION
+\f4rmalloc\f1 allocates space from the private space management map
+pointed to by \f2mp\f1.
+.SS "Return Values"
+Upon successful completion, \f4rmalloc\f1 returns the base of the
+allocated space.
+If \f2size\f1 units cannot be allocated, 0 is returned.
+.SH USAGE
+Drivers can use \f4rmalloc\f1 to allocate space from a previously
+allocated and initialized private space management map.
+.P
+The map must have been allocated by a call to \f4rmallocmap\f1(D3)
+and the space managed by the map must have been added using
+\f4rmfree\f1(D3) prior to the first call to \f4rmalloc\f1 for the map.
+.P
+\f2size\f1 specifies the amount of space to allocate and is
+in arbitrary units.
+The driver using the map places whatever semantics on the units are
+appropriate for the type of space being managed.
+For example, units may be byte addresses, pages of memory, or blocks
+on a device.
+.P
+The system allocates space from the memory map on a first-fit
+basis and coalesces adjacent space fragments when space is returned to the
+map by \f4rmfree\f1.
+.SS Level
+Initialization, Base or Interrupt.
+.SS "Synchronization Constraints"
+Does not sleep.
+.P
+Driver-defined basic locks, read/write locks, and sleep locks
+may be held across calls to this function.
+.SS Examples
+The following example is a simple memory map, but it illustrates
+the principles of map management.  A driver declares a map table
+(line 4) and initializes the map table by
+calling the \f4rmfree\f1 function.
+There are 35 entries in the map table, 32 of which can be used to
+represent space allocated.  In the driver's \f4start\fP(D2) routine,
+we allocate 16 Kbytes of memory using \f4rmallocmap\fP(D3) (line 8).
+This is the space to be managed.  Then call
+\f4rmfree\f1 to populate the map with the space it is to manage (line 10).
+.P
+In the driver's \f4read\f1(D2) and
+\f4write\f1(D2) routines, we use \f4rmalloc\fP to allocate buffers
+for data transfer.  This example illustrates the \f4write\fP routine.
+Assuming the device can only transfer \f4XX_MAXBUFSZ\fP bytes at a time,
+we calculate the amount of data to copy (line 21) and
+use \f4rmalloc\fP to allocate some space from the map.
+The call to \f4rmalloc\fP is protected against interrupts (line 22) from
+the device that may result in freeing map space.  This way, if
+space is freed, we won't miss the corresponding \f4wakeup\fP(D3).
+.ne 4
+.P
+.nf
+.ft 4
+.ps 9
+.vs 11
+ 1  #define XX_MAPSIZE	35
+ 2  #define XX_MEMSIZE	(16*1024)
+ 3  #define XX_MAXBUFSZ	1024
+.sp 0.4
+ 4  struct map *xx_map;
+    ...
+ 5  xx_start()
+ 6  {
+ 7    caddr_t bp;
+.sp 0.4
+ 8    if ((mp=rmallocmap(xx_MAPSIZE) == 0
+ 9         cmn_err (CE_PANIC, "xx_start: could not allocate map");
+10    rmfree(xx_map, XX_MEMSIZE, bp);
+11  }
+    ...
+12  xx_write(dev, uiop, crp)
+13    dev_t dev;
+14    uio_t *uiop;
+15    cred_t *crp;
+16  {
+17    caddr_t addr;
+18    size_t size;
+19    int s;
+    ...
+20    while (uiop->uio_resid > 0) {
+21        size = min(uiop->uio_resid, XX_MAXBUFSZ);
+22        s = spl4();    
+23        while ((addr = (caddr_t)rmalloc(xx_map, size)) == NULL) {  
+24            sleep((caddr_t)xx_map, PZERO);
+25        }
+26
+27        splx(s);
+          ...
+28    }
+    ...
+.vs
+.ps
+.ft 1
+.fi
+.IX "\f4rmfree\fP(D3), example"
+.IX "\f4rmalloc\fP(D3), example"
+.SH REFERENCES
+.na
+\f4rmalloc_wait\fP(D3),
+\f4rmallocmap\fP(D3),
+\f4rmfree\fP(D3),
+\f4rmfreemap\fP(D3),
+.ad

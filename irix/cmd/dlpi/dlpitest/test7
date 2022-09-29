@@ -1,0 +1,251 @@
+# Tests of LLC1 data transmission
+# Tested:
+#	1) OK LLC1 transmit and receive
+#	2) Error conditions:
+#	    Attempt to send DL_UNITDATA_REQ when not in correct state
+#	    Attempt to send DL_UNITDATA_REQ on an LLC2 stream
+#	    Attempt to send to zero or odd SAP
+#	    Attempt to loopback to same SAP
+#	3) Bind LLC1 and LLC2 streams to the same SAP, send and receive
+#	    data on both of these streams
+#	4) Send LLC1 data to local SAP, then send LLC1 data to same SAP,
+#	    but on a remote machine.  Should not see any local indication
+#	    of the data (tests that loopback mode is turned off correctly)
+#	5) Send LLC1 data to two streams at a time
+
+###### Test case #1 ######
+# Open and bind two LLC1 streams
+open 1
+attach $1 43
+bind $1 40 1 0 0 0
+
+open 2
+attach $2 43
+bind $2 48 1 0 0 0
+
+# Send data in both directions, first from fd $1 to fd $2
+send_udata $1 0:0:0:0:0:0,48 '1 2 3 4 5'
+
+poll $1 $2 $2
+
+recv_udata $2 '1 2 3 4 5'
+
+poll $1 $2 0
+check_state $1 dl_idle
+check_state $2 dl_idle
+
+# Now send data from fd $2 to fd $1
+send_udata $2 0:0:0:0:0:0,40 'aa bb cc dd ee ff'
+
+poll $1 $2 $1
+
+recv_udata $1 'aa bb cc dd ee ff'
+
+poll $1 $2 0
+check_state $1 dl_idle
+check_state $2 dl_idle
+
+close $1
+close $2
+
+
+###### Test case #2 ######
+open 1
+
+# Attempt to send LLC1 data on a stream that has not been attached yet.
+send_udata $1 0:0:0:0:0:0,48 '1 2 3 4 5'
+recv_udata $1			dl_uderror_ind dl_outstate
+
+attach $1 43
+
+# Attempt to send LLC1 data on a stream that has not been bound.
+send_udata $1 0:0:0:0:0:0,48 '1 2 3 4 5'
+recv_udata $1			dl_uderror_ind dl_outstate
+
+bind $1 40 2 0 0 0
+
+# Attempt to send LLC1 data on an LLC2 stream
+send_udata $1 0:0:0:0:0:0,48 '1 2 3 4 5'
+recv_udata $1			dl_uderror_ind dl_outstate
+
+unbind $1
+
+# Bind the stream as an LLC1 stream.
+bind $1 40 1 0 0 0
+
+# Attempt to send to zero SAP
+send_udata $1 0:0:0:0:0:0,0 '1 2 3 4 5'
+recv_udata $1			dl_uderror_ind dl_badaddr
+
+# Attempt to send to odd SAP
+send_udata $1 0:0:0:0:0:0,41 '1 2 3 4 5'
+recv_udata $1			dl_uderror_ind dl_badaddr
+
+# Attempt to loopback to same SAP
+send_udata $1 0:0:0:0:0:0,40 '1 2 3 4 5'
+#recv_udata $1			dl_uderror_ind dl_badaddr
+poll $1 $1 $1
+recv_udata $1 '1 2 3 4 5'
+
+open 2
+attach $2 43
+bind $2 48 1 0 0 0
+
+# Send valid LLC1 data.
+send_udata $1 0:0:0:0:0:0,48 '1 2 3 4 5'
+
+poll $1 $2 $2
+
+recv_udata $2 '1 2 3 4 5'
+
+close $1
+close $2
+
+
+###### Test case #3 ######
+# Open and bind two LLC1 streams
+open 1
+attach $1 43
+bind $1 40 1 0 0 0
+
+open 2
+attach $2 43
+bind $2 48 1 0 0 0
+
+# Open LLC2 listen stream, to the same SAP as the LLC1 stream
+open 3
+attach $3 43
+bind $3 48 2 2 0 1
+
+# Open LLC2 connecting stream, to the same SAP as the other LLC1 stream
+open 4
+attach $4 43
+bind $4 40 2 0 0 1
+connect $4 0:0:0:0:0:0,48 0
+
+poll $1 $4 $3
+
+# Receive the incoming call
+connect_ind $3 1 -
+
+poll $1 $4 $4
+
+# Receive the connect confirmation
+connect_con $4
+
+# Send data in both directions on the LLC1 stream, first from fd $1 to fd $2
+send_udata $1 0:0:0:0:0:0,48 '1 2 3 4 5'
+
+poll $1 $4 $2
+
+recv_udata $2 '1 2 3 4 5'
+
+# Now send data from fd $2 to fd $1
+send_udata $2 0:0:0:0:0:0,40 'aa bb cc dd ee ff'
+
+poll $1 $4 $1
+
+recv_udata $1 'aa bb cc dd ee ff'
+
+# Send data in both directions on the LLC2 stream, first from fd $3 to fd $4
+send_data $3 '6 7 8 9 a b c d e f'
+
+poll $1 $4 $4
+recv_data $4 '6 7 8 9 a b c d e f'
+
+# Now send data from fd $4 to fd $3
+send_data $4 '1 2 3 4 5 6 7 8 9 a'
+
+poll $1 $4 $3
+recv_data $3 '1 2 3 4 5 6 7 8 9 a'
+
+close $1
+close $2
+close $3
+close $4
+
+
+###### Test case #4 ######
+# Open and bind two LLC1 streams
+open 1
+attach $1 43
+bind $1 40 1 0 0 0
+
+open 2
+attach $2 43
+bind $2 48 1 0 0 0
+
+# Send data from fd $1 to fd $2
+send_udata $1 0:0:0:0:0:0,48 '1 2 3 4 5'
+
+poll $1 $2 $2
+
+recv_udata $2 '1 2 3 4 5'
+
+poll $1 $2 0
+check_state $1 dl_idle
+check_state $2 dl_idle
+
+# Now send data to another machine
+send_udata $1 8:0:20:a:a9:63,48 '1 2 3 4 5'
+
+sleep 2
+# Should see no indication on stream #4, which is bound to the same SAP
+# as that specified in the DLSAP addr
+poll $1 $2 0
+
+close $1
+close $2
+
+
+###### Test case #5 ######
+open 1
+attach $1 43
+bind $1 48 1 0 0 0
+
+open 2
+attach $2 43
+bind $2 40 1 0 0 0
+
+open 3
+attach $3 43
+bind $3 44 1 0 0 0
+
+send_udata $1 0:0:0:0:0:0,40 '1 2 3 4 5'
+send_udata $1 0:0:0:0:0:0,44 '1 2 3 4'
+recv_udata $2 '1 2 3 4 5'
+recv_udata $3 '1 2 3 4'
+
+send_udata $1 0:0:0:0:0:0,44 '9 8 7 6'
+send_udata $1 0:0:0:0:0:0,40 '6 7 8 9 a'
+recv_udata $2 '6 7 8 9 a'
+recv_udata $3 '9 8 7 6'
+
+send_udata $1 0:0:0:0:0:0,40 'aa bb cc dd ee ff 0 1 2 3 4 5 6 7 8 9'
+send_udata $1 0:0:0:0:0:0,44 '1 2 3 4 5 6 7 8 9 0'
+recv_udata $2 'aa bb cc dd ee ff 0 1 2 3 4 5 6 7 8 9'
+recv_udata $3 '1 2 3 4 5 6 7 8 9 0'
+
+send_udata $1 0:0:0:0:0:0,44 '1 2 3'
+send_udata $1 0:0:0:0:0:0,40 '1 2 3 4 5 6 7 8 9 0'
+recv_udata $2 '1 2 3 4 5 6 7 8 9 0'
+recv_udata $3 '1 2 3'
+
+send_udata $2 0:0:0:0:0:0,48 '1 2 3'
+send_udata $3 0:0:0:0:0:0,48 '4 5 6'
+recv_udata $1 '1 2 3'
+recv_udata $1 '4 5 6'
+
+send_udata $3 0:0:0:0:0:0,48 '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+send_udata $2 0:0:0:0:0:0,48 'aa bb cc dd ee ff'
+recv_udata $1 '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+recv_udata $1 'aa bb cc dd ee ff'
+
+send_udata $2 0:0:0:0:0:0,48 '9 8 7 6 5 4 3 2 1 0'
+send_udata $3 0:0:0:0:0:0,48 '99 88 77 66 55 44'
+recv_udata $1 '9 8 7 6 5 4 3 2 1 0'
+recv_udata $1 '99 88 77 66 55 44'
+
+close $1
+close $2
+close $3

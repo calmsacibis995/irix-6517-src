@@ -1,0 +1,245 @@
+.\" Copyright (c) 1980 Regents of the University of California.
+.\" All rights reserved.  The Berkeley software License Agreement
+.\" specifies the terms and conditions for redistribution.
+.\"
+.\"	@(#)savecore.8	6.3 (Berkeley) 5/24/86
+.\"
+.TH savecore 1M "July 13, 1993"
+.SH NAME
+savecore \- save a crash vmcore dump of the operating system
+.SH SYNOPSIS
+.nf
+\f3/etc/savecore\f1 [ \f3\-f\f1 ] [ \f3\-v\f1 ] \f2dirname\f1 [ \f2system\f1 ]
+.fi
+.SH DESCRIPTION
+.I savecore
+is meant to be called by
+.IR /etc/rc2.d/S48savecore .
+.I savecore
+attempts to save the core dump of the system (assuming one was
+made) and write a reboot message in the shutdown log.
+The
+.I S48savecore
+script will save all output files to
+.IR dirname ,
+which defaults to
+.IR /var/adm/crash ,
+unless overridden by
+site-specific command-line options in the file
+.IR /etc/config/savecore.options .
+.PP
+In the event of a software-detectable system crash, one of
+the last steps that the kernel performs before shutting down
+is to write the contents of system memory to the dump
+device.  There are several ways in which this information
+can be used to determine the cause and solution to the
+crash.
+.PP
+The dump device normally defaults to
+.IR /dev/swap .
+The process of creating the dump image will overwrite any data on the dump
+device.
+Thus, the dump device must be a raw partition that does not
+contain any data that needs to be preserved across a system crash (which
+is why
+.I /dev/swap
+is the obvious candidate for the dump device).
+As each page of memory is
+written to the dump device, it is compressed in order to save disk space.
+.PP
+On reboot, the
+.I S48savecore
+script initially checks the value of the savecore
+.IR chkconfig (1M)
+option.
+By default, this option is on for all systems.
+If it is turned off,
+.IR icrash (1M)
+will run against the compressed core image on the dump
+device and write reports about the system crash to
+.IR dirname .
+The compressed core image on the dump device will not be saved to disk.
+.PP
+If the savecore
+.IR chkconfig (1M)
+option is left on,
+.I savecore
+will read the compressed core image saved on the dump device and write it
+to the file
+.IR dirname/vmcore.N.comp .
+This core file can then be uncompressed using the
+.IR uncompvm (1M)
+command, although most utilities designed to look at system core files do
+not require that the core file be uncompressed.
+The core file also
+has a header which contains certain information about the system crash.
+This information can be retreived by running
+.IR uncompvm (1M)
+with the
+.I \-h
+option.
+.PP
+Making sense of any saved core image requires the symbol
+table of the operating system that was running at the time of
+the crash.
+For that reason, if the savecore
+.IR chkconfig (1M)
+option is on when the
+.I S48savecore
+script runs,
+.I savecore
+will save the current default kernel boot file
+.I /unix
+as
+.IR dirname/unix.N .
+Otherwise,
+.I /unix
+will not be copied to
+.IR dirname .
+The trailing
+.I .N
+in the pathname is replaced by a number stored in the
+.I dirname/bounds
+file that grows every time
+.I savecore
+is run in that directory.
+.PP
+Before
+.I savecore
+writes out a core image, it reads a number from the file
+.IR dirname /minfree.
+If the number of free bytes on the filesystem that contains
+.I dirname
+is less than the number obtained from the
+.I minfree
+file, the core dump is not saved.
+If the
+.I minfree
+file does not exist,
+.I savecore
+always writes out the core file (assuming that a core dump was taken).
+.PP
+.I savecore
+also logs a reboot message using facility
+LOG_AUTH
+(see
+.IR syslog (3C)) .
+If the system crashed as a result of a panic,
+.I savecore
+logs the panic string also.
+.PP
+.I savecore
+assumes that
+.I /unix
+corresponds to the running system at the time of the crash.
+If the core dump was from a system other than
+.IR /unix ,
+the name of that system must be supplied as
+.IR system .
+.PP
+The following options apply to
+.IR savecore :
+.TP
+.B \-f
+Ordinarily,
+.I savecore
+checks a magic number on the dump device
+(usually
+.IR /dev/swap )
+to determine if a core dump was made.
+This flag forces
+.I savecore
+to attempt to save the core image regardless of the state of this magic number.
+This may be necessary since
+.I savecore
+always clears the magic number after reading it.
+If a previous attempt to save the image failed in some manner,
+it is still possible to restart the save with this option.
+.TP
+.B \-v
+Give more verbose output.
+.SH SCRIPT DIAGNOSTIC FILES
+The
+.I S48savecore
+script creates a number of diagnostics files:
+.TP 13
+analysis.N
+This file contains a report that has information specific
+to the system crash.
+It is created by \f2icrash\f1(1M) and
+contains either an ICRASH CORE FILE REPORT, or a copy of
+the core dump header.
+.SH VMCORE CONTENTS
+The size of the swap space is limited, and often smaller
+than the system physical memory size, so a dump is likely to
+be partial.  For this reason, the kernel takes steps to squeeze as
+much information as possible into the available space.
+.PP
+The kernel uses run-length encoding to compress memory pages
+as it stores them.  This lessens the impact of pages that
+contain mostly zeroes.
+.PP
+The kernel first stores the putbuf, which contains the
+system crash messages, followed by all memory in use by the
+operating system, followed by all memory in use by user
+processes, and finally all of the rest of free memory.  The
+putbuf and operating system memory contain the most
+important information and will generally fit in their
+entirety.
+.PP
+The \f2systune\f1(1M) variable \f2dump_level\f1
+controls the data dumped in a system crash, and may have
+the following values:
+.TP
+\f43\f1 dump putbuf, kernel, user, and free pages (usual setting)
+.TP
+\f42\f1 dump putbuf, kernel, and user pages
+.TP
+\f41\f1 dump putbuf and kernel pages
+.TP
+\f40\f1 dump putbuf only
+.PP
+.SH DIAGNOSTICS
+.TP
+\f7warning: /unix may not have created core file\f1
+Printed if
+.I savecore
+believes that the system core file does not correspond
+with the
+.I /unix
+operating system binary.
+.TP
+\f7savecore: /unix is not the running system\f1
+Printed for
+the obvious reason.
+If the system that crashed was
+.IR /unix ,
+use
+.IR mv (1)
+to change its name before running
+.IR savecore .
+Use
+.IR mv (1)
+or
+.IR ln (1)
+to rename or produce a link
+to the name of the file of the
+currently running operating system binary.
+This enables
+.I savecore
+to find name list information about the current state of the
+running system from the file
+.IR /unix .
+.SH FILES
+.nf
+.ta \w'/etc/config/savecore.optionsxxx'u
+/unix		current IRIX
+/var/adm/crash	default place to create dump files
+/var/adm/crash/bounds	number for next dump file
+/var/adm/crash/minfree	minimum filesystem free space
+/var/adm/crash/analysis.N	file created by \f2icrash\f1(1M) that contains
+	information about the core dump
+/etc/config/savecore.options	site-specific command-line options
+.fi
+.SH "SEE ALSO"
+uncompvm(1M), nlist(3X), icrash(1M), chkconfig(1M).

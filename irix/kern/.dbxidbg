@@ -1,0 +1,255 @@
+set $hexints=1
+
+duel newline := "\n" ;
+duel tab := "\t" ;
+
+alias kernhelp \
+"duel                                                                   \
+{newline, newline},                                                     \
+{\"plist\", tab, \"- print list of active processes\", newline},        \
+{\"slist\", tab, \"- print list of active sthreads\", newline},         \
+{\"xlist\", tab, \"- print list of active ithreads\", newline},         \
+{\"ilist\", tab, \"- print list of active xthreads\", newline},         \
+{\"runq\", tab, \"- threads currently on the cpus/ready to run\", newline}, \
+{\"pregion x\", tab, \"- print pregions of proc (x is procptr)\", newline}, \
+{\"pregpde x\", tab, \"- print valid page table entries for given pregion\",  newline}, \
+{\"fdtp x\", tab, \"- print file table info. of given PROCESS (proc ptr)\", newline} \
+"
+
+
+alias plist                                                             \
+"duel                                                                   \
+    head := ((T pid_entry_t *)&pidactive) ;                             \
+    first := (T pid_entry_t *)head->pe_queue.kq_next;                   \
+    {newline, newline},                                                 \
+    {\"  PID       PROC                   NAME               VAS\\n\"}, \
+    {\"---------------------------------------------------------\\n\"}, \
+    for(i:=((T pid_entry_t *)first);                                    \
+         i != (T pid_entry_t *)&pidactive;                              \
+         i:=((T pid_entry_t *)i->pe_queue.kq_next))                     \
+    {                                                                   \
+         pp := ((proc_t *)(i->pe_vproc->vp_bhvh.bh_first->bd_pdata));   \
+         i->pe_pid,  pp, (char *) (pp->p_ui.u_comm),              \
+         pp->p_proxy.prxy_threads->ut_asid.as_obj, newline              \
+                                                                        \
+    }"
+
+
+alias pregion(pp)                                                       \
+"duel                                                                   \
+    {newline, newline},                                                 \
+    {\"    PREGIONPTR      VADDR       PGLEN          NVALID\\n\"},     \
+    {\"-----------------------------------------------------\\n\"},     \
+    for (ut := ((proc_t *)pp)->p_proxy.prxy_threads; ut; ut := ut->ut_next) \
+    {                                                                   \
+        as := &ut->ut_asid;                                             \
+        if (as->as_obj != (struct __as_opaque *)(__psunsigned_t)0xf)    \
+        {     vas := (vas_t *) as->as_obj;                              \
+            bdp := vas->vas_bhvh.bh_first;                              \
+            pas := (pas_t *) bdp->bd_pdata;                             \
+            prset := pas->pas_pregions;                                 \
+            prp := prset.avl_firstino;                                  \
+            for ( ; prp; prp := ((T preg_t *)prp)->p_avlnode.avl_nextino) \
+            {                                                           \
+                    prp, (long)((T preg_t *)prp)->p_attrs.attr_start,   \
+                    tab, ((T preg_t *)prp)->p_pglen,  \"    \",         \
+                    tab, ((T preg_t *)prp)->p_nvalid, newline           \
+            }                                                           \
+        }                                                               \
+    }"
+
+
+#  \"PMAP =\", pmap, \"PMAP_TYPE =\", pmap->pmap_type,             \
+
+alias pregpde(prp) \
+"duel                                                                   \
+    PMAP_SEGMENT := 1;                                                  \
+    sizeofpde_t := 8;                                                   \
+    pagesize := 16384;                                                  \
+    NBPP := pagesize;                                                   \
+    NBPC := pagesize;                                                   \
+    NCPS := NBPC / 8;                                                   \
+    NBPS := NCPS * NBPC;                                                \
+    pmap := ((preg_t *)prp)->p_pmap;                                    \
+    if (pmap->pmap_type != PMAP_SEGMENT)                                \
+             {\"\\n ONLY PMAP_SEGMENT SUPPORTED\\n\"}                 \
+    else {                                                              \
+        vaddr := ((preg_t *)prp)->p_attrs.attr_start;                   \
+        size := ((preg_t *)prp)->p_pglen;                               \
+        fsegno := ((__psunsigned_t)vaddr) / NBPS;                       \
+        lsegno := (((__psunsigned_t)vaddr) / NBPC) + size - 1;          \
+        lsegno := lsegno / NCPS;                                        \
+        ppt := (pde_t * *) (*((__int64_t *) pmap));                     \
+        pdep := (pde_t *)0;                                             \
+        for (segno:=fsegno; segno <= lsegno && pdep == 0; segno:=segno+1) \
+        {  pdep := *(pde_t **)(ppt + segno);                            \
+           if ((__psunsigned_t)pdep != 0) { fseg := segno }             \
+        };                                                              \
+        if (pdep == 0)                                                  \
+            { \" NO PTES FOUND \\n\" }                                  \
+        else                                                            \
+        {    va := fseg * NBPS;                                         \
+             if (va > (__psunsigned_t)vaddr) {                          \
+                tmp := (((__psunsigned_t)(va - vaddr)+(NBPC-1))/NBPC);  \
+                if (tmp >= size)                                        \
+                    { \" NO PTES FOUND \\n\" }                          \
+                else {                                                  \
+                        size := size - tmp;                             \
+                        vaddr := va                                     \
+                }                                                       \
+             } else ;                                                   \
+             NPGPT := NBPP/sizeofpde_t;                                 \
+             SOFFMASK := NPGPT * NBPP - 1;                              \
+             segoff := (__psunsigned_t)vaddr & SOFFMASK;                \
+             segoff := ((__psunsigned_t)segoff+(NBPC-1))/NBPC;          \
+             pdep := pdep + segoff;                                     \
+             {newline, newline},                                        \
+             {\"    VADDR         PTEPTR        PFN\", newline},        \
+             {\"-------------------------------------\", newline},      \
+             for (i:=size; i > 0; vaddr:=vaddr+NBPP, pdep:=pdep+1, i:=i-1) \
+             { if (pdep->pte.pte_sv)                                    \
+                  { (__psunsigned_t)vaddr, pdep, pdep->pte.pte_pfn, newline} \
+             }                                                          \
+        }                                                               \
+    }                                                                   \
+"
+
+alias fdtp(pp) \
+"duel                                                                   \
+    fdtp := ((proc_t *)pp)->p_fdt;                                      \
+    NFPCHUNK := 16;                                                     \
+    NFPCHUNK4 := 16/4;                                                  \
+    chunks := fdtp->fd_nofiles / NFPCHUNK;                              \
+    {newline},                                                          \
+    {\"fdt at address\", fdtp, newline},               \
+    {\"nofiles\", fdtp->fd_nofiles},                                    \
+    {\"&flist\", &fdtp->fd_flist},                                      \
+    {\"&fdt_lock\", &fdtp->fd_lock, newline},                           \
+    {\"fwaiting\", fdtp->fd_fwaiting},                                  \
+    {\"&fwait\", &fdtp->fd_fwait},                                      \
+    {\"(WAITER: NOT IMPLEMENTED)\", newline},                           \
+    {\"fdt has\", chunks, \"ufchunks each of size\", NFPCHUNK, newline},\
+    for (ufp := &fdtp->fd_flist, i := 1; i <= chunks && ufp; i :=i+1) { \
+        \"Chunk\", i, newline,                                          \
+        \"next chunk pointer\", ufp->uf_next, newline,                  \
+        \"uf_ofile:\", newline,                                         \
+        {for (j := 0 ; j < NFPCHUNK4; j:=j+1)                           \
+             tab, { for (k:=0; k < 4; k:=k+1) ufp->uf_ofile[j*4+k] }, newline\
+        },                                                              \
+        {\"uf_pofile:\", newline},                                      \
+        {for (j := 0 ; j < NFPCHUNK4; j:=j+1)                           \
+           tab, {for (k:=0; k < 4; k:=k+1) (int)ufp->uf_pofile[j*4+k]}, newline\
+        },                                                              \
+        {\"uf_inuse:\", newline},                                       \
+        {for (j := 0 ; j < NFPCHUNK4; j:=j+1)                           \
+            tab, {for (k:=0; k < 4; k:=k+1) ufp->uf_inuse[j*4+k] }, newline \
+        },                                                              \
+        {ufp := ufp->uf_next; newline}                                  \
+    }"
+
+alias runq \
+"duel {                                                                    \
+    {newline, newline},                                                  \
+    for (i:= 0; ((T pdaindr_t *)&pdaindr)[i].CpuId == i; i := i+1) {     \
+      pda := ((T pdaindr_t *)&pdaindr)[i].pda;                           \
+      \"CPU\", i, \"SWITCHING\", (int) pda->p_switching,                 \
+      \"RUNRUN\", (int) pda->p_runrun, \"CURPRI\", pda->p_curpri,         \
+      \"LTICKS\", pda->p_lticks, newline,                                \
+      { curthread := pda->p_curkthread;                                  \
+        tab, \"CURTHREAD\", curthread,                                   \
+        if (curthread != 0) {                                            \
+           \"PRI\", curthread->k_pri,                                    \
+           if (curthread->k_uthread != 0) {                              \
+               proc:=curthread->k_uthread->ut_proc;                      \
+               newline, tab, tab, \"== PROC\", proc,                     \
+               if (proc != 0)                                            \
+                    { \"PID\", proc->p_pid, (char *)proc->p_ui.u_comm }  \
+           }                                                             \
+        }                                                                \
+      },                                                                 \
+      newline,                                                           \
+      { nextthread := pda->p_nextthread;                                 \
+        tab, \"NEXTTHREAD\", nextthread,                                 \
+        if (nextthread != 0)                                             \
+        { \"PRI\", nextthread->k_pri,                                    \
+           if (nextthread->k_uthread != 0) {                             \
+               proc:=nextthread->k_uthread->ut_proc;                     \
+               newline, tab, tab, \"== PROC\", proc,                     \
+               if (proc != 0)                                            \
+                    { \"PID\", proc->p_pid, (char *)proc->p_ui.u_comm }  \
+           }                                                             \
+        }                                                                \
+     },                                                                  \
+     newline,                                                            \
+     { pcpu:=&pda->p_cpu;    \
+       if (pcpu->c_threads != 0)         \
+       {  tab, \"THREADS ON LOCALQ:\", newline, \
+          for (kt:=pcpu->c_threads;  kt!=pcpu->c_threads; kt:=kt->k_rflink)\
+          {  tab, tab, \"KTHREAD\", kt, \"PRI\", kt->k_pri, \
+             \"MRUN\", kt->k_mustrun,\
+             \"FLAGS\", kt->k_flags, newline} \
+       } else                                                 \
+          tab, \"NO THREADS ON LOCALQ\", newline \
+    }                              \
+   } \
+}"
+
+
+alias slist                                                                  \
+"duel                                                                        \
+{                                                                            \
+    {newline, newline},                                                      \
+    {\"  STHREAD                       NAME                       STACK\\n\"},\
+    {\"----------------------------------------------------------------\\n\"},\
+    for(st:=((sthread_t *)&sthreadlist)->st_next;                            \
+      st != (sthread_t *)&sthreadlist; st:=st->st_next)                      \
+        {st, (char *)st->st_name, tab, (long)st->st_ev.k_stack, newline}\
+}"
+
+
+alias ilist                                                                  \
+"duel                                                                        \
+{                                                                            \
+    {newline, newline},                                                      \
+    {\"  ITHREAD                       NAME                       STACK\\n\"},\
+    {\"----------------------------------------------------------------\\n\"},\
+    for(it:=((ithread_t *)&ithreadlist)->it_next;                            \
+      it != (ithread_t *)&ithreadlist; it:=it->it_next)                      \
+        {it, (char *)it->it_name, tab, (long)it->it_ev.k_stack, newline}\
+}"
+
+alias xlist                                                                  \
+"duel                                                                        \
+{                                                                            \
+    {newline, newline},                                                      \
+    {\"  XTHREAD                       NAME                       STACK\\n\"},\
+    {\"----------------------------------------------------------------\\n\"},\
+    for(xt:=((xthread_t *)&xthreadlist)->xt_next;                            \
+      xt != (xthread_t *)&xthreadlist; xt:=xt->xt_next)                      \
+        {xt, (char *)xt->xt_name, tab, (long)xt->xt_ev.k_stack, newline}\
+}"
+
+alias einfo(a) \
+        "duel ((T eframe_t *)a)->ef_epc,  {newline}, \
+                ((T eframe_t *)a)->ef_ra, {newline}, \
+                ((T eframe_t *)a)->ef_sp"
+
+alias einfo32(a) \
+        "duel ((T eframe_t *)a)->ef_epc & 0xffffffff,\
+                ((T eframe_t *)a)->ef_ra & 0xffffffff,\
+                ((T eframe_t *)a)->ef_sp & 0xffffffff"
+
+alias etracepc32(a) \
+        "assign $pc=((eframe_t *)a)->ef_epc & 0xffffffff ; \
+         assign $ra=((eframe_t *)a)->ef_ra & 0xffffffff ; \
+         assign $sp=((eframe_t *)a)->ef_sp & 0xffffffff ; \
+         p \"pc=\", $pc, \"ra=\", $ra, \"sp=\", $sp ;  \
+         t "
+
+alias etracera32(a)        \
+        "assign $pc=((space.eframe_t *)a)->ef_ra & 0xffffffff ; \
+         assign $ra=((space.eframe_t *)a)->ef_ra & 0xffffffff ; \
+         assign $sp=((space.eframe_t *)a)->ef_sp & 0xffffffff ; \
+         p \"pc=\", $pc, \"ra=\", $ra, \"sp=\", $sp ;  \
+         t "
+

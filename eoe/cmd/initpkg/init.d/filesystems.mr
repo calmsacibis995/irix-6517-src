@@ -1,0 +1,72 @@
+#! /bin/sh
+#Tag 0x00000f00
+
+# (u)mount file systems other than /usr
+# "$Revision: 1.12 $"
+
+cd /
+
+case $1 in
+'start')
+	# The /usr filesystem is mounted earlier earlier so that unbundled
+	# products have a chance to execute initialization code between
+	# mounting /usr and mounting the rest of /etc/fstab.
+	#
+	# Mount all the rest of the filesystems listed in /etc/fstab 
+	# (ie: beyond / and /usr).
+	#
+	if /sbin/chkconfig verbose
+	then
+		echo "Mounting filesystems:"
+	fi
+
+	# mv /tmp to /.oldtmp and create a new /tmp unless the existing
+	# /tmp or any of its subdirectories is a mount point, or unless /tmp
+	# is a symbolic link.  In these cases, just leave /tmp alone.
+
+	chkconfig nocleantmp
+	if test $? = 1 -a -d /tmp -a ! -L /tmp ; then
+	    # 2 tests because we don't want to run the command part, and
+	    # the shell does the command substitution stuff before running
+	    # test, and we don't want to get "/tmp: No such file or directory"
+	    # when /tmp doesn't exist (as is the case in the miniroot.
+	    if test -z "`/sbin/mount | grep ' on /tmp[/ ]'`" \
+		-a "`ls -la /tmp | wc -l`" -gt 3; then
+
+		# Any existing /.oldtmp means we somehow didn't remove
+		# it in rmtmpfiles or perhaps never even ran rmtmpfiles
+		# last time we booted.  It might contain good stuff.
+
+		if test -d /.oldtmp; then
+		    ls -a1 /tmp | sed -e '/^\.$/d' -e '/^\.\.$/d' | xargs -i rm -rf /.oldtmp/{}
+		    ls -a1 /tmp | sed -e '/^\.$/d' -e '/^\.\.$/d' | xargs -i mv /tmp/{} /.oldtmp
+		else
+		    /sbin/su root -m -C CAP_MAC_WRITE,CAP_MAC_READ+ipe -c "rm -rf /.oldtmp"
+		    /sbin/su root -m -c "mv /tmp /.oldtmp"
+		    /sbin/su root -m -c "mkdir /tmp"
+		fi
+		# do same as rmtmpfiles, for consistency
+		if chkconfig nostickytmp; then 
+		    /sbin/su root -m -c "chmod 777 /tmp /var/tmp"
+		else
+		    /sbin/su root -m -c "chmod 1777 /tmp /var/tmp"
+		fi
+		/sbin/su root -m -C CAP_FOWNER+eip -c "chown sys.sys /tmp /var/tmp"
+	    fi
+	fi
+	;;
+
+'stop')
+	if /sbin/chkconfig verbose
+	then
+		echo "Unmounting filesystems:"
+	fi
+	sync
+	/sbin/su root -C CAP_MOUNT_MGT+ip -c "/sbin/umount -ak -b /usr,/debug,/proc,/hw"
+	sync
+	;;
+
+*)
+	echo "usage: /etc/init.d/filesystems {start|stop}"
+	;;
+esac

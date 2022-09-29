@@ -1,0 +1,222 @@
+#!/usr/bin/perl
+
+#ident "$Id: xfs_chver,v 1.1 1998/06/08 19:39:11 mostek Exp $"
+#
+# This program works with a device (an XFS file system) and updates
+# it's version to set the "extent unwritten version" flag.
+#
+
+use strict;
+
+my($prog, $dev, $version, $progjunk, $equ, $junk, $nver, $agcount, $tmp_file,
+	$mod_string, $ag, $count, $all, $rest, $devnum, $d, $usage, $mdev,
+	$rootdevno, $mydevno, $ino, $mode, $nlink, $uid, $gid, $save_script,
+	$base, @args, %mlist, @devlist, $device, $directory, $type);
+
+use File::Basename;
+
+$save_script = 0;
+$prog = "xfs_chver";
+$usage = "usage:  $prog [-f] -a\n\t$prog [-f] devname [devname ...]\n";
+$all = 0;
+while($_ = $ARGV[0], /^-/) {
+	shift;
+	if (/^-a$/) {
+		$all = 1;
+	} elsif (/^-f/) {
+		$save_script = 1;
+	} else {
+		printf($usage);
+		exit 1;
+	}
+}
+
+if ($all && $ARGV[0]) {
+	printf($usage);
+	exit 1;
+} elsif ($ARGV[0] eq "" && !$all) {
+	printf($usage);
+	exit 1;
+}
+
+
+#
+# if all, build an array of devices that are not mounted and
+# are in /etc/fstab.
+# otherwise, use the list from ARGV.
+#
+
+if ($all) {
+	open FSTAB, "/etc/fstab" or
+		die("$prog: can't open /etc/fstab\n");
+	$devnum = 0;
+	while (<FSTAB>) {
+		if (!/^#/) {
+			($device, $directory, $type, $rest) = split(/\s+/);
+			if ($type eq "xfs") {
+				$devlist[$devnum] = $device;
+				$devnum = $devnum+1;
+			}
+		}
+	}
+} else {
+	@devlist = @ARGV;
+}
+
+($d, $ino, $mode, $nlink, $uid, $gid, $rootdevno, $rest) = stat "/dev/root";
+
+open MTAB, "/etc/mtab" or
+	die("$prog: can't open /etc/mtab\n");
+
+while (<MTAB>) {
+	($device, $directory, $type, $rest) = split(/\s+/);
+	if ($type eq "xfs") {
+		$mlist{$device} = 1;
+	}
+}
+close(MTAB);
+
+for($devnum = 0; $devlist[$devnum]; $devnum = $devnum+1) {
+	$dev = $devlist[$devnum];
+	($d, $ino, $mode, $nlink, $uid, $gid, $mydevno, $rest) =
+				stat $dev;
+
+	if (!$save_script && ($mydevno == $rootdevno)) {
+		printf("$prog: $dev is root so can't change version.\n");
+		printf("$prog: must unmount $dev and change using another root or miniroot.\n");
+		next;
+	}
+
+	if (!$save_script && $mlist{$dev}) {
+		printf("$prog: $dev mounted so can't change version.\n");
+		printf("$prog: unmount $dev and try again. Skipping $dev.\n");
+		next;
+	}
+
+	if (!-e $dev) {
+		printf("$prog: $dev does not exist.\n");
+		next;
+	}
+
+	if (!(-r $dev) && ($save_script)) {
+		printf("$prog: can't read $dev. Are you root?\n");
+		next;
+	}
+
+	if (!$save_script && (!(-r $dev) || !(-w $dev))) {
+		printf("$prog: can't read or write $dev to update. Are you root?\n");
+		next;
+	}
+
+	open CUR_VERSION, "xfs_db -c 'sb 0' -c 'p versionnum' -r $dev |" or
+		die("can't exec xfs_db -c 'sb 0' -c 'p versionnum' -r $dev to get version");
+
+	$version = 0;
+	while(<CUR_VERSION>) {
+		if (/versionnum/) {
+			chop;
+			($junk, $equ, $version) = split(/ /);
+			$version = oct $version;
+		} else {
+			print("$prog: didn't get versionnum in $dev.");
+			print("got: ($_) instead.\n");
+			print("$prog: skipping $dev.\n");
+			next;
+		}
+	}
+	if ($version == 0) {
+		print("$prog: nothing came back from xfs_db for $dev, skipping!\n");
+		next;
+	}
+	close CUR_VERSION;
+
+	if ($version == 1) {
+		$nver = 0x1004;
+	} elsif ($version == 2) {
+		$nver = 0x1014;
+	} elsif ($version == 3) {
+		$nver = 0x1034;
+	} elsif ($version & 0x1000) {
+		printf("$prog: $dev has new format 0x%x. Nothing to do.\n", $version);
+		next;
+	} else {
+		$nver = $version | 0x1000;
+	}
+
+	open AG, "xfs_db -c 'sb 0' -c 'p agcount' -r $dev |" or
+		 die("can't exec xfs_db -c 'sb 0' -c 'p agcount' -r $dev to get agcount\n");
+
+	$agcount = -1;
+	while(<AG>) {
+		if (/agcount/) {
+			chop;
+			($junk, $equ, $agcount) = split(/ /);
+		} else {
+			print("$prog: didn't get agcount in $dev, got: $_ instead\n");
+			print("$prog: skipping $dev\n");
+			next;
+		}
+	}
+
+	if ($agcount == -1) {
+		print("nothing came back from xfs_db for agcount, quitting!\n");
+		print("$prog: NO agcount in $dev, skipping.\n");
+		next;
+	}
+	close AG;
+
+	if (!$save_script) {
+		printf("$prog: $dev: changing version 0x%x to 0x%x in $agcount AGs\n",
+			$version, $nver, $agcount);
+	}
+
+	#
+	# Tried to do the following by writing directly to xfs_db. It wouldn't work
+	# for some reason eventhough cat, and other programs would see
+	# all the commands. For some reason, we need to put the commands
+	# in a temp file and read it back in.
+	# Would like to do the following but it doesn't work.
+	#open(MODIFY, "| xfs_db -x $dev ") or die("can't exec xfs_db -x $dev to fix versions\n");
+	#
+
+	$tmp_file = "/tmp/xfs_db.in$$";
+
+	open(TMPFILE, ">$tmp_file") or die("can't create $tmp_file");
+
+	$mod_string = "";
+	for ($ag = 0; $ag < $agcount; $ag = $ag + 1) {
+		$mod_string .= sprintf("sb $ag\nwrite versionnum 0x%x\n", $nver);
+	}
+	print(TMPFILE "$mod_string");
+	close TMPFILE;
+
+	if ($save_script) {
+		$base = basename($dev);
+		$base .= ".xfs_chver";
+		@args = ("mv", "$tmp_file", "$base");
+		system(@args) == 0 or die("$prog: can't save $tmp_file in $base\n");
+		printf("$prog: run \"xfs_db -x $dev < $base\"\n");
+	} else {
+		open(MODIFY, "xfs_db -x $dev < $tmp_file |") or
+			die("can't exec xfs_db -x $dev < $tmp_file to fix versions\n");
+
+		while(<MODIFY>) {
+			if (/versionnum = /) {
+				$count = $count + 1;
+			} elsif (!/xfs_db:/) {
+				printf("$prog: got $_ back from xfs_db, continue.\n");
+			}
+		}
+
+		if ($count != $agcount) {
+			printf("$prog: WARNING: $count updated instead of $agcount?\n");
+			printf("$prog: see $tmp_file for input to xfs_db -x $dev.\n");
+			next;
+		} else {
+			@args = ("rm", "$tmp_file");
+			system(@args) == 0 or die("$prog: can't remove $tmp_file\n");
+		}
+		close MODIFY;
+	}
+}
+exit 0;

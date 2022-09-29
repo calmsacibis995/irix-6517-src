@@ -1,0 +1,202 @@
+This file describes bugs that I (Margie) found while trying to
+make niblet 64 bit, port it to TFP, and integrate it with the
+prom.  Many of the problems that I had with 64 bit and TFP port
+are not here since I didn't start keeping this log until Niblet
+was mostly running 64bit and on TFP.  I started keeping this
+log during the period while I was integrating Niblet with the
+bootprom.
+
+*	Steve links niblet at 0x10000.  I had been linking at 0x0
+	instead, but it seems that it is important to keep Niblet linked
+	at 0x10000.  This is because in dcob we move the handlers from
+	their link address down to 0, so if the code starts at 0 we will
+	end up writing over it.
+
+*	When we link at a given address, say 0x10000, the code ends up
+	starting at some offest from that address becauase the elf header
+	is at the front of the text section.  To avoid this we use the
+	-rom option to the linker
+
+*	In dcob we store the address of the proc table into the
+	nib_exc_start location.  The reason we can do this is that we've
+	moved the exception handlers from their linked address down to
+	address 0, so the space where they were linked is empty now.  We
+	use that area as an area to save stuff.   In dcob.c we were using
+	the store_word() routine from the prom to store the proc table
+	address but in niblet.s we were reading it as a double.  I changed
+	dcob.c to use store_double_lo() instead of store_word().
+
+*	After changing the nib_exc_start tack to all double words, I found
+	code in niblet.s that used magic numbers to offset into that
+	stack.  These were wrong now since they were accessing it as a
+	stack of words instead of double words.
+
+*	Previously the proc table for each task was a mixture of 32 bit
+	and 64 bit values.  But since I changed all lw and sw to LW and SW
+	I'm now accessing everything as doubles.  It's too confusing to
+	figure out which entires can remain as 32 bit values.  But
+	proc_tbl in dcob.c was written to initialize the proc table as a
+	sequence of 32 bit words.  I changed proc_tbl() so it initializes
+	a sequence of 64 bit words instead.  This meant changing
+	declarations for entry_base[] and 'j'.
+
+*	I was trying to access the page table from kernel space,
+	0xa8000000ff800000 instead of virtual space 0xc0000000ff800000
+	just to avoid the complexity of misses on the page table.  But
+	this doesn't work because sable memory is only 8 Megabytes.
+
+*	The '.align 7's used to separate the exception handlers is related
+	to the R4000 architecture, where handlers are 0x80 apart.  In TFP
+	they are 0x400 apart, so .align 7 doesn't work.  To get the
+	handlers 0x400 apart, must put first one at 0x4000 and use '.align
+	10" between them.  This endus up adding 0x1000 (4096) bytes to raw
+	niblet, which is 1K.  But then I found out about -rom option which
+	lets me put text at 0x0, but this doesn't seem to work with the -D
+	option to ld.  HOwever, I don't think it is necessary to put the
+	data section at a special address, so I tried leaving out the -D.
+	This actually results in raw niblet being smaller, despite the
+	extra room in the exception handler area, because now we don't
+	have to pad up to the data section.
+
+*	Had some problems with tlb related code.  In dcob, scn_mem was a
+	pointer to a word and enlo was only a word, so we were writing the
+	enlo value to the high word of a double word location.  In
+	niblet.s COHERENCY_SHIFT was hard coded as 3, but in TFP it is 9.
+	Also, ASID field of entryhi was hardcoded at bits 0 .. 7.  They
+	used an OR to OR it into entryhi with no shift.  We need to shift
+	by ENTRYHI_ASIDSHIFT in TFP.
+
+*	Confusion about virtual coherency when we first get to test.
+	Since we have written test to memory through address
+	0xa800000000109000, we have a virtual synonym of 9.  But then we
+	try to execute through vaddr 0x0, so now the virtual synonym is
+	wrong.  Peter says this is ok.
+
+*	The exception table and sysvect table were in text space but our
+	assembler/linker don't use the right address for clode like 'la
+	r4, sysvect'.  I added .data before the table, .text after it.
+
+*	All over the place they are oring ASID into entryhi structures.  I
+	added ifdefs everywhere to shift it by pid shift.
+
+*	R4000 niblet does not set ICACHE register.  I went through the
+	code and every place I write to enhi I added code to write
+	C0_ICACHE.  This may be overkill.
+
+*	Changed vaddr that is used to access page table to
+	0x40000000ff800000 instead of 0xc0000000ff800000.  The 'c' address
+	ignores the asid so niblet doesn't switch page tables when it
+	switches processes.
+
+*	Some stuff in .lcomm doesn't get into bss or sbss.  Made all .lcom
+	into .byte, but this left nothing in .bss or .sbss and
+	nib_sbss_end label ended up zero which messed dcob up.  Maybe this
+	is a bug in nextract?
+
+*	If two sections are in the same virtual page, the pg_tbl() routine
+	in dcob() breaks.  For example, if text is at 0x000000000000010b
+	and data is at 0x110, then we first create a tlb mapping for
+	virtual page 0 to the physical page where prg_code puts the text
+	section, say page 0x109.  But prg_code() puts each section in a
+	different physical page, so data section is in, say physical page
+	0x10a.  Now we look at the first virtual page of the data section
+	and it is also page 0, so we now try to map virtual page 0 to
+	physical page 0x10a.  But the text section needs it mapped to
+	0x109!  In other words, if text and data are linked into the same
+	virtual page, they must be put in same physical page in prg_code()
+	or there is no way to do tl mappings.
+
+	In order to link test at 0x0, I had been using -rom option to
+	loader.  But for some reason I was not able to use -D option to
+	specify where data section goes when I use -rom.  This would have
+	been the easiest way to solve the above problem.  I wanted to just
+	move my data section out of the text section's virtual page
+	because th is would give me the same environment that Steve
+	Whitney had.  But since I couldn't get -rom -and -D to work
+	together, I tried omitting -rom.  This puts the elf header at the
+	top of the text section, moving the entry point of the test to
+	0x110.  This didn't work because prg_code() was copying the test's
+	text (without the elf header) to the beginning of the physical
+	page it was assigned to.  For example, the first instruction ended
+	up at 0x109000, but when I started executing at 0x110, this was
+	mapped to 0x109110, and there was no code there.
+
+	I solved this in prg_code() by looking at how far the entryoint of
+	the text section was from 0 and padding the first 'n' bytes of the
+	physical page, where n = entrypoint - vaddr.  This seems ok,
+	as long as the test does not have code in front of its entrypoint.
+
+*	Found bug in pg_tbl() routine.  I was allocating two double words
+	for each page, rather than 1.  This was a relic from the way they
+	do page table mappings for R4000.
+
+*	Had to mask out some IP bits in cause register in the niblet.s
+	code for running on sable.  If we don't, sable takes an interupt
+	as soon as we start the test.  Somewhere in the code, probably in
+	the boot prom, they try to reset these bits by writing to an
+	uncached location, but Sable probably doesn't understand this.
+
+*	Tried to run on system, but had problems so we decided I should
+	update to new bootprom.  Found some bugs in 'gm' code of bootprom
+	where a 32 bit value was getting loaded where a 64 bit value
+	should be.
+
+*	In dcob code where we set a data strucure field to slave_return,
+	found that that field (brd->eb_cpuarr[j].cpu_launch) is a 32 bit
+	value instead of a 64 bit value.  FOr some reason it cannot be
+	changed.  Steve Whitney says this is because it is used in two IO4
+	proms and they didn't think ahead enough.  So slave_return, which
+	is a 64 bit address, must be converted to a 32 bit R4000 type
+	address before storing it into cpu_launch.
+
+*	In dcob, slave_return must be extern'd as a function, rather than
+	a long.  If it is a long, then when we assign it, we get it's
+	contents, which is an instruction opcode, when we really want the
+	address it represents.
+	
+	
+MAKING RAW_DCOB
+
+*	The scn_ptr field of the obj_inf in cob.h is declared of type 
+	scn_data_ptr.  This is the only address field in obj_inf that is
+	not *always* a 64 bit value.  Instead it is declared as a pointer
+	to an int, which makes it a 64 bit value in a 64 bit architecture
+	and a 32 bit value on a e2 bit architecture.  This is because
+	it is used by scob and nextract as a pointer to a location on the
+	home machine and all pointers on my home machine are 32 bit.  
+	This is different from a field like scn_addr, which is also used
+	by scob.c, but is used to point to a 64 bit address that it gets
+	from the elf information for the niblet test.  I actually think
+	it would be cleaner to make scn_data_ptr a 64 bit value, but
+	this requires changing a bunch of variables in nextract.c and
+	scob.c, and I don't want to mess anything up.  Leaving it as it
+	is is ugly because in dcob.c there is a printf to print it.  It
+	is currently printed as %x.  This works in 32 bit world because
+	it is a 32 bit value.  It works in 64 bit world because printf
+	is defined to be loprintf and loprintf happens to print a full
+	64 bits for the %x format.  Ugly.
+
+
+	
+  
+
+
+   
+-------------------------------
+FOUND on HW
+
+*   When running MP, the C0_COUNTS register in the slave was not
+	getting in itialized.  When the slave swithched to its task,
+	it would execute
+
+		P_ICNT = P_ICNT + (C0_COUNT - QUANTUM)
+
+	But since C0_COUNT hadn't been intiialized, C0_COUNT - QUANTUM
+	would give me a large negative number.  Fixed by initializing
+	C0_COUNT to QUANTUM in slave.
+
+*   In tlbl handler was not setting ENTRYHI correctly.  I was writing
+    vaddr to ENTRYHI and this was overwriting the ASID bits of ENTRYHI
+    with bits from the virtual address.
+
+*   td command in pod not working for multiple page sizes.  Fixed.

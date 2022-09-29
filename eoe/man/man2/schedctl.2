@@ -1,0 +1,252 @@
+'\"macro stdmacro
+.TH schedctl 2 LOCAL
+.SH NAME
+\f4schedctl\fP \- scheduler control call
+.Op c p a
+.SH C SYNOPSIS
+.nf
+\f3#include <limits.h>\f1
+\f3#include <sys/types.h>\f1
+\f3#include <sys/prctl.h>\f1
+\f3#include <sys/schedctl.h>\f1
+.sp .6v
+\f3int schedctl (int cmd, [ int arg1 [ , int arg2 ] ]);\f1
+.fi
+.Op
+.Op f
+.SH FORTRAN SYNOPSIS
+.nf
+\f3#include <limits.h>\f1
+\f3#include <sys/prctl.h>\f1
+\f3#include <sys/schedctl.h>\f1
+.sp .6v
+\f3integer*4 function schedctl (cmd, arg1, arg2)\f1
+\f3integer*4 cmd, arg1, arg2\f1
+.fi
+.Op
+.SH DESCRIPTION
+This system call is used to alter scheduling parameters of either individual
+processes or of the system as a whole.
+.Op f
+All three arguments must be given, supply 0 if an argument is not necessary
+for a particular operation.
+.Op
+The following commands are supported:
+.IP \f3AFFINITY_ON\f1 8
+This command enables cache affinity for the calling or another process.
+.I arg1
+is the process
+ID
+of the process to be modified; if zero, it indicates the current
+process.
+The affinity status is inherited by the process's children after a fork.
+By default, affinity is on.
+.IP \f3AFFINITY_OFF\f1 8
+This command disables cache affinity for the calling or another process.
+.I arg1
+is the process
+ID
+of the process to be modified; if zero, it indicates the current
+process.
+The affinity status is inherited by the process's children after a fork.
+.IP \f3AFFINITY_STATUS\f1 8
+This command returns the current cache affinity
+status for the calling or another process.
+.I arg1
+is the process
+ID
+of the process to be modified; if zero, it indicates the current
+process.
+If affinity is on, it returns 0, otherwise 1.
+.IP \f3RENICE\f1 8
+This command allows a process to change its own or another process's
+.I nice
+value.
+.I arg1
+is the process
+ID
+of the process to be modified; if zero, it indicates the current
+process.
+.I arg2
+is the new process nice value to use.
+This is different than the value given to the
+.IR nice (2)
+system call.
+.I nice
+takes a relative value, while this command changes the absolute nice
+value of the process which ranges from 0 to 39.
+The default absolute nice value for a process is 20.
+.IP "" 8
+The process must have superuser permissions to use this command.
+The previous (absolute) nice value is returned.
+.IP \f3SLICE\f1 8
+This command allows a process to change its own or another process's
+time slice.
+A time slice is the period of time that a
+process is allowed to run before being eligible for preemption by another
+process.
+.I arg1
+is the process
+ID
+of the process to be altered; if zero, it indicates the
+current process.
+.I arg2
+is the new time slice value to use, expressed in terms of
+.IR "clock ticks" .
+The system software clock fires
+.B CLK_TCK
+times per second; hence the duration
+of a clock tick in milliseconds is equal to
+.B 1000/CLK_TCK
+(see
+.IR <limits.h> ).
+.I arg2
+is constrained to be greater than 0, and less than 10 seconds.
+.IP "" 8
+The process must have superuser permissions to use this command.
+The previous time slice value is returned.
+.IP \f3SETHINTS\f1 8
+This command sets up a communication path between the process
+and the kernel, which allows the process to communicate scheduling modes
+to the kernel without the overhead of a system call.
+The return value is
+a pointer to a
+.I prda_sys
+structure, defined in
+.IR <sys/prctl.h> .
+Since the return value for \f4schedctl\fP is defined as an integer,
+it is necessary to cast this value to a
+.B "struct prda_sys \(**"
+before using it.
+Also, since the optimizer can remove references to variables
+which have no apparent uses, it is best to declare the variable with the
+.I volatile
+attribute:
+.IP
+.B "volatile struct prda_sys \(**prda_sys;"
+.br
+.IP "" 8
+After a
+.B SETHINTS
+command, the process may write scheduling modes
+to the
+.I t_hint
+field of the
+.I prda_sys
+structure.
+These scheduling modes will be observed by the kernel at
+process dispatch time.
+The scheduling modes are the same as those defined for the
+.B SCHEDMODE
+command.
+.IP "" 8
+Also, the
+.I t_cpu
+field may be read by user code to obtain the identifier of the cpu
+where the process was recently scheduled.
+.PP
+The next two commands provide control over the scheduling
+of groups of parallel processes on multi-cpu systems.
+The processes must be members of the same
+.IR share group
+(see \f2sproc\fP(2) for more information about share groups).
+Note that the
+.B SCHEDMODE
+and
+.B SETMASTER
+commands can only be used after a share group has been created.
+.IP \f3SCHEDMODE\f1 8
+This command allows a member of a share group to set a
+.I scheduling mode
+for the entire share group.
+.I arg1
+specifies the scheduling mode.
+These are
+.BR SGS_FREE ,
+which specifies that each member of the share group is to be
+scheduled independently,
+.BR SGS_SINGLE ,
+which specifies that only the
+.I master
+is to run (see
+.B SETMASTER
+for setting the master thread), and
+.BR SGS_GANG ,
+which specifies that all members of the share group are to be scheduled
+as a unit, if possible.
+The default scheduling mode when a share group
+is created is
+.BR SGS_FREE .
+.IP "" 8
+The previous scheduling mode is returned.
+.IP \f3SETMASTER\f1 8
+This command sets the
+.I "master process"
+of the share group.
+.I arg1
+specifies the
+.I pid
+of the new master process.
+.IP "" 8
+By default, the creator of the share group is the master process.
+The master process differs from other members of the share group only
+in the case of the
+.B SGS_SINGLE
+scheduling mode.
+In that case,
+only the master process will run.
+This operation can only be performed by
+the master of the share group.
+On success, 0 is returned.
+.PP
+.PP
+\f2<sys/schedctl.h>\fP.
+.PP
+.I schedctl
+will fail if any of the following are true:
+.TP 12
+[EINVAL]
+An invalid command or new value was passed to the system.
+.TP
+[EINVAL]
+The command was
+.BR SCHEDMODE ,
+and either the process was not
+a member of a share group, or
+.I arg1
+did not specify a valid scheduling mode.
+.TP
+[EINVAL]
+The command was
+.BR SETMASTER ,
+and either the process was not a
+member of a share group, the process was not the current master
+of the share group, or
+.I arg1
+specified a process that was not a member of the
+share group.
+.TP
+[EPERM]
+An attempt was made to perform privileged operations without appropriate
+permissions.
+.TP
+[ESRCH]
+The named process was not found.
+.SH SEE ALSO
+npri(1),
+nice(2),
+prctl(2),
+sched_getparam(2),
+sched_setparam(2),
+sched_getscheduler(2),
+sched_yield(2),
+sched_get_priority_max(2),
+sched_get_priority_min(2),
+sched_rr_get_interval(2),
+sproc(2),
+sysmp(2)
+.SH DIAGNOSTICS
+.I schedctl
+returns \-1 if an error occurred.
+Otherwise, the return is dependent on
+.IR cmd .

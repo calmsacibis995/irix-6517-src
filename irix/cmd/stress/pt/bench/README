@@ -1,0 +1,221 @@
+
+
+These benchmarks are intended to measure the performance of pthreads.
+They aren't necessarily complete; see the TODO file for some possible
+room for expansion.
+
+The tests themselves are self-documenting; you can do a make doc to
+see documentation for all tests.
+
+BUILDING THE TESTS
+==================
+
+Just type make. This will build all tests for all ABIs.
+
+Note that all of the tests depend on a dso in the build directory:
+either libsthrsproc.so, or libsthrpthread.so. By default, the binaries
+are built to look for these dsos in the directory in which they were
+built. However, if you want to carry the binaries to other machines,
+you will need to consider the dsos as well.
+
+RUNNING THE TESTS
+=================
+
+Environment
+-----------
+
+All of the benchmarks understand two environment variables: THRLIB and
+HRN_VRB.  HRN_VRB controls the verbosity of test output; by default,
+the tests will produce no output. HRN_VRB can also be set to exactly
+one of "result", "info", or "vrb", in increasing order of verbosity.
+
+	result 	- output only test results; most likely timing information.
+	info 	- print out everything output by HRN_VRB=result, and any
+		informational messages about the test's progress.
+	vrb	- print out everything output by HRN_VRB=info, and any other
+		output in the test; this might include debugging output, 
+		printouts in tight inner loops, and other such noise you
+		don't always want to see.
+
+If the environment variable HRN_SPROC is set, certain of these
+benchmarks will use sproc(2) to create threads rather than
+pthread_create(3P). Such benchmarks will necessarily also use different
+synchronization constructs when running with sproc's. See the section
+on the "sthr" library below.
+
+Command-line Args
+-----------------
+
+There is a standard set of command-line arguments that each test accepts. The
+individual tests also accept their own, idiosyncratic arguments: by convention,
+standard arguments have a lower-case option letter (-z) and test-defined ones
+have an upper-case option letter (-Z).
+
+The standard command-line arguments are:
+
+	-t #	use # threads. This option is not supported for all tests.
+		Specifically, tests which use more than one type of thread
+		will offer their own command-line arguments to independently
+		set the number of threads of each type.
+
+	-c #	Call pthread_setconcurrency(3P) with # as an argument. This
+		is a no-op when HRN_SPROC is set.
+
+	-i #	Repeat the test # times.
+
+	-d	Print out verbose documentation of this test.
+
+	-u	Print a short usage message, with brief explanations of
+		all command-line options.
+
+	-h	Print a long usage message, with verbose explanations of
+		all command-line options.
+
+
+Use <test> -[uhd] to figure out what other options <test> supports.
+
+Results
+-------
+
+All output from the tests is preceeded with the thread-id of the
+calling thread. For sprocs, this id is a pid; for pthreads, it is a
+pthread_t.
+
+All timing information is obtained via the SGI cycle counters. Each
+timer is "named" by the event it times; when a timer completes, if
+HRN_VRB=result is set, the test will print a message containing the
+timer's name and the time in microseconds its corresponding event
+took.
+
+For example:
+
+$ HRN_VRB=result ./mutex
+thr0x00010001:  single                        :      1305119.840us
+thr0x00010000:  total                         :      1362364.000us
+$ 
+
+indicates that a single thread took ~1.31 seconds to complete, and that
+all threads took ~1.36 seconds to complete.
+
+Automated Workloads
+-------------------
+
+There is a somewhat obscure framework in place for specifying
+workloads; however, if you're in a hurry, cd results and type ./runall
+to run the standard workload, and record the results.
+
+To aid in repetitively running a set of tests, there is a script in the
+results/ directory called runtests. runtests accepts as an
+argument a file describing a set of tests you would like to run. Each
+test's name is given on a line beginning with ':'. Subsequent lines are
+considered arguments to the command. The script will expand lines like
+"-n 1,2,3" into 3 separate runs of the command, with the arguments "-n
+1", "-n 2", and "-n 3". This could also have been written as "-n 1-3".
+runtests.pl runs cpp over the file before reading it. This is all
+easier to see than explain, so look at results/testfile for an
+example.
+
+runtests examines the output of each command, and places a formatted
+output file in a file named $cmdname.$(hostname).$(date +%H%M%S).
+runtests.pl. Each line of this file is of the format:
+
+<timer-name>	<command-line args>	<averaged timer value in usecs>
+
+For example, running runtests on a file like this:
+
+:../mutex
+-t 1-4
+
+Would produce a file named mutex.babylon.153843, containing something like:
+
+single	-t 1	467216.8
+total	-t 1	468403.2
+single	-t 2	553371.11111111
+total	-t 2	527496.5
+single	-t 3	609364.4
+total	-t 3	711393.72727272
+single	-t 4	828111.425
+total	-t 4	850190.56
+
+Graphing Tests
+--------------
+
+Since the amount of data resulting from a run of runtests can be
+overwhelming, graphs can help visualize the output. Running ./graphall
+with an argument that is the directory containing data files from a run
+of the benchmarks will put the data from the experiments in several postscript
+files. graphall is a wrapper around grapho.
+
+In its simplest form, grapho takes to arguments: a file generated by
+runtests.pl, and a perl regular expression. The regex is used
+to match lines in the file that should be considered for the graph.
+
+The regex argument to grpaho is slightly different from perl re's in
+that
+
+	+ a space in the re matches any positive number of whitespace
+	characters;
+	+ the symbol '#' in the re indicates that grapho should match a 
+	floating point number, and use that number as a parameter to the 
+	test.
+
+For example, to graph threads vs. time for all threads to complete,
+using mutex.babylon.153843 above, we could type:
+
+$ ./grapho mutex.babylon.153843 "total -t # #"
+
+If two '#'s are specified in the re, grapho will make a two-dimensional
+plot.  If more are specified, grapho will make a parametric
+three-dimensional plot. It is implicit that the first '#' corresponds
+to the x-axis, the second to the y-axis, and the third (if any) to the
+z-axis.
+
+gnuplot is used to do the graphing; by default, the graph will be in a
+postscript file called "graph.ps"; the -o option lets you specify a
+different output file. The -x, -y, and -z flags allow you to label the
+x, y, and z axes respectively. For example:
+
+$ ./grapho -o mutex.ps -x nthreads -y "time (usecs)" mutex.babylon.153843 \
+	"total -t # #"
+
+will produce a graph similar to the one from the previous example, but with
+labelled axes, in a file called mutex.ps.
+
+Special Tests
+-------------
+
+slock creates real-time threads, and so can only be run as root.
+affinity uses the mmci interfaces, only available on SN0. It can be run
+with its -N option on other machines, however.
+
+
+WRITING NEW BENCHMARKS
+======================
+
+These tests have been written using a common harness and set of APIs.
+Any additional tests written for this suite of benchmarks should, for
+consistency's sake, use the same ones. Use template.c as a starting
+point for writing new benchmarks; it should be mostly possible to fill
+in the blanks, using the existing tests as examples.
+
+sthr.h defines an interface for tests which can run with both sproc's
+and pthreads. It restricts itself to the LCD of these two interfaces.
+Tests which exclusively use the sthr_* interfaces are able to be run
+with either sproc's or pthreads, depending on the HRN_SPROC environment
+variable. The harness handles this change transparently to the
+benchmark writer.
+
+All output is done using the trace facilities available in trc.h
+
+Things to update
+----------------
+When you add a benchmark, you should update the following files:
+
+localdefs-- to make sure your experiment gets built with everything else
+
+results/workload-- find a reasonable set of parameters to your experiment,
+and include it in the workload file.
+
+results/graphall-- add rules to results/graphall if you often want to
+generate specific graphs from your test runs.
+

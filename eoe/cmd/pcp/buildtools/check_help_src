@@ -1,0 +1,103 @@
+#!/bin/sh
+#
+# Check typical help text in the build environment ... the intent here is
+# to reduce the likelihood of a PMDA installation problem when the
+# help text is shipped as source and newhelp(1) is run as part of the
+# PMDA installation.
+#
+# Usage: PCP_SRC_DEPTH=... check_help_src help_file root_pmns
+#
+# the newhelp(1) binary is chosen according to the following heuristic:
+# 1. if $ROOT is set and $ROOT/usr/pcp/buildtools/newhelp is executable,
+#    use that one
+# 2. else if $PCP_SRC_DEPTH is set and $PCP_SRC_DEPTH/buildtools/newhelp
+#    is executable, use that one
+# 3. else error
+#
+# assumes domain.h in current directory to get symbolic name and decimal
+# value for PMDA domain
+#
+
+status=4
+
+tmp=/usr/tmp/$$
+trap "rm -f $tmp.*; exit \$status" 0 1 2 3 15
+
+if [ $# -ne 2 ]
+then
+    echo "Usage: PCP_SRC_DEPTH=... check_help_src help_file root_pmns"
+    exit
+fi
+
+if [ ! -f $1 ]
+then
+    echo "check_help_src: cannot find help source \"$1\""
+    exit
+fi
+
+if [ ! -f $2 ]
+then
+    echo "check_help_src: cannot find pmns file \"$2\""
+    exit
+fi
+
+if [ ! -z "$ROOT" -a -x $ROOT/usr/pcp/buildtools/newhelp ]
+then
+    path_pfx=$ROOT/usr/pcp/buildtools
+elif [ ! -z "$PCP_SRC_DEPTH" -a -x $PCP_SRC_DEPTH/buildtools/newhelp ]
+then
+    path_pfx=$PCP_SRC_DEPTH/buildtools
+else
+    echo "check_help_src: cannot find newhelp binary"
+    exit
+fi
+
+# stolen from /usr/lib/pmdaproc.sh
+#
+# should be able to extract default domain from domain.h
+#
+__check_domain()
+{
+    if [ -f domain.h ]
+    then
+	# expect something like
+	#	#define FOO 123
+	#
+	domain=''
+	eval `nawk <domain.h '
+/^#define/ && $3 ~ /^[0-9][0-9]*$/	{ print $2 "=" $3
+					  if (seen == 0) {
+					    print "domain=" $3
+					    print "SYMDOM=" $2
+					    seen = 1
+					  }
+					}'`
+	if [ "X$domain" = X ]
+	then
+	    echo "check_help_src: cannot determine the Performance Metrics Domain from ./domain.h"
+	    exit 1
+	fi
+    else
+	echo "check_help_src: cannot find ./domain.h to determine the Performance Metrics Domain"
+	exit 1
+    fi
+}
+
+__check_domain
+
+# echo $domain
+# echo $SYMDOM
+
+# prepend domain.h to pmns in case symbolic references
+#
+cat domain.h $2 >$tmp.root
+
+# replace symbolic references in help text source 
+# note, output is not important ... just the exit status matters to cause
+#	make(1) to barf if there are problems
+#
+sed -e "/^@ $SYMDOM\./s/$SYMDOM\./$domain./" <$1 \
+| $path_pfx/newhelp -v 2 -n $tmp.root -o $tmp.help
+status=$?
+
+exit

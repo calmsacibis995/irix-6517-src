@@ -1,0 +1,477 @@
+.TH pciio_dma D3
+.SH NAME
+pciio_dma: pciio_dmatrans_addr,
+pciio_dmatrans_list,
+pciio_dmamap_alloc,
+pciio_dmamap_addr,
+pciio_dmamap_list,
+pciio_dmamap_done,
+pciio_dmamap_free,
+pciio_dma_addr,
+pciio_dmamap_drain,
+pciio_dmaaddr_drain,
+pciio_dmalist_drain \- manage DMA on PCI bus
+.SH SYNOPSIS
+.ft 3
+.nf
+#include <sys/PCI/pciio.h>
+.sp .8v
+iopaddr_t
+pciio_dmatrans_addr(
+	vertex_hdl_t \f2vhdl\fP,
+	device_desc_t \f2desc\fP,
+	iopaddr_t \f2addr\fP,
+	size_t \f2size\fP,
+	unsigned \f2flags\fP)
+.sp .8v
+alenlist_t
+pciio_dmatrans_list(
+	vertex_hdl_t \f2vhdl\fP,
+	device_desc_t \f2desc\fP,
+	alenlist_t \f2list\fP,
+	unsigned \f2flags\fP)
+.sp .8v
+pciio_dmamap_t
+pciio_dmamap_alloc(
+	vertex_hdl_t \f2vhdl\fP,
+	device_desc_t \f2desc\fP,
+	size_t \f2max\fP,
+	unsigned \f2flags\fP)
+.sp .8v
+iopaddr_t
+pciio_dmamap_addr(
+	pciio_dmamap_t \f2map\fP,
+	iopaddr_t \f2addr\fP,
+	size_t \f2size\fP);
+.sp .8v
+alenlist_t
+pciio_dmamap_list(
+	pciio_dmamap_t \f2map\fP,
+	alenlist_t \f2list\fP,
+	unsigned \f2flags\fP);
+.sp .8v
+void
+pciio_dmamap_done(pciio_dmamap_t \f2map\fP)
+.sp .8v
+void
+pciio_dmamap_free(pciio_dmamap_t \f2map\fP)
+.sp .8v
+iopaddr_t
+pciio_dma_addr(
+	vertex_hdl_t \f2vhdl\fP,
+	device_desc_t \f2desc\fP,
+	iopaddr_t \f2addr\fP,
+	size_t \f2size\fP,
+	pciio_dmamap_t *\f2mapp\fP,
+	unsigned \f2flags\fP)
+.sp .8v
+void
+pciio_dmamap_drain(
+	pciio_dmamap_t *\f2map\fP)
+.sp .8v
+void
+pciio_dmaaddr_drain(
+	vertex_hdl_t \f2vhdl\fP,
+	paddr_t \f2addr\fP,
+	size_t \f2bytes\fP)
+.sp .8v
+void
+pciio_dmalist_drain(
+	vertex_hdl_t \f2vhdl\fP,
+	alenlist_t *\f2list\fP)
+.fi
+.ft 1
+.SS Arguments
+.IP "\f2addr\fP"
+The DMA buffer address in system physical address space.
+.IP "\f2desc\fP"
+A device descriptor, usually zero.
+.IP "\f2flags\fP"
+Attributes of the mapping.
+.IP "\f2list\fP"
+An address/length list as prepared by one of the alenlist
+construction functions (see
+.IR alenlist (D4)).
+.IP "\f2map\fP"
+A dma map as returned by
+.IR pciio_dmamap_alloc ().
+.IP "\f2mapp\fP"
+A place to return a map allocated as
+a side effect of other work; must be
+initialized to zero, or to a map that
+should be used instead of allocating one.
+.IP "\f2max\fP"
+The maximum range of addresses this map will cover at any one time.
+.IP "\f2size\fP"
+The size of the mapped buffer in bytes.
+.IP "\f2vhdl\fP" 8n
+The device connection point as passed to the
+.IR attach ()
+entry point.
+.SH DESCRIPTION
+When a device driver wishes to use
+Direct Memory Access (DMA) to communicate with
+a device, the system needs to have a chance
+to set up any appropriate mapping registers.
+The work to be done varies with the available hardware
+and with the version of IRIX.
+The functions described here provide an abstract interface to
+the creation of DMA mapping objects that is
+consistent across most hardware.
+These functions always do the least possible work
+given the available hardware.
+.P
+There are two different models for setting up a DMA map,
+one simple but fallible and the other more general.
+In both models, the final goal is to retrieve an address
+in PCI bus address space that can be used by a PCI device
+to write into, or read from, system physical memory.
+.SS "Simple Model"
+The simple model provides
+permanent mappings through fixed mapping
+resources that may or may not exist in a given system at a given time.
+.IR pciio_dmatrans_addr ()
+is the one-stop shopping place for
+using system fixed shareable mapping resources
+to construct a DMA address.
+This is not always possible.
+When it is not, the function returns NULL.
+.P
+.IR pciio_dmatrans_list ()
+is similar,
+but operates on a list of blocks of memory and
+returns a list of blocks in PCI address space.
+.P
+When they work, these functions allow the driver to set up DMA
+with the fewest complications.
+Typically the functions always succeed in some platforms
+(those having simple hardware mappings of PCI to memory),
+and always fail in other platforms (where multiple layers of
+hardware mappings must be configured dynamically).
+However, drivers that use them should be coded as if the functions
+could succeed or fail alternately in the same system (which they could).
+.SS "General Model"
+It is not always possible to establish
+DMA mappings using common shared system
+resources, so the concept of a DMA channel
+that preallocates scarce mapping resources
+is provided.
+.P
+Such a channel is allocated using
+.IR pciio_dmamap_alloc (),
+which is given the
+maximum size to be mapped.
+.IR pciio_dmamap_addr ()
+or
+.IR pciio_dmamap_list ()
+is then applied to the map to actually establish
+the proper mappings for a DMA target.
+Given the base address and block size of the
+buffer for DMA (or a list of buffers),
+the functions hand back
+the base PCI address to use for accessing
+that buffer (or a list of PCI addresses).
+.P
+.IR pciio_dmamap_drain (),
+.IR pciio_dmaaddr_drain ()
+or
+.IR pciio_dmalist_drain ()
+are used (depending on how the mapping was created)
+after a device reports it has
+completed DMA, to ensure that all data
+along the DMA path has in fact reached
+its destination.
+.P
+When all DMA to a given buffer (or list) is complete,
+.IR pciio_dmamap_done ()
+should be called to idle any mapping
+hardware (and possibly flush out
+any pipes or buffers along the path
+that might do unexpected things when
+mapping registers are modified).
+Later,
+.IR pciio_dmamap_addr ()
+or
+.IR pciio_dmamap_list ()
+can again be called,
+specifying the same or another buffer area.
+.P
+When a driver is completely finished with
+a DMA channel -- because the channel
+is used only for initialization of the
+device, because the driver's
+.IR close ()
+entry point is called so it is known that the device
+will be idle for some time,
+or because the device or the driver
+is being shut down -- the DMA channel resources
+should be released using
+.IR pciio_dmamap_free ().
+.P
+.IR pciio_dma_addr ()
+combines
+.IR pciio_dmatrans_addr ()
+and the
+.IR pciio_dmamap_alloc ()
+/
+.IR pciio_dmamap_addr ()
+facilities;
+it attempts to do the direct translation,
+and if that fails, allocates a dmamap and
+attempts to map through it.
+The
+.I mapp
+parameter should point to a pciio_dmamap_t
+which has been either set to NULL,
+or set to a map that should be used
+if one is needed.
+On return, the value will be cleared if the
+direct translation worked, or set to the
+map that was used.
+.SS "DMA Attribute Flags"
+The following attributes are specified in the
+.I flags
+argument:
+.IP PCIIO_FIXED 12n
+specifies that
+all DMA translations
+are done using fixed shared resources.
+The results of those translations
+remain valid permanently,
+even if the map resource is
+subsequently used to obtain
+additional mappings.
+Fixed shared resources are not always available.
+.IP PCIIO_NOSLEEP 12n
+specifies that
+any resources that are needed from
+the system are allocated without
+sleeping.
+If any resource allocation
+would require the infrastructure
+to sleep, the service call returns
+a failure code.
+.IP PCIIO_INPLACE 12n
+on a list operation
+requests that the input list be
+modified in place.
+When this flag is not specified,
+a new list is allocated for the translated addresses.
+Allocating a new list preserves the contents of the input list.
+However, it can take longer, may require sleeping,
+and may fail (especially if PCIIO_NOSLEEP is specified).
+.IP PCIIO_DMA_CMD 12n
+specifies that the DMA channel
+will be used for command-type transactions.
+The channel is set up to optimize short transactions
+with frequent changes of direction.
+Unless a more specific request
+is made using one of the other flags,
+any prefetch and write-gatherer hardware
+in the path is disabled.
+.IP PCIIO_DMA_DATA 12n
+specifies that the DMA channel
+will be used for data-type transactions.
+The channel is set up to optimize longer transfers.
+Unless a more specific request
+is made using one of the other flags,
+any prefetch and write-gatherer hardware
+in the path may be enabled.
+.IP PCIIO_DMA_A64 12n
+indicates that the device is capable
+of using 64-bit PCI addresses for DMA.
+If this flag is not specified,
+only DMA addresses in the low 4GB
+of PCI address space can be generated.
+On some systems, 32-bit PCI addresses are a limited resource.
+The map request fails if a 32-bit region cannot be allocated.
+.IP PCIIO_WRITE_GATHER 12n
+indicates that the device driver believes
+turning on write-gather hardware for
+this DMA channel is a good thing.
+The flag overrides the write-gather choice
+from PCIIO_DMA_CMD.
+.IP PCIIO_NOWRITE_GATHER 12n
+indicates that the device driver believes
+turning on write-gather hardware for
+this DMA channel is a bad thing.
+The flag overrides the write gather choice
+from PCIIO_DMA_DATA.
+.IP PCIIO_PREFETCH 12n
+indicates that the device driver believes
+turning on prefetching hardware for
+this DMA channel is a good thing.
+The flag overrides the prefetch choice
+from PCIIO_DMA_CMD.
+.IP PCIIO_NOPREFETCH 12n
+indicates that the device driver believes
+turning on prefetching hardware for
+this DMA channel is a bad thing.
+The flag overrides the prefetch settings
+from PCIIO_DMA_DATA.
+.IP PCIIO_BYTE_STREAM 12n
+demands that any
+byte-swapping
+hardware along this DMA path
+be organized so that an ordered
+stream of bytes from the device
+are deposited in order in system memory.
+This is the typical setting for data
+streams.
+If this endianness cannot be supplied,
+then the service call fails.
+.IP PCIIO_WORD_VALUES 12n
+demands that any
+byte-swapping
+hardware along this DMA path
+be initialized so that 32-bit quantities on PCI-bus 32-bit boundaries
+maintain their binary values.
+This is the typical setting for command-type transactions
+because command words exchanged with a little-endian PCI device
+retain their binary values.
+If this endianness cannot be supplied,
+then the service call fails.
+.P
+When PCIIO_BYTE_STREAM is used,
+the bytes of multibyte values embedded in input data
+are found at their original offsets.
+Multibyte values from little-endian devices
+may require programmed swapping before use.
+.P
+When PCIIO_WORD_VALUES is used,
+.IP \(bu 4n
+Single bytes in input data are
+found at the offset the device places
+them, exclusive-or with 3.
+.IP \(bu 4n
+16-bit quantities in input data are found at the offset
+used by the device, exclusive-or with 2,
+and do not need to be byteswapped.
+.IP \(bu 4n
+32-bit values are found
+at the expected offset, and do not need
+to be byteswapped.
+.IP \(bu 4n
+64-bit values are found
+at the expected offset, and their 32-bit halves
+need to be swapped before use.
+.SH EXAMPLES
+Here is one way that a driver might make
+use of dmamap and dmatrans calls.
+.Ex
+pcifoo_attach(vertex_hdl_t vhdl)
+{
+	pciio_dmamap_t	command_map;
+	iopaddr_t	command_dma;
+	struct pcifoo_regs	*reg_pio;
+	struct pcifoo_ring	*command_ring;
+	...
+	/*
+	 * This driver has decided to use a dmamap
+	 * to get to its command rings, which contain
+	 * things like DMA addresses and counts; we
+	 * set PCIIO_WORD_VALUES so we don't have to
+	 * byteswap the 32-bit values.
+	 *
+	 * We still have to swap the upper and lower
+	 * halves of the 64-bit values.
+	 */
+	/* allocate the channel
+	 */
+	command_map = pciio_dmamap_alloc(
+		vhdl, 0,
+		RINGBYTES,
+		PCIIO_DMA_CMD |
+		PCIIO_WORD_VALUES);
+	command_dma = pciio_dmamap_addr(
+		command_map,
+		kvtophys(command_ring),
+		RINGBYTES);
+	/* tell the device where it can find
+	 * it's command rings.
+	 */
+	reg_pio->command_dma = command_dma;
+	...
+}
+{
+	caddr_t	data_buffer;
+	size_t	data_size;
+	...
+	data_dma = pciio_dmatrans_addr(
+		vhdl, 0,
+		kvtophys(data_buffer), data_size,
+		PCIIO_DMA_DATA|
+		PCIIO_DMA_A64|
+		PCIIO_BYTE_STREAM);
+	command_ring->data_dma_lo = data_dma & 0xFFFFFFFF;
+	command_ring->data_dma_hi = data_dma >> 32;
+	command_ring->data_dma_size = data_size;
+	command_ring->ready = 1;
+}
+.Ee
+.\" .SH FILES
+.SH "SEE ALSO"
+alenlist(D3),
+pciio(D3),
+pciio_config(D3),
+pciio_error(D3),
+pciio_get(D3),
+pciio_intr(D3),
+pciio_pio(D3).
+.SH NOTE
+.LP
+Do not point the
+.I mapp
+parameter to the
+.IR pciio_dma_addr ()
+function at your only copy of a map pointer,
+since it will write a NULL through this pointer
+when direct translations work.
+.LP
+In IRIX 6.3,
+.IR pciio_dmatrans_list ()
+is declared and implemented with two arguments only,
+taking no
+.I flags
+argument.
+When porting a driver from IRIX 6.3,
+add a third argument of NULL (or other flag values as desired).
+.SH DIAGNOSTICS
+.IR pciio_dmatrans_addr ()
+returns zero if
+shared (fixed) resources can not be
+used to construct a valid PCI address
+that maps to the desired
+range of physical addresses.
+.P
+.IR pciio_dmatrans_list ()
+returns a null pointer if any
+of the requested physical address
+blocks can not be reached using
+shared fixed resources, or if
+unable to allocate a return list.
+.P
+.IR pciio_dmamap_alloc ()
+returns a null pointer if resources
+can not be allocated to establish DMA
+mappings of the requested size, or
+if the parameters are inconsistant.
+.P
+.IR pciio_dmamap_addr ()
+returns zero if the specified
+target address can not be mapped using
+the specified DMA channel.
+This would usually
+be due to specifying a target block that is
+outside the previously specified target area
+or is larger than the previously specified
+maximum mapping size.
+It may also return a null pointer if the
+DMA channel is currently in use and has
+not been marked idle by a call to
+.IR pciio_dmamap_done ().
+.P
+.IR pciio_dmamap_list ()
+can return a null pointer for all the reasons
+mentioned above, or if it is unable to allocate
+the return list.

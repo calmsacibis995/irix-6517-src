@@ -1,0 +1,340 @@
+struct obj_inf {
+	char name[25];						/* Section name */
+	unsigned int scn_size[NUM_SECTS]; 	/* Size of each section */
+	addr_type scn_addr[NUM_SECTS]; 		/* Address of each section */
+						scob:		sets scn_addr to virtual address of the section.  This
+									gets printed into static_table.
+						dcob:		pg_tbl() uses scn_addr to determine vaddr of section
+									proc_tbl() uses for ???
+	addr_type scn_end[NUM_SECTS]; 		/* End of each section */
+						scob:		sets scn_end to virtual address of the last byte of section.
+									gets printed into static_table.
+						dcob:		pg_tbl() uses scn_end to determine vaddr of last byte of section
+	scn_data_ptr scn_ptr[NUM_SECTS]; 	/* Ptr to each section's mem. */
+						scob,nxtct:	points to the sections data, such as its text, data, or
+									bss.  But at the end of scob, when we print out the
+									static_table, we are printing an obj_inf struct for each
+									test.  For the scn_ptr field we make this an address which
+									points into the nib_prgs array, so the contents of a
+									scn_ptr field in static_table might look like this: 
+											nib_prgs + 0x382
+
+					
+	addr_type start_addr[NUM_SECTS]; 	/* Start of scn's mem */
+						prg_code: 	set to the physical address in memory where the section gets
+									copied
+	int real_size[NUM_SECTS];
+						prg_code:	set to the size of the section, padded to the next page 
+									boundary
+	addr_type end_addr[NUM_SECTS]; 		/* Last page of proc's mem. */
+						prg_code:	set to the address of last byte of the section, where
+									the section is composed of the section code plus its
+									padding up to the next page boundary.  
+	addr_type pg_tbl_addr;				/* Page table address */
+	addr_type pg_tbl_end;				/* End of page table (+ 1) */
+	addr_type entry_addr;				/* Virtual address of ENTRY */
+};
+
+
+
+SCOB
+-----
+
+We run scob on all of the tests in the test directory and generate
+a file called nib_procs.c.  This file contains the text and data of each test
+in an array called nib_prgs.  It also contains an array of obj_inf
+structs in a table called static_table.  Each obj_inf struct
+contains info about the sections in one of the tests, such as
+the section sizes, address where the sections start and end,
+a place holder for the page table address and the virtual address
+of the tests entry point.  The section start and end addresses are
+virtual addresses.  The scn_ptr addresses point to locations in the
+nib_prog array, thus defining where in the nib_prog array different
+sections start and end.   We use the scn_ptr fields in the prg_code()
+routine of dcob.c for copying a chosen test from the nib_prog array
+into memory.  We use the scn_addr(virtual start of test)  and scn_end 
+(virtual end of test) fields in the pg_tbl()
+routine of dcob.c for creating a page table for the program.  For
+each virtual page, n,  in a task that we want to run, we figure out what section
+of the task it is in.  Then we figure out where we have put that section
+in physical memory.  Then we figure out the distance of page n from the
+start of its section, and then add that distance to the physical page
+where the section starts.  This gives us a physical page where virtual
+page n resides, and we put that in entry lo.  Wit this algorithm
+the test may be at any address, I believe.
+ ------------------------------------------------------------------------------
+ |  nib_procs.c
+ |
+ |  unsigned int nib_progs[]         array of test code
+ |  struct obj_inf static_table[]    array of obj_inf structures for each test
+ |  struct obj_inf static_table[] = {
+ |  {
+ |      "tests/invalid",
+ |      { 0x40,	0x0,	0x0,	0x8000 },	/* scn_size */
+ |      { 0xe0,	0x0,	0x0,	0x300000},	/* scn_addr */
+ |      { 0x11b,	0x0,	0x0,	0x307fff },	/* scn_end */
+ |      {
+ |      	nib_prgs + 0x32,
+ |      	nib_prgs + 0x42,
+ |      	nib_prgs + 0x42,
+ |      	nib_prgs + 0x42
+ |      },
+ |      { 0x0,0x0,0x0,0x0 },
+ |      { 0x0,0x0,0x0,0x0 },
+ |      { 0x0,0x0,0x0,0x0 },
+ |      0x0,	/* Page table address place holder */
+ |      0xe0	/* Entry address */
+ |  },
+ |
+ ------------------------------------------------------------------------------
+
+    TO PORT
+    -------
+    Porting scob involved changing it to 64 bit.  Since libelf.a returns
+    64 bit values for addresses, the fields of obj_inf are now of tyep
+    addr_type.  This was not really evident in most of the scob.c code
+    because statments like "obj->scn_addr[j] = shdr64->sh_addr;" just work
+    in both 32 bit and 64 bit.  In a 32 bit worls, the scn_addr field
+    will still be 64 bits, but only the low 32 bits will be filled, and
+    that's ok, I believe.  The main text changes involved printf statements.
+    The printf statements all used %x, but now they must use %llx to print
+    the addr_type fields.
+
+    There were few (if any) variables that get assigned values from
+    the obj_inf struct, so there were not changes of variables from
+    int to addr_type.
+
+
+NEXTRACT
+--------
+Nextract is similar to scob, but it works on the niblet executable
+instead of on the niblet tests.  It creates an array called niblet_code
+which contains all of the text and data of the niblet program.
+It also creates a bunch of variables which contain the addresses
+of labels in the niblet program of the same name.
+
+ ------------------------------------------------------------------------------
+ |  nib_code.c
+ |
+ |  unsigned int niblet_code[]   array of niblet code & data
+ |
+ |  unsigned int nib_obj_start = 0xa80000000000180;    /* Start of niblet code and entry point */
+ |  unsigned int nib_text_entry = 0xa800000000025e0;
+ |
+ |
+ |  unsigned int nib_slave_entry = 0xa80000000002bfc; /* Start of niblet code and entry point */
+ |
+ |  unsigned int nib_exc_start = 0xa80000000000180;   /* Link addresses and object offset for Niblet exception handlers */
+ |  unsigned int nib_exc_end = 0xa80000000000330;
+ |  unsigned int nib_exc_off = 0x0;
+ |
+ |  unsigned int nib_text_start = 0xa80000000000330;  /* Link addresses and object offset for Niblet text */
+ |  unsigned int nib_text_end = 0x310fb4ac1c;
+ |  unsigned int nib_text_off = 0x1b0;
+ |
+ |  unsigned int nib_data_start = 0x370fb4ac1c;       /* Link addresses and object offset for Niblet data */
+ |  unsigned int nib_data_end = 0x2c0fb4ac1c;
+ |  unsigned int nib_data_off = 0xf580000000103e80;
+ |
+ |  unsigned int nib_bss_start = 0x1a0fb4ac1c;        /* BSS and SBSS addrs. */
+ |  unsigned int nib_bss_end = 0x2b0fb4ac1c;
+ |  unsigned int nib_sbss_start = 0x290fb4ac1c;
+ |  unsigned int nib_sbss_end = 0x2c0fb4ac1c;
+ ------------------------------------------------------------------------------
+
+We use these variables in dcob to copy words from the niblet_code array
+into specific parts of memory.
+
+    TO PORT
+    -------
+    Nextract fills up an array of obj_inf, and the fields in obj_inf are now
+    all of type addr_type (long long), since we are using libelf.a on a 64bit file.  So all the
+    varaibles that get assigned to obj fields must change, too.  Originally
+    obj_inf was defined in both cob.h and nextract.c, but in nextract.c only
+    the top 4 fields were defined.  I made nextract.c include cob.h and use
+    its definition.
+
+    There is some confusion with the scn_ptr field of the obj_inf struct.  When
+    running scob and nextract, this field holds a pointer to memory on my
+    real machine.  For each section, it points the section's actual data, such
+    as text, data, bss, etc, so it is a 32 bit pointer.  But in scob, we
+    print out a table of obj_inf structures into nib_procs.c.  This is "static_table[]".
+    When we print the scn_ptr field for each section, we make this field
+    point to the start of the section as it lies in the nib_prgs[] array,
+    which scob also generates.  Thus, it is now a 64 bit pointer for TFP
+    because when nib_procs.c is compiled for TFP, nib_prgs will be a
+    64 bit address of an array that contains all the text and data for the
+    tests.  This all means that scn_ptr must be a 32 bit pointer to an
+    instruction in scob and nextract, but it is a 64 bit pointer to an
+    instruction in dcob.  This means it must be a long because long is
+    64 bits in a 64 bit world and 32 bits in a 32 bit world.  Or else it
+    can be a pointer, which is 64 bits in a 64 bit world and 32 bits in
+    a 32 bit world.  I think a pointer is cleaner, but it must always point
+    to a 32 bit value, because in both scob.c and dcob.c we offset into scn_ptr as if it
+    is an array of 32 bit values.
+
+    There were a bunch of places in nextract.c where fields of obj_inf were
+    assigned to other variables, so I had to go through and find these
+    places and redefine the typs of those variables to be addr_type.
+
+    We call elf32_generate_syms and elf64_generate_syms to fill the variables
+    that define the locations of the important niblet labels, and these
+    are now of type addr_type, so those had to change in the prototype
+    definitions, as well as in the function definitions, themselves.
+    Addr_type is now a 64 bit value, so the label addresses are always
+    placed in 64 bit variables.  This is necessary for TFP, but not
+    for R4000, but it doesn't hurt in the R4000 case.  I originally
+    tried to keep everything 32 bit for R4000, but this was difficult
+    because of the printfs, which need %x for 32 bit and %llx for 64 bit.
+    It doesn't work to use a long, because nextract is run on my r4000
+    machine, so the long would be 32 bits, not 64 bits. So, we carry
+    the label addresses around in 64 bit variables for both R4000 and
+    TFP, and in the end, when we print them to nib_code.c, we use %x
+    for R4000 (32 bit) and %llx for TFP.
+
+
+NIB_CONF.c
+----------
+This file just sits in the niblet directory.  It contains an array that has
+entries which represent sets of tests.  This file is compiled with nib_code.c
+and nib_procs.c, and at run time, we can index into it to choose a particular
+set of tests to run.
+ ------------------------------------------------------------------------------
+ |  nib_conf.c
+ |
+ |  int test_array[][PROCS_PER_TEST + 1] = {
+ |       {INVALID, -1},						/* 0 */
+ |       {INVALID, COUNTER, COUNTER, -1},			/* 1 */
+ |       ...
+ -----------------------------------------------------------------------------
+
+
+
+
+DCOB
+----
+Dcob uses the variables defined in nib_code.c to copy various parts of
+niblet into memory.
+
+  * It copies code starting at nib_code[nib_exc_off] to memory
+    locations a800000000000000 to a8...0 + nib_exc_off
+  * It copies code starting at nib_code[nib_text_off] to memory
+    locations nib_text_start to nib_text_end
+  * It copies code starting at nib_code[nib_data_off] to memory
+    locations nib_data_start to nib_data_end
+  * It zeroes out memory locations nib_bss_start to nib_bss_end
+  * It zeroes out memory locations nib_sbss_start to nib_sbss_end
+
+Then it calls niblet, passing it the address of its process table
+
+Before doing all this, dcob determines where the end of niblet's BSS
+section is and calls dcob() to put a bunch of task related stuff past
+the end of niblet's bss.
+
+The first thing it does is look into the
+test_array at the index which defines what set of tests we should run.
+It runs through each test in the set, copying information from the
+static_table[] entry for that test (in nib_procs.c) into a new,
+dynamic table, which begins right at the end of niblet bss.  When this
+is done, we have a new array of obj_inf structs that represents the
+tasks we want to run.
+
+
+PUTTING TESTS INTO MEMORY
+prg_code()
+Then we copy the text section of each task we are going to run into
+memory.  We do this by calling prg_code(), passing it the address of
+the dynamic_table which contains the obj_inf structs for each test.
+For each obj_inf struct, we copy each section of the test into memory,
+one after another.  We also record som information in the obj_inf
+struct, namely the start_addr, real_size, and end_addr fields for each
+section.  The start_addr field gives the physical page number of first
+page of the section.  The real_size field is computed by looking at
+the size of the section and aligning it to a full page.  In other
+words, every section, no matter how small, is placed in it's own page.
+The real-size fields reflects the numbe of bytes, so if a section is
+3000 bytes, real_size will be set to 4096.  The end_addr field is just
+the start_addr field plust the real_size. 
+
+
+On the first test, we set up an area of shared memory that all the
+tests will use.  We simply zero out an area of memory, and then in all
+the other tests we set the start_addr, real_size, and end_addr fields
+of the tests SHARED section to point to that shared area of memory.
+
+CREATING A PAGE TABLE
+pg_tbl()
+After putting the tests into memory we create a page table for each
+test, and put each of these into memory, too.  For each test we look
+for the scn_end fields of each of its sections.  These are virtual
+addresses.  We find the highest virtual page, and then for each page between
+0 and that highest page we create a page table entry for that page.
+So, what we do is, for page i, we figure out what section it is in.
+Then we figure out how many pages page i is from the beginning of 
+its section - call that n.  
+Then we look at the physical address where that section starts, and
+add n to it to get the physical page number for that page.  Then we
+create an TLBLO double word and put it into memory.
+
+  ** needs to be changed for TFP because our enlo entries for pagetable
+     are different than R4000
+
+CREATING THE PROC TABLE
+proc_tbl()
+After putting the tests in memory and creating page tables for them,
+we create a proc table.  We update cur_page to pointto the next
+free page of physical memory and then we start placing the proc table
+into cur_page.   The things that go into the proc table are:
+    entr_addr  entrypoint of test
+    id for test
+    text start_addr (physical start addr of text section)
+    data ""
+    bss ""
+    text scn_addr (virtual start of text -- currently same as entry poitn)
+    data ""
+    bss ""
+    text size
+    pg_tbl_addr
+    pg_tbl_virtual_end (pg_tbl_end - pg_tbl_addr + PTEBASE)
+    next entry as unmapped, cached address
+    quantum
+    magic 1
+    magic 2
+    SHARED_VADDR
+    address of beginning of my entry
+
+
+
+
+
+prog_tbl()
+   ** changed entrybase from int * to long *.
+
+dcob()
+    ** changed start_addr to type addr_type fron unsigned int
+    ** changed cur_page to type addr_type fron unsigned int
+    all over changed ints to addrs and unsigned int *s to addres
+    Big job.
+
+
+PASSING and FAILING
+
+when a test exectues a PASS syscall, it goes to nsys_pass, prints
+a pass message, then jumps to continue_passing.   If there are tasks
+still executing then it goes to deque to try to get another task.
+If there are no task left, then it goes to twiddle where it sitts in
+a loop witing for an interrupt that says that everyone is done.
+
+If there are no task executing, then it executs PASS, which is a macro
+which is a macro in passfail.h that just jumps to pass_test.  In
+pass_test we send a PASS interrupt, find the return address in
+the prom, and jump to it.  If there are other processors that were
+runnign niblet, each of those processors has been sititng in a twiddle
+loop waiting for this interrupt, and when they receive it, the find
+the return address in the prom and jump to it.
+
+When a test executes a FAIL syscall, it goes to nsys_fail, prints
+a fail message, then calls the FAIL() macro, defined in passfail.h.
+This simply puts the fail value in k0 and then jumps to fail_test
+where we send a fail interrupt, find the return address in
+the prom, and jump to it.

@@ -1,0 +1,1258 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	fsSrchVpDlg
+# Version:	$Revision: 1.8 $
+# Synopsis:	Encapsulates the dialog that allows the user to search for
+#		volumes or partitions on a host.
+# Functions:	vpSrch:realize
+#		vpSrch:manage
+#		vpSrch:unmanage
+#		vpSrch:markPartsInUse
+#		vpSrch:markRawPartsAvail
+#		vpSrch:markPartsAvail
+#		vpSrch:setClass
+#		vpSrch:setHost
+#		vpSrch:getItems
+#		vpSrch:getNamedItems
+#		vpSrch:getItemCount
+#		vpSrch:getPartsSize
+#		vpSrch:getVolRaw
+#		vpSrch:getVolSubvSizes
+#		vpSrch:registerSearchExecute
+#		vpSrch:registerStateChange
+#		vpSrch:volSearch
+#		vpSrch:partSearch
+#		vpSrch:_create
+#		vpSrch:_createSearchArea
+#		vpSrch:_getNewPartList
+#		vpSrch:_getNewVolList
+#		vpSrch:_dialogCb
+#		vpSrch:_accept
+#		vpSrch:_cancel
+#		vpSrch:_categoryCb
+#		vpSrch:_activateCb
+#		vpSrch:_optCb
+#		vpSrch:_searchCb
+#		vpSrch:_searchParts
+#		vpSrch:_searchVols
+#%COMMENT_END
+
+#########################################
+#		Public			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vpSrch:realize
+# Synopsis:	Initializes any class-wide data and creates an instance of the
+#		dialog.  If an instance of this dialog already exists for the
+#		given handle, no action is taken.
+# Arguments:	- handle	An identifier that is used as a key for storing
+#				(and later retrieving) the created widgets and
+#				any instance specific data.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc vpSrch:realize { handle parent } \
+{
+	global		_GW_vpSrch _GD_vpSrch
+	set name	vpSrch
+
+	####    One time initialization
+	if {! [info exists _GD_vpSrch(initialized)]} {
+	    ####    Make sure we don't go through this again
+	    set _GD_vpSrch(initialized)	true
+	    set _GD_vpSrch(buttons)	{accept apply cancel help}
+
+	    set _GD_vpSrch(radios)	{PARTS XLV_VOL}
+	    set _GD_vpSrch(categories)	{NAME SIZE TYPE}
+	    set _GD_vpSrch(toggles)	{FLUSH_CACHE}
+	    set _GD_vpSrch(texts)	{NAME SIZE}
+	    set _GD_vpSrch(SIZE,opts)	{EQUAL GREATER LESS}
+	    set _GD_vpSrch(TYPE,opts)	{xfs efs xlv sysv bsd bsd42}
+	}
+
+	####	Per instance initialization / creation
+	if {! [info exists _GW_vpSrch($handle,dialog)]} {
+
+	    set _GD_vpSrch($handle,class) ""
+	    lappend _GD_vpSrch(handles) $handle
+
+	    ####	scaction:	State Change Action
+	    ####	seaction:	Search Execute Action
+	    set _GD_vpSrch($handle,scaction) ""
+	    set _GD_vpSrch($handle,seaction) ""
+	    set _GD_vpSrch($handle,PART,result) ""
+	    set _GD_vpSrch($handle,VOL,result) ""
+	    set _GD_vpSrch($handle,hip) ""
+
+	    set _GD_vpSrch($handle,xfs) true
+	    set _GD_vpSrch($handle,efs) false
+	    set _GD_vpSrch($handle,xlv) false
+	    set _GD_vpSrch($handle,sysv) false
+	    set _GD_vpSrch($handle,bsd) false
+	    set _GD_vpSrch($handle,bsd42) false
+
+	    set _GD_vpSrch($handle,TYPE) true
+	    set _GD_vpSrch($handle,NAME) true
+	    set _GD_vpSrch($handle,SIZE) false
+	    set _GD_vpSrch($handle,FLUSH_CACHE) false
+	    set _GD_vpSrch($handle,USED) false
+
+	    ####	Create the widget(s)
+	    set _GW_vpSrch($handle,dialog) [$name:_create $handle $parent]
+
+	    ####    This must happen after the dialog is realized
+	    $_GW_vpSrch($handle,dialog) realizeWidget
+	    $_GW_vpSrch($handle,dialog) getValues \
+				-height height \
+				-width width
+	    [$_GW_vpSrch($handle,dialog) parent] setValues \
+				-minWidth $width \
+				-minHeight $height \
+				-maxHeight $height
+
+	    $_GW_vpSrch($handle,buttons) getValues -height height
+	    $_GW_vpSrch($handle,buttons) setValues \
+			-paneMinimum $height \
+			-paneMaximum $height
+	}
+}
+
+#########################################
+#	Public: State Changes		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vpSrch:manage
+# Synopsis:	Manages an instance of the dialog and sets the "Flush Cache"
+#		option to its default value of false.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vpSrch:manage { handle } \
+{
+	global		_GW_vpSrch
+
+	if {[info exists _GW_vpSrch($handle,dialog)]} {
+		$_GW_vpSrch($handle,dialog) manageChild
+		$_GW_vpSrch($handle,FLUSH_CACHE-tb) setValues -set false
+		set _GD_vpSrch($handle,FLUSH_CACHE) false
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	vpSrch:unmanage
+# Synopsis:	Unmanages an instance of the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vpSrch:unmanage { handle } \
+{
+	global		_GW_vpSrch
+
+	if {[info exists _GW_vpSrch($handle,dialog)]} {
+		$_GW_vpSrch($handle,dialog) unmanageChild
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	vpSrch:markPartsInUse
+# Synopsis:	Mark a list of partitions as either "inuse" or "used".  Calls
+#		any procedures registered for "State Change" action with
+#		the new state and the list of partitions.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- parts		A list of partitions to mark as used.
+#		- state		An optional argument that lets the caller
+#				define the state to set the parts to.
+#				Acceptable values are "inuse" and "used".
+#				inuse defines a temporary condition.  For
+#				example, the user has chosen to use a partition
+#				but has not yet committed the action.
+#				A state of "used" indicates that the partition
+#				is currently used by the system.  The default
+#				value is "inuse".
+#%COMMENT_END
+proc vpSrch:markPartsInUse { handle parts {state inuse} } \
+{
+	global	_GD_vpSrch
+
+	if {$state == "inuse"} {
+		set ch +
+	} elseif {$state == "used"} {
+		set ch *
+	} else {
+		puts "vpSrch:markPartsInUse: illegal state value: $state"
+		return
+	}
+	set hip $_GD_vpSrch($handle,hip)
+	foreach item $parts {
+		set item [string trimleft $item "~*+ "]
+		set idx [lsearch -glob $_GD_vpSrch($hip,parts) "*$item*"]
+		if {$idx == -1} {
+			continue
+		}
+		lvarpop _GD_vpSrch($hip,parts) $idx "$ch $item"
+	}
+
+	foreach item $_GD_vpSrch(handles) {
+		if {$_GD_vpSrch($item,hip) == $hip} {
+			foreach action $_GD_vpSrch($item,scaction) {
+				$action $item $state $parts
+			}
+		}
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	vpSrch:markRawPartsAvail
+# Synopsis:	Mark a list of partition names as available for use.  Calls
+#		any procedures registered for "State Change" action with
+#		the new state and the list of partitions.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- host		A hostname that is used to get the key
+#				for the cache of partitions.
+#		- parts		A list of partition names to mark as
+#				available for use.
+#%COMMENT_END
+proc vpSrch:markRawPartsAvail { handle host parts } \
+{
+	global	_GD_vpSrch _GD_resources
+
+	if {! [info exists _GD_vpSrch(initialized)]} {
+		return 1
+	}
+
+	if {! [hu:getIpAddress $host hfn hpd hip $_GD_resources(hostsFile)]} {
+		return 0
+	}
+
+	foreach item $parts {
+	    set item [file tail $item]
+	    set idx [lsearch -glob $_GD_vpSrch($hip,parts) "*$item*"]
+	    if {$idx == -1} {
+		continue
+	    }
+	    set item [string trimleft [lindex $_GD_vpSrch($hip,parts) $idx] "~*+ "]
+	    lappend nparts "~ $item"
+	    lvarpop _GD_vpSrch($hip,parts) $idx "~ $item"
+	}
+
+	foreach item $_GD_vpSrch(handles) {
+	    if {$_GD_vpSrch($item,hip) == $hip} {
+		foreach action $_GD_vpSrch($item,scaction) {
+		    $action $item avail $nparts
+		}
+	    }
+	}
+
+	return 1
+}
+
+#%COMMENT_BEGIN
+# Function:	vpSrch:markPartsAvail
+# Synopsis:	Mark a list of partitions as available for use.  Calls any
+#		procedures registered for "State Change" action with the new
+#		state and the list of partitions.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- host		A hostname that is used to get the key
+#				for the cache of partitions.
+#		- parts		A list of partition names to mark as
+#				available for use.
+#%COMMENT_END
+proc vpSrch:markPartsAvail { handle parts } \
+{
+	global	_GD_vpSrch
+
+	set hip $_GD_vpSrch($handle,hip)
+	foreach item $parts {
+		set item [string trimleft $item "~*+ "]
+		set idx [lsearch -glob $_GD_vpSrch($hip,parts) "*$item*"]
+		if {$idx == -1} {
+			continue
+		}
+		lvarpop _GD_vpSrch($hip,parts) $idx "~ $item"
+	}
+
+	foreach item $_GD_vpSrch(handles) {
+		if {$_GD_vpSrch($item,hip) == $hip} {
+			foreach action $_GD_vpSrch($item,scaction) {
+				$action $item avail $parts
+			}
+		}
+	}
+}
+
+#########################################
+#	Public: Data In Routines	#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vpSrch:setClass
+# Synopsis:	Sets the class of objects that the search dialog will look for.
+#		Makes the appropriate input fields necessary to search for the
+#		given class available.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- class		The class of objects to search for (either
+#				PART or VOL).
+#%COMMENT_END
+proc vpSrch:setClass { handle class } \
+{
+	global		_GW_vpSrch _GD_vpSrch
+
+	if {$_GD_vpSrch($handle,class) != $class} {
+		set _GD_vpSrch($handle,class) $class
+		if {$class == "PART"} {
+			$_GW_vpSrch($handle,search) setValues \
+					-labelString "Search for Paritions"
+			$_GW_vpSrch($handle,TYPE-tb) setSensitive true
+			$_GW_vpSrch($handle,TYPE-tb) setValues \
+				-set $_GD_vpSrch($handle,TYPE)
+
+			foreach item $_GD_vpSrch(TYPE,opts) {
+				$_GW_vpSrch($handle,$item) setValues \
+					-set $_GD_vpSrch($handle,$item)
+				$_GW_vpSrch($handle,$item) setSensitive true
+			}
+		} else {
+			$_GW_vpSrch($handle,search) setValues \
+					-labelString "Search for Volumes"
+			$_GW_vpSrch($handle,TYPE-tb) setSensitive false
+			$_GW_vpSrch($handle,TYPE-tb) setValues -set false
+
+			foreach item $_GD_vpSrch(TYPE,opts) {
+				$_GW_vpSrch($handle,$item) setSensitive false
+				$_GW_vpSrch($handle,$item) setValues -set false
+			}
+		}
+		vpSrch:_categoryCb $handle
+	}
+	
+}
+
+#%COMMENT_BEGIN
+# Function:	vpSrch:setHost
+# Synopsis:	Sets the host name on which to search for objects, manages
+#		the variables associated with caching and, if necessary
+#		gets the objects from the given host.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- host		The host on which to search.
+#		- force		If set to true, gets a new set of objects
+#				regardless of whether or not they are already
+#				cached.
+#%COMMENT_END
+proc vpSrch:setHost { handle host {force false} } \
+{
+	global		_GD_vpSrch _GD_resources
+
+	if {! [hu:getIpAddress $host hfn hpd hip $_GD_resources(hostsFile)]} {
+		return 0
+	}
+	set cur_hip $_GD_vpSrch($handle,hip)
+	set _GD_vpSrch($handle,hip) $hip
+	set _GD_vpSrch($handle,hfn) $hfn
+
+	if {$hip != $cur_hip} {
+		if {[info exists _GD_vpSrch($cur_hip,refcnt)]} {
+			incr _GD_vpSrch($cur_hip,refcnt) -1
+			if {$_GD_vpSrch($cur_hip,refcnt) == 0} {
+				unset _GD_vpSrch($cur_hip,parts)
+				unset _GD_vpSrch($cur_hip,inuse)
+				unset _GD_vpSrch($cur_hip,raw)
+				unset _GD_vpSrch($cur_hip,kb)
+				unset _GD_vpSrch($cur_hip,vols)
+				unset _GD_vpSrch($cur_hip,vraw)
+			}
+		}
+		if {! [info exists _GD_vpSrch($hip,refcnt)]} {
+			set _GD_vpSrch($hip,refcnt) 0
+		}
+		incr _GD_vpSrch($hip,refcnt)
+	}
+
+	if {$force == "false" && \
+	    ($_GD_vpSrch($hip,refcnt) > 1 || $cur_hip == $hip)} {
+		return 1
+	}
+
+	set vol_result [vpSrch:_getNewVolList $handle $hfn $hip $force]
+	set part_result [vpSrch:_getNewPartList $handle $hfn $hip $force]
+
+	if {! $part_result || ! $vol_result} {
+		return 0
+	} else {
+		return 1
+	}
+}
+
+#########################################
+#	Public: Data Out Routines	#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vpSrch:getItems
+# Synopsis:	Returns the set of items matching the current search criteria.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vpSrch:getItems { handle } \
+{
+	global		_GD_vpSrch
+
+	set nitems ""
+	foreach item $_GD_vpSrch($handle,$_GD_vpSrch($handle,class),result) {
+		lappend nitems [lindex $item 1]
+	}
+	return $nitems
+}
+
+#%COMMENT_BEGIN
+# Function:	vpSrch:getNamedItems
+# Synopsis:	Returns the set of items which matching the list of names
+#		passed in.  The data returned is a list of items where each
+#		item is a list containing the name and size of the partition.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- name_list	The list of partitions to search for.
+#%COMMENT_END
+proc vpSrch:getNamedItems { handle name_list } \
+{
+	global		_GD_vpSrch
+
+	set hip $_GD_vpSrch($handle,hip)
+	set items ""
+	foreach part $name_list {
+		set idx [lsearch -glob $_GD_vpSrch($hip,parts) "*$part *"]
+		lappend items [lindex $_GD_vpSrch($hip,parts) $idx]
+	}
+	return $items
+}
+
+#%COMMENT_BEGIN
+# Function:	vpSrch:getItemCount
+# Synopsis:	Returns the number of items which matched the search criteria.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vpSrch:getItemCount { handle } \
+{
+	global		_GD_vpSrch
+	return [llength $_GD_vpSrch($handle,$_GD_vpSrch($handle,class),result)]
+}
+
+#%COMMENT_BEGIN
+# Function:	vpSrch:getPartsSize
+# Synopsis:	Returns the total size of given list of parititions.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- name_list	The list of partitions to total.
+#		- unit		An optional argument which specifies the
+#				desired unit for the returned size.  Acceptable
+#				values are: b (bytes), kb (kilobytes),
+#				mb (megabytes), gb (gigabytes) and blocks.
+#				The default value is mb.
+#%COMMENT_END
+proc vpSrch:getPartsSize { handle part_list {unit mb} } \
+{
+	global		_GD_vpSrch
+
+	set hip $_GD_vpSrch($handle,hip)
+
+	set size 0
+	if {$unit == "blocks"} {
+	    foreach item $part_list {
+		set entry [lmatch $_GD_vpSrch($hip,raw) "*$item *"]
+		if {$entry != ""} {
+		    lappend size [lindex [lindex $entry 0] 1]
+		}
+	    }
+	    set size [expr [join $size "+"]]
+
+	} else {
+	    foreach item $part_list {
+		set entry [lmatch $_GD_vpSrch($hip,kb) "*$item *"]
+		if {$entry != ""} {
+		    lappend size [lindex [lindex $entry 0] 2]
+		}
+	    }
+	    set size [expr [join $size " + "]]
+
+	    switch $unit {
+		b  { set size [expr $size * 1024.0] }
+		mb { set size [expr $size / 1024.0] }
+		gb { set size [expr $size / 1048576.0] }
+	    }
+	}
+
+	return $size
+}
+
+#%COMMENT_BEGIN
+# Function:	vpSrch:getVolRaw
+# Synopsis:	Returns the "raw" data for a given volume.  The "raw" data is
+#		the data returned by the xlv "synopsis" command.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- volume	The name of the desired volume.
+#%COMMENT_END
+proc vpSrch:getVolRaw { handle volume } \
+{
+	global		_GD_vpSrch
+
+	set hip $_GD_vpSrch($handle,hip)
+
+	set data [lmatch $_GD_vpSrch($hip,vraw) "$volume vol *"]
+	return $data
+
+	if {$data != ""} {
+		return [lindex [lindex $data 0] 1]
+	} else {
+		return ""
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	vpSrch:getVolSubvSizes
+# Synopsis:	Gets the size for each subvolume of a volume.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- volume	The name of the desired volume.
+#		- d_size	A reference to a variable in which to store
+#				the size for the data subvolume.
+#		- l_size	A reference to a variable in which to store
+#				the size for the log subvolume.
+#		- r_size	A reference to a variable in which to store
+#				the size for the real-time subvolume.
+#		- unit		An optional argument which specifies the
+#				desired unit for the returned size.  Acceptable
+#				values are: b (bytes), kb (kilobytes),
+#				mb (megabytes), gb (gigabytes) and "" (blocks).
+#				The default value is mb.
+#%COMMENT_END
+proc vpSrch:getVolSubvSizes { handle volume d_size l_size r_size {unit mb} } \
+{
+	global		_GD_vpSrch
+	upvar $d_size	dsize
+	upvar $l_size	lsize
+	upvar $r_size	rsize
+
+	set hip $_GD_vpSrch($handle,hip)
+	set data [lmatch $_GD_vpSrch($hip,vraw) "$volume vol *"]
+	if {$data == ""} {
+		return 0
+	}
+
+	set dsize ""; set lsize ""; set rsize ""
+	set subvs [lassign [lindex $data 0] v_nm v_type]
+	foreach subv $subvs {
+		lassign $subv s_type s_size
+		switch $unit {
+			gb {set s_size [expr $s_size / (2.0 * 1024.0 * 1024.0)]}
+			mb {set s_size [expr $s_size / (2.0 * 1024.0)]}
+			kb {set s_size [expr $s_size / 2.0]}
+			b  {set s_size [expr $s_size * 512.0]}
+		}
+
+		if {$s_type == "data"} {
+			set dsize $s_size
+		} elseif {$s_type == "log"} {
+			set lsize $s_size
+		} elseif {$s_type == "rt"} {
+			set rsize $s_size
+		}
+	}
+
+	return 1
+}
+
+#########################################
+#	Public: Register for Actions	#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vpSrch:registerSearchExecute
+# Synopsis:	This provides a way for other procedures to register a function
+#		to be called whenever a search is executed.  The registered
+#		function is called with one argument, the handle.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- action	The name of the function to be called.
+#%COMMENT_END
+proc vpSrch:registerSearchExecute { handle action } \
+{
+	global		_GD_vpSrch
+	lappend _GD_vpSrch($handle,seaction) $action
+}
+
+#%COMMENT_BEGIN
+# Function:	vpSrch:registerStateChange
+# Synopsis:	This provides a way for other procedures to register a function
+#		to be called whenever the state of a partition changes.
+#		The registered function is called with three arguments: the
+#		handle, the state, and a list of partitions.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- action	The name of the function to be called.
+#%COMMENT_END
+proc vpSrch:registerStateChange { handle action } \
+{
+	global		_GD_vpSrch
+	lappend _GD_vpSrch($handle,scaction) $action
+}
+
+#########################################
+#	Public: Execute Search		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vpSrch:volSearch
+# Synopsis:	Executes a search for volumes.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vpSrch:volSearch { handle } \
+{
+	return [vpSrch:_searchCb $handle VOL]
+}
+
+#%COMMENT_BEGIN
+# Function:	vpSrch:partSearch
+# Synopsis:	Executes a search for partitions.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vpSrch:partSearch { handle } \
+{
+	return [vpSrch:_searchCb $handle PART]
+}
+
+#########################################
+#		Private			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vpSrch:_create
+# Synopsis:	Creates an instance of the dialog and defines callbacks for
+#		the dialog buttons.
+# Arguments:	- handle	The identifier for the new instance.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc vpSrch:_create { handle parent } \
+{
+	global		_GW_vpSrch _GD_vpSrch
+	set name	vpSrch
+
+	set dialog [xmFormDialog $parent.$name]
+	set pane [xmPanedWindow $dialog.$handle \
+			-sashWidth 1 \
+			-sashHeight 1 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none]
+
+	set sa [$name:_createSearchArea $handle $pane]
+
+	set _GW_vpSrch($handle,buttons) \
+		[xfs:createDialogButtons $pane $_GD_vpSrch(buttons) 20]
+	foreach i $_GD_vpSrch(buttons) {
+		$_GW_vpSrch($handle,buttons).$i activateCallback \
+				"$name:_dialogCb $handle $i"
+	}
+
+	$sa manageChild
+	$_GW_vpSrch($handle,buttons) manageChild
+	$pane manageChild
+
+	return $dialog
+}
+
+#%COMMENT_BEGIN
+# Function:	vpSrch:_createSearchArea
+# Synopsis:	Creates the search input fields.
+# Arguments:	- handle	The identifier for the new instance.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc vpSrch:_createSearchArea { handle parent } \
+{
+	global		_GW_vpSrch _GD_vpSrch
+	set name	vpSrch
+
+	set container [xmForm $parent.sa]
+	set item search
+	set _GW_vpSrch($handle,$item) [xmLabel $container.$item-label managed \
+			-alignment alignment_beginning \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none]
+	set grid [sgiGrid $container.grid managed -numRows 6 -numColumns 2 \
+			-defaultSpacing 2 \
+			-topAttachment attach_widget \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none \
+			-topWidget $_GW_vpSrch($handle,$item) \
+			-topOffset 5]
+
+	set item TYPE; set row 0
+	set _GW_vpSrch($handle,$item-tb) [xmToggleButton $grid.$item-tb \
+			managed \
+			-row $row -column 0 \
+			-resizeVertical false \
+			-set $_GD_vpSrch($handle,$item)]
+	set rc [xmRowColumn $grid.$item managed \
+			-row $row -column 1 \
+			-resizeHorizontal false \
+			-orientation horizontal \
+			-spacing 3 \
+			-packing pack_column \
+			-numColumns 2]
+	foreach item $_GD_vpSrch(TYPE,opts) {
+		set _GW_vpSrch($handle,$item) [xmToggleButton $rc.$item \
+				managed -spacing 2 -marginHeight 1 \
+				-set $_GD_vpSrch($handle,$item)]
+		$_GW_vpSrch($handle,$item) valueChangedCallback \
+				"set _GD_vpSrch($handle,$item) %set"
+	}
+
+	set item NAME; incr row
+	set _GW_vpSrch($handle,$item-tb) [xmToggleButton $grid.$item-tb \
+			 managed -row $row -column 0 \
+			-set $_GD_vpSrch($handle,$item)]
+	set _GW_vpSrch($handle,$item) [xmTextField $grid.$item managed \
+			-row $row -column 1 -columns 16 -value "*"]
+
+	set item SIZE; incr row
+	set rc [xmRowColumn $grid.rc managed -row $row -column 0 \
+			-orientation horizontal -marginWidth 0]
+	set _GW_vpSrch($handle,$item-tb) [xmToggleButton $rc.$item-tb managed \
+			-set $_GD_vpSrch($handle,$item)]
+	set _GW_vpSrch($handle,$item-pd) [xmPulldownMenu $rc.$item-pd]
+	foreach opt $_GD_vpSrch(SIZE,opts) {
+		set pb [xmPushButton $_GW_vpSrch($handle,$item-pd).$opt-pb \
+				 managed \
+				-marginWidth 0 \
+				-marginHeight 0]
+		$pb activateCallback "$name:_optCb $handle $opt"
+	}
+	set _GD_vpSrch($handle,metric) EQUAL
+
+	set _GW_vpSrch($handle,$item-om) [xmOptionMenu $rc.$item-om managed \
+			-spacing 0 \
+			-marginWidth 0 \
+			-marginHeight 0 \
+			-subMenuId $_GW_vpSrch($handle,$item-pd)]
+	set _GW_vpSrch($handle,$item) [xmTextField $grid.$item managed \
+			-row $row -column 1 \
+			-columns 16 \
+			-maxLength 9]
+	$_GW_vpSrch($handle,$item) modifyVerifyCallback \
+				"tfu:onlyRealsCb %w %ptr %length %doit"
+
+	foreach item $_GD_vpSrch(texts) {
+		$_GW_vpSrch($handle,$item) activateCallback \
+				"$name:_activateCb $handle $item"
+	}
+
+#	set item USED; incr row
+#	set _GW_vpSrch($handle,$item-tb) [xmToggleButton $grid.$item-tb \
+#			 managed \
+#			-row $row -column 0 \
+#			-resizeHorizontal false]
+
+	set item FLUSH_CACHE; incr row 2
+	set _GW_vpSrch($handle,$item-tb) [xmToggleButton $grid.$item-tb \
+			 managed \
+			-row $row -column 0 \
+			-resizeHorizontal false]
+
+	foreach item [concat $_GD_vpSrch(categories) $_GD_vpSrch(toggles)] {
+		$_GW_vpSrch($handle,$item-tb) valueChangedCallback \
+				"$name:_categoryCb $handle $item %set"
+	}
+
+	$grid columnResizable 0 false
+#	$grid rowMargin 4 8
+	$grid rowMargin 3 8
+	return $container
+}
+
+#########################################
+#	Private: Data Fetch Routines	#
+#########################################
+#%COMMENT_BEGIN
+# Function:	vpSrch:_getNewPartList
+# Synopsis:	Executes a search for partitions on a host.
+# Arguments:	- handle	The identifier for the new instance.
+#		- hfn		The hostname on which to search.
+#		- hfn		The ip corresponding to the hostname.
+#		- force		Unused.
+#%COMMENT_END
+proc vpSrch:_getNewPartList { handle hfn hip force } \
+{
+	global		_GD_vpSrch
+
+	if {! [ou:getObjsOnHost objects $hfn DISK] || \
+	      [llength $objects] == 0} {
+		return 0
+	}
+
+	set _GD_vpSrch($hip,parts) {}
+	set _GD_vpSrch($hip,inuse) {}
+	set _GD_vpSrch($hip,raw) {}
+	set _GD_vpSrch($hip,kb) {}
+
+	set names ""; set sizes ""; set types ""
+	foreach obj $objects {
+		set o_nm [obj:getName $obj]
+
+		if {[catch {set data [xfsInfo $obj]} err]} {
+			regsub -all -- "\n" [string trim $err] "\n\t" nerror
+			em:storeMsg $handle error \
+			"Unable to get partitions for disk $o_nm:\n\t$nerror"
+			continue
+		}
+		set elem [lmatch [split $data "\n"] "DISK_SEC_LEN:*"]
+		if {$elem == ""} {
+			em:storeMsg $handle error \
+			    "Unable to get partitions for disk $o_nm."
+			continue
+		}
+		set kpb [expr [lindex [split $elem ":"] 1] / 1024.0]
+
+		set part_list [ou:getPartsOnDisk $hfn $o_nm {name size type}]
+		foreach part $part_list {
+			lappend _GD_vpSrch($hip,raw) $part
+			lassign $part pt_nm pt_blk pt_tp
+			set pt_kb [int [expr $pt_blk * $kpb]]
+			lappend _GD_vpSrch($hip,kb) [list ~ $pt_nm $pt_kb $pt_tp]
+		}
+	}
+	set _GD_vpSrch($hip,parts) [xfsmSort partNames $_GD_vpSrch($hip,kb)]
+
+	set obj [obj:unparse VOL $hfn none VOL]
+	set _GD_vpSrch($hip,inuse) ""
+	if {[catch {set piu_list [xfsGetPartsInUse $obj]} err]} {
+	    regsub -all -- "\n" [string trim $err] "\n\t" nerror
+	    em:storeMsg $handle warning \
+		"Unable to list of used partitions for $hfn:\n\t$nerror"
+	} else {
+	    foreach item $piu_list {
+		lappend _GD_vpSrch($hip,inuse) [file tail [lindex $item 0]]
+			
+	    }
+	    vpSrch:markPartsInUse $handle \
+		[vpSrch:getNamedItems $handle $_GD_vpSrch($hip,inuse)] used
+	}
+
+	return 1
+}
+
+#%COMMENT_BEGIN
+# Function:	vpSrch:_getNewVolList
+# Synopsis:	Executes a search for volumes on a host.
+# Arguments:	- handle	The identifier for the new instance.
+#		- hfn		The hostname on which to search.
+#		- hfn		The ip corresponding to the hostname.
+#		- force		Unused.
+#%COMMENT_END
+proc vpSrch:_getNewVolList { handle hfn hip force } \
+{
+	global		_GD_vpSrch
+
+	lappend data "HOST_PATTERN:$hfn"
+	lappend data "OBJ_TYPE:VOL"
+	lappend data "OBJ_PATTERN:\*"
+
+	if {[catch {set objects [xfsObjects [join $data "\n"]]} error]} {
+		regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		em:storeMsg $handle error \
+			"Unable to get XLV volumes for $hfn].\n\t$nerror"
+		return 0
+	}
+
+	set _GD_vpSrch($hip,vols) {}
+	set _GD_vpSrch($hip,vraw) {}
+	foreach obj $objects {
+		obj:parse $obj o_class o_host o_nm o_type
+		if {$o_type != "VOL"} {
+			continue
+		}
+
+		set blocks 0
+		if {[catch {set synopsis [xlvCmd synopsis $obj]} error]} {
+			regsub -all -- "\n" [string trim $error] "\n\t" nerror
+			em:storeMsg $handle warning \
+				"Could not get size data for $o_nm.\n\t$nerror"
+		} else {
+			lappend _GD_vpSrch($hip,vraw) [lindex $synopsis 0]
+			set subvs [lassign [lindex $synopsis 0] v_nm v_type]
+			foreach subv $subvs {
+				lassign $subv s_type s_size
+				set size($s_type) $s_size
+			}
+			if {[info exists size(rt)]} {
+				set blocks $size(rt)
+			} else {
+				set blocks $size(data)
+			}
+			unset size
+		}
+
+		lappend _GD_vpSrch($hip,vols) [list ~ $o_nm $blocks]
+	}
+
+	return 1
+}
+
+#################################
+#	Dialog Callbacks	#
+#################################
+#%COMMENT_BEGIN
+# Function:	vpSrch:_dialogCb
+# Synopsis:	The callback function defined on the dialog buttons.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- op		Indicates which button the user selected.
+#%COMMENT_END
+proc vpSrch:_dialogCb { handle op } \
+{
+	global	_GW_vpSrch
+
+	switch $op {
+		accept {
+			if {[vpSrch:_accept $handle]} {
+				vpSrch:_cancel $handle
+			}
+		}
+		apply	{ vpSrch:_accept $handle }
+		cancel	{ vpSrch:_cancel $handle }
+		help    { sgiHelpMsg $_GW_vpSrch($handle,dialog) }
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	vpSrch:_accept
+# Synopsis:	This is called when the user presses the "Accept" dialog
+#		button.  It executes a search and then calls all actions
+#		registered with vpSrch:registerSearchExecute().
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vpSrch:_accept { handle } \
+{
+	global	_GW_vpSrch _GD_vpSrch
+
+	$_GW_vpSrch($handle,dialog) defineCursor watch
+
+	if {[vpSrch:_searchCb $handle]} {
+		foreach item $_GD_vpSrch($handle,seaction) {
+			$item $handle
+		}
+		set rval 1
+	} else {
+		set rval 0
+	}
+
+	$_GW_vpSrch($handle,dialog) defineCursor ""
+	return $rval
+}
+
+#%COMMENT_BEGIN
+# Function:	vpSrch:_cancel
+# Synopsis:	This is called when the user presses the "Cancel" dialog
+#		button.  It unmanages the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc vpSrch:_cancel { handle } \
+{
+	global	_GW_vpSrch
+
+	$_GW_vpSrch($handle,dialog) unmanageChild
+}
+
+#################################
+#	Other Callbacks		#
+#################################
+#%COMMENT_BEGIN
+# Function:	vpSrch:_categoryCb
+# Synopsis:	This is the XmNvalueChangedCallback for the xmToggleButton
+#		widgets representing the "Type", "Name" and the "Size"
+#		criteria.  If none of these are set, then the Accept/Apply
+#		buttons are insensitized.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- item		Indicates which toggle button was changed.
+#		- set		The value of the XmNset resource.
+#%COMMENT_END
+proc vpSrch:_categoryCb { handle {item ""} {set false} } \
+{
+	global		_GW_vpSrch _GD_vpSrch
+
+	if {$item != ""} {
+		set _GD_vpSrch($handle,$item) $set
+	}
+
+	set sensitive "false"
+	foreach item $_GD_vpSrch(categories) {
+		$_GW_vpSrch($handle,$item-tb) getValues -set isSet
+		if {$isSet} {
+			set sensitive "true"
+		}
+	}
+
+	foreach item {accept apply} {
+		$_GW_vpSrch($handle,buttons).$item setSensitive $sensitive
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	vpSrch:_activateCb
+# Synopsis:	This is the XmNactivateCallback for the xmTextField widgets
+#		representing the "Name" and the "Size" criteria.  If the
+#		corresponding toggle button indicates that this is one of
+#		the search criteria (e.g., the toggle button is set), then
+#		a search is executed.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- item		Indicates in which text field the <CR> occurred.
+#%COMMENT_END
+proc vpSrch:_activateCb { handle item } \
+{
+	global		_GW_vpSrch _GD_vpSrch
+
+	$_GW_vpSrch($handle,$item-tb) getValues -set set
+	if {[cequal $set "false"]} {
+		return
+	}
+
+	if {[cequal $item "SIZE"] && \
+	    [cequal [$_GW_vpSrch($handle,SIZE) getString] ""]} {
+		return
+	}
+
+	vpSrch:_accept $handle
+}
+
+#%COMMENT_BEGIN
+# Function:	vpSrch:_optCb
+# Synopsis:	This is the callback for the "Size" option menu.  If "Size"
+#		is one of the search criteria (e.g., the "Size" toggle button
+#		is set), then a search is executed.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- opt		The value of the option menu.
+#%COMMENT_END
+proc vpSrch:_optCb { handle opt } \
+{
+	global		_GW_vpSrch _GD_vpSrch
+
+	set _GD_vpSrch($handle,metric) $opt
+
+	$_GW_vpSrch($handle,SIZE-tb) getValues -set set
+
+	if {[cequal $set "true"] && \
+	   ! [cequal [$_GW_vpSrch($handle,SIZE) getString] ""]} {
+		vpSrch:_accept $handle
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	vpSrch:_searchCb
+# Synopsis:	This gathers the data from the dialog, checks to make sure
+#		that there is at least one search criteria chosen, and
+#		applies the criteria to the correct set of objects (PART / VOL).
+# Arguments:	- handle	The identifier for the desired instance.
+#		- class		An optional parameter that allows the caller
+#				to specify which class of objects to apply
+#				the filters to.  The default value is an
+#				empty string which indicates to apply to the
+#				dialogs' current class value.
+#%COMMENT_END
+proc vpSrch:_searchCb { handle {class ""} } \
+{
+	global		_GW_vpSrch _GD_vpSrch
+
+	if {$class == ""} {
+		set class $_GD_vpSrch($handle,class)
+	}
+
+	if {$_GD_vpSrch($handle,NAME) == "false" && \
+	    $_GD_vpSrch($handle,SIZE) == "false" && \
+	    $_GD_vpSrch($handle,TYPE) == "false"} {
+		return 0
+	}
+
+	if {$_GD_vpSrch($handle,NAME)} {
+	    set m_name [string trim [$_GW_vpSrch($handle,NAME) getString]]
+	    if {$m_name == ""} {
+		$_GW_vpSrch($handle,NAME-tb) getValues -labelString lbl
+		lappend errstr "No value given for $lbl."
+	    }
+	} else {
+		set m_name ""
+	}
+
+	if {$_GD_vpSrch($handle,SIZE)} {
+	    set m_size [string trim [$_GW_vpSrch($handle,SIZE) getString]]
+	    if {$m_size == ""} {
+		$_GW_vpSrch($handle,SIZE-tb) getValues -labelString lbl
+		lappend errstr "No value given for $lbl."
+	    }
+	} else {
+		set m_size ""
+	}
+
+	if {$_GD_vpSrch($handle,TYPE)} {
+		foreach item $_GD_vpSrch(TYPE,opts) {
+			if {$_GD_vpSrch($handle,$item)} {
+				lappend m_types $item
+			}
+		}
+		if {! [info exists m_types]} {
+		    $_GW_vpSrch($handle,TYPE-tb) getValues -labelString lbl
+		    lappend errstr "No type(s) specified for $lbl."
+		}
+	} else {
+		set m_types $_GD_vpSrch(TYPE,opts)
+	}
+
+	if {[info exists errstr]} {
+	    lvarpush errstr "Unable to execute search: @n"
+	    em:simpleMsg $handle information [join $errstr " @n "]
+	    return 0
+	}
+
+	if {$_GD_vpSrch($handle,FLUSH_CACHE) == "true"} {
+		vpSrch:setHost $handle $_GD_vpSrch($handle,hfn) true
+		$_GW_vpSrch($handle,FLUSH_CACHE-tb) setValues -set false
+		set _GD_vpSrch($handle,FLUSH_CACHE) false
+	}
+
+	if {$class == "PART"} {
+		lappend criteria $_GD_vpSrch($handle,USED)
+		lappend criteria $m_name
+		lappend criteria [list $m_size $_GD_vpSrch($handle,metric)]
+		lappend criteria $m_types
+		set _GD_vpSrch($handle,PART,result) \
+				[vpSrch:_searchParts $handle $criteria]
+	} else {
+		lappend criteria $m_name
+		lappend criteria [list $m_size $_GD_vpSrch($handle,metric)]
+		set _GD_vpSrch($handle,VOL,result) \
+				[vpSrch:_searchVols $handle $criteria]
+	}
+
+	return 1
+}
+
+#%COMMENT_BEGIN
+# Function:	vpSrch:_searchParts
+# Synopsis:	Applies the given search criteria to the list of partitions.
+#		It returns the list of partitions matching the criteria.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- criteria	A list of the values for the available search
+#				criteria.
+#%COMMENT_END
+proc vpSrch:_searchParts { handle criteria } \
+{
+	global		_GD_vpSrch
+
+	set hip $_GD_vpSrch($handle,hip)
+	lassign $criteria m_used m_name size m_types
+	lassign $size m_size m_metric
+
+	if {$m_used == "true"} {
+	    set result $_GD_vpSrch($hip,parts)
+	} else {
+	    set result [lmatch -regexp $_GD_vpSrch($hip,parts) "^~ .*"]
+	}
+
+	if {$m_name != "" && $m_name != "*"} {
+		set result [lmatch $result "*$m_name *"]
+	}
+
+	if {$m_types != ""} {
+		set exp "([join $m_types |])"
+		set result [ lmatch -regexp $result ".* $exp" ]
+	}
+
+	if {$m_size != ""} {
+		#	Since the sizes are stored in kb, but we want to
+		#	present mb to the user, multiply $m_size by 1024
+		#	to get mb
+		set m_size [expr $m_size * 1024.0]
+		set new_items ""
+		switch $m_metric {
+			EQUAL {
+				foreach item $result {
+					lassign $item used name size
+					if {$size == $m_size} {
+						lappend new_items $item
+					}
+				}
+			}
+			LESS {
+				foreach item $result {
+					lassign $item used name size
+					if {[expr $size - $m_size] < 0} {
+						lappend new_items $item
+					}
+				}
+			}
+			GREATER {
+				foreach item $result {
+					lassign $item used name size
+					if {[expr $size - $m_size] > 0} {
+						lappend new_items $item
+					}
+				}
+			}
+		}
+		set result $new_items
+	}
+
+	return $result
+}
+
+#%COMMENT_BEGIN
+# Function:	vpSrch:_searchVols
+# Synopsis:	Applies the given search criteria to the list of volumes.
+#		It returns the list of volumes matching the criteria.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- criteria	A list of the values for the available search
+#				criteria.
+#%COMMENT_END
+proc vpSrch:_searchVols { handle criteria } \
+{
+	global		_GD_vpSrch
+
+	set hip $_GD_vpSrch($handle,hip)
+	lassign $criteria m_name size
+	lassign $size m_size m_metric
+
+	set result $_GD_vpSrch($hip,vols)
+
+	if {$m_name != "" && $m_name != "*"} {
+		set result [lmatch $result "$m_name *"]
+	}
+
+	if {$m_size != ""} {
+		set new_items ""
+		switch $m_metric {
+			EQUAL {
+				foreach item $result {
+					lassign $item used name size
+					if {$size == $m_size} {
+						lappend new_items $item
+					}
+				}
+			}
+			LESS {
+				foreach item $result {
+					lassign $item used name size
+					if {[expr $size - $m_size] < 0} {
+						lappend new_items $item
+					}
+				}
+			}
+			GREATER {
+				foreach item $result {
+					lassign $item used name size
+					if {[expr $size - $m_size] > 0} {
+						lappend new_items $item
+					}
+				}
+			}
+		}
+		set result $new_items
+	}
+
+	return $result
+}

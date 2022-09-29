@@ -1,0 +1,319 @@
+.TH mkfs_efs 1M
+.SH NAME
+mkfs_efs \- construct an EFS filesystem
+.SH SYNOPSIS
+.nf
+\f3mkfs_efs\f1 [\f3\-q\f1] [\f3\-a\f1] [\f3\-i\f1] [\f3\-r\f1] \c
+[\f3\-n\f1 inodes] special [proto]
+\f3mkfs_efs\f1 [\f3\-q\f1] [\f3\-i\f1] [\f3\-r\f1] special blocks \c
+inodes heads sectors cgsize cgalign ialign [proto]
+.fi
+.SH DESCRIPTION
+.I mkfs_efs
+constructs a filesystem by writing on the
+.I special
+file using the values found in the remaining arguments of the
+command line.
+Normally
+.I mkfs_efs
+prints the parameters of the filesystem
+to be constructed;
+the
+.B \-q
+flag suppresses this.
+.PP
+If the
+.B \-i
+flag is given,
+.I mkfs_efs
+asks for confirmation after displaying
+the parameters of the filesystem to be constructed.
+.PP
+In it's simplest (and most commonly used form), the size of the 
+filesystem is determined from the disk driver.  As an example, to
+make a filesystem on partition 7 (all of the useable portion of an
+option drive, normally) on drive 7 on SCSI bus 0, use:
+.Ex
+	mkfs_efs /dev/rdsk/dks0d7s7
+.Ee
+.PP
+The
+.B \-r
+flag causes
+.I mkfs_efs
+to write only the superblock, without touching other
+areas of the filesystem.
+See the section below on the recovery option.
+.PP
+The
+.B \-a
+flag causes
+.I mkfs_efs
+to align inodes and data on cylinder boundaries
+(equivalent to setting cgalign and ialign to a cylinder size).
+This
+option can result in a loss of 10MB or more in a filesystem, since
+the resulting cylinder groups are not very flexible in size, and
+runt cylinder groups are not allowed.
+Aligning data and inodes with
+this option can result in an increase in performance (about
+two percent) on drives that have a fixed number of sectors per track.
+Many SCSI disk drives do not have a fixed number of sectors per track,
+and thus, will not see a benefit from this option.
+.PP
+When the first form of
+.I mkfs_efs
+is used,
+.I mkfs_efs
+obtains information about the
+device size and geometry by means of appropriate IOCTLs, and assigns
+values to the filesystem parameters on the basis of this information.
+.PP
+If the
+.B \-n
+option is present, however, the given number of inodes is used rather than
+the default.
+This allows a nonstandard number of inodes to be assigned
+without needing to resort to the long form invocation.
+.PP
+If the second form of
+.I mkfs_efs
+is used, then all the filesystem parameters
+must be specified from the command line.
+Each argument other than
+.I special
+and
+.I proto
+is interpreted as a decimal number.
+.PP
+The filesystem parameters are:
+.TP 10
+.I blocks
+The number of
+.I physical
+(512-byte) disk blocks the filesystem will occupy.
+The current maximum limit on the size of an EFS filesystem is
+16777214 blocks (two to the 24th power).
+This can also be expressed
+as 8 gigabytes.
+.I mkfs_efs
+does not attempt to make a filesystem larger than this limit.
+.TP
+.I inodes
+The number of inodes the filesystem should have as a minimum.
+.TP
+.I heads
+An unused parameter, retained only for backward compatibility.
+.TP
+.I sectors
+The number of sectors per track of the physical medium.
+.TP
+.I cgsize
+The size of each cylinder group, in disk blocks, approximately.
+.TP
+.I cgalign
+The boundary, in disk blocks, that a cylinder group should be
+aligned to.
+.TP
+.I ialign
+The boundary, in disk blocks, that each cylinder group's inode list
+should be aligned to.
+.PP
+Once
+.I mkfs_efs
+has the filesystem parameters it needs, it then
+builds a filesystem containing two directories.
+The filesystem's root directory is created with one entry, the
+.I lost+found
+directory.
+The
+.I lost+found
+directory is filled with zeros out to approximately
+10 disk blocks, so as to allow space for
+.IR fsck (1M)
+to reconnect disconnected files.
+The boot program block, block zero, is left uninitialized.
+.PP
+If the optional
+.I proto
+argument is given,
+.I mkfs_efs
+uses it as a prototype file
+and takes its directions from that file.
+The blocks and inodes
+specifiers in the
+.I proto
+file are provided for backwards compatibility, but are otherwise unused.
+The prototype file
+contains tokens separated by spaces or
+new-lines.
+A sample prototype specification follows (line numbers have been added to
+aid in the explanation):
+.Ex
+1.	/stand/\f2diskboot\f1\f7
+2.	4872 110
+3.	d\-\-777 3 1
+4.	usr	d\-\-777 3 1
+5.	sh	\-\-\-755 3 1 /bin/sh
+6.	ken	d\-\-755 6 1
+7.		$
+8.	b0	b\-\-644 3 1 0 0
+9.	c0	c\-\-644 3 1 0 0
+10	fifo	p\-\-644 3 1
+11	slink	l\-\-644 3 1 /a/symbolic/link
+12	:  This is a comment line
+13	$
+14.	$
+.Ee
+Line 1 is a dummy string.
+(It was formerly the bootfilename.)
+It is present for backward
+compatibility; boot blocks are not used on SGI systems, and
+.I mkfs_efs
+merely clears block zero.
+.PP
+Note that some string of characters must be present as the first line of
+the proto file to cause it to be parsed correctly; the value
+of this string is immaterial since it is ignored.
+.PP
+Line 2 contains two numeric values (formerly the numbers of blocks and inodes).
+These are also merely for backward compatibility:
+two numeric values must
+appear at this point for the proto file to be correctly parsed,
+but their values are immaterial since they are ignored.
+.PP
+Lines 3-11 tell
+.I mkfs_efs
+about files and directories to
+be included in this filesystem.
+.PP
+Line 3 specifies the root directory.
+.PP
+lines 4-6 and 8-10 specifies other directories and files.
+Note the special symbolic link syntax on line 11.
+.PP
+The
+.B $
+on line 7 tells
+.I mkfs_efs
+to end the branch of the filesystem it is on, and continue
+from the next higher directory.
+It must be the last character
+on a line.
+The
+.B :
+on line 12 introduces a comment; all characters up until the
+following newline are ignored.
+Note that this means you cannot
+have files in a prototype file whose name contains a
+.BR : .
+The
+.B $
+on lines 13 and 14 end the process, since no additional
+specifications follow.
+.PP
+File specifications give the mode,
+the user ID,
+the group ID,
+and the initial contents of the file.
+Valid syntax for the contents field
+depends on the first character of the mode.
+.PP
+The mode for a file is specified by a six-character string.
+The first character
+specifies the type of the file.
+The character range is
+.B \-bcdpl
+to specify regular, block special,
+character special, directory files, named pipes (fifos) and symbolic
+links, respectively.
+The second character of the mode
+is either
+.B u
+or
+.B \-
+to specify set-user-ID mode or not.
+The third is
+.B g
+or
+.B \-
+for the set-group-ID mode.
+The rest of the mode
+is a six digit octal number giving the
+owner, group, and other read, write, execute
+permissions (see
+.IR chmod (1)).
+.PP
+Two decimal number
+tokens come after the mode; they specify the
+user and group IDs of the owner of the file.
+.PP
+If the file is a regular file,
+the next token of the specification can be a pathname
+whence the contents and size are copied.
+If the file is a block or character special file,
+two decimal numbers
+follow that give the major and minor device numbers.
+If the file is a symbolic link, the next token of the specification
+is used as the contents of the link.
+If the file is a directory,
+.I mkfs_efs
+makes the entries
+.BR . ""
+and
+.B ..
+and then
+reads a list of names and
+(recursively)
+file specifications for the entries
+in the directory.
+As noted above, the scan is terminated with the
+token
+.BR $ .
+.in -5
+.SH RECOVERY OPTION
+The
+.B \-r
+flag causes
+.I mkfs_efs
+to write only the superblock, without touching the remainder
+of the filesystem space.
+This allows a last-ditch
+recovery attempt on a
+filesystem whose superblocks have been destroyed:
+by running
+.I mkfs_efs
+on the
+device with the
+.B \-r
+option, a superblock is created from which
+.IR fsck (1M)
+can obtain the geometry information it needs to
+analyze the filesystem.
+.P
+Note that this procedure is only of use if the regenerated superblock
+matches the parameters of the original filesystem.
+If the filesystem was
+created using the long form invocation, parameters identical to the original
+invocation must be given with the
+.B \-r
+option.
+Note also that filesystem defaults may change from release to
+release to allow more efficient use of newer disk technologies; thus, the
+.B \-r
+option may not be useful for filesystems created under
+IRIX versions other
+than the version being run.
+.P
+It should be clear that this is a limited recovery facility; it does not help
+if, for example, the root directory of the
+filesystem has been destroyed.
+.SH SEE ALSO
+chmod(1),
+mkfp(1M),
+mkfs(1M),
+mkfs_xfs(1M),
+dir(4),
+efs(4).
+.SH BUGS
+With a prototype file, it is not possible to specify hard links.

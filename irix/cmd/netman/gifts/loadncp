@@ -1,0 +1,104 @@
+#! /bin/sh
+# NAME
+#       loadncp - copy a remote NCP database
+# SYNOPSIS
+#       loadncp remote-node area-number
+# DESCRIPTION
+#	This is a UNIX shell program that can download a network database
+#	across the network. All node entries in the remote database with
+#	a matching area number are copied to the local database.
+# WARNINGS
+#	Only address-name pairs are copied. Entries with a matching area
+#	number but without a name are not copied to the local database.
+# NOTES
+#	This program assumes that 4DDN has been installed and the two
+#	shell scripts /usr/etc/dn/dninstall.sh and /usr/etc/dn/dnstart.sh
+#	have been run.
+#
+#	You must be su to successfully execute.
+# LIMITATIONS
+#	Loadncp should have an option to copy an entire database without
+#	specifying an area number.
+#
+
+USAGE="usage: loadncp [-vs] remote-node area-number"
+
+rmtmpfile=yes
+
+#
+# Check for legal options.
+#
+while getopts "sv" c; do
+	case $c in
+	v) set -x;;
+	s) rmtmpfile=no;;
+	\?) echo $USAGE; exit 1;;
+	esac
+done
+shift `expr $OPTIND - 1`
+
+while test $# -ge 0; do
+	# environment and shell variables -- these are set from the command
+	# line so that arguments can override envariables
+	case "$1" in
+	[A-Za-z_]*=*)
+		var=`expr "$1" : '\([^=]*\)=.*'`
+		val=`expr "$1" : '[^=]*=\(.*\)'`
+		eval $var='"$val"'
+		export $var
+		shift
+		;;
+	*)
+		break		# not envariables so there must be no more
+		;;
+	esac
+done
+
+#
+# Global Envariables
+#
+TMPFILE=${TMPFILE:="/tmp/loadncp.tmp"}
+NCP=${NCP:="/usr/etc/dn/ncp"}
+
+#
+# Check for correct number of arguments.
+#
+if test $# -ne 2
+then
+	echo $USAGE
+	exit 1
+fi
+
+#
+# Extract all known node address-name pairs from the specified Executor
+# Node, including the Executor address-name, and feed them to the Network
+# Control Program (NCP).
+#
+
+$NCP tell $1 show known nodes 2> $TMPFILE
+
+#
+# Adding to the NCP volatile database can only be performed by super-user.
+#
+ID=`id | sed 's/uid=.*(\(.*\)).*gid=.*/\1/'`
+if [ "$ID" != "root" ]
+then
+	echo "Adding to the NCP database has to be done by root"
+	exit
+fi
+
+#
+# 	From:	Executor Node =  1.999 (NAME1)
+#	To:	set node 1.999  name NAME1
+# and
+#	From:	1.888 (NAME2)  Reachable     0        1      ENP
+#	To:	set node 1.888 name NAME2
+#
+sed -n "/$2\..*([0-9A-Za-z].*)/ \
+	s/.*\($2\.[0-9]*\) (\([^)]*\)).*/set node \1 name \2/p" $TMPFILE | $NCP
+
+if test $rmtmpfile = yes; then
+	rm $TMPFILE
+else
+	echo "Temporary file $TMPFILE is not being removed."
+fi

@@ -1,0 +1,158 @@
+# Tests of Ethernet data transmission
+# Tested:
+#	1) OK Ethernet transmit and receive
+#	2) Error conditions:
+#	    Attempt to send DL_UNITDATA_REQ when not in correct state
+#	    Attempt to send to an incorrectly formatted address.
+#	3) Send Ethernet data to loopback, then send to a remote machine
+#	   Should not see any local indication of the data (tests
+#	   that loopback mode is turned off correctly)
+#	4) Send Ethernet data to two streams at a time
+
+###### Test case #1 ######
+# Open and bind two Ethernet streams
+open 1
+attach $1 43
+bind $1 2040 1 0 0 0
+
+open 2
+attach $2 43
+bind $2 2048 1 0 0 0
+
+# Send data in both directions, first from fd $1 to fd $2
+send_udata $1 0:0:0:0:0:0,20,48 '1 2 3 4 5'
+
+poll $1 $2 $2
+
+recv_udata $2 '1 2 3 4 5'
+
+poll $1 $2 0
+check_state $1 dl_idle
+check_state $2 dl_idle
+
+# Now send data from fd $2 to fd $1
+send_udata $2 0:0:0:0:0:0,20,40 'aa bb cc dd ee ff'
+
+poll $1 $2 $1
+
+recv_udata $1 'aa bb cc dd ee ff'
+
+poll $1 $2 0
+check_state $1 dl_idle
+check_state $2 dl_idle
+
+close $1
+close $2
+
+
+###### Test case #2 ######
+open 1
+
+# Attempt to send Ethernet data on a stream that has not been attached yet.
+send_udata $1 0:0:0:0:0:0,20,48 '1 2 3 4 5'
+recv_udata $1			dl_uderror_ind dl_outstate
+
+attach $1 43
+
+# Attempt to send Ethernet data on a stream that has not been bound.
+send_udata $1 0:0:0:0:0:0,20,48 '1 2 3 4 5'
+recv_udata $1			dl_uderror_ind dl_outstate
+
+# Bind the stream as an Ethernet stream.
+bind $1 2040 1 0 0 0
+
+# Attempt to send to an address which is too short
+send_udata $1 0:0:0:0:0:0,20 '1 2 3 4 5'
+recv_udata $1			dl_uderror_ind dl_badaddr
+
+open 2
+attach $2 43
+bind $2 2048 1 0 0 0
+
+# Send valid Ethernet data.
+send_udata $1 0:0:0:0:0:0,20,48 '1 2 3 4 5'
+
+poll $1 $2 $2
+
+recv_udata $2 '1 2 3 4 5'
+
+close $1
+close $2
+
+###### Test case #3 ######
+# Open and bind Ethernet stream
+open 1
+attach $1 43
+bind $1 2040 1 0 0 0
+
+# Send data from fd $1 to fd $1
+send_udata $1 0:0:0:0:0:0,20,40 '1 2 3 4 5'
+
+poll $1 $1 $1
+
+recv_udata $1 '1 2 3 4 5'
+
+poll $1 $1 0
+check_state $1 dl_idle
+
+# Now send data to another machine
+send_udata $1 8:0:20:a:a9:63,20,40 '1 2 3 4 5'
+
+sleep 2
+# Should see no indication on the stream, which is bound to the same SAP
+# as that specified in the DLSAP addr
+poll $1 $1 0
+
+close $1
+
+###### Test case #4 ######
+open 1
+attach $1 43
+bind $1 2048 1 0 0 0
+
+open 2
+attach $2 43
+bind $2 2040 1 0 0 0
+
+open 3
+attach $3 43
+bind $3 2044 1 0 0 0
+
+send_udata $1 0:0:0:0:0:0,20,40 '1 2 3 4 5'
+send_udata $1 0:0:0:0:0:0,20,44 '1 2 3 4'
+recv_udata $2 '1 2 3 4 5'
+recv_udata $3 '1 2 3 4'
+
+send_udata $1 0:0:0:0:0:0,20,44 '9 8 7 6'
+send_udata $1 0:0:0:0:0:0,20,40 '6 7 8 9 a'
+recv_udata $2 '6 7 8 9 a'
+recv_udata $3 '9 8 7 6'
+
+send_udata $1 0:0:0:0:0:0,20,40 'aa bb cc dd ee ff 0 1 2 3 4 5 6 7 8 9'
+send_udata $1 0:0:0:0:0:0,20,44 '1 2 3 4 5 6 7 8 9 0'
+recv_udata $2 'aa bb cc dd ee ff 0 1 2 3 4 5 6 7 8 9'
+recv_udata $3 '1 2 3 4 5 6 7 8 9 0'
+
+send_udata $1 0:0:0:0:0:0,20,44 '1 2 3'
+send_udata $1 0:0:0:0:0:0,20,40 '1 2 3 4 5 6 7 8 9 0'
+recv_udata $2 '1 2 3 4 5 6 7 8 9 0'
+recv_udata $3 '1 2 3'
+
+send_udata $2 0:0:0:0:0:0,20,48 '1 2 3'
+send_udata $3 0:0:0:0:0:0,20,48 '4 5 6'
+recv_udata $1 '1 2 3'
+recv_udata $1 '4 5 6'
+
+send_udata $3 0:0:0:0:0:0,20,48 '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+send_udata $2 0:0:0:0:0:0,20,48 'aa bb cc dd ee ff'
+recv_udata $1 '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+recv_udata $1 'aa bb cc dd ee ff'
+
+send_udata $2 0:0:0:0:0:0,20,48 '9 8 7 6 5 4 3 2 1 0'
+send_udata $3 0:0:0:0:0:0,20,48 '99 88 77 66 55 44'
+recv_udata $1 '9 8 7 6 5 4 3 2 1 0'
+recv_udata $1 '99 88 77 66 55 44'
+
+close $1
+close $2
+close $3

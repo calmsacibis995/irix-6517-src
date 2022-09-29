@@ -1,0 +1,140 @@
+.if n .pH ddi.rm/d3/gen/makedevice @(#)makedevice	43.12 of 3/25/93
+.\" Copyright 1992, 1991 UNIX System Laboratories, Inc.
+.TH makedevice D3
+.IX "\f4makedevice\fP(D3)"
+.SH NAME
+\f4makedevice\f1 \- make device number from major and minor numbers
+.SH SYNOPSIS
+.nf
+.na
+.ft 4
+#include <sys/types.h>
+#include <sys/ddi.h>
+.sp 0.4
+dev_t makedevice(major_t \f2majnum\fP, minor_t \f2minnum\fP);
+.ft 1
+.ad
+.fi
+.SS Arguments
+.RS 0
+.IP "\f2majnum\f1" 10n
+Major number.
+.IP "\f2minnum\f1" 10n
+Minor number.
+.RE
+.SH DESCRIPTION
+The \f4makedevice\f1 function creates a device number from
+major and minor device numbers.
+.SS "Return Values"
+The device number, containing both the major number and the minor
+number, is returned.
+No validation of the major or minor numbers is performed.
+.SH USAGE
+\f4makedevice\f1 should be used to create device numbers
+so that the driver will port easily to
+releases that treat device numbers differently.
+.SS Level
+Initialization, Base or Interrupt.
+.SS "Synchronization Constraints"
+Does not sleep.
+.P
+Driver-defined basic locks, read/write locks, and sleep locks
+may be held across calls to this function.
+.SS "Singlethreaded Example"
+In the following example,
+\f4makedevice\f1 is used to create the device number
+selected during a clone open.
+If the \f4CLONEOPEN\fP flag is set (line 9),
+we search through the list of minor devices looking
+for one that is available (lines 10\-11).
+If we find an unused minor, we
+break off the search, create a new device number, and store it in the
+memory location pointed to by \f4devp\fP (line 15).
+If no unused minor
+was found, we return the error \f4ENXIO\fP.
+.P
+.nf
+.ft 4
+.ps -1
+.vs -2
+1  xxxopen(q, devp, oflag, sflag, crp)
+2    queue_t *q;
+3    dev_t *devp;
+4    int oflag;
+5    int sflag;
+6    cred_t *crp;
+7  {
+8    minor_t minnum;
+.sp 0.4
+9    if (sflag == CLONEOPEN) {
+10        for (minnum = 0; minnum < XXXMAXMIN; minnum++)
+11            if (!INUSE(minnum))
+12                break;
+13        if (minnum >= XXXMAXMIN)
+14            return(ENXIO);
+15            SETINUSE(minnum);
+16        *devp = makedevice(getemajor(*devp), minnum);
+17    }
+    ...
+.vs
+.ps
+.ft 1
+.fi
+.SS "Multithreaded Example"
+In the following example, \f4makedevice\f1 is used
+to create the device number selected during a clone open.
+If the \f4CLONEOPEN\fP flag is set (line 11),
+we lock the list of minor devices (line 12)
+and search through the list,
+looking for a minor device that is available (lines 13\-14).
+If we find an unused minor,
+we break off the search, mark the minor as being in use (line 20),
+unlock the list, create a new device number,
+and store it in the memory location pointed to by \f4devp\fP (line 22).
+If no unused minor was found,
+we unlock the list and return the error \f4ENXIO\fP.
+.ne 4
+.P
+.nf
+.ft 4
+.ps -1
+.vs -2
+1  xxxopen(q, devp, oflag, sflag, crp)
+2    queue_t *q;
+3    dev_t *devp;
+4    int oflag;
+5    int sflag;
+6    cred_t *crp;
+7  {
+8    minor_t minnum;
+9    int pl;
+10    extern lock_t *xxxminlock;
+.sp 0.4
+11    if (sflag == CLONEOPEN) {
+12        pl = LOCK(xxxminlock, plstr);
+13        for (minnum = 0; minnum < XXXMAXMIN; minnum++)
+14            if (!INUSE(minnum))
+15                break;
+16        if (minnum >= XXXMAXMIN) {
+17            UNLOCK(xxxminlock, pl);
+18            return(ENXIO);
+19        } else {
+20            SETINUSE(minnum);
+21            UNLOCK(xxxminlock, pl);
+22            *devp = makedevice(getemajor(*devp), minnum);
+23        }
+24    }
+        ...
+.vs
+.ps
+.ft 1
+.fi
+.IX "\f4makedevice\fP(D3), example"
+.IX "\f4getemajor\fP(D3), example"
+.SH REFERENCES
+.na
+\f4getemajor\fP(D3),
+\f4geteminor\fP(D3),
+\f4getmajor\fP(D3),
+\f4getminor\fP(D3)
+.ad

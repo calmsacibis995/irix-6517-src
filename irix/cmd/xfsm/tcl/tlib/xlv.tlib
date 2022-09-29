@@ -1,0 +1,423 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	xlv.tlib
+# Version:	$Revision: 1.3 $
+# Synopsis:	Utility functions for the XFSM volume manager application.
+# Packages:	XLV-Base
+#		XLV-Parse
+#%COMMENT_END
+
+
+#%COMMENT_BEGIN
+# Package:	XLV-Base
+# Functions:	xlv:validNameCb
+#		xlv:partCount
+#		xlv:objPartList
+#
+# Function:	xlv:validNameCb
+# Synopsis:	Enforces proper naming conventions for xlv objects.
+# Arguments:	- do		If set to 0, this will cancel the modification.
+#		- pointer	The data that was entered.
+#		- length	The length of the entered data.
+#
+# Function:	xlv:partCount
+# Synopsis:	Parses data in the xlv file format.  If given a volume, it
+#		counts the total number of partitions in each sub-volume.
+#		If given a stand-alone plex or ve, it counts the total
+#		number of partitions.
+# Arguments:	- data_in	Data in xlv file format.
+#		- data_out	A reference to an array variable in which
+#				to store the information.
+#
+# Function:	xlv:objPartList
+# Synopsis:	Returns a list containing all the partitions used by the
+#		object in question.
+# Arguments:	- obj		The object signature for which the partitions
+#				are desired.
+#		- partitions	A reference to a variable in which the
+#				partition list is stored.
+#%COMMENT_END
+
+#@package: XLV-Base        xlv:validNameCb xlv:partCount xlv:objPartList
+
+proc xlv:validNameCb { do pointer length } \
+{
+	upvar $do doit
+	upvar $pointer p
+
+	set doit_ok 1
+	if {! [ctype alnum $p]} {
+	    upvar $length len
+	    loop n 0 $len 1 {
+		set item [string index $p $n]
+		if {! [ctype alnum $item] && $item != "_" && $item != "-"} {
+			set doit 0
+		}
+	    }
+	}
+}
+
+proc xlv:partCount { data_in data_out } \
+{
+	global		_GD_xlv
+	upvar $data_out  dout
+
+	set dout(data) 0
+	set dout(log) 0
+	set dout(rt) 0
+
+	foreach line $data_in {
+	    set args ""
+	    set args [lassign $line cmd]
+	    switch $cmd {
+		vol {
+		    if {! [info exists obj_type]} { set obj_type VOL }
+		}
+		plex {
+		    if {! [info exists obj_type]} { set obj_type PLEX }
+		}
+		data -
+		log -
+		rt {
+		    set cnt_ve 0
+		    set sv $cmd
+		}
+		ve {
+		    if {! [info exists obj_type]} {
+			set obj_type VE
+			####	Throw away the name
+			lvarpop args
+		    }
+		    set parsing_options 1
+		    while {$parsing_options} {
+			set opt [string trim [lvarpop args]]
+			if {[cindex $opt 0] != "-"} {
+				set parsing_options 0
+				lvarpush args $opt
+			} elseif {$opt == "-state" ||
+				  $opt == "-start" ||
+				  $opt == "-stripe_unit"} {
+				lvarpop args
+			}
+		    }
+		    if {$obj_type == "VOL"} {
+			    set dout($sv,parts) \
+				[expr $dout($sv,parts) + [llength $args]]
+		    } elseif {$obj_type == "PLEX"} {
+			    set dout(plex,parts) \
+				[expr $dout(plex,parts) + [llength $args]]
+		    } elseif {$obj_type == "VE"} {
+			    set dout(ve,parts) [llength $args]
+		    }
+		}
+	    }
+	}
+}
+
+proc xlv:objPartList { obj partitions } \
+{
+	upvar $partitions	parts
+	set parts ""
+
+	if {[catch {set data [xlvCmd objInfo $obj]} error]} {
+		return 0
+	}
+
+	foreach line [split $data "\n"] {
+	    set args ""
+	    set args [lassign $line cmd]
+	    switch $cmd {
+		vol {
+		    if {! [info exists obj_type]} {
+			set obj_type VOL
+		    }
+		}
+		plex {
+		    if {! [info exists obj_type]} {
+			set obj_type PLEX
+		    }
+		}
+		ve {
+		    if {! [info exists obj_type]} {
+			set obj_type PLEX
+			####	Throw away the name
+			lvarpop args
+		    }
+		    set parsing_options 1
+		    while {$parsing_options} {
+			set opt [string trim [lvarpop args]]
+			if {[cindex $opt 0] != "-"} {
+				set parsing_options 0
+				lvarpush args $opt
+			} elseif {$opt == "-state" ||
+				  $opt == "-start" ||
+				  $opt == "-stripe_unit"} {
+				lvarpop args
+			}
+		    }
+		    lvarcat parts $args
+		}
+	    }
+	}
+
+	return 1
+}
+#@packend
+
+#%COMMENT_BEGIN
+# Package:	XLV-Parse
+# Synopsis:	The XLV subsystem has the ability to store the description
+#		of a volume/plex/ve in ASCII.  The format is an ordered
+#		set of "commands" separated by newlines (\n).  A state
+#		machine can be devised to parse the lines.  Each line
+#		begins with a word that is a key (aka command) as to what
+#		the rest of the line contains.  There is one private function
+#		for each possible key in the data.
+# Functions:	xlv:parseData
+#		xlv:_vol
+#		xlv:_log
+#		xlv:_data
+#		xlv:_rt
+#		xlv:_subvolume
+#		xlv:_plex
+#		xlv:_ve
+#		xlv:_end
+#		xlv:_exit
+#
+# Function:	xlv:parseData
+# Synopsis:	Parses data in xlv file format and stores it in an array.
+# Arguments:	- mode		Either "object" or "template".  The difference
+#				is that some of the rules are relaxed for
+#				"template" mode.
+#		- data_in	Data in xlv file format.
+#		- data_out	A reference to an array variable in which
+#				to store the parsed information.
+#
+# Function:	xlv:_vol
+# Synopsis:	Parses the "vol" command.
+# Arguments:	- data_out	A reference to an array variable in which
+#				to store the parsed information.
+#		- args		The rest of the line.
+#
+# Function:	xlv:_log
+# Synopsis:	Parses the "log" command.
+# Arguments:	- data_out	A reference to an array variable in which
+#				to store the parsed information.
+#		- args		The rest of the line.
+#
+# Function:	xlv:_data
+# Synopsis:	Parses the "data" command.
+# Arguments:	- data_out	A reference to an array variable in which
+#				to store the parsed information.
+#		- args		The rest of the line.
+#
+# Function:	xlv:_rt
+# Synopsis:	Parses the "rt" command.
+# Arguments:	- data_out	A reference to an array variable in which
+#				to store the parsed information.
+#		- args		The rest of the line.
+#
+# Function:	xlv:_subvolume
+# Synopsis:	This is a general function that handles any of the subvolume
+#		commands (log, data, rt).
+# Arguments:	- data_out	A reference to an array variable in which
+#				to store the parsed information.
+#		- args		The rest of the line.
+#
+# Function:	xlv:_plex
+# Synopsis:	Parses the "plex" command.
+# Arguments:	- data_out	A reference to an array variable in which
+#				to store the parsed information.
+#		- args		The rest of the line.
+#
+# Function:	xlv:_ve
+# Synopsis:	Parses the "ve" command.
+# Arguments:	- data_out	A reference to an array variable in which
+#				to store the parsed information.
+#		- args		The rest of the line.
+#
+# Function:	xlv:_end
+# Synopsis:	Parses the "end" command.
+# Arguments:	- data_out	A reference to an array variable in which
+#				to store the parsed information.
+#		- args		The rest of the line.
+#
+# Function:	xlv:_exit
+# Synopsis:	Parses the "exit
+# Arguments:	- data_out	A reference to an array variable in which
+#				to store the parsed information.
+#		- args		The rest of the line.
+#%COMMENT_END
+
+#@package: XLV-Parse	xlv:parseData
+
+proc xlv:parseData { mode data_in data_out } \
+{
+	global		_GD_xlv
+	upvar $data_out  dout
+
+	set _GD_xlv(mode) $mode
+
+	####	Initialize internal variables
+	set _GD_xlv(curr_type) ""
+
+	set _GD_xlv(curr_vcnt) 0
+	set dout(subvolumes) ""
+
+	####	Initialize return variable
+	set dout(name) ""
+	set dout(type) ""
+
+	####	Parse the data
+	foreach line $data_in {
+		set line [string trim $line]
+		if {$line == "" || [cindex $line 0] == "#"} {
+			continue
+		}
+		set args ""
+		set args [lassign $line cmd]
+		if {[catch {set rv [eval xlv:_$cmd dout $args]} error]} {
+#			em:storeMsg xlv error \
+#				"Bad data format for object.\n\t$error"
+#			return 0
+		}
+	}
+
+	return 1
+}
+
+proc xlv:_vol { data_out args } \
+{
+	global		_GD_xlv
+	upvar $data_out dout
+
+	if {$_GD_xlv(mode) != "template"} {
+		if {[llength $args] == 0} {
+			puts "volume: requires a name"
+			return 0
+		} elseif {[llength $args] != 1} {
+			puts "volume: bad name format"
+			return 0
+		}
+	}
+
+	set dout(type) vol
+	set dout(name) $args
+
+	return 1
+}
+
+proc xlv:_log { data_out args } {
+	return [xlv:_subvolume $data_out log]
+}
+
+proc xlv:_data { data_out args } {
+	return [xlv:_subvolume $data_out data]
+}
+
+proc xlv:_rt { data_out args } {
+	return [xlv:_subvolume $data_out rt]
+}
+
+proc xlv:_subvolume { data_out type } \
+{
+	global		_GD_xlv
+	upvar 2 $data_out dout
+
+	lappend dout($_GD_xlv(curr_type),ve_num) $_GD_xlv(curr_vcnt)
+	lvarpop dout($_GD_xlv(curr_type),ve_num)
+
+	set _GD_xlv(curr_type) $type
+	lappend dout(subvolumes) $type
+
+	return 1
+}
+
+proc xlv:_plex { data_out args } \
+{
+	global		_GD_xlv
+	upvar $data_out dout
+
+	if {$args != ""} {
+		if {$dout(name) == ""} {
+			set dout(name) $args
+			set _GD_xlv(curr_type) plex
+		}
+	}
+	lappend dout($_GD_xlv(curr_type),ve_num) $_GD_xlv(curr_vcnt)
+
+	set _GD_xlv(curr_vcnt) 0
+
+	return 1
+}
+
+proc xlv:_ve { data_out args } \
+{
+	global		_GD_xlv
+	upvar $data_out dout
+
+	incr _GD_xlv(curr_vcnt)
+	set ve_type C
+	set ve_sunit {}
+	set ve_start {}
+
+	if {$args != "" && $dout(name) == ""} {
+		set dout(name) [lvarpop args]
+		set _GD_xlv(curr_type) ve
+	}
+	set parsing_options 1
+	while {$parsing_options} {
+	    set opt [string trim [lvarpop args]]
+	    if {[cindex $opt 0] != "-"} {
+		set parsing_options 0
+		lvarpush args $opt
+	    } else {
+		if {$opt == "-stripe"} {
+			set ve_type S
+		} elseif {$opt == "-state"} {
+		} elseif {$opt == "-force"} {
+		} elseif {$opt == "-stripe_unit"} {
+		    set ve_sunit [string trim [lvarpop args]]
+		} elseif {$opt == "-start"} {
+		    set ve_start [string trim [lvarpop args]]
+		}
+	    }
+	}
+	lappend dout($_GD_xlv(curr_type),ve_type) $ve_type
+	lappend dout($_GD_xlv(curr_type),ve_sunit) $ve_sunit
+	lappend dout($_GD_xlv(curr_type),ve_start) $ve_start
+	lappend dout($_GD_xlv(curr_type),nparts) [llength $args]
+	foreach item $args {
+		lappend parts [file tail $item]
+	}
+	lappend dout($_GD_xlv(curr_type),parts) $parts
+
+	return 1
+}
+
+proc xlv:_end { data_out args } \
+{
+	global		_GD_xlv
+	upvar $data_out dout
+
+	lappend dout($_GD_xlv(curr_type),ve_num) $_GD_xlv(curr_vcnt)
+	lvarpop dout($_GD_xlv(curr_type),ve_num)
+
+	return 1
+}
+
+proc xlv:_exit { data_out args } \
+{
+	return 1
+}

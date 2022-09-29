@@ -1,0 +1,255 @@
+# Tests of DL_RESET_REQ, DL_RESET_IND
+# Tested:
+#	1) Valid RESET while stream in state DL_DATAXFER
+#	2) Error conditions:  DL_OUTSTATE for DL_RESET_REQ, DL_RESET_ RES
+#	3) Send RESET, other side sends a DISCONNECT_REQ (from state
+#	     DL_PROV_RESET_PENDING)
+#	4) Send RESET, then send DISCONNECT_REQ (from state
+#	     DL_USER_RESET_PENDING) other side should see DL_RESET_IND,
+#	     then DL_DISCONNECT_IND
+#	5) Send RESET, but it never gets acknowledged.  Should receive
+#	    a DL_DISCONNECT_IND
+
+
+###### Test case #1 ######
+# Open listen stream
+open 1
+attach $1 43
+bind $1 48 2 2 0 1
+
+# Open connecting stream
+open 2
+attach $2 43
+bind $2 40 2 0 0 1
+
+connect $2 0:0:0:0:0:0,48 0
+
+# Should see an event on the listening stream (3)
+poll $1 $2 $1
+
+# Receive the incoming call
+connect_ind $1 1 -
+
+# Should see an event on the connecting stream (4)
+poll $1 $2 $2
+
+# Receive the connect confirmation
+connect_con $2
+
+poll $1 $2 0
+
+# Send data from fd $1 to fd $2
+send_data $1 '1 2 3 4 5'
+
+# Should see an event on the receiving stream
+poll $1 $2 $2
+recv_data $2 '1 2 3 4 5'
+
+# Now reset the connection
+reset $1 0
+
+# Should see DL_RESET_IND on other stream
+poll $1 $2 $2
+connect_con $2			dl_reset_ind
+
+check_state $1 dl_user_reset_pending
+check_state $2 dl_prov_reset_pending
+
+# Confirm the RESET
+reset_res $2
+
+# Should see DL_RESET_CON on other stream
+poll $1 $2 $1
+connect_con $1			dl_reset_con
+
+poll $1 $2 0
+check_state $1 dl_dataxfer
+check_state $2 dl_dataxfer
+
+# Send data from fd $2 to fd $1
+send_data $2 'aa bb cc dd ee ff'
+
+poll $1 $2 $1
+recv_data $1 'aa bb cc dd ee ff'
+
+close $1
+close $2
+
+
+###### Test case #2 ######
+open 1
+
+# Try to reset, reset confirm when in state DL_UNATTACHED
+reset $1 1			dl_error_ack dl_outstate
+reset_res $1			dl_error_ack dl_outstate
+
+attach $1 43
+# Try to reset, reset confirm when in state DL_UNBOUND
+reset $1 1			dl_error_ack dl_outstate
+reset_res $1			dl_error_ack dl_outstate
+
+bind $1 48 2 2 0 1
+# Try to reset, reset confirm when in state DL_IDLE
+reset $1 1			dl_error_ack dl_outstate
+reset_res $1			dl_error_ack dl_outstate
+
+close $1
+
+
+###### Test case #3 ######
+# Open listen stream
+open 1
+attach $1 43
+bind $1 48 2 2 0 1
+
+# Open connecting stream
+open 2
+attach $2 43
+bind $2 40 2 0 0 1
+
+connect $2 0:0:0:0:0:0,48 0
+
+# Should see an event on the listen stream (3)
+poll $1 $2 $1
+
+# Receive the incoming call
+connect_ind $1 1 -
+
+# Should see an event on the connecting stream (4)
+poll $1 $2 $2
+
+# Receive the connect confirmation
+connect_con $2
+
+poll $1 $2 0
+
+# Reset the connection
+reset $1 0
+
+poll $1 $2 $2
+
+# Receive the DL_RESET_IND
+connect_con $2			dl_reset_ind
+
+# Disconnect the stream
+disconnect $2 0
+
+poll $1 $2 $1
+
+# Should see a DL_DISCONNECT_IND
+disconnect_ind $1 0
+
+check_state $1 dl_idle
+check_state $2 dl_idle
+
+close $1
+close $2
+
+
+###### Test case #4 ######
+# Open listen stream
+open 1
+attach $1 43
+bind $1 48 2 2 0 1
+
+# Open connecting stream
+open 2
+attach $2 43
+bind $2 40 2 0 0 1
+
+connect $2 0:0:0:0:0:0,48 0
+
+# Should see an event on the listen stream (3)
+poll $1 $2 $1
+
+# Receive the incoming call
+connect_ind $1 1 -
+
+# Should see an event on the connecting stream (4)
+poll $1 $2 $2
+
+# Receive the connect confirmation
+connect_con $2
+
+poll $1 $2 0
+
+# Reset the connection
+reset $1 0
+
+poll $1 $2 $2
+
+# Receive the DL_RESET_IND
+connect_con $2			dl_reset_ind
+
+# Disconnect the stream, from the resetting side
+disconnect $1 0
+
+poll $1 $2 $2
+
+# Should see a DL_DISCONNECT_IND
+disconnect_ind $2 0
+
+check_state $1 dl_idle
+check_state $2 dl_idle
+
+close $1
+close $2
+
+
+###### Test case #5 ######
+# Open listen stream
+open 1
+attach $1 43
+bind $1 48 2 2 0 1
+
+# Open connecting stream
+open 2
+attach $2 43
+bind $2 40 2 0 0 1
+
+connect $2 0:0:0:0:0:0,48 0
+
+# Should see an event on the listen stream (3)
+poll $1 $2 $1
+
+# Receive the incoming call
+connect_ind $1 1 -
+
+# Should see an event on the connecting stream (4)
+poll $1 $2 $2
+
+# Receive the connect confirmation
+connect_con $2
+
+poll $1 $2 0
+
+# Reset the connection
+reset $1 0
+
+poll $1 $2 $2
+
+# Receive the DL_RESET_IND, but don't respond to it
+connect_con $2			dl_reset_ind
+
+# After the ACK timer expires, should see a DL_DISCONNECT_IND
+disconnect_ind $1 0
+
+check_state $1 dl_idle
+check_state $2 dl_prov_reset_pending
+
+# Now (finally) respond to reset indication, which causes UA to be sent
+# back.  (Also causes XID to be sent)
+reset_res $2
+
+# UA is ignored at the other end of the connection
+poll $1 $2 0
+
+# XXX If now try to send data on stream $2, ack timer will expire, and
+# RRs will be sent on the connection until retry_count = 0.  Problem:
+# retry_count was decremented to 0 when XIDs were sent after "reset_res"
+# and not ack'ed.  retry_count is now decremented to 255, and 255 RR
+# frames are sent before the reset procedure goes into affect (N2
+# SABMEs sent, then finally a disconnect_ind is sent upstream).
+
+close $1
+close $2

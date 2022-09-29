@@ -1,0 +1,103 @@
+.TH MISER 5
+.SH NAME
+\f3miser\f1, \f3batch\f1 \- The Miser Resource Manager
+.SH DESCRIPTION
+Miser is a resource management facility with a batch process scheduling
+component.  This component allows a system administrator to balance
+interactive and batch load on a machine without static partitioning.  
+Miser provides deterministic batch scheduling associated with static 
+partitioning without the wasted resources that result from static 
+partitioning.  Idle resources are always available for use regardless 
+of ownership, but are reclaimed on demand as necessary.
+.P
+Miser schedules applications with known time and space requirements.  The 
+user level component of miser, the daemon, generates a non-conflicting 
+schedule of applications.  The schedule is said to be non-conflicting 
+because at no point in the schedule are the resources over-subscribed.  
+An application scheduled by miser is scheduled to begin running at a 
+particular point in time and then to run without preemption until the end 
+time has been reached.  The kernel component uses the schedule to determine 
+what resources an application has access to and when to actually schedule an 
+application to run.  The applications are said to be scheduled in a batch 
+fashion.
+.P
+Miser, given a job and its resource request, a tuple of time/space, searches 
+through a time/space pool, it manages to find an allocation that fist fits 
+the job's requests.  A successful allocation, called the schedule, is a 
+tuple consisting of a start and end time and the resources allotted to the 
+application during the interval defined.  These resources are guaranteed by 
+the kernel during the schedule. 
+.P
+Miser manages the time/space pool using a hierarchy of resource vectors 
+indexed by time, using a system-wide quantum.  All vectors are of equal size.  
+Each entry in the vectors specifies a set of resources allocated to the 
+vector: a number of CPUs and an allocation of physical memory.  The system 
+vector defines the set of resources allocated to Miser; all other vectors 
+allocate their resources from the system vector.  Associated with each vector 
+is a vector definition (to allocate new entries as time advances), a set of 
+jobs scheduled against the resources of the vector, a policy module that 
+controls the scheduling of jobs, and miscellaneous policy-related data.  The
+collection of a resource vector and its associated code and data structures 
+is called a Queue.
+.P
+The resource vector represents the time/space pool a Queue manages.  The 
+length of the resource vector defines the length of the time dimension of 
+the time/space pool or the duration of the time/space pool, and is defined 
+to be the length of the system vector.  The resource vector's duration is 
+not fixed in time, but rather represents how far into the future the Queue 
+can schedule resources.  The actual amount of space available at any point 
+in time is defined by the vector definition.  The vector definition consists 
+of a list of resource tuples.  The resource tuples contain a start and end
+time, and a quantity of space.  The tuples are ordered by their start and 
+end times and these times are relative to midnight of UTC (see 
+gettimeofday(3B)).  The duration of the system vector defines how far into 
+the future relative to midnight of CTU the last tuple's end time can be.  
+The duration of the vector definition is the time between time 0 and the 
+end time of the last tuple.  If the duration is greater than the duration of 
+the system vector, the vector definition is truncated.  If the vector 
+definition is shorter, then it is repeated.  If the duration of the vector 
+definition does not perfectly divide into the system vector's duration, and 
+is smaller, then the last repetition of the vector definition is truncated.
+.P
+Given that the origin for time is 00:00 Thursday Jan 1st, it is possible to 
+construct vector definitions for weeks, days or parts of days by creating 
+appropriate resource tuples.  Note, time zero is time zero at GMT adjusted 
+for timezone difference, and daylight savings.  For example, a vector 
+definition for a Queue that managed 10 CPUs and 1 gigabyte of memory b
+8:00pm and 4:00am and manged no resources between 4:00am and 8:00pm would 
+consist of two resource tuples, the first with a start time of 00:00 hours 
+and end time of 04:00 hours, and the second with a start time of 20:00 hours 
+and end time of 00:00 hours.  The actual values of the resource vector 
+entries, depend on the value of the current time.  So if the current time 
+was 4:00pm, then the entries corresponding to 4:00pm through 8:00pm would 
+reflect that there was no available space; the entries between 8:00pm and 
+4:00am would reflect that the resource vector had 10 CPUs and 1g of memory 
+to allocate; and between 4:00am and 4:00pm there were no resource available.  
+In other words, the value of the 0 entry of the resource vector does not 
+correspond to time 0 of the vector definition.  If the system vector was a 
+week long, then the resource vector definition would be repeated seven times.  The Queue would be able to schedule an application up to a week in advance 
+of its execution time.
+.P
+The policy module defines the way in which a block of time/space is searched 
+to satisfy the resource request made by the application.  The two policies 
+supplied with miser are the "default" and "repack" policy.  The "default 
+policy is the first fit policy.  In this policy once a job is scheduled, its
+start and end time remains constant.  The event of an earlier job finishing 
+ahead of schedule does not have any effect on the start/end time of the 
+future scheduled jobs.  On the other hand the "repack" policy does as its 
+name implies.  Each time any job ends on a queue with a repack policy the 
+entire job schedule is reevaluated and updated.  When machine resources are 
+freed due an executing job's early termination, the repack policy will 
+attempt to reschedule queued jobs, pulling them ahead in time.  While 
+repacking endeavors to maintain the FIFO order of queued jobs, a higher 
+priority is given to the optimal utilization of machine resources.  The 
+actual start and end times of a job in a queue with a repack policy can 
+potentially be earlier than its initially reported start and end times.
+.SH SEE ALSO
+miser(1),
+miser_submit(1),
+miser(4),
+miser_jinfo(1),
+miser_qinfo(1),
+miser_move(1),
+miser_reset(1).

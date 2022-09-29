@@ -1,0 +1,256 @@
+#!/bin/sh
+# This script will be run by inst (or swmgr) when the distribution directory,
+# if placed at the top level distribution directory, with the name
+# "inst.init".  The user is asked if the script should be run, unless
+# the resource "startup_script" is set to either "ignore" or "execute",
+# to suppress asking the question.  Automatic installs (inst -a) fail
+# if this resource is not set, and this file is present.
+# 
+# The script has access to the normal environment variables (those that
+# can be used by pre-, post-, and exit-ops), such as $mr, $rbase, and
+# $dist.
+# 
+# It is invoked with 3 arguments.  The first is either "inst" or "swmgr"
+# for scripts that want to behave differently.  The second is the distribution
+# path, and the third is the file descriptor number for communicating
+# results/commands back to inst or swmgr.
+#
+# The script should exit with the value 0 if there are no errors
+# if the exit value is non-zero, a warning message is printed.
+#
+# The normal output of this script and the programs it uses are not paged
+# in anyway, nor is the input.  Error output (stderr, descriptor 2) is
+# paged.  If programs are used that use stderr, but you do not want paging
+# (such as rm -ri), then run them with stderr directed to normal output
+# (rm -ri 2>&1)
+
+distpath="$2"
+if [ -z "$rbase" ]; then rbase=/; fi
+
+case "$1" { # decided whether we need a window to run in
+winterm) # re-invoked from swmgr; see below
+	stty intr '^c' # for consistency with most usage.
+	endmsg='\nDistribution script completed, close this window to continue'
+	instfd=">$3" # for selfile creation
+	;;
+swmgr)
+	# can't pass a file descriptor, so use a temporary file.
+	# still want to use -hold, even with the "read" confirmation
+	# at the end, in case there are errors.
+	xwsh -xrm '' -xrm 'XWsh*autoFork:false' \
+		-title "Software Manager - Installation Startup" -hold -e $0 winterm "$2" /tmp/$$
+	if [ -s /tmp/$$ ]; then cat /tmp/$$ 1>&"$3"; fi
+	rm -f /tmp/$$
+	exit 0 ;; # can not get useful exit value for this case
+inst|*) # if missing, or wrong, treat as inst
+	endmsg='\nDistribution script completed, press ENTER to continue \c'
+	instfd=">&$3" # for selfile creation
+	;;
+}
+
+# sub functions defined here; invocation at end of file {
+
+# a *really* silly way to do paging, but with no pager in the miniroot...
+mypager()
+{
+	  2>&1 nawk -v tl=$ttylines -F ';' \
+		'{ print $0; l++; \
+		  if(!(l%tl)) { \
+		  printf "[  Press Enter for next screen, Control-C to stop ]  "; \
+		  getline junk < "/dev/tty" } }' $1
+}
+
+rminteractive()
+{
+	echo '\nThe list of files will be shown one screen at a time,'
+	echo 'in the format "owner   size   date  filename".'
+	echo 'For each screen, you will be prompted for each file in that screen.'
+	echo 'Preparing list ... \c'
+
+	# the check for "uid # modify" is in case the login name can't be matched
+	# which is fairly likely for miniroot; in that case the name field will
+	# be printed as "uid=#".
+	(xargs stat -ums 2>/dev/null) < $1 \
+		| sed -e 's/ <[0-9>]*$//' -e 's,//,/,g' \
+		  -e 's/uid \([0-9][0-9]*\)[ 	]*modify/uid \1 (uid=\1) modify/' \
+		  -e 's/modify time - ... //' \
+		  -e 's/ [0-9][0-9]:[0-9][0-9]:[0-9][0-9] \(....\)$/ \1/' \
+		  -e 's/^\([^:]*\):.*; size \([0-9][0-9]*\)[^(]*(\([^)]*\)[) 	]*\(.*\)/\3;\2;\4;\1/'\
+		> /tmp/rmi$$;
+
+	if [ -s /tmp/rmi$$ ]
+	then # 2>&1 because the rm command prompts to stderr, we want to avoid
+	  # the inst paging of stderr
+	  echo ''
+	  2>&1 nawk -v tl=$rmlines -F ';' \
+		'{ printf "%9s %9d %s  %s\n", $1, $2, $3, $4; f=f" "$4; l++; \
+		  if(!(l%tl)) { printf "Use Control-C to end cleanup\n"; \
+		  system("rm -ri" f ); f="" } } \
+		  END { if(length(f)) { printf "Use Control-C to end cleanup\n"; \
+		  system("rm -ri" f ) } }' /tmp/rmi$$
+	else echo No files found to remove # should not happen
+	fi
+	rm -f /tmp/rmi$$
+}
+
+diskspace()
+{
+	echo '\nDo you want to check for kernel crash files, program core files, '
+	echo 'dumpster directories, temporary and lost+found files that might'
+	echo 'prevent a successful installation? (yes/no) [yes] \c'
+	read ans
+	case "$ans" {
+	y*|Y*|"") ;;
+	*) return ;;
+	}
+
+	# figure out if we need to check /usr seperately from /
+	rootdev="`stat -qd /$rbase`"
+	usrdev="`stat -qd /$rbase/usr`"
+	if [ "$rootdev" != "$usrdev" ]
+	then dirs="$rbase $rbase/usr"
+	else dirs="$rbase"
+	fi
+	if [ -d $rbase/lost+found ]; then lostdirs="$lostdirs $rbase/lost+found"; fi
+	if [ -d $rbase/usr/lost+found ]; then lostdirs="$lostdirs $rbase/usr/lost+found"; fi
+	if [ -d $rbase/tmp ]; then lostdirs="$lostdirs $rbase/tmp"; fi
+	if [ -d $rbase/usr/tmp ]; then lostdirs="$lostdirs $rbase/usr/tmp"; fi
+	if [ -d $rbase/var/tmp ]; then lostdirs="$lostdirs $rbase/var/tmp"; fi
+
+	echo Searching for large files that might need to be removed.
+	echo This may take a few minutes... \\c
+
+	find $dirs -mount \( -name dumpster -type d -print \)  -o \( -name core -type f -print \) >/tmp/rm$$ 2>/dev/null
+	find $rbase/usr/adm/crash -mount \( -name 'unix*' -o -name 'vmcore*' \) -type f -print >>/tmp/rm$$ 2>/dev/null
+	# 2K and larger only, to eliminate long nuisance list...
+	find $lostdirs -type f -size +4 -print >> /tmp/rm$$ 2>/dev/null
+	echo '' # end the "Searching" line above
+	if [ -s /tmp/rm$$ ]
+	  then rminteractive /tmp/rm$$
+	  else echo \\nNo files found that might need to be removed to make space
+	fi
+	rm -f /tmp/rm$$ /tmp/rm2.$$
+}
+
+oldkernel()
+{
+	if [ ! -d $rbase/var/sysgen ! -d $rbase/usr/cpu/sysgen ]
+	then	echo '\nNo old kernel files (used to build /unix) found.'
+		return
+	fi
+
+        REL=`uname -r`
+	echo '\nIf you are doing a full installation from an IRIX release *prior*'
+	echo 'to' "${REL}," 'you may want to remove your old installed kernel (unix)'
+	echo 'object and configuration files that have not been modified since'
+	echo 'installation (modified files will be saved), because their presence'
+	echo 'may prevent successful installation or configuration of a new kernel'
+	echo '\nDo not remove kernel files if you are upgrading from' "${REL}" 'or'
+	echo 'later.'
+	echo '\nDo you want to remove the unmodified kernel files? (yes/no) [no] \c'
+	read ans
+	case "$ans" {
+	y*|Y*)
+	    echo '\nChecking for modified files; may take a few minutes. \c'
+	    showfiles -smr $rbase -- /var/sysgen 2>/dev/null |\
+			sed s,var/sysgen/,, > /tmp/modvar$$
+	    showfiles -smr $rbase -- /usr/cpu/sysgen 2>/dev/null |\
+			sed s,usr/cpu/sysgen/,, > /tmp/modusr$$
+	    if [ -s /tmp/modvar$$ -o -s /tmp/modusr$$ ]; then
+		if [ -s /tmp/modvar$$ ]; then
+		    echo \\nModified installed kernel files saved in /var/sysgen.O:
+		    mkdir -p $rbase/var/sysgen.O
+			# errs will be on files "modified" because they are missing.
+		    (cd $rbase/var/sysgen && cpio -dmp $rbase/var/sysgen.O \
+				</tmp/modvar$$) >/dev/null 2>&1
+		    (cd $rbase/var/sysgen.O && (l="`echo *`"; if [ "$l" != '*' ];
+				then find * -type f -print; fi))
+
+		fi
+		if [ -s /tmp/modusr$$ ]; then
+		    echo \\nModified installed kernel files saved in /usr/cpu/sysgen.O:
+		    mkdir -p $rbase/usr/cpu/sysgen.O
+			# errs will be on files "modified" because they are missing.
+		    (cd $rbase/usr/cpu/sysgen && cpio -dmp $rbase/usr/cpu/sysgen.O \
+				</tmp/modusr$$) >/dev/null 2>&1
+		    (cd $rbase/usr/cpu/sysgen.O && (l="`echo *`"; if [ "$l" != '*' ];
+				then find * -type f -print; fi))
+		fi
+	    else echo . Note: no modified kernel files exist.
+	    fi
+	    rm -f /tmp/mod*$$
+	    echo '\nRemoving kernel directories var/sysgen and usr/cpu/sysgen'
+	    rm -rf $rbase/var/sysgen $rbase/usr/cpu/sysgen
+	    ;;
+	}
+}
+
+
+oldunix()
+{
+	# this is mainly so we don't run out of space on the miniroot when we
+	# try to save the old kernel there, but it can help a lot with the install
+	# itself also.
+	rootfree=7168 # 7MB; more than enough for the largest kernel we know of
+
+	set `df -k $rbase | sed -n '$p'`
+	if [ "$5" -lt $rootfree -s $rbase/unix ]
+	then
+		echo "\nYou have limited free space on your root filesystem ($5 KB)."
+		echo 'This may cause some problems in completing your installation.'
+		echo 'If you are installing kernel drivers, or the full OS, you'
+		echo 'may wish to remove your current /unix to create more space.'
+		echo '(This should not be done if you are installing new drivers or'
+		echo 'the full IRIX release.)  Do you wish to remove /unix? (yes/no) [no] \c'
+		read ans
+		case "$ans" {
+		y*|Y*) rm $rbase/unix && echo Removed old /unix ;;
+		}
+	fi
+}
+
+# a function so the 'return' in the trap handler works right.
+endit()
+{
+	rm -f /tmp/*$$*; echo "$endmsg"; read answer
+}
+
+# }
+
+# main sequence starts here, using the functions above
+
+
+# Check done after xwsh opened if swmgr used, so it's visible.
+if [ "$instmode" = "client" -o "$instmode" = "prototype" ]
+then echo This script should only be run if you are not installing software
+	echo into an alternate location.  Nothing to do, since -r used.
+	endit
+	exit 0
+fi
+
+# for paging, and interactive file removal list.  Does not deal with linewrap
+ttylines=`stty -a 2>/dev/null|grep rows|sed 's/.*\( [0-9][0-9]*\) rows.*/\1/'`
+if [ "$ttylines" -le 0 ]
+	then ttylines=24  # assume serial console
+elif [ "$ttylines" -le 10 ]
+	then ttylines=10 # need a reasonable amount of space...
+fi
+ttylines=`expr $ttylines - 1` # leave room for prompt at bottom
+rmlines=`expr $ttylines - 4` # context, and some linewrap
+
+
+# abort the current function, and continue with the next one,
+# if we get an interrupt
+trap 'echo \\n\\nInterrupted\\n; return' 2 3 15
+
+echo '\nTo stop the current cleanup activity, press Control-C at any time.\n'
+
+diskspace
+
+oldkernel
+
+oldunix
+
+endit
+
+exit 0

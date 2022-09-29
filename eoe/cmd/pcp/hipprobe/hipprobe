@@ -1,0 +1,261 @@
+#! /bin/sh
+#
+# Copyright 1999, Silicon Graphics, Inc.
+# ALL RIGHTS RESERVED
+#
+# UNPUBLISHED -- Rights reserved under the copyright laws of the United
+# States.   Use of a copyright notice is precautionary only and does not
+# imply publication or disclosure.
+#
+# U.S. GOVERNMENT RESTRICTED RIGHTS LEGEND:
+# Use, duplication or disclosure by the Government is subject to restrictions
+# as set forth in FAR 52.227.19(c)(2) or subparagraph (c)(1)(ii) of the Rights
+# in Technical Data and Computer Software clause at DFARS 252.227-7013 and/or
+# in similar or successor clauses in the FAR, or the DOD or NASA FAR
+# Supplement.  Contractor/manufacturer is Silicon Graphics, Inc.,
+# 2011 N. Shoreline Blvd. Mountain View, CA 94039-7311.
+#
+# THE CONTENT OF THIS WORK CONTAINS CONFIDENTIAL AND PROPRIETARY
+# INFORMATION OF SILICON GRAPHICS, INC. ANY DUPLICATION, MODIFICATION,
+# DISTRIBUTION, OR DISCLOSURE IN ANY FORM, IN WHOLE, OR IN PART, IS STRICTLY
+# PROHIBITED WITHOUT THE PRIOR EXPRESS WRITTEN PERMISSION OF SILICON
+# GRAPHICS, INC.
+#
+# $Id: hipprobe,v 1.1 1999/04/26 23:53:21 kenmcd Exp $
+#
+
+#
+# hipprobe: simple shell script to check on operational status of hippi
+#           interfaces
+#
+
+tmp=/tmp/$$
+pmProgname=`basename $0`
+hipcntl=/usr/etc/hipcntl
+ping="/usr/etc/ping -c3 -f"
+ifconfig=/usr/etc/ifconfig
+verbose=false
+badhippi=0
+status=255
+
+trap "rm -f $tmp.*; exit \$status" 0 1 2 3 15
+
+# only echo if verbose output has been specified
+#
+_echo()
+{
+    if [ "$verbose" = "true" ]; then
+	echo $*
+    fi
+}
+
+# ifconfig & ping the interface to check everything's alive
+#
+_checkInterface()
+{
+    interface=hip$1
+
+    if ! $ifconfig $interface > $tmp.ifconfig 2> /dev/null
+    then
+	_echo "unable to ifconfig interface $interface"
+	return 1
+    fi
+
+    eval `nawk '
+BEGIN { ifup = 0; ip = 0 }
+/UP/		{ ifup++; next }
+$1 ~ /inet/	{ ip=$2 }	
+END { printf "ifup=%s\nip=%s\n", ifup, ip }
+' < $tmp.ifconfig`
+
+    if [ $ifup = "0" ]; then
+	_echo "network interface not UP"
+	return 1
+    fi
+
+    if [ $ip = "0" ]; then
+	_echo "unable to determine the interface IP address"
+	return 1
+    fi
+
+    if ! $ping $ip > /dev/null 2>&1
+    then
+	_echo "unable to ping interface on $ip"
+	return 1
+    fi
+
+    return 0
+}
+
+# check status of XIO hippi device
+#
+_checkXIO()
+{
+    _echo "hippi$1 \c"
+
+    if ! $hipcntl hippi$1 status > $tmp.hipcntl 2> $tmp.hipcntl2
+    then
+	if [ "$verbose" = "true" ]; then
+	    cat $tmp.hipcntl2
+	fi
+	return 1
+    fi
+
+    eval `nawk '
+BEGIN { sig_det=0; oh8sync=0; fsync=0; lnk_rdy=0; accepting=0 }
+/DST.SIG_DET/	{ sig_det++ }
+/DST.OH8SYNC/	{ oh8sync++ }
+/DST.FSYNC/	{ fsync++ }
+/DST.LNK_RDY/	{ lnk_rdy++ }
+/ACCEPTING/	{ accepting++ }
+END { printf "sig_det=%s\noh8sync=%s\nfsync=%s\nlnk_rdy=%s\naccepting=%s\n", sig_det, oh8sync, fsync, lnk_rdy, accepting }
+' < $tmp.hipcntl`
+
+    if [ $sig_det = "0" ]; then
+	_echo "DST.SIG_DET flag not set: possible problem with cable installation"
+	return 1
+    fi
+    if [ $oh8sync = "0" ]; then
+	_echo "DST.OH8SYNC flag not set: bad or dirty cable or fiber-optic interface"
+	return 1
+    fi
+    if [ $fsync = "0" ]; then
+	_echo "DST.FSYNC flag not set: bad or dirty cable or fiber-optic interface"
+	return 1
+    fi
+    if [ $lnk_rdy = "0" ]; then
+	_echo "DST.LNK_RDY flag not set: bad or dirty cable or fiber-optic interface"
+	return 1
+    fi
+    if [ $accepting = "0" ]; then
+	_echo "ACCEPTING flag not set: interface not configured to accept packets"
+	return 1
+    fi
+
+    if ! _checkInterface $1
+    then
+	return 1
+    fi
+
+    _echo "OK"
+    return 0
+}
+
+# check status of HIO hippi device
+#
+_checkHIO()
+{
+    _echo "hippi$1 \c"
+
+    if ! $hipcntl hippi$1 status > $tmp.hipcntl 2> $tmp.hipcntl2
+    then
+	if [ "$verbose" = "true" ]; then
+	    cat $tmp.hipcntl2
+	fi
+	return 1
+    fi
+
+    eval `nawk '
+BEGIN { dsic=0; sdic=0; accepting=0 }
+/DSIC/		{ dsic++ }
+/SDIC/		{ sdic++ }
+/ACCEPTING/	{ accepting++ }
+END { printf "dsic=%s\nsdic=%s\naccepting=%s\n", dsic, sdic, accepting }
+' < $tmp.hipcntl`
+
+    if [ $dsic = "0" ]; then
+	_echo "DSIC flag not set: InterConnect signal not sensed"
+	return 1
+    fi
+    if [ $sdic = "0" ]; then
+	_echo "SDIC flag not set: InterConnect signal not sensed"
+	return 1
+    fi
+    if [ $accepting = "0" ]; then
+	_echo "ACCEPTING flag not set: interface not configured to accept packets"
+	return 1
+    fi
+
+    if ! _checkInterface $1
+    then
+	return 1
+    fi
+
+    _echo "OK"
+    return 0
+}
+
+_usage()
+{
+    echo "Usage: $pmProgname [-v] [hippiN ...]"	>&2
+    echo					>&2
+    echo "options:"				>&2
+    echo "  -v	verbose/diagnostic output"	>&2
+}
+
+# main
+#
+
+while getopts v c
+do
+    case $c in
+    v)
+	verbose=true
+	;;
+    \?)
+	_usage
+	exit
+	;;
+    esac
+done
+shift `expr $OPTIND - 1`
+
+if [ ! -x $hipcntl ]; then
+    _echo "$pmProgname: Warning: $hipcntl not found or not executable"
+    status=0
+    exit
+fi
+
+# create a list of hippi devices
+if [ -z "$*" ]; then
+    devices=`ls /hw/hippi`
+else
+    # validate hippi devices listed on commandline
+    for dev in $*
+    do
+	if expr ${dev} : 'hippi[0-9][0-9]*' > /dev/null 2>&1
+	then
+	    devices="$devices ${dev#hippi}"
+	else
+	    _usage
+	    exit
+	fi
+    done
+fi
+
+# is this an XIO or HIO machine?
+case `hinv -d hippi 2>/dev/null | nawk '/^HIPPI/ { print $1; exit }'` in
+    "HIPPI-Serial")
+	checkFn=_checkXIO
+	;;
+    "HIPPI")
+	checkFn=_checkHIO
+	;;
+    *)
+	_echo "$pmProgname: Warning: No HIPPI devices found on this system"
+	status=0
+	exit
+	;;
+esac
+
+# check each device
+for dev in $devices
+do
+    if ! $checkFn $dev
+    then
+	badhippi=`expr $badhippi + 1`
+    fi
+done
+
+status=$badhippi
+exit

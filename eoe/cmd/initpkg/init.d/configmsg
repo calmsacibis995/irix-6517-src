@@ -1,0 +1,194 @@
+#!/sbin/sh
+#Tag 0x00000f00
+
+# The software installation will leave a message, and versions will give
+# a zero exit status, if installation has altered one or more configuration
+# files.  Print the message, which is a reminder to the user to go find
+# them and resolve the differences.
+#
+# Also search for directories that have been moved aside due to the
+# filesystem re-org, and inform the user about such.
+#
+# Also rebuild the man page database for whatis/apropos after anything
+# installed or removed.
+
+MSG=/var/inst/.config_changed
+MSGTIMER=/var/inst/.change_cnt
+msgfile=uxsgicore
+LIMIT=13
+
+# sgindexAdmin (infosearch)
+#
+# If infosearch is installed, check each domain (bks, man, relnotes)
+# to see if the index is older than the history file.  If so, update
+# that index (read in data from any new or changed files). If the 
+# index is missing or /var/inst/hist is missing, do nothing.
+# This followings the exact same logic as the mkwhatis check,
+# except that it's internal to sgindexAdmin and checked for 
+# each content domain.
+#
+# For the man domain, if the man index exists, use the title 
+# information in the index to update whatis instead of reading
+# the first 4k of every man page. In this case, after sgindexAdmin
+# is run successfully, whatis will be newer than the hist file and 
+# we skip running mkwhatis. 
+
+# mkwhatis
+#
+# rebuild the man page apropos/whatis database after an install
+# or if whatis doesn't exist.  Don't do it if /var/inst/hist doesn't
+# exist (stat returns only one value, and whatis does exist) because
+# that probably means a user removed it because of disk space, and we
+# would run makewhatis on every boot until hist was recreated.
+# outer >/dev/null is in case neither file exists
+
+( if [ -x /usr/lib/infosearch/bin/sgindexAdmin ]; then
+     /sbin/nice -20 /usr/lib/infosearch/bin/sgindexAdmin -instchk 2>&1 \
+     	| logger -t sgindexAdmin
+fi
+set `/sbin/stat -mq /var/inst/hist /usr/share/catman/whatis 2>/dev/null` >/dev/null
+if [ ! -s /usr/share/catman/whatis -o \( "$2" -a "$1" -gt "$2" \) ]
+then
+    logger -t makewhatis man page database out of date with install history
+    /sbin/nice -20 /usr/lib/makewhatis -s 2>&1 | logger -t makewhatis
+    logger -t makewhatis man page database build finished;
+fi ) &
+
+#  Check for configuration file changes
+if test ! -r $MSG -o ! -x /usr/sbin/versions
+then exit 0 # don't check for dirs either, if versions isn't there.
+	# or we have already resolved config files and removed $MSG
+fi
+
+cnt=`cat $MSGTIMER 2>/dev/null`
+cnt=`expr ${cnt:=0} + 1`
+echo $cnt > $MSGTIMER 2>/dev/null
+if test $cnt -le $LIMIT && /usr/sbin/versions -t changed>/dev/null; then
+	gettxt ${msgfile}:1137 '\nSoftware installation has installed new configuration files and/or saved\nthe previous version in some cases.  You may need to update or merge\nold configuration files with the newer versions.  See the "Updating\nConfiguration Files" section in the versions(1M) manual page for details.\nThe shell command "versions changed" will list the affected files.\n\n' | \
+		logger -s -t inst
+	if chkconfig visuallogin; then
+		# give user a chance to see the message before pandora
+		sleep 5
+	fi
+else
+	rm -f $MSG $MSGTIMER
+	exit 0 # that's enough times to check for directories also
+fi
+
+# Check for moved-aside directories.
+BANNERPRINT=0
+  DIRS='
+/usr/Cadmin/classes.O
+/usr/CaseVision.O
+/usr/Insight/lib/data/config/C.O
+/usr/Insight/lib/data/entities.O
+/usr/Insight/library/SGI_bookshelves/SGI_Admin/books/SiteAdmin/styles.O
+/usr/Insight/library/SGI_bookshelves/SGI_EndUser/books/IRISEssentials/styles.O
+/usr/Insight/library/SGI_bookshelves/SGI_EndUser/books/PerSysAdmin/styles.O
+/usr/Insight/library/SGI_bookshelves/SGI_EndUser/books/ShowcaseUG/styles.O
+/usr/Insight/library/SGI_bookshelves/SGI_EndUser/books/Utilities/styles.O
+/usr/Insight/library/SGI_bookshelves/SGI_EndUser/books/glossary/styles.O
+/usr/WorkShop.O
+/usr/adm.O
+/usr/catman/u_man/cat1/explorer.O
+/usr/demos/bin.O
+/usr/diags/crash/Sproc.O
+/usr/etc/boot.O
+/usr/etc/dn.O
+/usr/etc/named.d.O
+/usr/etc/yp.O
+/usr/frame/.fminit2.0.O
+/usr/frame/docs.O
+/usr/frame/fmtemplates.O
+/usr/gfx/CLOVER2/lib/IP7GT.O
+/usr/gfx/libgl/EXPRESSEXPRESS/libGL.so.O
+/usr/gfx/libgl/EXPRESSEXPRESS/libGLcore.so.O
+/usr/gfx/libgl/LIGHTLG1MC.O
+/usr/gfx/libgl/LIGHTLIGHT.O
+/usr/gfx/ucode/SKYWR/vof.O
+/usr/gfx/ucode/VGX/vof.O
+/usr/include/DPS.O
+/usr/include/Mrm.O
+/usr/include/NCC.O
+/usr/include/Vk.O
+/usr/include/X11/Mrm.O
+/usr/include/X11/Xirisw.O
+/usr/include/X11/Xm.O
+/usr/include/X11/uil.O
+/usr/include/Xm.O
+/usr/include/make.O
+/usr/include/oz.O
+/usr/include/uil.O
+/usr/lib/DPS/AFM.O
+/usr/lib/DPS/outline/base.O
+/usr/lib/Insight.O
+/usr/lib/TeamVision.O
+/usr/lib/X11.O
+/usr/lib/X11/Schemes.O
+/usr/lib/X11/app-defaults/XClipboard.O
+/usr/lib/X11/app-defaults/Xmh.O
+/usr/lib/X11/ja_JP.EUC/schemes/Base.O
+/usr/lib/X11/schemes/Base.O
+/usr/lib/X11/schemes/FaxMgr.O
+/usr/lib/X11/schemes/Lascaux.O
+/usr/lib/cron.O
+/usr/lib/dict.O
+/usr/lib/font/devX100.O
+/usr/lib/images.O
+/usr/lib/locale/de_AT/LC_MESSAGES.O
+/usr/lib/locale/de_CH/LC_MESSAGES.O
+/usr/lib/locale/fr_BE/LC_MESSAGES.O
+/usr/lib/locale/fr_CA/LC_MESSAGES.O
+/usr/lib/locale/fr_CH/LC_MESSAGES.O
+/usr/lib/onlineHelp.O
+/usr/lib/onlineHelp/CaseVision.O
+/usr/lib/sounds.O
+/usr/lib/terminfo.O
+/usr/lib/tmac.O
+/usr/lib/wnn/dic.O
+/usr/mail.O
+/usr/preserve.O
+/usr/relnotes/motif_dev.O
+/usr/relnotes/motif_eoe.O
+/usr/sbin/r4kpp.O
+/usr/spool.O
+/usr/sysgen.O
+/usr/sysgen/system.O
+/usr/tmp.O
+/usr/var/X11/input.O
+/usr/var/adm/lastlog.O
+/usr/var/config.O
+/usr/var/inst.O
+/usr/var/mail.O
+/usr/var/sna/log.O
+/usr/var/spool.O
+/usr/var/spool/mqueue.O
+/usr/var/sysgen/boot.O
+/usr/var/sysgen/root.O
+/usr/var/tmp.O
+'
+
+for dir in $DIRS; do
+  if test -d $dir; then
+    # grumble.  These dirs are unlikely to hold user modified info.  If they did,
+    # tough.  That's what backups are for.
+    if test $dir = "/usr/include/X11/Mrm.O" -o \
+      $dir = "/usr/include/X11/Xirisw.O" -o \
+      $dir = "/usr/include/X11/Xm.O" -o \
+      $dir = "/usr/include/X11/uil.O" -o \
+      $dir = "/usr/lib/sounds.O" -o \
+      $dir = "/usr/lib/terminfo.O" -o \
+      $dir = "/usr/var/inst.O" -o \
+      $dir = "/usr/diags/crash/Sproc.O" -o \
+      $dir = "/usr/lib/cron.O" ; then
+      rm -rf $dir
+      continue
+    fi
+    if test $BANNERPRINT -ne 1; then
+      gettxt ${msgfile}:1138 'These directories were unable to be moved properly during the\ninstallation process.  Check for any user-modified files, then\ndelete the directories.\n' | \
+	logger -s -t inst
+      BANNERPRINT=1
+    fi
+    logger -s -t inst "   $dir"
+  fi     
+done

@@ -1,0 +1,2816 @@
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/BuildTools/OS/IRIX.6.5 sendmail-8.9.3.patch.trusted/BuildTools/OS/IRIX.6.5
+*** sendmail-8.9.3/BuildTools/OS/IRIX.6.5	Tue Dec 29 09:39:53 1998
+--- sendmail-8.9.3.patch.trusted/BuildTools/OS/IRIX.6.5	Wed Aug 18 18:11:37 1999
+***************
+*** 23,28 ****
+--- 23,41 ----
+  POPDIVERT
+  define(`confMAPDEF', `-DNDBM -DNIS -DMAP_REGEX')
+  define(`confENVDEF', `-DIRIX6 -DHASSNPRINTF=1 ${ABI} ')
++ 
++ sysmcd(`test -e ${ROOT}/usr/include/t6net.h')
++ define(`confENVDEF', confENVDEF ifelse(0, sysval, `-DTRUSTED_NET'))
++ 
++ sysmcd(`test -e ${ROOT}/usr/include/sys/capability.h')
++ define(`confENVDEF', confENVDEF ifelse(0, sysval, `-DTRUSTED_CAP'))
++ 
++ sysmcd(`test -e ${ROOT}/usr/include/sys/mac.h')
++ define(`confENVDEF', confENVDEF ifelse(0, sysval, `-DTRUSTED_MAC'))
++ 
++ sysmcd(`test -e ${ROOT}/usr/include/sat.h')
++ define(`confENVDEF', confENVDEF ifelse(0, sysval, `-DTRUSTED_AUDIT'))
++ 
+  define(`confLDOPTS', `${ABI}')
+  define(`confMBINDIR', `/usr/lib')
+  define(`confSBINDIR', `/usr/etc')
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/BuildTools/OS/IRIX.6.x sendmail-8.9.3.patch.trusted/BuildTools/OS/IRIX.6.x
+*** sendmail-8.9.3/BuildTools/OS/IRIX.6.x	Tue Dec 29 09:39:48 1998
+--- sendmail-8.9.3.patch.trusted/BuildTools/OS/IRIX.6.x	Wed Aug 18 18:11:50 1999
+***************
+*** 23,28 ****
+--- 23,41 ----
+  POPDIVERT
+  define(`confMAPDEF', `-DNDBM -DNIS -DMAP_REGEX')
+  define(`confENVDEF', `-DIRIX6 ${ABI} ')
++ 
++ sysmcd(`test -e ${ROOT}/usr/include/t6net.h')
++ define(`confENVDEF', confENVDEF ifelse(1, sysval, `-DTRUSTED_NET'))
++ 
++ sysmcd(`test -e ${ROOT}/usr/include/sys/capability.h')
++ define(`confENVDEF', confENVDEF ifelse(1, sysval, `-DTRUSTED_CAP'))
++ 
++ sysmcd(`test -e ${ROOT}/usr/include/sys/mac.h')
++ define(`confENVDEF', confENVDEF ifelse(1, sysval, `-DTRUSTED_MAC'))
++ 
++ sysmcd(`test -e ${ROOT}/usr/include/sat.h')
++ define(`confENVDEF', confENVDEF ifelse(1, sysval, `-DTRUSTED_AUDIT'))
++ 
+  define(`confLDOPTS', `${ABI}')
+  define(`confMBINDIR', `/usr/lib')
+  define(`confSBINDIR', `/usr/etc')
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/README.trusted sendmail-8.9.3.patch.trusted/README.trusted
+*** sendmail-8.9.3/README.trusted
+--- sendmail-8.9.3.patch.trusted/README.trusted	Tue Aug 17 15:19:26 1999
+***************
+*** 0 ****
+--- 1,92 ----
++ Compiling
++ 	MAC support is compiled in if TRUSTED_MAC is defined.
++ 	Capability support is compiled in if TRUSTED_CAP is defined.
++ 	Trusted networking support is compiled in if TRUSTED_NET is
++ 	defined. Normally both TRUSTED_MAC and TRUSTED_NET are defined
++ 	together. If you want both SMTP and local delivery they must be
++ 	defined together.
++ 
++ Run-Time
++ 	Since all these features (Capabilities, MAC, Trusted Networking)
++ 	are tested for at run-time, a sendmail binary with these features
++ 	compiled in should work properly if they are not supported by the
++ 	kernel as long as the appropriate functions/stubs are in libc.
++ 	One sendmail binary works on both IRIX and Trusted IRIX, for example.
++ 
++ The Envelope
++ 	Envelopes have MAC labels associated with them. They represent
++ 	the MAC label that the message associated with the envelope
++ 	will be delivered at. When new envelopes are created they inherit
++ 	the MAC label of their parent. That way MAC information is retained
++ 	across redeliveries, bouncebacks, etc. The initial envelope
++ 	(BlankEnvelope) contains the initial MAC label of the sendmail
++ 	process itself, which will also be the MAC label of any messages
++ 	sendmail is delivering on behalf of the user invoking it (due to
++ 	envelope inheritance). Envelopes also get MAC labels from incoming
++ 	socket connections and from queue entries.
++ 
++ The Queue
++ 	Queue entries have MAC labels associated with them. These MAC
++ 	labels are contained in the qf file itself as an 'l' line if
++ 	QF_HAS_MAC is defined. Otherwise, it is contained in an
++ 	alternate place (On IRIX, as an extended attribute of the qf
++ 	file). An envelope created to represent a queue entry obtains
++ 	its MAC label from it. If the queue entry has no MAC label, or
++ 	a temporary out of memory condition prevents sendmail from
++ 	allocating storage to hold that MAC label, that queue entry
++ 	will not be processed (or in the case of mailq, will not appear
++ 	in queue listings).
++ 
++ 	Users who wish to examine the queue (mailq or sendmail -bp)
++ 	must pass a MAC dominance check to see queue entries. If that
++ 	fails, the user will not see that queue entry. This may result
++ 	in the queue appearing to have fewer entries than it really has.
++ 
++ Delivery
++ 	Deliveries are first checked to see if the recipient is cleared
++ 	to recieve a message with that MAC label. On IRIX, for example,
++ 	the criteria are "is that MAC label one the user could log in
++ 	at?".  If this check is failed, the message is bounced back to
++ 	the sender.  If it succeeds, delivery proceeds normally. The
++ 	process performing delivery changes its MAC label to that of
++ 	the envelope. This is important to ensure that the correct mail
++ 	folder is used, as well as ensuring that sendmail or any
++ 	delivery agents don't violate security policy by running at a
++ 	MAC label the recipient is not permitted to use.
++ 
++ Capabilities
++ 	Sendmail runs in a least-privilege mode. It acquires only the
++ 	specific capabilities needed for an operation, and only as long
++ 	as it needs them. If sendmail is about to exec a mailer that
++ 	will not be running as root sendmail empties its capability set
++ 	before invoking it to prevent privilege propagation. This isn't
++ 	really a good criterion, but it will do for now. What you really
++ 	want is a way to distinguish "safe" mailers from unsafe ones, such
++ 	as mailers specified in "safe" cf files.
++ 
++ Connection Caching
++ 	Connection caching is disabled if TRUSTED_MAC is defined.
++ 	Currently only one criteria is permitted for cache lookups: the
++ 	target host's name. If TRUSTED_MAC is defined, additional
++ 	criteria are needed, to wit the MAC label of the connection (it
++ 	wouldn't do to send SECRET data over an UNCLASSIFIED
++ 	connection, for example, or vice versa).
++ 
++ Debug Levels
++ 
++ 	70	MAC Debugging
++ 	70.1	Trace get/set/duplication of envelope MAC labels
++ 	70.2	Trace queue entry MAC labels (get/set/dominance checks)
++ 	70.3	Trace get/set of process MAC label
++ 	70.4	Trace get/set of socket MAC label
++ 	70.5	Trace MAC clearance checks on recipient
++ 
++ 	71	Capability Debugging
++ 	71.1	Trace setting current capability set
++ 	71.2	Trace getting current capability set
++ 
++ General Notes
++ 	There is no single place where "uid/gid/gidset/MAC label"
++ 	changes are computed and made. This code is duplicated many
++ 	times throughout sendmail. That makes analysis and changes very
++ 	hard.
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/mail.local/mail.local.c sendmail-8.9.3.patch.trusted/mail.local/mail.local.c
+*** sendmail-8.9.3/mail.local/mail.local.c	Tue Dec 29 09:42:53 1998
+--- sendmail-8.9.3.patch.trusted/mail.local/mail.local.c	Tue Aug 17 15:19:37 1999
+***************
+*** 700,705 ****
+--- 700,708 ----
+  	char *p;
+  	char biffmsg[100], buf[8*1024], path[MAXPATHLEN];
+  	off_t curoff;
++ #ifdef TRUSTED
++ 	int resetuid = 0;
++ #endif
+  	extern char *quad_to_string();
+  
+  	/*
+***************
+*** 772,777 ****
+--- 775,786 ----
+  	 */
+  tryagain:
+  	lockmbox(path);
++ #ifdef TRUSTED
++ 	if (resetuid && setreuid(0, pw->pw_uid) < 0) {
++ 		mailerr("450 4.2.0", "setreuid(0, %d): %s (r=%d, e=%d)", pw->pw_uid, strerror(errno), getuid(), geteuid());
++ 		goto err0;
++ 	}
++ #endif
+  	if (lstat(path, &sb) < 0) {
+  		mbfd = open(path,
+  			O_APPEND|O_CREAT|O_EXCL|O_WRONLY, S_IRUSR|S_IWUSR);
+***************
+*** 780,785 ****
+--- 789,799 ----
+  			eval = EX_CANTCREAT;
+  			mailerr("550 5.2.0",
+  				"%s: lstat: file changed after open", path);
++ #ifdef TRUSTED
++ 			if (resetuid) {
++ 				(void) setreuid(0, 0);
++ 			}
++ #endif
+  			goto err1;
+  		}
+  		else
+***************
+*** 790,809 ****
+--- 804,850 ----
+  		} else if (fchown(mbfd, pw->pw_uid, pw->pw_gid)) {
+  			mailerr("451 4.3.0", "chown %u.%u: %s",
+  				pw->pw_uid, pw->pw_gid, name);
++ #ifdef TRUSTED
++ 			if (resetuid) {
++ 				(void) setreuid(0, 0);
++ 			}
++ #endif
+  			goto err1;
+  		}
+  	} else if (sb.st_nlink != 1 || !S_ISREG(sb.st_mode)) {
+  		mailerr("550 5.2.0", "%s: irregular file", path);
++ #ifdef TRUSTED
++ 		if (resetuid) {
++ 			(void) setreuid(0, 0);
++ 		}
++ #endif
+  		goto err0;
+  	} else if (sb.st_uid != pw->pw_uid) {
+  		eval = EX_CANTCREAT;
+  		mailerr("550 5.2.0", "%s: wrong ownership (%d)",
+  				path, sb.st_uid);
++ #ifdef TRUSTED
++ 		if (resetuid) {
++ 			(void) setreuid(0, 0);
++ 		}
++ #endif
+  		goto err0;
+  	} else {
+  		mbfd = open(path, O_APPEND|O_WRONLY, 0);
++ #ifdef TRUSTED
++ 		if (errno == EACCES && resetuid == 0) {
++ 			resetuid = 1;
++ 			goto tryagain;
++ 		}
++ #endif
+  	}
+  
++ #ifdef TRUSTED
++ 	if (resetuid && setreuid(0, 0) < 0) {
++ 		mailerr("450 4.2.0", "setreuid(0, %d): %s (r=%d, e=%d)", pw->pw_uid, strerror(errno), getuid(), geteuid());
++ 		goto err0;
++ 	}
++ #endif
+  	if (mbfd == -1) {
+  		mailerr("450 4.2.0", "%s: %s", path, strerror(errno));
+  		goto err0;
+***************
+*** 836,842 ****
+  			       name, quad_to_string(curoff));
+  	else
+  		(void)snprintf(biffmsg, sizeof(biffmsg), "%s@%ld\n",
+! 			       name, curoff);
+  
+  	/* Copy the message into the file. */
+  	if (lseek(fd, (off_t)0, SEEK_SET) == (off_t)-1) {
+--- 877,883 ----
+  			       name, quad_to_string(curoff));
+  	else
+  		(void)snprintf(biffmsg, sizeof(biffmsg), "%s@%ld\n",
+! 			       name, (long) curoff);
+  
+  	/* Copy the message into the file. */
+  	if (lseek(fd, (off_t)0, SEEK_SET) == (off_t)-1) {
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/src/conf.c sendmail-8.9.3.patch.trusted/src/conf.c
+*** sendmail-8.9.3/src/conf.c	Tue Jan 26 16:15:52 1999
+--- sendmail-8.9.3.patch.trusted/src/conf.c	Tue Aug 17 15:19:35 1999
+***************
+*** 256,262 ****
+--- 256,266 ----
+  	e->e_sendmode = SM_FORK;		/* option d */
+  	e->e_errormode = EM_PRINT;		/* option e */
+  	SevenBitInput = FALSE;			/* option 7 */
++ #ifdef TRUSTED_MAC
++ 	MaxMciCache = (sm_mac_enabled() ? 0 : 1);	/* option k */
++ #else
+  	MaxMciCache = 1;			/* option k */
++ #endif
+  	MciCacheTimeout = 5 MINUTES;		/* option K */
+  	LogLevel = 9;				/* option L */
+  	inittimeouts(NULL);			/* option r */
+***************
+*** 1100,1106 ****
+--- 1104,1114 ----
+  		return (EX_UNAVAILABLE);
+  	}
+  # endif /* EXAMPLE_CODE */
++ # ifdef TRUSTED_MAC
++ 	return (sm_clear_user(to, e->e_label));
++ # else
+  	return (EX_OK);
++ # endif
+  }
+  /*
+  **  SETSIGNAL -- set a signal handler
+***************
+*** 2719,2757 ****
+  }
+  #endif /* HASUNAME */
+  /*
+- **  INITGROUPS -- initialize groups
+- **
+- **	Stub implementation for System V style systems
+- */
+- 
+- #ifndef HASINITGROUPS
+- 
+- initgroups(name, basegid)
+- 	char *name;
+- 	int basegid;
+- {
+- 	return 0;
+- }
+- 
+- #endif
+- /*
+- **  SETGROUPS -- set group list
+- **
+- **	Stub implementation for systems that don't have group lists
+- */
+- 
+- #ifndef NGROUPS_MAX
+- 
+- int
+- setgroups(ngroups, grouplist)
+- 	int ngroups;
+- 	GIDSET_T grouplist[];
+- {
+- 	return 0;
+- }
+- 
+- #endif
+- /*
+  **  SETSID -- set session id (for non-POSIX systems)
+  */
+  
+--- 2727,2732 ----
+***************
+*** 4214,4219 ****
+--- 4189,5097 ----
+  #endif
+  }
+  /*
++ **
++ */
++ 
++ #ifdef TRUSTED_CAP
++ static int
++ sm_cap_enabled()
++ {
++ #ifdef _SC_CAP
++ 	static int c = -1;
++ 
++ 	if (c == -1)
++ 		c = (sysconf(_SC_MAC) > 0);
++ 	return(c);
++ #else
++ 	return(0);
++ #endif
++ }
++ 
++ static void
++ fill_capset(num, capset, trusted)
++ 	int *num, trusted;
++ 	cap_value_t *capset;
++ {
++ 	*num = 0;
++ 
++ 	if (trusted & SM_CAP_SETUID)
++ 		capset[(*num)++] = CAP_SETUID;
++ 	if (trusted & SM_CAP_SETGID)
++ 		capset[(*num)++] = CAP_SETGID;
++ 	if (trusted & SM_CAP_CHROOT)
++ 		capset[(*num)++] = CAP_CHROOT;
++ 	if (trusted & SM_CAP_PLABEL)
++ 		capset[(*num)++] = CAP_MAC_RELABEL_SUBJ;
++ 	if (trusted & SM_CAP_DACREAD)
++ 		capset[(*num)++] = CAP_DAC_READ_SEARCH;
++ 	if (trusted & SM_CAP_MACREAD)
++ 		capset[(*num)++] = CAP_MAC_READ;
++ 	if (trusted & SM_CAP_AUDIT)
++ 		capset[(*num)++] = CAP_AUDIT_WRITE;
++ 	if (trusted & SM_CAP_CHOWN)
++ 		capset[(*num)++] = CAP_CHOWN;
++ 	if (trusted & SM_CAP_MACUP)
++ 		capset[(*num)++] = CAP_MAC_UPGRADE;
++ 	if (trusted & SM_CAP_MACDN)
++ 		capset[(*num)++] = CAP_MAC_DOWNGRADE;
++ 
++ #if defined(sgi)
++ 	if (trusted & SM_CAP_ATTR)
++ 		capset[(*num)++] = CAP_DEVICE_MGT;
++ #endif
++ 
++ #ifdef CAP_NETWORK_MGT
++ #define CAP CAP_NETWORK_MGT
++ #endif
++ #ifdef CAP_NET_ADMIN
++ #define CAP CAP_NET_ADMIN
++ #endif
++ #ifdef CAP
++ 	if (trusted & SM_CAP_NETMGT)
++ 		capset[(*num)++] = CAP;
++ #undef CAP
++ #endif
++ 
++ #ifdef CAP_PRIV_PORT
++ #define CAP CAP_PRIV_PORT
++ #endif
++ #ifdef CAP_NET_BIND_SERVICE
++ #define CAP CAP_NET_BIND_SERVICE
++ #endif
++ #ifdef CAP
++ 	if (trusted & SM_CAP_PRIVPORT)
++ 		capset[(*num)++] = CAP;
++ #undef CAP
++ #endif
++ 
++ #ifdef CAP_SCHED_MGT
++ #define CAP CAP_SCHED_MGT
++ #endif
++ #ifdef CAP_SYS_NICE
++ #define CAP CAP_SYS_NICE
++ #endif
++ #ifdef CAP
++ 	if (trusted & SM_CAP_SCHED)
++ 		capset[(*num)++] = CAP;
++ #undef CAP
++ #endif
++ }
++ 
++ static void
++ sm_capdbg(level, msg, cap)
++ 	int level;
++ 	const char *msg;
++ 	cap_t cap;
++ {
++ 	int terrno = errno;
++ 	if (tTd(71, level) && sm_cap_enabled())
++ 	{
++ 		char *capstr, *errstr = "bad capability set";
++ 
++ 		capstr = cap_to_text(cap, (size_t *) NULL);
++ 		if (capstr == NULL)
++ 			capstr = errstr;
++ 		printf("%s: '%s'\n", msg, capstr);
++ 		if (capstr != errstr);
++ 			cap_free(capstr);
++ 	}
++ 	errno = terrno;
++ }
++ 
++ /*
++  * Make the specified set of capabilities effective, but only if
++  * they are currently permitted. Return the old capability set.
++  */
++ cap_t
++ sm_cap_acquire(trusted)
++ 	int trusted;
++ {
++ 	if (sm_cap_enabled())
++ 	{
++ 		cap_value_t capset[15];
++ 		int ncap;
++ 
++ 		fill_capset(&ncap, capset, trusted);
++ 		if (ncap != 0)
++ 		{
++ 			cap_value_t newset[15];
++ 			cap_t old;
++ 			int i, j;
++ 			char *capstr;
++ 
++ 			old = cap_get_proc();
++ 			sm_capdbg(2, "getting old capability set", old);
++ 			if (old == NULL)
++ 				return(old);
++ 
++ 			for (i = 0, j = 0; i < ncap; i++)
++ 			{
++ 				cap_flag_value_t flag;
++ 
++ 				if (cap_get_flag(old, capset[i], CAP_PERMITTED, &flag) == 0 && flag == CAP_SET)
++ 					newset[j++] = capset[i];
++ 			}
++ 
++ 			if (j != 0)
++ 			{
++ 				cap_t new = cap_dup(old);
++ 
++ 				if (new == NULL || cap_set_flag(new, CAP_EFFECTIVE, j, newset, CAP_SET) == -1 || cap_set_proc(new) == -1)
++ 				{
++ 					cap_free(old);
++ 					old = NULL;
++ 				}
++ 				sm_capdbg(1, "setting new capability set",
++ 					  new);
++ 				cap_free(new);
++ 			}
++ 
++ 			return(old);
++ 		}
++ 	}
++ 	errno = ENOSYS;
++ 	return(NULL);
++ }
++ 
++ /*
++  * Make our capability set equal to cap, freeing cap afterwards.
++  * Ignore NULL capability sets. cap is usually the return value
++  * of sm_cap_acquire().
++  */
++ void
++ sm_cap_surrender(cap)
++ 	cap_t cap;
++ {
++ 	if (cap != NULL)
++ 	{
++ 		sm_capdbg(1, "setting new capability set", cap);
++ 		(void) cap_set_proc(cap);
++ 		cap_free(cap);
++ 	}
++ }
++ 
++ int
++ sm_cap_inherit(trusted)
++ 	int trusted;
++ {
++ 	if (sm_cap_enabled())
++ 	{
++ 		cap_value_t capset[15];
++ 		cap_t cap;
++ 		int ncap;
++ 
++ 		/* get our current capability set */
++ 		cap = cap_get_proc();
++ 		if (cap == NULL)
++ 			return(-1);
++ 
++ 		/* enable all specified capabilities */
++ 		fill_capset(&ncap, capset, trusted);
++ 		if (ncap != 0 && (cap_set_flag(cap, CAP_INHERITABLE, ncap, capset, CAP_SET) == -1 || cap_set_flag(cap, CAP_EFFECTIVE, ncap, capset, CAP_SET) == -1))
++ 		{
++ 			cap_free(cap);
++ 			return(-1);
++ 		}
++ 
++ 		/* clear all capabilities not specified */
++ 		fill_capset(&ncap, capset, ~trusted);
++ 		if (ncap != 0 && (cap_set_flag(cap, CAP_INHERITABLE, ncap, capset, CAP_CLEAR) == -1 || cap_set_flag(cap, CAP_PERMITTED, ncap, capset, CAP_CLEAR) == -1 || cap_set_flag(cap, CAP_EFFECTIVE, ncap, capset, CAP_CLEAR) == -1))
++ 		{
++ 			cap_free(cap);
++ 			return(-1);
++ 		}
++ 
++ 		/* change our capability set */
++ 		ncap = cap_set_proc(cap);
++ 		cap_free(cap);
++ 		return(ncap);
++ 	}
++ 	errno = ENOSYS;
++ 	return(0);
++ }
++ #endif
++ /*
++ **
++ */
++ 
++ #ifdef TRUSTED_MAC
++ #if defined(sgi)
++ #include <sys/attributes.h>
++ 
++ static const char *attrname = "SENDMAIL_MAC";
++ #endif
++ 
++ int
++ sm_mac_enabled()
++ {
++ #ifdef _SC_MAC
++ 	static int m = -1;
++ 
++ 	if (m == -1)
++ 		m = (sysconf(_SC_MAC) > 0);
++ 	return(m);
++ #else
++ 	return(0);
++ #endif
++ }
++ 
++ void
++ sm_macdbg(level, msg, label)
++ 	int level;
++ 	const char *msg;
++ 	mac_t label;
++ {
++ 	int terrno = errno;
++ 	if (tTd(70, level) && sm_mac_enabled())
++ 	{
++ 		char *lblstr, *errstr = "no label";
++ 
++ 		lblstr = mac_to_text(label, (size_t *) NULL);
++ 		if (lblstr == NULL)
++ 			lblstr = errstr;
++ 		printf("%s: '%s'\n", msg, lblstr);
++ 		if (lblstr != errstr)
++ 			mac_free(lblstr);
++ 	}
++ 	errno = terrno;
++ }
++ 
++ int
++ qf_set_mac(fp, label)
++ 	FILE *fp;
++ 	mac_t label;
++ {
++ 	if (sm_mac_enabled())
++ 	{
++ #ifdef QF_HAS_MAC
++ 		char *lblstr = mac_to_text(label, (size_t *) NULL);
++ 		if (lblstr != NULL)
++ 		{
++ 			fprintf(fp, "l%s\n", lblstr);
++ 			mac_free(lblstr);
++ 			sm_macdbg(2, "set qf MAC label: success", label);
++ 			return(0);
++ 		}
++ 		sm_macdbg(2, "set qf MAC label: failure", label);
++ 		return(-1);
++ #else
++ #if defined(sgi)
++ 		int r, size = (int) mac_size(label);
++ 
++ 		if (size != -1 && attr_setf(fileno(fp), attrname, (char *) label, size, 0) == 0)
++ 		{
++ 			sm_macdbg(2, "set qf MAC label: success", label);
++ 			return(0);
++ 		}
++ 		sm_macdbg(2, "set qf MAC label: failure", label);
++ 		return(-1);
++ #endif
++ #endif
++ 	}
++ 	errno = ENOSYS;
++ 	return(0);
++ }
++ 
++ #ifndef QF_HAS_MAC
++ mac_t
++ qf_get_mac(fp)
++ 	FILE *fp;
++ {
++ 	if (sm_mac_enabled())
++ 	{
++ #if defined(sgi)
++ 		int r, size = 512, flags = 0;
++ 		mac_t label;
++ #ifdef TRUSTED_CAP
++ 		cap_t cap;
++ #endif
++ 
++ 		/* allocate initial buffer */
++ 		label = malloc((size_t) size);
++ 		if (label == NULL)
++ 		{
++ 			sm_macdbg(2, "get qf MAC label: failure", label);
++ 			return(label);
++ 		}
++ 
++ redo:
++ 		/* Get queue entry label */
++ #ifdef TRUSTED_CAP
++ 		cap = sm_cap_acquire(flags ? SM_CAP_ATTR : SM_CAP_NONE);
++ #endif
++ 		r = attr_getf(fileno(fp), attrname, (char *) label, &size,
++ 			      flags);
++ #ifdef TRUSTED_CAP
++ 		sm_cap_surrender(cap);
++ #endif
++ 		if (r == -1)
++ 		{
++ 			if (errno == E2BIG)
++ 			{
++ 				/*
++ 				 * Our buffer wasn't big enough.
++ 				 * Reallocate and try again.
++ 				 */
++ 				label = realloc(label, size);
++ 				if (label != NULL)
++ 					goto redo;
++ 			}
++ 
++ 			if (errno == ENOATTR && flags == 0)
++ 			{
++ 				/*
++ 				 * The attribute doesn't exist. It may exist
++ 				 * in the root namespace because of an older
++ 				 * version of sendmail. Check there. If it
++ 				 * doesn't exist there, do not continue.
++ 				 */
++ 				flags = ATTR_ROOT;
++ 				goto redo;
++ 			}
++ 
++ 			/*
++ 			 * If there is any error other than the ones
++ 			 * checked above, return error.
++ 			 */
++ 			free(label);
++ 			label = NULL;
++ 			sm_macdbg(2, "get qf MAC label: failure", label);
++ 			return(label);
++ 		}
++ 
++ 		/*
++ 		 * If the label is not valid, return error to the caller.
++ 		 * If the label was found in the root namespace, copy to the
++ 		 * user namespace.
++ 		 */
++ 		if (mac_valid(label) <= 0 || (flags == ATTR_ROOT && attr_setf(fileno(fp), attrname, (char *) label, size, 0) == -1))
++ 		{
++ 			free(label);
++ 			label = NULL;
++ 			sm_macdbg(2, "get qf MAC label: failure", label);
++ 			return(label);
++ 		}
++ 		sm_macdbg(2, "get qf MAC label: success", label);
++ 		return(label);
++ #endif
++ 	}
++ 	/*
++ 	 * MAC is not supported. Return error with errno == ENOSYS
++ 	 * to indicate that the error is not fatal.
++ 	 */
++ 	errno = ENOSYS;
++ 	return(NULL);
++ }
++ #endif	/* QF_HAS_MAC */
++ 
++ mac_t
++ qdir_get_mac(file)
++ 	const char *file;
++ {
++ 	if (sm_mac_enabled())
++ 	{
++ 		mac_t label;
++ #ifdef TRUSTED_CAP
++ 		cap_t cap = sm_cap_acquire(SM_CAP_MACREAD);
++ #endif
++ 		label = mac_get_file(file);
++ 		sm_macdbg(2, "get queue directory MAC label", label);
++ #ifdef TRUSTED_CAP
++ 		sm_cap_surrender(cap);
++ #endif
++ 		return(label);
++ 	}
++ 	/*
++ 	 * MAC is not supported. Return error with errno == ENOSYS
++ 	 * to indicate that the error is not fatal.
++ 	 */
++ 	errno = ENOSYS;
++ 	return(NULL);
++ }
++ 
++ mac_t
++ sm_mac_dup(old)
++ 	mac_t old;
++ {
++ 	if (sm_mac_enabled())
++ 	{
++ 		mac_t new;
++ 
++ 		new = mac_dup(old);
++ 		sm_macdbg(1, "duplicate envelope MAC label", old);
++ 		return(new);
++ 	}
++ 	/*
++ 	 * MAC is not supported. Return error with errno == ENOSYS
++ 	 * to indicate that the error is not fatal.
++ 	 */
++ 	errno = ENOSYS;
++ 	return(NULL);
++ }
++ 
++ /*
++  * Get and/or set the current process MAC label
++  */
++ static int
++ sm_plabel(new, old)
++ 	mac_t new, *old;
++ {
++ 	if (sm_mac_enabled())
++ 	{
++ 		if (old != NULL)
++ 		{
++ 			*old = mac_get_proc();
++ 			sm_macdbg(3, "get process MAC label", *old);
++ 			if (*old == NULL)
++ 				return(-1);
++ 		}
++ 		if (new != NULL)
++ 		{
++ 			int r;
++ #ifdef TRUSTED_CAP
++ 			cap_t cap = sm_cap_acquire(SM_CAP_PLABEL);
++ #endif
++ 			r = mac_set_proc(new);
++ 			sm_macdbg(3, "set process MAC label", new);
++ #ifdef TRUSTED_CAP
++ 			sm_cap_surrender(cap);
++ #endif
++ 			return(r);
++ 		}
++ 	}
++ 	else
++ 	{
++ 		if (old != NULL)
++ 			*old = NULL;
++ 		errno = ENOSYS;
++ 	}
++ 	return(0);
++ }
++ 
++ /*
++  * Set the current process MAC label, returning the previous MAC label
++  */
++ mac_t
++ sm_mac_swap(new)
++ 	mac_t new;
++ {
++ 	mac_t old;
++ 
++ 	if (sm_plabel(new, &old) == -1)
++ 	{
++ 		mac_free(old);
++ 		old = NULL;
++ 	}
++ 	return(old);
++ }
++ 
++ /*
++  * Set the current process MAC label, then free the passed in MAC label.
++  */
++ void
++ sm_mac_restore(label)
++ 	mac_t label;
++ {
++ 	(void) sm_plabel(label, (mac_t *) NULL);
++ 	mac_free(label);
++ }
++ 
++ /*
++  * Get the current process MAC label
++  */
++ int
++ sm_setplabel(label)
++ 	mac_t label;
++ {
++ 	return(sm_plabel(label, (mac_t *) NULL));
++ }
++ 
++ /*
++  * Get the current process MAC label
++  */
++ int
++ sm_getplabel(label)
++ 	mac_t *label;
++ {
++ 	return(sm_plabel((mac_t) NULL, label));
++ }
++ 
++ /*
++  * Check of a user is cleared to receive a message at MAC label `label'
++  */
++ int
++ sm_clear_user(to, label)
++ 	ADDRESS *to;
++ 	mac_t label;
++ {
++ 	int r = EX_OK;
++ 
++ 	if (sm_mac_enabled())
++ 	{
++ #if defined(sgi)
++ 		struct clearance *clp;
++ 		char *user, buf[64];
++ 
++ 		if (to != NULL)
++ 		{
++ 			if (!bitset(QGOODUID, to->q_flags))
++ 				return(EX_OK);
++ 			user = to->q_ruser ? to->q_ruser : to->q_user;
++ 		}
++ 		else
++ 		{
++ 			user = DefUser;
++ 		}
++ 
++ 		clp = sgi_getclearancebyname(user);
++ 		if (clp == (struct clearance *) NULL ||
++ 		    mac_clearedlbl(clp, label) != MAC_CLEARED)
++ 		{
++ #ifdef TRUSTED_AUDIT
++ 			sm_audit(user, "not cleared for mail");
++ #endif
++ 			r = EX_NOPERM;
++ 		}
++ 
++ 		sprintf(buf, "'%s' %s for mail", user,
++ 			r == EX_OK ? "cleared" : "not cleared");
++ 		sm_macdbg(5, buf, label);
++ #endif
++ 	}
++ 	return (r);
++ }
++ #endif
++ /*
++ **
++ */
++ 
++ #ifdef TRUSTED_NET
++ /*
++  * Create a socket that can receive communication at any MAC label
++  */
++ int
++ sm_trusted_socket(fd)
++ 	int fd;
++ {
++ #if defined(sgi)
++ 	if (tsix_on(fd) == -1)
++ 	{
++ 		(void) close(fd);
++ 		fd = -1;
++ 	}
++ #endif
++ 	return(fd);
++ }
++ 
++ /*
++  * Get the MAC label of a socket connection
++  */
++ int
++ sm_getsolabel(fd, label)
++ 	int fd;
++ 	mac_t *label;
++ {
++ 	*label = NULL;
++ #if defined(sgi)
++ 	if (tsix_get_mac(fd, label) == -1)
++ 	{
++ 		(void) close(fd);
++ 		fd = -1;
++ 	}
++ #endif
++ 	sm_macdbg(4, "get socket MAC label", *label);
++ 	return(fd);
++ }
++ 
++ /*
++  * Set the MAC label of outgoing data
++  */
++ int
++ sm_setsolabel(fd, label)
++ 	int fd;
++ 	mac_t label;
++ {
++ #if defined(sgi)
++ 	if (tsix_set_mac(fd, label) == -1 ||
++ 	    tsix_set_solabel(fd, label) == -1)
++ 	{
++ 		(void) close(fd);
++ 		fd = -1;
++ 	}
++ #endif
++ 	sm_macdbg(4, "set socket MAC label", label);
++ 	return(fd);
++ }
++ #endif
++ /*
++ **
++ */
++ 
++ #ifdef TRUSTED_AUDIT
++ static int
++ sm_audit_enabled()
++ {
++ #ifdef _SC_AUDIT
++ 	static int a = -1;
++ 
++ 	if (a == -1)
++ 		a = (sysconf(_SC_AUDIT) > 0);
++ 	return(a);
++ #else
++ 	return(0);
++ #endif
++ }
++ 
++ /*
++  * Create an audit record for sendmail
++  */
++ void
++ sm_audit(user, msg)
++ 	const char *user;
++ 	const char *msg;
++ {
++ 	if (sm_audit_enabled())
++ 	{
++ 		int status;
++ #if defined(sgi)
++ 		const char *prog = "SENDMAIL";
++ #ifdef TRUSTED_CAP
++ 		cap_t cap;
++ #endif
++ 
++ 		if (user == NULL)
++ 			user = "unknown user";
++ #ifdef TRUSTED_CAP
++ 		cap = sm_cap_acquire(SM_CAP_AUDIT);
++ #endif
++ 		status = satvwrite(SAT_AE_CUSTOM, SAT_FAILURE, "%s|%c|%s|%s",
++ 				   prog, '-',  user, msg);
++ #ifdef TRUSTED_CAP
++ 		sm_cap_surrender(cap);
++ #endif
++ #endif
++ 		if (status == -1)
++ 			sm_syslog(LOG_ERR|LOG_AUTH, NOQID,
++ 				  "%s: satvwrite failure", prog);
++ 	}
++ }
++ #endif
++ /*
++ ** sm_set[re]*[gu]id 	-- wrapper for setuid and friends
++ */
++ 
++ int 
++ sm_setuid(uid, trusted)
++ 	uid_t uid;
++ 	int trusted;
++ {
++ 	int r;
++ #ifdef TRUSTED_CAP
++ 	cap_t cap = sm_cap_acquire(trusted);
++ #endif
++ 	r = setuid(uid);
++ #ifdef TRUSTED_CAP
++ 	sm_cap_surrender(cap);
++ #endif
++ 	return (r);
++ }
++ 
++ int 
++ sm_seteuid(uid, trusted)
++ 	uid_t uid;
++ 	int trusted;
++ {
++ 	int r;
++ #ifdef TRUSTED_CAP
++ 	cap_t cap = sm_cap_acquire(trusted);
++ #endif
++ 	r = seteuid(uid);
++ #ifdef TRUSTED_CAP
++ 	sm_cap_surrender(cap);
++ #endif
++ 	return (r);
++ }
++ 
++ int 
++ sm_setreuid(uid, euid, trusted)
++ 	uid_t uid, euid;
++ 	int trusted;
++ {
++ 	int r;
++ #ifdef TRUSTED_CAP
++ 	cap_t cap = sm_cap_acquire(trusted);
++ #endif
++ 	r = setreuid(uid, euid);
++ #ifdef TRUSTED_CAP
++ 	sm_cap_surrender(cap);
++ #endif
++ 	return (r);
++ }
++ 
++ int 
++ sm_setgid(gid, trusted)
++ 	gid_t gid;
++ 	int trusted;
++ {
++ 	int r;
++ #ifdef TRUSTED_CAP
++ 	cap_t cap = sm_cap_acquire(trusted);
++ #endif
++ 	r = setgid(gid);
++ #ifdef TRUSTED_CAP
++ 	sm_cap_surrender(cap);
++ #endif
++ 	return (r);
++ }
++ 
++ /*
++ ** sm_initgroups	-- wrapper for initgroups
++ ** sm_setgroups 	-- wrapper for setgruops
++ **
++ ** 	These wrappers are stub implementations for systems that dont support
++ **	these calls.
++ */
++ int
++ sm_initgroups(name, group, trusted)
++ 	char *name;
++ 	gid_t group;
++ 	int trusted;
++ {
++ #ifndef HASINITGROUPS
++ 	return 0;
++ #else
++ 	int r;
++ #ifdef TRUSTED_CAP
++ 	cap_t cap = sm_cap_acquire(trusted);
++ #endif
++ 	r = initgroups(name,group);
++ #ifdef TRUSTED_CAP
++ 	sm_cap_surrender(cap);
++ #endif
++ 	return (r);
++ #endif /* HASINITGROUPS */
++ }
++ 
++ int
++ sm_setgroups(ngroups, grouplist, trusted)
++ 	int ngroups;
++ 	GIDSET_T grouplist[];
++ 	int trusted;
++ {
++ #ifndef NGROUPS_MAX
++ 	return 0;
++ #else
++ 	int r;
++ #ifdef TRUSTED_CAP
++ 	cap_t cap = sm_cap_acquire(trusted);
++ #endif
++ 	r = setgroups(ngroups, grouplist);
++ #ifdef TRUSTED_CAP
++ 	sm_cap_surrender(cap);
++ #endif
++ 	return (r);
++ #endif /* NGROUPS_MAX */
++ }
++ 
++ /*
++ ** sm_bind		-- wrapper for bind
++ */
++ int
++ sm_bind(s, name, namelen, trusted)
++ 	int s, namelen, trusted;
++ 	const struct sockaddr *name;
++ {
++ 	int r;
++ #ifdef TRUSTED_CAP
++ 	cap_t cap = sm_cap_acquire(trusted);
++ #endif
++ 	r = bind(s,name,namelen);
++ #ifdef TRUSTED_CAP
++ 	sm_cap_surrender(cap);
++ #endif
++ 	return (r);
++ }
++ 
++ /*
++ ** sm_chroot		-- wrapper for chroot
++ */
++ int
++ sm_chroot(path, trusted)
++ 	const char *path;
++ 	int trusted;
++ {
++ 	int r;
++ #ifdef TRUSTED_CAP
++ 	cap_t cap = sm_cap_acquire(trusted);
++ #endif
++ 	r = chroot(path);
++ #ifdef TRUSTED_CAP
++ 	sm_cap_surrender(cap);
++ #endif
++ 	return (r);
++ }
++ 
++ /*
++ ** sm_chown		-- wrapper for chown
++ */
++ int
++ sm_chown(path, owner, group, trusted)
++ 	const char *path;
++ 	uid_t owner;
++ 	gid_t group;
++ 	int trusted;
++ {
++ 	int r;
++ #ifdef TRUSTED_CAP
++ 	cap_t cap = sm_cap_acquire(trusted);
++ #endif
++ 	r = chown(path, owner, group);
++ #ifdef TRUSTED_CAP
++ 	sm_cap_surrender(cap);
++ #endif
++ 	return (r);
++ }
++ 
++ /*
++ ** sm_fchown		-- wrapper for fchown
++ */
++ int
++ sm_fchown(fd, owner, group, trusted)
++ 	int fd;
++ 	uid_t owner;
++ 	gid_t group;
++ 	int trusted;
++ {
++ 	int r;
++ #ifdef TRUSTED_CAP
++ 	cap_t cap = sm_cap_acquire(trusted);
++ #endif
++ 	r = fchown(fd, owner, group);
++ #ifdef TRUSTED_CAP
++ 	sm_cap_surrender(cap);
++ #endif
++ 	return (r);
++ }
++ 
++ /*
++ **
++ */
++ int
++ sm_nice(prio, trusted)
++ 	int prio, trusted;
++ {
++ 	int r;
++ #ifdef TRUSTED_CAP
++ 	cap_t cap = sm_cap_acquire(trusted);
++ #endif
++ 	r = nice(prio);
++ #ifdef TRUSTED_CAP
++ 	sm_cap_surrender(cap);
++ #endif
++ 	return (r);
++ }
++ 
++ /*
+  **  SECUREWARE_SETUP_SECURE -- Convex SecureWare setup
+  **
+  **	Set up the trusted computing environment for C2 level security
+***************
+*** 4729,4734 ****
+--- 5607,5613 ----
+  
+  # endif
+  #endif
++ 
+  /*
+  **  Compile-Time options
+  */
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/src/control.c sendmail-8.9.3.patch.trusted/src/control.c
+*** sendmail-8.9.3/src/control.c	Sun Jan 17 14:57:33 1999
+--- sendmail-8.9.3.patch.trusted/src/control.c	Tue Aug 17 15:19:29 1999
+***************
+*** 65,72 ****
+  	controladdr.sun_family = AF_UNIX;
+  	strcpy(controladdr.sun_path, ControlSocketName);
+  
+! 	if (bind(ControlSocket, (struct sockaddr *) &controladdr,
+! 		 sizeof controladdr) < 0)
+  	{
+  		int save_errno = errno;
+  
+--- 65,72 ----
+  	controladdr.sun_family = AF_UNIX;
+  	strcpy(controladdr.sun_path, ControlSocketName);
+  
+! 	if (sm_bind(ControlSocket, (struct sockaddr *) &controladdr,
+! 		 sizeof controladdr, SM_CAP_NONE /* XXX-RGM */) < 0)
+  	{
+  		int save_errno = errno;
+  
+***************
+*** 75,84 ****
+  		return -1;
+  	}
+  
+  #  if _FFR_TRUSTED_USER
+  	if (geteuid() == 0 && TrustedUid != 0)
+  	{
+! 		if (chown(ControlSocketName, TrustedUid, -1) < 0)
+  		{
+  			int save_errno = errno;
+  
+--- 75,93 ----
+  		return -1;
+  	}
+  
++ 	if (chmod(ControlSocketName, S_IRUSR|S_IWUSR) < 0)
++ 	{
++ 		int save_errno = errno;
++ 
++ 		closecontrolsocket(TRUE);
++ 		errno = save_errno;
++ 		return -1;
++ 	}
++ 
+  #  if _FFR_TRUSTED_USER
+  	if (geteuid() == 0 && TrustedUid != 0)
+  	{
+! 		if (sm_chown(ControlSocketName, TrustedUid, -1, SM_CAP_CHOWN) < 0)
+  		{
+  			int save_errno = errno;
+  
+***************
+*** 93,107 ****
+  		}
+  	}
+  #  endif
+- 
+- 	if (chmod(ControlSocketName, S_IRUSR|S_IWUSR) < 0)
+- 	{
+- 		int save_errno = errno;
+- 
+- 		closecontrolsocket(TRUE);
+- 		errno = save_errno;
+- 		return -1;
+- 	}
+  
+  	if (listen(ControlSocket, 8) < 0)
+  	{
+--- 102,107 ----
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/src/daemon.c sendmail-8.9.3.patch.trusted/src/daemon.c
+*** sendmail-8.9.3/src/daemon.c	Mon Jan 25 20:00:16 1999
+--- sendmail-8.9.3.patch.trusted/src/daemon.c	Tue Aug 17 15:19:33 1999
+***************
+*** 113,118 ****
+--- 113,121 ----
+  	bool j_has_dot;
+  #endif
+  	char status[MAXLINE];
++ #ifdef TRUSTED_MAC
++ 	mac_t label;
++ #endif
+  	extern void reapchild __P((int));
+  #ifdef NETUNIX
+  	extern int ControlSocket;
+***************
+*** 187,193 ****
+--- 190,202 ----
+  	sff = SFF_NOLINK|SFF_ROOTOK|SFF_REGONLY|SFF_CREAT;
+  	if (TrustedUid != 0 && RealUid == TrustedUid)
+  		sff |= SFF_OPENASROOT;
++ #ifdef TRUSTED_MAC
++ 	label = sm_mac_swap(e->e_label);
++ #endif
+  	pidf = safefopen(PidFile, O_WRONLY|O_TRUNC, 0644, sff);
++ #ifdef TRUSTED_MAC
++ 	sm_mac_restore(label);
++ #endif
+  	if (pidf == NULL)
+  	{
+  		sm_syslog(LOG_ERR, NOQID, "unable to write %s", PidFile);
+***************
+*** 229,234 ****
+--- 238,246 ----
+  		bool control = FALSE;
+  		int savederrno;
+  		int pipefd[2];
++ #ifdef TRUSTED_NET
++ 		mac_t label;
++ #endif
+  		extern bool refuseconnections __P((int));
+  
+  		/* see if we are rejecting connections */
+***************
+*** 379,384 ****
+--- 391,399 ----
+  		}
+  		savederrno = errno;
+  		(void) blocksignal(SIGALRM);
++ #ifdef TRUSTED_NET
++ 		t = sm_getsolabel(t, &label);
++ #endif
+  		if (t < 0)
+  		{
+  			errno = savederrno;
+***************
+*** 433,439 ****
+  			**	Collect verified idea of sending host.
+  			**	Verify calling user id if possible here.
+  			*/
+- 
+  			(void) releasesignal(SIGALRM);
+  			(void) releasesignal(SIGCHLD);
+  			(void) setsignal(SIGCHLD, SIG_DFL);
+--- 448,453 ----
+***************
+*** 480,488 ****
+--- 494,513 ----
+  			RealHostName = newstr(p);
+  			sm_setproctitle(TRUE, "startup with %s", p);
+  
++ #ifdef TRUSTED_NET
++ 			mac_free(e->e_label);
++ 			e->e_label = label;
++ 			sm_macdbg(1, "set envelope MAC label", e->e_label);
++ 			if (sm_setsolabel(t, e->e_label) == -1 ||
++ 			    (inchannel = fdopen(t, "r")) == NULL ||
++ 			    (t = dup(t)) < 0 ||
++ 			    sm_setsolabel(t, e->e_label) == -1 ||
++ 			    (outchannel = fdopen(t, "w")) == NULL)
++ #else
+  			if ((inchannel = fdopen(t, "r")) == NULL ||
+  			    (t = dup(t)) < 0 ||
+  			    (outchannel = fdopen(t, "w")) == NULL)
++ #endif
+  			{
+  				syserr("cannot open SMTP server channel, fd=%d", t);
+  				finis(FALSE, EX_OK);
+***************
+*** 502,507 ****
+--- 527,536 ----
+  			break;
+  		}
+  
++ #ifdef TRUSTED_NET
++ 		mac_free(label);
++ #endif
++ 
+  		/* parent -- keep track of children */
+  		snprintf(status, sizeof status, "SMTP server child for %s",
+  			 anynet_ntoa(&RealHostAddr));
+***************
+*** 561,566 ****
+--- 590,598 ----
+  		if (firsttime || DaemonSocket < 0)
+  		{
+  			DaemonSocket = socket(DaemonAddr.sa.sa_family, SOCK_STREAM, 0);
++ #ifdef TRUSTED_NET
++ 			DaemonSocket = sm_trusted_socket(DaemonSocket);
++ #endif
+  			if (DaemonSocket < 0)
+  			{
+  				saveerrno = errno;
+***************
+*** 614,620 ****
+  				break;
+  			}
+  
+! 			if (bind(DaemonSocket, &DaemonAddr.sa, socksize) < 0)
+  			{
+  				/* probably another daemon already */
+  				saveerrno = errno;
+--- 646,652 ----
+  				break;
+  			}
+  
+! 			if (sm_bind(DaemonSocket, &DaemonAddr.sa, socksize,SM_CAP_PRIVPORT) < 0)
+  			{
+  				/* probably another daemon already */
+  				saveerrno = errno;
+***************
+*** 1056,1061 ****
+--- 1088,1096 ----
+  		{
+  			s = socket(addr.sa.sa_family, SOCK_STREAM, 0);
+  		}
++ #ifdef TRUSTED_NET
++ 		s = sm_setsolabel(s, e->e_label);
++ #endif
+  		if (s < 0)
+  		{
+  			sav_errno = errno;
+***************
+*** 1434,1440 ****
+  		clrevent(ev);
+  		goto noident;
+  	}
+! 	if (bind(s, &la.sa, sizeof la.sin) < 0 ||
+  	    connect(s, &RealHostAddr.sa, sizeof RealHostAddr.sin) < 0)
+  	{
+  		goto closeident;
+--- 1469,1475 ----
+  		clrevent(ev);
+  		goto noident;
+  	}
+! 	if (sm_bind(s, &la.sa, sizeof la.sin, SM_CAP_PRIVPORT) < 0 ||
+  	    connect(s, &RealHostAddr.sa, sizeof RealHostAddr.sin) < 0)
+  	{
+  		goto closeident;
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/src/deliver.c sendmail-8.9.3.patch.trusted/src/deliver.c
+*** sendmail-8.9.3/src/deliver.c	Mon Jan 18 16:35:11 1999
+--- sendmail-8.9.3.patch.trusted/src/deliver.c	Tue Aug 17 15:19:25 1999
+***************
+*** 1650,1655 ****
+--- 1650,1663 ----
+  			(void) setsignal(SIGHUP, SIG_IGN);
+  			(void) setsignal(SIGTERM, SIG_DFL);
+  
++ #ifdef TRUSTED_MAC
++ 			if (sm_setplabel(e->e_label) == -1)
++ 			{
++ 				syserr("%s... openmailer(%s): cannot set MAC label", shortenstring(e->e_to, MAXSHORTSTR), m->m_name);
++ 				_exit(EX_OSERR);
++ 			}
++ #endif
++ 
+  			if (m != FileMailer || stat(tochain->q_user, &stb) < 0)
+  				stb.st_mode = 0;
+  
+***************
+*** 1675,1681 ****
+  
+  			/* tweak niceness */
+  			if (m->m_nice != 0)
+! 				nice(m->m_nice);
+  
+  			/* reset group id */
+  			if (bitnset(M_SPECIFIC_UID, m->m_flags))
+--- 1683,1689 ----
+  
+  			/* tweak niceness */
+  			if (m->m_nice != 0)
+! 				sm_nice(m->m_nice, SM_CAP_SCHED);
+  
+  			/* reset group id */
+  			if (bitnset(M_SPECIFIC_UID, m->m_flags))
+***************
+*** 1691,1697 ****
+  					if (u == NULL)
+  						u = ctladdr->q_user;
+  
+! 					if (initgroups(u, ctladdr->q_gid) == -1 && suidwarn)
+  						syserr("openmailer: initgroups(%s, %d) failed",
+  							u, ctladdr->q_gid);
+  				}
+--- 1699,1705 ----
+  					if (u == NULL)
+  						u = ctladdr->q_user;
+  
+! 					if (sm_initgroups(u, ctladdr->q_gid, SM_CAP_SETGID) == -1 && suidwarn)
+  						syserr("openmailer: initgroups(%s, %d) failed",
+  							u, ctladdr->q_gid);
+  				}
+***************
+*** 1700,1706 ****
+  					GIDSET_T gidset[1];
+  
+  					gidset[0] = ctladdr->q_gid;
+! 					if (setgroups(1, gidset) == -1 && suidwarn)
+  						syserr("openmailer: setgroups() failed");
+  				}
+  				new_gid = ctladdr->q_gid;
+--- 1708,1714 ----
+  					GIDSET_T gidset[1];
+  
+  					gidset[0] = ctladdr->q_gid;
+! 					if (sm_setgroups(1, gidset, SM_CAP_SETGID) == -1 && suidwarn)
+  						syserr("openmailer: setgroups() failed");
+  				}
+  				new_gid = ctladdr->q_gid;
+***************
+*** 1709,1715 ****
+  			{
+  				if (!DontInitGroups)
+  				{
+! 					if (initgroups(DefUser, DefGid) == -1 && suidwarn)
+  						syserr("openmailer: initgroups(%s, %d) failed",
+  							DefUser, DefGid);
+  				}
+--- 1717,1723 ----
+  			{
+  				if (!DontInitGroups)
+  				{
+! 					if (sm_initgroups(DefUser, DefGid, SM_CAP_SETGID) == -1 && suidwarn)
+  						syserr("openmailer: initgroups(%s, %d) failed",
+  							DefUser, DefGid);
+  				}
+***************
+*** 1718,1724 ****
+  					GIDSET_T gidset[1];
+  
+  					gidset[0] = DefGid;
+! 					if (setgroups(1, gidset) == -1 && suidwarn)
+  						syserr("openmailer: setgroups() failed");
+  				}
+  				if (m->m_gid == 0)
+--- 1726,1732 ----
+  					GIDSET_T gidset[1];
+  
+  					gidset[0] = DefGid;
+! 					if (sm_setgroups(1, gidset, SM_CAP_SETGID) == -1 && suidwarn)
+  						syserr("openmailer: setgroups() failed");
+  				}
+  				if (m->m_gid == 0)
+***************
+*** 1726,1732 ****
+  				else
+  					new_gid = m->m_gid;
+  			}
+! 			if (new_gid != NO_GID && setgid(new_gid) < 0 && suidwarn)
+  				syserr("openmailer: setgid(%ld) failed",
+  					(long) new_gid);
+  
+--- 1734,1740 ----
+  				else
+  					new_gid = m->m_gid;
+  			}
+! 			if (new_gid != NO_GID && sm_setgid(new_gid, SM_CAP_SETGID) < 0 && suidwarn)
+  				syserr("openmailer: setgid(%ld) failed",
+  					(long) new_gid);
+  
+***************
+*** 1746,1761 ****
+  			{
+  				vendor_set_uid(new_euid);
+  #if USESETEUID
+! 				if (seteuid(new_euid) < 0 && suidwarn)
+  					syserr("openmailer: seteuid(%ld) failed",
+  						(long) new_euid);
+  #else
+  # if HASSETREUID
+! 				if (setreuid(new_ruid, new_euid) < 0 && suidwarn)
+  					syserr("openmailer: setreuid(%ld, %ld) failed",
+  						(long) new_ruid, (long) new_euid);
+  # else
+! 				if (new_euid != geteuid() && setuid(new_euid) < 0 && suidwarn)
+  					syserr("openmailer: setuid(%ld) failed",
+  						(long) new_euid);
+  # endif
+--- 1754,1769 ----
+  			{
+  				vendor_set_uid(new_euid);
+  #if USESETEUID
+! 				if (sm_seteuid(new_euid, SM_CAP_SETUID) < 0 && suidwarn)
+  					syserr("openmailer: seteuid(%ld) failed",
+  						(long) new_euid);
+  #else
+  # if HASSETREUID
+! 				if (sm_setreuid(new_ruid, new_euid, SM_CAP_SETUID) < 0 && suidwarn)
+  					syserr("openmailer: setreuid(%ld, %ld) failed",
+  						(long) new_ruid, (long) new_euid);
+  # else
+! 				if (new_euid != geteuid() && sm_setuid(new_euid, SM_CAP_SETUID) < 0 && suidwarn)
+  					syserr("openmailer: setuid(%ld) failed",
+  						(long) new_euid);
+  # endif
+***************
+*** 1764,1770 ****
+  			else if (new_ruid != NO_UID)
+  			{
+  				vendor_set_uid(new_ruid);
+! 				if (setuid(new_ruid) < 0 && suidwarn)
+  					syserr("openmailer: setuid(%ld) failed",
+  						(long) new_ruid);
+  			}
+--- 1772,1778 ----
+  			else if (new_ruid != NO_UID)
+  			{
+  				vendor_set_uid(new_ruid);
+! 				if (sm_setuid(new_ruid, SM_CAP_SETUID) < 0 && suidwarn)
+  					syserr("openmailer: setuid(%ld) failed",
+  						(long) new_ruid);
+  			}
+***************
+*** 1852,1857 ****
+--- 1860,1890 ----
+  			/* run disconnected from terminal */
+  			(void) setsid();
+  
++ #ifdef TRUSTED_CAP
++ 			{
++ 				int trust;
++ 
++ 				/*
++ 				 * If this mailer will be running as an
++ 				 * ordinary user, allow no inheritance
++ 				 * of capabilities. Otherwise we would
++ 				 * be giving user-specified mail programs
++ 				 * privilege they shouldn't have.
++ 				 *
++ 				 * This algorithm is sub-optimal. If there
++ 				 * were some way to flag a mailer as being
++ 				 * user-specified vs specified in a "safe"
++ 				 * cf file tha would be best.
++ 				 */
++ 				if (geteuid() != 0)
++ 					trust = SM_CAP_NONE;
++ 				else
++ 					trust = SM_CAP_SETUID|SM_CAP_CHOWN;
++ 				if (sm_cap_inherit(trust) == -1)
++ 					_exit(EX_SOFTWARE);
++ 			}
++ #endif
++ 
+  			/* try to execute the mailer */
+  			execve(m->m_mailer, (ARGV_T) pv, (ARGV_T) UserEnviron);
+  			saveerrno = errno;
+***************
+*** 3325,3330 ****
+--- 3358,3369 ----
+  		MCI mcibuf;
+  		int err;
+  		volatile int oflags = O_WRONLY|O_APPEND;
++ #ifdef TRUSTED_MAC
++ 		volatile mac_t label;
++ #endif
++ #ifdef TRUSTED_CAP
++ 		volatile cap_t cap;
++ #endif
+  
+  		if (e->e_lockfp != NULL)
+  			(void) close(fileno(e->e_lockfp));
+***************
+*** 3346,3351 ****
+--- 3385,3400 ----
+  		else
+  			ev = NULL;
+  
++ #ifdef TRUSTED_MAC
++ 		label = sm_mac_swap(e->e_label);
++ 		if (label == NULL && errno != ENOSYS)
++ 			exit(EX_SOFTWARE);
++ #endif
++ #ifdef TRUSTED_CAP
++ 		cap = sm_cap_acquire(SM_CAP_DACREAD);
++ 		if (cap == NULL && errno != ENOSYS)
++ 			exit(EX_SOFTWARE);
++ #endif
+  #ifdef HASLSTAT
+  		if (bitset(DBS_FILEDELIVERYTOSYMLINK, DontBlameSendmail))
+  			err = stat(filename, &stb);
+***************
+*** 3367,3372 ****
+--- 3416,3427 ----
+  			exit(EX_CANTCREAT);
+  		if (mode == ST_MODE_NOFILE)
+  			mode = stb.st_mode;
++ #ifdef TRUSTED_CAP
++ 		sm_cap_surrender(cap);
++ #endif
++ #ifdef TRUSTED_MAC
++ 		sm_mac_restore(label);
++ #endif
+  
+  		/* limit the errors to those actually caused in the child */
+  		errno = 0;
+***************
+*** 3448,3454 ****
+  		/* set group id list (needs /etc/group access) */
+  		if (RealUserName != NULL && !DontInitGroups)
+  		{
+! 			if (initgroups(RealUserName, RealGid) == -1 && suidwarn)
+  				syserr("mailfile: initgroups(%s, %d) failed",
+  					RealUserName, RealGid);
+  		}
+--- 3503,3509 ----
+  		/* set group id list (needs /etc/group access) */
+  		if (RealUserName != NULL && !DontInitGroups)
+  		{
+! 			if (sm_initgroups(RealUserName, RealGid, SM_CAP_SETGID) == -1 && suidwarn)
+  				syserr("mailfile: initgroups(%s, %d) failed",
+  					RealUserName, RealGid);
+  		}
+***************
+*** 3457,3472 ****
+  			GIDSET_T gidset[1];
+  
+  			gidset[0] = RealGid;
+! 			if (setgroups(1, gidset) == -1 && suidwarn)
+  				syserr("mailfile: setgroups() failed");
+  		}
+  
+  		/* if you have a safe environment, go into it */
+  		if (SafeFileEnv != NULL && SafeFileEnv[0] != '\0')
+  		{
+  			int i;
+  
+! 			if (chroot(SafeFileEnv) < 0)
+  			{
+  				syserr("mailfile: Cannot chroot(%s)",
+  					SafeFileEnv);
+--- 3512,3535 ----
+  			GIDSET_T gidset[1];
+  
+  			gidset[0] = RealGid;
+! 			if (sm_setgroups(1, gidset, SM_CAP_SETGID) == -1 && suidwarn)
+  				syserr("mailfile: setgroups() failed");
+  		}
+  
++ #ifdef TRUSTED_MAC
++ 		if (sm_setplabel(e->e_label) == -1)
++ 		{
++ 			syserr("mailfile: cannot set MAC label");
++ 			exit(EX_SOFTWARE);
++ 		}
++ #endif
++ 
+  		/* if you have a safe environment, go into it */
+  		if (SafeFileEnv != NULL && SafeFileEnv[0] != '\0')
+  		{
+  			int i;
+  
+! 			if (sm_chroot(SafeFileEnv, SM_CAP_CHROOT) < 0)
+  			{
+  				syserr("mailfile: Cannot chroot(%s)",
+  					SafeFileEnv);
+***************
+*** 3481,3490 ****
+  
+  		/* now reset the group and user ids */
+  		endpwent();
+! 		if (setgid(RealGid) < 0 && suidwarn)
+  			syserr("mailfile: setgid(%ld) failed", (long) RealGid);
+  		vendor_set_uid(RealUid);
+! 		if (setuid(RealUid) < 0 && suidwarn)
+  			syserr("mailfile: setuid(%ld) failed", (long) RealUid);
+  
+  		/* move into some "safe" directory */
+--- 3544,3553 ----
+  
+  		/* now reset the group and user ids */
+  		endpwent();
+! 		if (sm_setgid(RealGid, SM_CAP_SETGID) < 0 && suidwarn)
+  			syserr("mailfile: setgid(%ld) failed", (long) RealGid);
+  		vendor_set_uid(RealUid);
+! 		if (sm_setuid(RealUid, SM_CAP_SETUID) < 0 && suidwarn)
+  			syserr("mailfile: setuid(%ld) failed", (long) RealUid);
+  
+  		/* move into some "safe" directory */
+***************
+*** 3586,3592 ****
+  #endif
+  		(void) xfclose(f, "mailfile", filename);
+  		(void) fflush(stdout);
+! 		setuid(RealUid);
+  		exit(ExitStat);
+  		/*NOTREACHED*/
+  	}
+--- 3649,3655 ----
+  #endif
+  		(void) xfclose(f, "mailfile", filename);
+  		(void) fflush(stdout);
+! 		sm_setuid(RealUid, SM_CAP_NONE);
+  		exit(ExitStat);
+  		/*NOTREACHED*/
+  	}
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/src/envelope.c sendmail-8.9.3.patch.trusted/src/envelope.c
+*** sendmail-8.9.3/src/envelope.c	Mon Jan 25 16:52:43 1999
+--- sendmail-8.9.3.patch.trusted/src/envelope.c	Tue Aug 17 15:19:25 1999
+***************
+*** 37,42 ****
+--- 37,46 ----
+  	register ENVELOPE *e;
+  	register ENVELOPE *parent;
+  {
++ #ifdef TRUSTED_MAC
++ 	if (e != parent)
++ 		e->e_label = sm_mac_dup(parent->e_label);
++ #endif
+  	if (e == parent && e->e_parent != NULL)
+  		parent = e->e_parent;
+  	clearenvelope(e, TRUE);
+***************
+*** 355,360 ****
+--- 359,368 ----
+  	e->e_dfp = NULL;
+  	e->e_id = NULL;
+  	e->e_flags &= ~EF_HAS_DF;
++ #ifdef TRUSTED_MAC
++ 	mac_free(e->e_label);
++ 	e->e_label = NULL;
++ #endif
+  }
+  /*
+  **  CLEARENVELOPE -- clear an envelope without unlocking
+***************
+*** 383,388 ****
+--- 391,399 ----
+  {
+  	register HDR *bh;
+  	register HDR **nhp;
++ #ifdef TRUSTED_MAC
++ 	mac_t tmplabel;
++ #endif
+  	extern ENVELOPE BlankEnvelope;
+  
+  	if (!fullclear)
+***************
+*** 396,402 ****
+--- 407,419 ----
+  	}
+  
+  	/* now clear out the data */
++ #ifdef TRUSTED_MAC
++ 	tmplabel = e->e_label;
++ #endif
+  	STRUCTCOPY(BlankEnvelope, *e);
++ #ifdef TRUSTED_MAC
++ 	e->e_label = tmplabel;
++ #endif
+  	e->e_message = NULL;
+  	if (Verbose)
+  		e->e_sendmode = SM_DELIVER;
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/src/main.c sendmail-8.9.3.patch.trusted/src/main.c
+*** sendmail-8.9.3/src/main.c	Sat Jan  9 15:31:13 1999
+--- sendmail-8.9.3.patch.trusted/src/main.c	Tue Aug 17 15:19:26 1999
+***************
+*** 117,122 ****
+--- 117,125 ----
+  	static char rnamebuf[MAXNAME];	/* holds RealUserName */
+  	char *emptyenviron[1];
+  	QUEUE_CHAR *new;
++ #ifdef TRUSTED_MAC
++ 	mac_t label;
++ #endif
+  	extern int DtableSize;
+  	extern int optind;
+  	extern int opterr;
+***************
+*** 325,330 ****
+--- 328,342 ----
+  	if (RealUid != 0 && getegid() == RealGid)
+  		RunAsGid = RealGid;
+  
++ #ifdef TRUSTED_MAC
++ 	if (sm_getplabel(&BlankEnvelope.e_label) == -1)
++ 	{
++ 		syserr("cannot get process label");
++ 		finis(FALSE, EX_SOFTWARE);
++ 	}
++ 	sm_macdbg(1, "set envelope MAC label", BlankEnvelope.e_label);
++ #endif
++ 
+  	if (tTd(47, 5))
+  	{
+  		printf("main: e/ruid = %d/%d e/rgid = %d/%d\n",
+***************
+*** 1238,1243 ****
+--- 1250,1279 ----
+  	}
+  	else
+  	{
++ #ifdef TRUSTED_MAC
++ 		if (!Warn_Q_option)
++ 		{
++ 			label = qdir_get_mac(QueueDir);
++ 			if (label != NULL)
++ 			{
++ 				if (sm_setplabel(label) == -1)
++ 				{
++ 					syserr("can't set process MAC label");
++ 					ExitStat = EX_CONFIG;
++ 				}
++ 				mac_free(label);
++ 			}
++ 			else
++ 			{
++ 				if (errno != ENOSYS)
++ 				{
++ 					syserr("%s: can't get MAC label",
++ 					       QueueDir);
++ 					ExitStat = EX_CONFIG;
++ 				}
++ 			}
++ 		}
++ #endif
+  		/* test path to get warning messages */
+  		(void) safedirpath(QueueDir, (uid_t) 0, (gid_t) 0, NULL, SFF_ANYFILE);
+  		if (OpMode != MD_TEST && chdir(QueueDir) < 0)
+***************
+*** 1302,1307 ****
+--- 1338,1347 ----
+  		break;
+  
+  	  case MD_HOSTSTAT:
++ #ifdef TRUSTED_MAC
++ 		if (sm_setplabel(BlankEnvelope.e_label) == -1)
++ 			finis(FALSE, EX_OK);
++ #endif
+  		signal(SIGPIPE, quiesce);
+  		mci_traverse_persistent(mci_print_persistent, NULL);
+  		finis(FALSE, EX_OK);
+***************
+*** 1308,1318 ****
+--- 1348,1366 ----
+  	    	break;
+  
+  	  case MD_PURGESTAT:
++ #ifdef TRUSTED_MAC
++ 		if (sm_setplabel(BlankEnvelope.e_label) == -1)
++ 			finis(FALSE, EX_OK);
++ #endif
+  		mci_traverse_persistent(mci_purge_persistent, NULL);
+  		finis(FALSE, EX_OK);
+  	    	break;
+  
+  	  case MD_INITALIAS:
++ #ifdef TRUSTED_MAC
++ 		if (sm_setplabel(BlankEnvelope.e_label) == -1)
++ 			finis(FALSE, EX_OK);
++ #endif
+  		/* initialize maps */
+  		initmaps(TRUE, CurEnv);
+  		finis(FALSE, ExitStat);
+***************
+*** 1479,1485 ****
+--- 1527,1539 ----
+  		**  Get authentication data
+  		*/
+  
++ #ifdef TRUSTED_MAC
++ 		label = sm_mac_swap(CurEnv->e_label);
++ #endif
+  		p = getauthinfo(fileno(InChannel), &forged);
++ #ifdef TRUSTED_MAC
++ 		sm_mac_restore(label);
++ #endif
+  		define('_', p, &BlankEnvelope);
+  #endif /* DAEMON */
+  	}
+***************
+*** 1740,1746 ****
+  
+  	/* reset uid for process accounting */
+  	endpwent();
+! 	setuid(RealUid);
+  
+  	exit(exitstat);
+  }
+--- 1794,1800 ----
+  
+  	/* reset uid for process accounting */
+  	endpwent();
+! 	sm_setuid(RealUid, SM_CAP_NONE);
+  
+  	exit(exitstat);
+  }
+***************
+*** 2257,2270 ****
+  
+  	/* reset group permissions; these can be set later */
+  	emptygidset[0] = (to_real_uid || RunAsGid != 0) ? RunAsGid : getegid();
+! 	if (setgroups(1, emptygidset) == -1 && geteuid() == 0)
+  		rval = EX_OSERR;
+  
+  	/* reset primary group and user id */
+! 	if ((to_real_uid || RunAsGid != 0) && setgid(RunAsGid) < 0)
+  		rval = EX_OSERR;
+! 	if ((to_real_uid || RunAsUid != 0) && setuid(RunAsUid) < 0)
+  		rval = EX_OSERR;
+  	if (tTd(47, 5))
+  	{
+  		printf("drop_privileges: e/ruid = %d/%d e/rgid = %d/%d\n",
+--- 2311,2328 ----
+  
+  	/* reset group permissions; these can be set later */
+  	emptygidset[0] = (to_real_uid || RunAsGid != 0) ? RunAsGid : getegid();
+! 	if (sm_setgroups(1, emptygidset, SM_CAP_SETGID) == -1 && geteuid() == 0)
+  		rval = EX_OSERR;
+  
+  	/* reset primary group and user id */
+! 	if ((to_real_uid || RunAsGid != 0) && sm_setgid(RunAsGid, SM_CAP_SETGID) < 0)
+! 		rval = EX_OSERR;
+! 	if ((to_real_uid || RunAsUid != 0) && sm_setuid(RunAsUid, SM_CAP_SETUID) < 0)
+  		rval = EX_OSERR;
+! #ifdef TRUSTED_CAP
+! 	if (to_real_uid && sm_cap_inherit(SM_CAP_NONE) == -1)
+  		rval = EX_OSERR;
++ #endif
+  	if (tTd(47, 5))
+  	{
+  		printf("drop_privileges: e/ruid = %d/%d e/rgid = %d/%d\n",
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/src/map.c sendmail-8.9.3.patch.trusted/src/map.c
+*** sendmail-8.9.3/src/map.c	Tue Feb  2 12:10:21 1999
+--- sendmail-8.9.3.patch.trusted/src/map.c	Tue Aug 17 15:19:32 1999
+***************
+*** 1002,1009 ****
+  #if _FFR_TRUSTED_USER
+  		if (geteuid() == 0 && TrustedUid != 0)
+  		{
+! 			if (fchown(dfd, TrustedUid, -1) < 0 ||
+! 			    fchown(pfd, TrustedUid, -1) < 0)
+  			{
+  				int err = errno;
+  
+--- 1002,1009 ----
+  #if _FFR_TRUSTED_USER
+  		if (geteuid() == 0 && TrustedUid != 0)
+  		{
+! 			if (sm_fchown(dfd, TrustedUid, -1, SM_CAP_CHOWN) < 0 ||
+! 			    sm_fchown(pfd, TrustedUid, -1, SM_CAP_CHOWN) < 0)
+  			{
+  				int err = errno;
+  
+***************
+*** 1553,1559 ****
+  #if _FFR_TRUSTED_USER
+  		if (geteuid() == 0 && TrustedUid != 0)
+  		{
+! 			if (fchown(fd, TrustedUid, -1) < 0)
+  			{
+  				int err = errno;
+  
+--- 1553,1559 ----
+  #if _FFR_TRUSTED_USER
+  		if (geteuid() == 0 && TrustedUid != 0)
+  		{
+! 			if (sm_fchown(fd, TrustedUid, -1, SM_CAP_CHOWN) < 0)
+  			{
+  				int err = errno;
+  
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/src/mci.c sendmail-8.9.3.patch.trusted/src/mci.c
+*** sendmail-8.9.3/src/mci.c	Tue Dec 29 09:42:26 1998
+--- sendmail-8.9.3.patch.trusted/src/mci.c	Tue Aug 17 15:19:33 1999
+***************
+*** 657,662 ****
+--- 657,663 ----
+  **		FALSE -- lock failed
+  */
+  
++ 
+  bool
+  mci_load_persistent(mci)
+  	MCI *mci;
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/src/queue.c sendmail-8.9.3.patch.trusted/src/queue.c
+*** sendmail-8.9.3/src/queue.c	Mon Jan 25 15:26:33 1999
+--- sendmail-8.9.3.patch.trusted/src/queue.c	Tue Aug 17 15:19:30 1999
+***************
+*** 214,219 ****
+--- 214,228 ----
+  	/* output message priority */
+  	fprintf(tfp, "P%ld\n", e->e_msgpriority);
+  
++ #if defined(TRUSTED_MAC)
++ 	if (qf_set_mac(tfp, e->e_label) == -1)
++ 	{
++ 		sm_syslog(LOG_ALERT, e->e_id,
++ 			  "queueup: cannot set MAC label: %s",
++ 			  errstring(errno));
++ 	}
++ #endif
++ 
+  	/* output inode number of data file */
+  	/* XXX should probably include device major/minor too */
+  	if (e->e_dfino != -1)
+***************
+*** 809,814 ****
+--- 818,826 ----
+  # define NEED_T		002
+  # define NEED_R		004
+  # define NEED_S		010
++ # if defined(TRUSTED_MAC) && defined(QF_HAS_MAC)
++ # define NEED_L		020
++ #endif
+  
+  static WORK	*WorkList = NULL;
+  static int	WorkListSize = 0;
+***************
+*** 968,973 ****
+--- 980,1026 ----
+  		}
+  
+  		cf = fopen(d->d_name, "r");
++ #if defined(TRUSTED_MAC) && !defined(QF_HAS_MAC)
++ 		if (OpMode == MD_PRINT && cf != NULL)
++ 		{
++ 			mac_t label;
++ 			extern ENVELOPE BlankEnvelope;
++ 
++ 			label = qf_get_mac(cf);
++ 			if (label != NULL)
++ 			{
++ 				if (mac_dominate(BlankEnvelope.e_label, label) > 0)
++ 				{
++ 					sm_macdbg(2, "qf mac_dominate: true",
++ 						  label);
++ 				}
++ 				else
++ 				{
++ 					sm_macdbg(2, "qf mac_dominate: false",
++ 						  label);
++ 					fclose(cf);
++ 					cf = NULL;
++ #ifdef TRUSTED_AUDIT
++ 					sm_audit(RealUserName,
++ 						 "qf mac_dominate: false");
++ #endif
++ 				}
++ 				mac_free(label);
++ 			}
++ 			else
++ 			{
++ 				if (errno != ENOSYS)
++ 				{
++ 					fclose(cf);
++ 					cf = NULL;
++ #ifdef TRUSTED_AUDIT
++ 					sm_audit(RealUserName,
++ 						 "qf MAC attribute: missing");
++ #endif
++ 				}
++ 			}
++ 		}
++ #endif
+  		if (cf == NULL)
+  		{
+  			/* this may be some random person sending hir msgs */
+***************
+*** 995,1000 ****
+--- 1048,1057 ----
+  			i |= NEED_S;
+  		if (QueueSortOrder == QS_BYHOST || QueueLimitRecipient != NULL)
+  			i |= NEED_R;
++ #if defined(TRUSTED_MAC) && defined(QF_HAS_MAC)
++ 		if (OpMode == MD_PRINT && sm_mac_enabled())
++ 			i |= NEED_L;
++ #endif
+  		while (i != 0 && fgets(lbuf, sizeof lbuf, cf) != NULL)
+  		{
+  			int c;
+***************
+*** 1082,1093 ****
+--- 1139,1181 ----
+  				if (atol(&lbuf[1]) == 0)
+  					w->w_tooyoung = FALSE;
+  				break;
++ #if defined(TRUSTED_MAC) && defined(QF_HAS_MAC)
++ 			  case 'l':
++ 				if (bitset(NEED_L, i))
++ 				{
++ 					mac_t label;
++ 					extern ENVELOPE BlankEnvelope;
++ 
++ 					label = mac_from_text(&lbuf[1]);
++ 					if (label != NULL)
++ 					{
++ 						if (mac_dominate(BlankEnvelope.e_label, label) > 0)
++ 						{
++ 							sm_macdbg(2, "qf mac_dominate: true", label);
++ 							i &= ~NEED_L;
++ 						}
++ 						else
++ 						{
++ 							sm_macdbg(2, "qf mac_dominate: false", label);
++ #ifdef TRUSTED_AUDIT
++ 							sm_audit(RealUserName, "qf mac_dominate: false");
++ #endif
++ 						}
++ 						mac_free(label);
++ 					}
++ 				}
++ 				break;
++ #endif
+  			}
+  		}
+  		(void) fclose(cf);
+  
+  		if ((!doall && shouldqueue(w->w_pri, w->w_ctime)) ||
++ #if defined(TRUSTED_MAC) && defined(QF_HAS_MAC)
++ 		    bitset(NEED_R|NEED_S|NEED_L, i))
++ #else
+  		    bitset(NEED_R|NEED_S, i))
++ #endif
+  		{
+  			/* don't even bother sorting this job in */
+  			if (tTd(41, 49))
+***************
+*** 1563,1568 ****
+--- 1651,1659 ----
+  	bool nomore = FALSE;
+  	char qf[MAXQFNAME];
+  	char buf[MAXLINE];
++ #if defined(TRUSTED_MAC) && defined(QF_HAS_MAC)
++ 	int need;
++ #endif
+  	extern ADDRESS *setctluser __P((char *, int));
+  
+  	/*
+***************
+*** 1596,1601 ****
+--- 1687,1708 ----
+  	**  Check the queue file for plausibility to avoid attacks.
+  	*/
+  
++ #if defined(TRUSTED_MAC) && !defined(QF_HAS_MAC)
++ 	mac_free(e->e_label);
++ 	e->e_label = qf_get_mac(qfp);
++ 	sm_macdbg(1, "set envelope MAC label", e->e_label);
++ 	if (e->e_label == NULL && errno != ENOSYS)
++ 	{
++ 		if (LogLevel > 0)
++ 			sm_syslog(LOG_ALERT, e->e_id, "missing MAC label");
++ 		if (tTd(40, 8))
++ 			printf("readqf(%s): qf_get_mac failure (%s)\n",
++ 			       qf, errstring(errno));
++ 		(void) fclose(qfp);
++ 		return FALSE;
++ 	}
++ #endif
++ 
+  	if (fstat(fileno(qfp), &st) < 0)
+  	{
+  		/* must have been being processed by someone else */
+***************
+*** 1660,1665 ****
+--- 1767,1777 ----
+  	ctladdr = NULL;
+  	e->e_dfino = -1;
+  	e->e_msgsize = -1;
++ #if defined(TRUSTED_MAC) && defined(QF_HAS_MAC)
++ 	need = 0;
++ 	if (sm_mac_enabled())
++ 		need |= NEED_L;
++ #endif
+  	while ((bp = fgetfolded(buf, sizeof buf, qfp)) != NULL)
+  	{
+  		register char *p;
+***************
+*** 1869,1874 ****
+--- 1981,2000 ----
+  			nomore = TRUE;
+  			break;
+  
++ #if defined(TRUSTED_MAC) && defined(QF_HAS_MAC)
++ 		  case 'l':		/* MAC label */
++ 			if (bitset(NEED_L, need))
++ 			{
++ 				mac_free(e->e_label);
++ 				e->e_label = mac_from_text(&bp[1]);
++ 				if (e->e_label != NULL)
++ 					need &= ~NEED_L;
++ 				sm_macdbg(1, "set envelope MAC label",
++ 					  e->e_label);
++ 			}
++ 			break;
++ #endif
++ 
+  		  default:
+  			syserr("readqf: %s: line %d: bad line \"%s\"",
+  				qf, LineNumber, shortenstring(bp, MAXSHORTSTR));
+***************
+*** 1880,1885 ****
+--- 2006,2020 ----
+  		if (bp != buf)
+  			free(bp);
+  	}
++ 
++ #if defined(TRUSTED_MAC) && defined(QF_HAS_MAC)
++ 	if (bitset(NEED_L, need))
++ 	{
++ 		fclose(qfp);
++ 		loseqfile(e, "missing MAC label");
++ 		return FALSE;
++ 	}
++ #endif
+  
+  	/*
+  	**  If we haven't read any lines, this queue file is empty.
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/src/readcf.c sendmail-8.9.3.patch.trusted/src/readcf.c
+*** sendmail-8.9.3/src/readcf.c	Thu Jan 28 15:28:53 1999
+--- sendmail-8.9.3.patch.trusted/src/readcf.c	Tue Aug 17 15:19:28 1999
+***************
+*** 1913,1921 ****
+--- 1913,1923 ----
+  		break;
+  
+  	  case 'k':		/* connection cache size */
++ #ifndef TRUSTED_MAC
+  		MaxMciCache = atoi(val);
+  		if (MaxMciCache < 0)
+  			MaxMciCache = 0;
++ #endif
+  		break;
+  
+  	  case 'K':		/* connection cache timeout */
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/src/recipient.c sendmail-8.9.3.patch.trusted/src/recipient.c
+*** sendmail-8.9.3/src/recipient.c	Sat Jan 23 16:34:33 1999
+--- sendmail-8.9.3.patch.trusted/src/recipient.c	Tue Aug 17 15:19:32 1999
+***************
+*** 391,398 ****
+--- 391,404 ----
+  	}
+  	else if (m == FileMailer)
+  	{
++ #ifdef TRUSTED_MAC
++ 		mac_t label;
++ #endif
+  		extern bool writable __P((char *, ADDRESS *, int));
+  
++ #ifdef TRUSTED_MAC
++ 		label = sm_mac_swap(e->e_label);
++ #endif
+  		/* check if writable or creatable */
+  		if (a->q_alias == NULL)
+  		{
+***************
+*** 429,434 ****
+--- 435,443 ----
+  			giveresponse(EX_CANTCREAT, m, NULL, a->q_alias,
+  				     (time_t) 0, e);
+  		}
++ #ifdef TRUSTED_MAC
++ 		sm_mac_restore(label);
++ #endif
+  	}
+  
+  	/* try aliasing */
+***************
+*** 795,801 ****
+  	uid_t euid;
+  	gid_t egid;
+  	char *uname;
+- 
+  	if (tTd(44, 5))
+  		printf("writable(%s, 0x%x)\n", filename, flags);
+  
+--- 804,809 ----
+***************
+*** 920,925 ****
+--- 928,936 ----
+  	volatile bool safedir = FALSE;
+  	struct stat st;
+  	char buf[MAXLINE];
++ #ifdef TRUSTED_MAC
++ 	volatile mac_t label;
++ #endif
+  	extern bool chownsafe __P((int, bool));
+  
+  	if (tTd(27, 2))
+***************
+*** 959,965 ****
+  	{
+  		if (!DontInitGroups)
+  		{
+! 			if (initgroups(uname, gid) == -1)
+  				syserr("include: initgroups(%s, %d) failed",
+  					uname, gid);
+  		}
+--- 970,976 ----
+  	{
+  		if (!DontInitGroups)
+  		{
+! 			if (sm_initgroups(uname, gid, SM_CAP_SETGID) == -1)
+  				syserr("include: initgroups(%s, %d) failed",
+  					uname, gid);
+  		}
+***************
+*** 968,987 ****
+  			GIDSET_T gidset[1];
+  
+  			gidset[0] = gid;
+! 			if (setgroups(1, gidset) == -1)
+  				syserr("include: setgroups() failed");
+  		}
+  
+! 		if (gid != 0 && setgid(gid) < -1)
+  			syserr("setgid(%d) failure", gid);
+  		if (uid != 0)
+  		{
+  # if USESETEUID
+! 			if (seteuid(uid) < 0)
+  				syserr("seteuid(%d) failure (real=%d, eff=%d)",
+  					uid, getuid(), geteuid());
+  # else
+! 			if (setreuid(0, uid) < 0)
+  				syserr("setreuid(0, %d) failure (real=%d, eff=%d)",
+  					uid, getuid(), geteuid());
+  # endif
+--- 979,998 ----
+  			GIDSET_T gidset[1];
+  
+  			gidset[0] = gid;
+! 			if (sm_setgroups(1, gidset, SM_CAP_SETGID) == -1)
+  				syserr("include: setgroups() failed");
+  		}
+  
+! 		if (gid != 0 && sm_setgid(gid, SM_CAP_SETGID) < -1)
+  			syserr("setgid(%d) failure", gid);
+  		if (uid != 0)
+  		{
+  # if USESETEUID
+! 			if (sm_seteuid(uid, SM_CAP_SETUID) < 0)
+  				syserr("seteuid(%d) failure (real=%d, eff=%d)",
+  					uid, getuid(), geteuid());
+  # else
+! 			if (sm_setreuid(0, uid, SM_CAP_SETUID) < 0)
+  				syserr("setreuid(0, %d) failure (real=%d, eff=%d)",
+  					uid, getuid(), geteuid());
+  # endif
+***************
+*** 988,993 ****
+--- 999,1007 ----
+  		}
+  	}
+  #endif
++ #ifdef TRUSTED_MAC
++ 	label = sm_mac_swap(e->e_label);
++ #endif
+  
+  	if (tTd(27, 9))
+  		printf("include: new uid = %d/%d\n",
+***************
+*** 1106,1124 ****
+  		if (uid != 0)
+  		{
+  # if USESETEUID
+! 			if (seteuid(0) < 0)
+  				syserr("seteuid(0) failure (real=%d, eff=%d)",
+  					getuid(), geteuid());
+  # else
+! 			if (setreuid(-1, 0) < 0)
+  				syserr("setreuid(-1, 0) failure (real=%d, eff=%d)",
+  					getuid(), geteuid());
+! 			if (setreuid(RealUid, 0) < 0)
+  				syserr("setreuid(%d, 0) failure (real=%d, eff=%d)",
+  					RealUid, getuid(), geteuid());
+  # endif
+  		}
+! 		setgid(savedgid);
+  	}
+  #endif
+  
+--- 1120,1138 ----
+  		if (uid != 0)
+  		{
+  # if USESETEUID
+! 			if (sm_seteuid(0, SM_CAP_SETUID) < 0)
+  				syserr("seteuid(0) failure (real=%d, eff=%d)",
+  					getuid(), geteuid());
+  # else
+! 			if (sm_setreuid(-1, 0, SM_CAP_SETUID) < 0)
+  				syserr("setreuid(-1, 0) failure (real=%d, eff=%d)",
+  					getuid(), geteuid());
+! 			if (sm_setreuid(RealUid, 0, SM_CAP_SETUID) < 0)
+  				syserr("setreuid(%d, 0) failure (real=%d, eff=%d)",
+  					RealUid, getuid(), geteuid());
+  # endif
+  		}
+! 		sm_setgid(savedgid, SM_CAP_SETGID);
+  	}
+  #endif
+  
+***************
+*** 1129,1141 ****
+--- 1143,1166 ----
+  	if (rval == E_SM_OPENTIMEOUT)
+  		usrerr("451 open timeout on %s", fname);
+  
++ #ifdef TRUSTED_MAC
++ 	if (fp == NULL)
++ 	{
++ 		sm_mac_restore(label);
++ 		return rval;
++ 	}
++ #else
+  	if (fp == NULL)
+  		return rval;
++ #endif
+  
+  	if (fstat(fileno(fp), &st) < 0)
+  	{
+  		rval = errno;
+  		syserr("Cannot fstat %s!", fname);
++ #ifdef TRUSTED_MAC
++ 		sm_mac_restore(label);
++ #endif
+  		return rval;
+  	}
+  
+***************
+*** 1146,1151 ****
+--- 1171,1180 ----
+  			fname,
+  			safedir ? "safe" : "dangerous",
+  			safechown ? "" : "un");
++ 
++ #ifdef TRUSTED_MAC
++ 	sm_mac_restore(label);
++ #endif
+  
+  	if (ca == NULL && safechown)
+  	{
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/src/safefile.c sendmail-8.9.3.patch.trusted/src/safefile.c
+*** sendmail-8.9.3/src/safefile.c	Tue Dec 29 09:42:27 1998
+--- sendmail-8.9.3.patch.trusted/src/safefile.c	Tue Aug 17 15:19:31 1999
+***************
+*** 363,369 ****
+  
+  int
+  safedirpath(fn, uid, gid, uname, flags)
+! 	char *fn;
+  	UID_T uid;
+  	GID_T gid;
+  	char *uname;
+--- 363,369 ----
+  
+  int
+  safedirpath(fn, uid, gid, uname, flags)
+!      char *fn;
+  	UID_T uid;
+  	GID_T gid;
+  	char *uname;
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/src/savemail.c sendmail-8.9.3.patch.trusted/src/savemail.c
+*** sendmail-8.9.3/src/savemail.c	Mon Jan 18 16:35:11 1999
+--- sendmail-8.9.3.patch.trusted/src/savemail.c	Tue Aug 17 15:19:34 1999
+***************
+*** 63,68 ****
+--- 63,71 ----
+  	int flags;
+  	char buf[MAXLINE+1];
+  	extern char *ttypath __P((void));
++ #ifdef TRUSTED_MAC
++ 	mac_t label;
++ #endif
+  	extern bool writable __P((char *, ADDRESS *, int));
+  
+  	if (tTd(6, 1))
+***************
+*** 379,392 ****
+  			}
+  
+  			flags = SFF_CREAT|SFF_REGONLY|SFF_ROOTOK|SFF_OPENASROOT|SFF_MUSTOWN;
+  			if (!writable(DeadLetterDrop, NULL, flags) ||
+  			    (fp = safefopen(DeadLetterDrop, O_WRONLY|O_APPEND,
+  					    FileMode, flags)) == NULL)
+  			{
+  				state = ESM_PANIC;
+  				break;
+  			}
+! 
+  			bzero(&mcibuf, sizeof mcibuf);
+  			mcibuf.mci_out = fp;
+  			mcibuf.mci_mailer = FileMailer;
+--- 382,403 ----
+  			}
+  
+  			flags = SFF_CREAT|SFF_REGONLY|SFF_ROOTOK|SFF_OPENASROOT|SFF_MUSTOWN;
++ #ifdef TRUSTED_MAC
++ 			label = sm_mac_swap(e->e_label);
++ #endif
+  			if (!writable(DeadLetterDrop, NULL, flags) ||
+  			    (fp = safefopen(DeadLetterDrop, O_WRONLY|O_APPEND,
+  					    FileMode, flags)) == NULL)
+  			{
+  				state = ESM_PANIC;
++ #ifdef TRUSTED_MAC
++ 				sm_mac_restore(label);
++ #endif
+  				break;
+  			}
+! #ifdef TRUSTED_MAC
+! 			sm_mac_restore(label);
+! #endif
+  			bzero(&mcibuf, sizeof mcibuf);
+  			mcibuf.mci_out = fp;
+  			mcibuf.mci_mailer = FileMailer;
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/src/sendmail.h sendmail-8.9.3.patch.trusted/src/sendmail.h
+*** sendmail-8.9.3/src/sendmail.h	Tue Jan 26 16:15:52 1999
+--- sendmail-8.9.3.patch.trusted/src/sendmail.h	Tue Aug 17 15:19:34 1999
+***************
+*** 80,85 ****
+--- 80,110 ----
+  # endif
+  #endif
+  
++ #ifdef TRUSTED_MAC
++ # include <sys/mac.h>
++ # ifdef sgi
++ #  include <clearance.h>
++ #  include <sys/mac_label.h>
++ # endif
++ #endif
++ 
++ #ifdef TRUSTED_CAP
++ # include <sys/capability.h>
++ #endif
++ 
++ #ifdef TRUSTED_NET
++ # ifdef sgi
++ #  include <cap_net.h>
++ #  include <t6net.h>
++ # endif
++ #endif
++ 
++ #ifdef TRUSTED_AUDIT
++ # ifdef sgi
++ #  include <sat.h>
++ # endif
++ #endif
++ 
+  /*
+  **  Following are "sort of" configuration constants, but they should
+  **  be pretty solid on most architectures today.  They have to be
+***************
+*** 486,491 ****
+--- 511,519 ----
+  	dev_t		e_dfdev;	/* df file's device, for crash recov */
+  	ino_t		e_dfino;	/* df file's ino, for crash recovery */
+  	char		*e_macro[256];	/* macro definitions */
++ #ifdef TRUSTED_MAC
++ 	mac_t		e_label;	/* MAC label of message */
++ #endif
+  };
+  
+  /* values for e_flags */
+***************
+*** 1367,1372 ****
+--- 1395,1420 ----
+  
+  
+  /*
++ **   Support for trusted sendmail
++ */
++ #define SM_CAP_NONE		0x0000		/* no capabilities needed */
++ #define SM_CAP_SETUID		0x0001		/* change uid capability */
++ #define SM_CAP_SETGID		0x0002		/* change gid capability */
++ #define SM_CAP_CHROOT		0x0004		/* change root capability */
++ #define SM_CAP_PRIVPORT		0x0008		/* open a port < 1024 */
++ #define SM_CAP_ATTR		0x0010		/* create privileged attr */
++ #define SM_CAP_PLABEL		0x0020		/* change process MAC label */
++ #define SM_CAP_DACREAD		0x0040		/* ignore DAC when reading */
++ #define SM_CAP_MACREAD		0x0080		/* ignore MAC when reading */
++ #define SM_CAP_AUDIT		0x0100		/* write to audit trail */
++ #define SM_CAP_CHOWN		0x0200		/* change ownership of files */
++ #define SM_CAP_SCHED		0x0400		/* change scheduling params */
++ #define SM_CAP_MACUP		0x0800		/* upgrade file MAC label */
++ #define SM_CAP_MACDN		0x1000		/* downgrade file MAC label */
++ #define SM_CAP_NETMGT		0x2000		/* network management priv */
++ #define SM_CAP_ALL		0xffff		/* all capabilities needed */
++ 
++ /*
+  **  Some in-line functions
+  */
+  
+***************
+*** 1512,1514 ****
+--- 1560,1604 ----
+  extern int		vsnprintf __P((char *, size_t, const char *, va_list));
+  #endif
+  extern char		*quad_to_string __P((QUAD_T));
++ 
++ #ifdef TRUSTED_CAP
++ extern cap_t sm_cap_acquire __P((int));
++ extern void  sm_cap_surrender __P((cap_t));
++ extern int   sm_cap_inherit __P((int));
++ #endif
++ 
++ #ifdef TRUSTED_MAC
++ extern int   sm_mac_enabled __P((void));
++ extern void  sm_macdbg __P((int, const char *, mac_t));
++ extern mac_t qdir_get_mac __P((const char *));
++ extern mac_t sm_mac_dup __P((mac_t));
++ extern mac_t sm_mac_swap __P((mac_t));
++ extern void  sm_mac_restore __P((mac_t));
++ extern int   sm_setplabel __P((mac_t));
++ extern int   sm_getplabel __P((mac_t *));
++ extern int   sm_clear_user __P((ADDRESS *, mac_t));
++ extern int   qf_set_mac __P((FILE *, mac_t));
++ extern mac_t qf_get_mac __P((FILE *));
++ #endif
++ 
++ #ifdef TRUSTED_NET
++ extern int sm_trusted_socket __P((int));
++ extern int sm_getsolabel __P((int, mac_t *));
++ extern int sm_setsolabel __P((int, mac_t));
++ #endif
++ 
++ #ifdef TRUSTED_AUDIT
++ extern void sm_audit __P((const char *, const char *));
++ #endif
++ 
++ extern int sm_setuid __P((uid_t, int));
++ extern int sm_seteuid __P((uid_t, int));
++ extern int sm_setreuid __P((uid_t, uid_t, int));
++ extern int sm_setgid __P((uid_t, int));
++ extern int sm_intgroups __P((char *, gid_t, int));
++ extern int sm_setgroups __P((int, GIDSET_T *, int));
++ extern int sm_bind __P((int, const struct sockaddr *, int, int));
++ extern int sm_chroot __P((const char *, int));
++ extern int sm_chown __P((const char *, uid_t, gid_t, int));
++ extern int sm_fchown __P((int, uid_t, gid_t, int));
++ extern int sm_nice __P((int, int));
+diff -c -N -r -xpatches -x.symlinks sendmail-8.9.3/src/util.c sendmail-8.9.3.patch.trusted/src/util.c
+*** sendmail-8.9.3/src/util.c	Thu Jan 21 22:18:40 1999
+--- sendmail-8.9.3.patch.trusted/src/util.c	Tue Aug 17 15:19:28 1999
+***************
+*** 1756,1764 ****
+  
+  	/* run as default user */
+  	endpwent();
+! 	if (setgid(DefGid) < 0 && geteuid() == 0)
+  		syserr("prog_open: setgid(%ld) failed", (long) DefGid);
+! 	if (setuid(DefUid) < 0 && geteuid() == 0)
+  		syserr("prog_open: setuid(%ld) failed", (long) DefUid);
+  
+  	/* run in some directory */
+--- 1756,1764 ----
+  
+  	/* run as default user */
+  	endpwent();
+! 	if (sm_setgid(DefGid, SM_CAP_SETGID) < 0 && geteuid() == 0)
+  		syserr("prog_open: setgid(%ld) failed", (long) DefGid);
+! 	if (sm_setuid(DefUid, SM_CAP_SETUID) < 0 && geteuid() == 0)
+  		syserr("prog_open: setuid(%ld) failed", (long) DefUid);
+  
+  	/* run in some directory */
+***************
+*** 1792,1797 ****
+--- 1792,1802 ----
+  		if ((j = fcntl(i, F_GETFD, 0)) != -1)
+  			(void) fcntl(i, F_SETFD, j | 1);
+  	}
++ 
++ #ifdef TRUSTED_CAP
++ 	if (sm_cap_inherit(SM_CAP_ALL) == -1)
++ 		_exit(EX_SOFTWARE);
++ #endif
+  
+  	/* now exec the process */
+  	execve(argv[0], (ARGV_T) argv, (ARGV_T) UserEnviron);

@@ -1,0 +1,12 @@
+#!smake -f Makefile.sgi
+#
+# Makefile for wind directory of FFSC software
+#
+# The real action for this subtree actually happens in the subdirectory
+# target/config/pc486, so simply switch to there and start over
+#
+
+SUBDIR = target\config\pc486
+
+default %::
+	$(MAKE) -C $(SUBDIR) MAKEFLAGS=$(MAKEFLAGS) $@

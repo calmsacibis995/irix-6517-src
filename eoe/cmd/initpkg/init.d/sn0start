@@ -1,0 +1,89 @@
+#! /sbin/sh
+#Tag 0x00000f00
+
+# SN0 System Startup
+# "$Revision: 1.15 $"
+
+IS_ON=/sbin/chkconfig
+MMSCD=/usr/etc/mmscd
+CLSHMCTL=/usr/etc/clshmctl
+
+case "$1" in
+'start')
+    #  Retrieve messages from the IP27 PROM Log
+
+    /usr/sbin/sn0log -s -a
+
+    #  (Re)start the multi-module system controller daemon.
+    #
+    #  Note: the daemon probes to determines if an MMSC is present, and
+    #  exits if not.  If no MMSC is present, the probing process results
+    #  in an MMSC "ping" command being sent to the console, consisting of
+    #  the characters 0xa0 0x00 0x00 0x00 0xa0.
+    #
+    #  The following check skips mmscd if running on an Origin200.
+
+    if [ `ls -d /hw/module/*/slot/MotherBoard 2>/dev/null | wc -l` = 0 ]
+    then
+	killall -k 3 mmscd
+
+	if $IS_ON mmscd; then
+	    if $IS_ON verbose; then
+		    echo "System controller daemons: mmscd."
+	    fi
+
+	    MFLAGS=""
+
+	    if $IS_ON cleanpowerdown  ; then MFLAGS="${MFLAGS} -g"; fi
+	    if $IS_ON cpumeter	      ; then MFLAGS="${MFLAGS} -m"; fi
+	    if [ -f /usr/gfx/gfxinit ]; then MFLAGS="${MFLAGS} -G"; fi
+
+	    if [ `nvram console` != d ]; then
+		MFLAGS="${MFLAGS} -c /dev/ttyd1"
+	    fi
+
+	    /sbin/suattr -C CAP_SCHED_MGT,CAP_DEVICE_MGT+ip \
+		-c "${MMSCD} ${MFLAGS} -t 'System activity for `hostname`'"
+	    sleep 1; echo "\r\c"
+	fi
+
+
+	# Starts up the craylink shared memory daemon.
+	# since placed the enclosing "if" doesn't get run on o200s
+
+	${CLSHMCTL} shutdown > /dev/null 2>&1
+
+	if $IS_ON clshmd; then
+	    if $IS_ON verbose; then
+		echo "Craylink shared memory daemon: clshmd."
+	    fi
+
+	    /sbin/suattr -C CAP_SCHED_MGT,CAP_DEVICE_MGT+ip \
+		-c "${CLSHMCTL} startup"
+	    sleep 1; echo "\r\c"
+	fi
+
+    fi
+
+    exit 0
+
+    ;;
+
+'stop')
+    # Stop the system controller daemon
+
+#   /sbin/scmsg "System coming down.."
+
+    killall -TERM -k 3 mmscd
+
+    # Stop the craylink shared memory daemon
+    ${CLSHMCTL} shutdown > /dev/null 2>&1
+
+    exit 0
+    ;;
+
+*)
+    echo "usage: $0 {start|stop}"
+    ;;
+
+esac

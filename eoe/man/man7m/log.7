@@ -1,0 +1,204 @@
+'\"macro stdmacro
+.if n .pH g7.log @(#)log	41.4 of 5/26/91
+.\" Copyright 1991 UNIX System Laboratories, Inc.
+.\" Copyright 1989, 1990 AT&T
+.nr X
+.if \nX=0 .ds x} log 7 "Networking Support Utilities" "\&"
+.if \nX=1 .ds x} log 7 "Networking Support Utilities"
+.if \nX=2 .ds x} log 7 "" "\&"
+.if \nX=3 .ds x} log "" "" "\&"
+.TH \*(x}
+.SH "NAME"
+\f4log\f1 \- interface to \s-1STREAMS\s0 error logging and event tracing
+.SH "DESCRIPTION"
+\f4log\fP is a \s-1STREAMS\s0 software device driver
+that provides an interface for console logging and for the
+\s-1STREAMS\s0 error logging and event tracing processes
+[\f4strerr\fP(1M), \f4strace\fP(1M)].
+\f4log\fP presents two separate interfaces: a function call interface in
+the kernel through which \s-1STREAMS\s0 drivers and modules submit
+\f4log\fP messages;
+and a subset of \f4ioctl\fP(2) system calls and \s-1STREAMS\s0 messages for
+interaction with a user level console logger, an error logger,
+a trace logger, or processes
+that need to submit their own \f4log\fP messages.
+.SS "Kernel Interface"
+\f4log\fP messages are generated within the kernel by calls to the function \f4strlog\fP:
+.PP
+.RS
+.nf
+\f4strlog(mid, sid, level, flags, fmt, arg1, ...)
+short mid, sid;
+char level;
+ushort flags;
+char *fmt;
+unsigned arg1;\fP
+.fi
+.RE
+.PP
+Required definitions are contained in \f4<sys/strlog.h>\fP, \f4<sys/log.h>\fP,
+and \f4<sys/syslog.h>\fP.
+\f2mid\fP is the \s-1STREAMS\s0 module id number for the module or driver submitting
+the \f4log\fP message.
+\f2sid\fP is an internal sub-id number usually used to identify a particular minor 
+device of a driver.
+\f2level\fP is a tracing level that allows for selective screening out of low 
+priority messages from the tracer.
+\f2flags\fP are any combination of \f4SL_ERROR\fP (the message is
+for the error logger), \f4SL_TRACE\fP (the message is for the tracer),
+\f4SL_CONSOLE\fP (the message is for the console logger),
+\f4SL_FATAL\fP (advisory notification of a fatal error), and \f4SL_NOTIFY\fP
+(request that a copy of the message be mailed to the system administrator).
+\f2fmt\fP is a \f4printf\fP(3S) style format string, except that %s, %e, %E, %g,
+and %G conversion specifications are not handled.
+Up to \f4NLOGARGS\fP (currently 3) numeric or character arguments can be provided.
+.SS "User Interface"
+\f4log\fP is opened via the \f4clone\fP interface, \f4/dev/log\fP.
+Each open of \f4/dev/log\fP obtains a separate stream to \f4log\fP.
+In order to receive \f4log\fP messages, a process must first notify \f4log\fP
+whether it is an error logger, trace logger, or console logger
+via a \s-1STREAMS\s0 \f4I_STR\fP \f4ioctl\fP call (see below).
+For the console logger, the \f4I_STR\fP
+\f4ioctl\fP has an \f4ic_cmd\fP field of \f4I_CONSLOG\fP, with no accompanying data.
+For the error logger, the \f4I_STR\fP
+\f4ioctl\fP has an \f4ic_cmd\fP field of \f4I_ERRLOG\fP, with no accompanying data.
+For the trace logger, the \f4ioctl\fP has an \f4ic_cmd\fP
+field of \f4I_TRCLOG\fP, and must be accompanied by a data buffer containing
+an array of one or more struct \f4trace_ids\fP elements.
+Each \f4trace_ids\fP structure specifies an \f2mid\fP, \f2sid\fP, and \f2level\fP 
+from which message will be accepted.
+\f4strlog\fP will accept messages whose \f2mid\fP and \f2sid\fP
+exactly match those in the \f4trace_ids\fP structure, and whose level is less than
+or equal to the level given in the \f4trace_ids\fP structure.
+A value of -1 in any of the fields of the \f4trace_ids\fP structure indicates that 
+any value is accepted for that field.
+.PP
+Once the logger process has identified itself via the \f4ioctl\fP call,
+\f4log\fP will begin sending up messages subject to the restrictions noted
+above.
+These messages are obtained via the \f4getmsg(2)\fP system call.
+The control part of this message contains a \f4log_ctl\fP structure,
+which specifies the \f2mid\fP, \f2sid\fP, \f2level\fP, \f2flags\fP, time in 
+ticks since boot
+that the message was submitted, the corresponding time in seconds since
+Jan. 1, 1970, a sequence number, and a priority.
+The time in seconds since 1970
+is provided so that the date and time of the message can be easily
+computed, and the time in ticks since boot is provided so that the relative
+timing of \f4log\fP messages can be determined.
+.PP
+The priority is comprised of a priority code and a facility code, found in \f4<sys/syslog.h>\fP.
+If \f4SL_CONSOLE\fP is set in \f2flags\f1, the priority code is set as follows. 
+If \f4SL_WARN\fP is set, the priority code is set to \f4LOG_WARNING\fP.
+If \f4SL_FATAL\fP is set, the priority code is set to \f4LOG_CRIT\fP.
+If \f4SL_ERROR\fP is set, the priority code is set to \f4LOG_ERR\fP.
+If \f4SL_NOTE\fP is set, the priority code is set to \f4LOG_NOTICE\fP.
+If \f4SL_TRACE\fP is set, the priority code is set to \f4LOG_DEBUG\fP.
+If only \f4SL_CONSOLE\fP is set, the priority code is set to \f4LOG_INFO\fP. 
+Messages originating from the kernel have the facility code set to \f4LOG_KERN\fP. 
+Most messages originating from user processes will have the facility code set to 
+\f4LOG_USER\fP.
+.PP
+Different sequence numbers
+are maintained for the error and trace logging streams, and are provided
+so that gaps in the sequence of messages can be determined (during
+times of high message traffic some messages may not be delivered
+by the logger to avoid hogging system resources).
+The data part of the message
+contains the unexpanded text of the format string (null terminated),
+followed by \f4NLOGARGS\fP words for the arguments to the format string,
+aligned on the first word boundary following the format string.
+.PP
+A process may also send a message of the same structure to \f4log\fP, even
+if it is not an error or trace logger.
+The only fields of the \f4log_ctl\fP
+structure in the control part of the message that are accepted
+are the \f2level\fP, \f2flags\fP, and \f2pri\fP fields; all other fields are filled in
+by \f4log\fP before being forwarded to the appropriate logger.
+The data portion must contain a null terminated format string, and any
+arguments (up to \f4NLOGARGS\fP) must be packed one word each, on the next
+word boundary following the end of the format string.
+.PP
+\f4ENXIO\fP is returned for \f4I_TRCLOG\fP \f4ioctl\fPs without any
+\f4trace_ids\fP structures, or for any unrecognized \f4I_STR ioctl\fP calls.
+Incorrectly formatted \f4log\fP messages sent to the driver by a
+user process are silently ignored (no error results).
+.PP
+Processes that wish to write a message to the console logger may direct
+their output to \f4/dev/conslog\fP,
+using either \f4write\fP(2) or \f4putmsg\fP(2).
+.SH "EXAMPLES"
+.PP
+Example of \f4I_ERRLOG\fP notification.
+.PP
+.RS
+.nf
+\f4struct strioctl ioc;
+.sp .5
+ioc.ic_cmd = I_ERRLOG;
+ioc.ic_timout = 0;	/* default timeout (15 secs.) */
+ioc.ic_len = 0;
+ioc.ic_dp = NULL;
+.sp .5
+ioctl(log, I_STR, &ioc);\fP
+.fi
+.RE
+.PP
+Example of \f4I_TRCLOG\fP notification.
+.PP
+.RS
+.nf
+\f4struct trace_ids tid[2];
+.sp .5
+tid[0].ti_mid = 2;
+tid[0].ti_sid = 0;
+tid[0].ti_level = 1;
+.sp .5
+tid[1].ti_mid = 1002;
+tid[1].ti_sid = -1;	/* any sub-id will be allowed */
+tid[1].ti_level = -1;	/* any level will be allowed */
+.sp .5
+ioc.ic_cmd = I_TRCLOG;
+ioc.ic_timout = 0;
+ioc.ic_len = 2 * sizeof(struct trace_ids);
+ioc.ic_dp = (char *)tid;
+.sp .5
+ioctl(log, I_STR, &ioc);\fP
+.fi
+.RE
+.PP
+Example of submitting a \f4log\fP message (no arguments).
+.PP
+.RS
+.nf
+\f4struct strbuf ctl, dat;
+struct log_ctl lc;
+char *message = "Don't forget to pick up some milk 
+                 on the way home";
+.sp .5
+ctl.len = ctl.maxlen = sizeof(lc);
+ctl.buf = (char *)&lc;
+.sp .5
+dat.len = dat.maxlen = strlen(message);
+dat.buf = message;
+.sp .5
+lc.level = 0;
+lc.flags = SL_ERROR|SL_NOTIFY;
+.sp .5
+putmsg(log, &ctl, &dat, 0);\fP
+.fi
+.RE
+.SH "FILES"
+.nf
+\f4/dev/log
+/dev/conslog
+<sys/log.h> 
+<sys/strlog.h>
+<sys/syslog.h>\f1
+.fi
+.SH "SEE ALSO"
+\f4strace\fP(1M), \f4strerr\fP(1M),
+\f4getmsg\fP(2), \f4intro\fP(2), \f4putmsg\fP(2), \f4write\fP(2), \f4clone\fP(7)
+.SH NOTES
+The \f4log\fP driver high and low water marks are tunable via the master file.
+.Ee

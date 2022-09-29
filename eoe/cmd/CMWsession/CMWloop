@@ -1,0 +1,73 @@
+#! /sbin/sh
+#
+#
+USER_NAME_FILE=/usr/CMW/CMWuser-name
+USER_MAC_FILE=/usr/CMW/CMWuser-mac
+USER_CAP_FILE=/usr/CMW/CMWuser-cap
+USER_SITECHECK=/usr/CMW/CMWuser-sitecheck
+USER_PASSWD=/usr/CMW/CMWuser-passwd
+USER_FILES="$USER_NAME_FILE $USER_MAC_FILE $USER_CAP_FILE \
+	    $USER_SITECHECK $USER_PASSWD"
+
+CMWSESSION=/usr/bin/X11/CMWsession
+CMWLOGIN=/usr/bin/X11/CMWlogin
+XINIT=/usr/bin/X11/xinit
+MACLBLDEVS=/usr/sbin/maclbldevs
+CMWUID=cmwlogin
+LOGINCAPS=CAP_XTCB,CAP_PRIV_PORT,CAP_AUDIT_WRITE+pi
+XSHM=0x000009a4
+
+SU=/sbin/su
+SH=/sbin/sh
+RM=/sbin/rm
+CAT=/sbin/cat
+ECHO=/sbin/echo
+SAT_ECHO=/usr/bin/sat_echo
+IPCRM=/usr/sbin/ipcrm
+CONSOLE=/dev/null
+
+# Don't start CMWlogin on systems without graphics
+if /sbin/chkconfig windowsystem ; then
+	:
+else
+	exit 0
+fi
+
+while true
+do
+	#
+	# Be sure the CMW directory is clean.
+	# Set up device attributes.
+	#
+	$RM -f $USER_FILES > $CONSOLE 2>&1
+	$MACLBLDEVS $CMWUID dblow
+	$IPCRM -M $XSHM
+	#
+	# Figure out who to be....
+	#
+	$XINIT $SH -c "$SU - $CMWUID -C $LOGINCAPS -c $CMWLOGIN" > $CONSOLE 2>&1
+
+	if [ -f $USER_NAME_FILE -a -f $USER_MAC_FILE -a -f $USER_CAP_FILE ]
+	then
+		USER_NAME=`$CAT $USER_NAME_FILE`
+		USER_MAC=`$CAT $USER_MAC_FILE`
+		#
+		# Start user's session
+		#
+		$ECHO "Successful CMW Login" | \
+		    $SAT_ECHO -S sat_ae_identity > $CONSOLE 2>&1
+		$MACLBLDEVS $USER_NAME $USER_MAC
+		$IPCRM -M $XSHM
+		$XINIT $SH -c \
+		    "$SU - $USER_NAME -M $USER_MAC -S -c $CMWSESSION" > \
+		    $CONSOLE 2>&1
+		$ECHO "Successful CMW Logout" | \
+		    $SAT_ECHO -S sat_ae_identity > $CONSOLE 2>&1
+	else
+		#
+		# Looks like the login failed.
+		#
+		$ECHO "Failed CMW Login" | \
+			$SAT_ECHO -F sat_ae_identity > $CONSOLE 2>&1
+	fi
+done

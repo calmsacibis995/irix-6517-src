@@ -1,0 +1,569 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	exportPnl
+# Version:	$Revision: 1.5 $
+# Synopsis:	Encapsulates the panel that allows the user to specify the
+#		export options for a file system.
+# Functions:	exPnl:realize
+#		exPnl:manage
+#		exPnl:setHost
+#		exPnl:setData
+#		exPnl:reset
+#		exPnl:getData
+#		exPnl:_create
+#		exPnl:_createMountArea
+#		exPnl:_createExportArea
+#		exPnl:_mntOptCb
+#		exPnl:_mntPopupCb
+#		exPnl:_toMountCb
+#		exPnl:_toChoiceCb
+#		exPnl:_moveItems
+#%COMMENT_END
+
+
+#########################################
+#		Public			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	expDlg:realize
+# Synopsis:	Creates an instance of the panel.  On the first call, any
+#		class-wide data is initialized.  If an instance of this
+#		panel already exists for the given handle, no action is taken.
+#		other than to return the top-level widget for the panel.
+# Arguments:	- handle	An identifier that is used as a key for storing
+#				(and later retrieving) the created widgets and
+#				any instance specific data.
+#		- parent	The parent for the created panel.
+#%COMMENT_END
+proc exPnl:realize { handle parent } \
+{
+	global		_GW_exPnl _GD_exPnl
+
+	if {! [info exists _GD_exPnl(initialized)]} {
+
+		set _GD_exPnl(texts)	{XFS_EXPOPTS_ANON}
+		set _GD_exPnl(toggles)	\
+			{XFS_EXPOPTS_RO XFS_EXPOPTS_WSYNC XFS_EXPOPTS_NOHIDE}
+		set _GD_exPnl(FS_MNT_OPT,opts)	{rw root}
+
+		set _GD_exPnl(list_font)	\
+			-*-fixed-bold-r-normal--15-*-*-*-c-90-iso8859-1
+
+		set _GD_exPnl(initialized) true
+	}
+
+	if {! [info exists _GW_exPnl($handle,panel)]} {
+		set _GD_exPnl($handle,mntType)	"rw"
+		set _GW_exPnl($handle,panel) [exPnl:_create $handle $parent]
+	}
+
+	return $_GW_exPnl($handle,panel)
+}
+
+#%COMMENT_BEGIN
+# Function:	exPnl:manage
+# Synopsis:	Manages an instance of the panel.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc exPnl:manage { handle } \
+{
+	global	_GW_exPnl
+
+	if {[info exists _GW_exPnl($handle,panel)]} {
+		$_GW_exPnl($handle,panel) manageChild
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	exPnl:setHost
+# Synopsis:	Stores the given host as the current host.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- host		A hostname.
+#		- force		An optional parameter that indicates whether
+#				or not to do the operation even if the current
+#				hostname is the same as the given hostname.
+#				The default value is "false".
+#%COMMENT_END
+proc exPnl:setHost { handle host {force false} } \
+{
+	global		_GW_exPnl _GD_exPnl
+
+	if {$host == $_GD_exPnl($handle,fsname) && $force == "false"} {
+		return
+	}
+	set _GD_exPnl($handle,fsname) $host
+}
+
+#%COMMENT_BEGIN
+# Function:	exPnl:setData
+# Synopsis:	Given a list of keyword/value pairs, fill in the appropriate
+#		field with the appropriate value.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- lst		A list of keyword/value pairs.
+#%COMMENT_END
+proc exPnl:setData { handle lst } \
+{
+	global		_GW_exPnl _GD_exPnl _GD_resources
+
+	if {! [info exists _GW_exPnl($handle,panel)]} {
+		return
+	}
+
+	####	Start with a clean slate
+	exPnl:reset $handle full
+
+	set rws {}; set roots {}
+	foreach item $lst {
+		set aux [lassign [split $item :] key val]
+		if {$key == "rw"} {
+		    if {$val != "NULL"} {
+			lappend aux $val
+			foreach host $aux {
+				lappend rws $host
+			}
+		    } else {
+			set key XFS_EXPOPTS_RO; set val false
+		    }
+
+		}
+		if {$key == "root"} {
+		    if {$val != "NULL"} {
+			lappend aux $val
+			foreach host $aux {
+				lappend roots $host
+			}
+		    }
+		}
+
+		if {[lsearch -exact $_GD_exPnl(texts) $key] != -1} {
+			$_GW_exPnl($handle,$key) setString $val
+		} elseif {[lsearch -exact $_GD_exPnl(toggles) $key] != -1} {
+			$_GW_exPnl($handle,$key) setValues -set $val
+		}
+	}
+
+	set f_rws {}; set f_roots {}; set chosen {}
+	foreach item $rws {
+		hu:getIpAddress $item hfn hpd hip $_GD_resources(hostsFile)
+		lappend f_rws [format "{%4.4s %s}" "rw" $hfn]
+		lappend chosen $hfn
+	}
+	foreach item $roots {
+		hu:getIpAddress $item hfn hpd hip $_GD_resources(hostsFile)
+		lappend f_roots [format "{%4.4s %s}" "root" $hfn]
+		lappend chosen $hfn
+	}
+
+	set to_list [lsort [concat $f_rws $f_roots]]
+	$_GW_exPnl($handle,mount) setValues \
+			-itemCount [llength $to_list] \
+			-items "$to_list"
+
+	foreach i $chosen {
+		if {[$_GW_exPnl($handle,choice) itemExists $i]} {
+			$_GW_exPnl($handle,choice) deleteItem $i
+		}
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	exPnl:reset
+# Synopsis:	Clears all data input fields.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- scope		An optional parameter that indicates the level
+#				of clearing.  If scope is "full", then the
+#				XmScrolledList is cleared.  If scope is set to
+#				anything else, the list is not cleared.
+#%COMMENT_END
+proc exPnl:reset { handle {scope full} } \
+{
+	global		_GW_exPnl _GD_exPnl
+
+	foreach item $_GD_exPnl(texts) {
+		$_GW_exPnl($handle,$item) setString ""
+	}
+
+	foreach item $_GD_exPnl(toggles) {
+		$_GW_exPnl($handle,$item) setValues -set false
+	}
+	$_GW_exPnl($handle,XFS_EXPOPTS_RO) setValues -set true
+
+	if {$scope == "full"} {
+		$_GW_exPnl($handle,mount) setValues \
+				-itemCount 0 \
+				-items {} \
+				-selectedItemCount 0 \
+				-selectedItems {}
+
+		set hosts [fsSrch:getHostList fs]
+		$_GW_exPnl($handle,choice) setValues \
+				-items $hosts \
+				-itemCount [llength $hosts]
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	exPnl:getData
+# Synopsis:	Reads the data from the panel and stores it in keyword/value
+#		pair format.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- data		A reference to an array variable in which
+#				to store the data.
+#		- check		An optional parameter that indicates whether
+#				or not to check the data for completeness.
+#				(default value: true)
+#%COMMENT_END
+proc exPnl:getData { handle data {check true} } \
+{
+	global		_GW_exPnl _GD_exPnl
+	upvar $data	dat
+
+	if {! [info exists _GW_exPnl($handle,panel)]} {
+		return 1
+	}
+
+	foreach item $_GD_exPnl(texts) {
+		set val [string trim [$_GW_exPnl($handle,$item) getString]]
+		if {$val != ""} {
+			lappend dat "$item:$val"
+		}
+	}
+		
+	foreach item $_GD_exPnl(toggles) {
+		$_GW_exPnl($handle,$item) getValues -set val
+		lappend dat "$item:$val"
+	}
+
+	$_GW_exPnl($handle,mount) getValues -items items
+	foreach item $items {
+		set item [string trim $item]
+		set mnt_type [lindex $item 0]
+		set host [lindex $item 1]
+		lappend dat $mnt_type:$host
+	}
+
+	return 1
+}
+
+#########################################
+#		Private			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	exPnl:_create
+# Synopsis:	Creates an instance of the panel.
+# Arguments:	- handle	The identifier for the new instance.
+#		- parent	The parent for the created panel.
+#%COMMENT_END
+proc exPnl:_create { handle parent } \
+{
+	global		_GW_exPnl _GD_exPnl
+	set name	exPnl
+
+	set container [xmForm $parent.$name]
+
+	set ma [exPnl:_createMountArea $handle $container]
+	set sa [exPnl:_createExportArea $handle $container]
+
+	$ma setValues	-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none
+	$sa setValues	-topAttachment attach_widget \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form \
+			-topWidget $ma
+
+	$ma manageChild
+	$sa manageChild
+
+	return $container
+}
+
+#%COMMENT_BEGIN
+# Function:	exPnl:_createMountArea
+# Synopsis:	Creates all the data input fields for the panel other than
+#		the XmScrolledList widgets.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- parent	The parent for the created panel.
+#%COMMENT_END
+proc exPnl:_createMountArea { handle parent } \
+{
+	global		_GW_exPnl _GD_exPnl
+
+	set container [xmForm $parent.ma]
+
+	set item XFS_EXPOPTS_ANON
+	set rc [xmRowColumn $container.rc1 managed -orientation horizontal \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_position \
+			-bottomAttachment attach_none \
+			-rightPosition 50 \
+			-rightOffset 20]
+	xmLabel $rc.$item-label managed 
+	set _GW_exPnl($handle,$item) [xmText $rc.$item managed \
+			-columns 10 -maxLength 10]
+
+	set rc [xmRowColumn $container.rc2 managed \
+			-topAttachment attach_form \
+			-leftAttachment attach_position \
+			-rightAttachment attach_none \
+			-bottomAttachment attach_none \
+			-leftPosition 50 \
+			-leftOffset 40]
+	foreach item $_GD_exPnl(toggles) {
+		set _GW_exPnl($handle,$item) [xmToggleButton $rc.$item managed]
+	}
+
+	return $container
+}
+
+#%COMMENT_BEGIN
+# Function:	exPnl:_createExportArea
+# Synopsis:	Creates the XmScrolledList widgets and the controls to move
+#		items between the "choice" list and the "selected" list.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- parent	The parent for the created panel.
+#%COMMENT_END
+proc exPnl:_createExportArea { handle parent } \
+{
+	global		_GW_exPnl _GD_exPnl
+
+	set container [xmForm $parent.sa]
+
+	set _GW_exPnl($handle,popup) $container.mount.FS_MNT_OPT-po
+	set _GW_exPnl($handle,mount) [xmScrolledList $container.mount managed \
+			-fontList $_GD_exPnl(list_font) \
+			-visibleItemCount 8 \
+			-listSizePolicy constant \
+			-selectionPolicy extended_select \
+			-translations "#override <Btn3Down>: \
+			action(xfs:popupMenu %event $_GW_exPnl($handle,popup))"\
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_position \
+			-bottomAttachment attach_form \
+			-rightPosition 45]
+	set form [xmForm $container.form \
+			-topAttachment attach_position \
+			-leftAttachment attach_widget \
+			-rightAttachment attach_none \
+			-bottomAttachment attach_none \
+			-topPosition 30 \
+			-leftWidget $container.mount]
+	set _GW_exPnl($handle,choice) [xmScrolledList $container.choice \
+			 managed \
+			-fontList $_GD_exPnl(list_font) \
+			-visibleItemCount 8 \
+			-listSizePolicy constant \
+			-selectionPolicy extended_select \
+			-topAttachment attach_form \
+			-leftAttachment attach_widget \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form \
+			-leftWidget $form]
+
+	####	Menus
+	set item FS_MNT_OPT
+	xmPulldownMenu $form.$item-pd -marginWidth 0 
+	foreach i $_GD_exPnl($item,opts) {
+		set pb [xmPushButton $form.$item-pd.$i managed -marginWidth 0]
+		$pb activateCallback "exPnl:_mntOptCb $handle $i"
+	}
+	set om [xmOptionMenu $form.$item-om managed \
+			-subMenuId $form.$item-pd \
+			-marginWidth 0 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none \
+			-rightOffset 7]
+
+	xmPopupMenu $_GW_exPnl($handle,popup)
+	foreach i $_GD_exPnl($item,opts) {
+		set pb [xmPushButton $_GW_exPnl($handle,mount).$item-po.$i managed]
+		$pb activateCallback "exPnl:_mntPopupCb $i $_GW_exPnl($handle,mount)"
+	}
+
+	####	Arrow Buttons
+	set toMount [xmArrowButton $form.toMount managed \
+			-arrowDirection arrow_left \
+			-topAttachment attach_widget \
+			-leftAttachment attach_form \
+			-rightAttachment attach_none \
+			-bottomAttachment attach_none \
+			-topWidget $om \
+			-topOffset 5 \
+			-leftOffset 7]
+
+	set toChoice [xmArrowButton $form.toChoice managed \
+			-arrowDirection arrow_right \
+			-topAttachment attach_widget \
+			-leftAttachment attach_none \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none \
+			-topWidget $om \
+			-topOffset 5 \
+			-rightOffset 7]
+
+	$toMount activateCallback "exPnl:_toMountCb $handle \
+			$_GW_exPnl($handle,choice) $_GW_exPnl($handle,mount)"
+	$toChoice activateCallback "exPnl:_toChoiceCb $handle \
+			$_GW_exPnl($handle,mount) $_GW_exPnl($handle,choice)"
+
+	$_GW_exPnl($handle,mount) defaultActionCallback \
+			"exPnl:_toChoiceCb \
+			$handle $_GW_exPnl($handle,mount) \
+			$_GW_exPnl($handle,choice)"
+	$_GW_exPnl($handle,choice) defaultActionCallback \
+			"exPnl:_toMountCb \
+			$handle $_GW_exPnl($handle,choice) \
+			$_GW_exPnl($handle,mount)"
+
+	$form manageChild
+
+	return $container
+}
+
+#########################################
+#	Other Callbacks			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	exPnl:_mntOptCb
+# Synopsis:	This is called when the option menu value is changed.  It
+#		stores the value for future reference.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- type		The value of the option menu.
+#%COMMENT_END
+proc exPnl:_mntOptCb { handle type } \
+{
+	global	_GD_exPnl; set _GD_exPnl($handle,mntType) $type
+}
+
+#%COMMENT_BEGIN
+# Function:	exPnl:_mntPopupCb
+# Synopsis:	This is called when an item in the popup menu is selected.
+#		It changes the export option for the selected hosts in the
+#		"selected" XmScrolledList widget.
+# Arguments:	- type		The item that was selected from the popup menu.
+#		- mount		The widget id for the XmScrolledList.
+#%COMMENT_END
+proc exPnl:_mntPopupCb { type mount } \
+{
+	$mount getValues -selectedItems selected \
+			-selectedItemCount selected_count \
+			-items items
+
+	if {[lempty $selected]} { return }
+
+	foreach item $items {
+	    if {[set idx [lsearch -exact $selected $item]] != -1} {
+		lvarpop selected $idx
+		lassign $item cur_type host
+		if {$type != $cur_type} {
+			set s [format "{%4.4s %s}" $type $host]
+			if {[$mount itemExists $s]} {
+				$mount deleteItem $s
+			} else {
+				set changes 1
+				lappend to_items $s
+				lappend new_sel $s
+			}
+		} else {
+			lappend to_items [list $item]
+			lappend new_sel [list $item]
+		}
+	    } else {
+		lappend to_items [list $item]
+	    }
+	}
+
+	if {[info exists changes]} {
+		$mount setValues -items [lsort $to_items] \
+				-selectedItems "$new_sel"
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	exPnl:_toMountCb
+# Synopsis:	This gets the selected items from the "choice" list of hosts
+#		and moves them to the "selected" list of hosts.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- from		The widget id for the "choice" XmScrolledList.
+#		- to		The widget id for the "selected" XmScrolledList.
+#%COMMENT_END
+proc exPnl:_toMountCb { handle from to } \
+{
+	global		_GD_exPnl
+
+	$from getValues -selectedItems from_items
+	if { $from_items != "" } {
+		set type $_GD_exPnl($handle,mntType)
+
+		$to getValues -items to_items
+		foreach i $from_items {
+			lappend munged_items [format "{%4.4s %s}" $type $i]
+		}
+
+		exPnl:_moveItems $from $to $munged_items $to_items
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	exPnl:_toChoiceCb
+# Synopsis:	This gets the selected items from the "selected" list of hosts
+#		and moves them to the "choice" list of hosts.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- from		The widget id for the "selected" XmScrolledList.
+#		- to		The widget id for the "choice" XmScrolledList.
+#%COMMENT_END
+proc exPnl:_toChoiceCb { handle from to } \
+{
+	$from getValues -selectedItems from_items
+	if {$from_items != ""} {
+		foreach i $from_items {
+			$from deleteItem [list $i]
+		}
+	}
+}
+
+#########################################
+#	Utilities			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	exPnl:_moveItems
+# Synopsis:	A general function to move items from one list to another.
+# Arguments:	- from		The widget id for the "from" XmScrolledList.
+#		- to		The widget id for the "to" XmScrolledList.
+#%COMMENT_END
+proc exPnl:_moveItems { from to new_items curr_items } \
+{
+	$to deselectAllItems
+
+	foreach item $new_items {
+		if {[$to itemExists $item]} { continue }
+		lappend to_list $item
+	}
+	if {! [info exists to_list]} { return }
+
+	foreach item $curr_items {
+		lappend to_list [list $item]
+	}
+
+	$to setValues -itemCount [llength $to_list] \
+			-items [lsort $to_list] \
+			-selectedItemCount [llength $new_items] \
+			-selectedItems "$new_items"
+}

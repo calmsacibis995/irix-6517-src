@@ -1,0 +1,884 @@
+#!/bin/sh
+#
+# get_mib_objects
+#
+# Script to scan an SNMP agent for several MIBs, using various
+# facilities (Get if applicable, GetNext otherwise)
+#
+# This script saves stats information in a file in $TMPDIR/mib.$SUBSYS.<date&time>
+# It is particularly useful to detect memory leaks by querying the 
+# agent several times in a row.
+#
+# This script may also save MIB output into a data file.
+#
+# To add new menu entries, search for the keyword GJB throughout this 
+# file to let you know how to do so.
+#
+# Gerard Berthet, SGI, October 19, 1994
+#
+
+MAX_COUNT=1
+PREFIX="-----> "
+MARKER="==========================================================================================================="
+START=`date`
+DFLT_AGENT_HOST=`uname -n`
+DFLT_COMMUNITY=public
+DFLT_MAX_COUNT=1
+DFLT_SLEEP=0
+DFLT_ANS_NO="no"
+DFLT_ANS_YES="yes"
+DFLT_PRINT_STATS=0		# means no
+DFLT_MACHINE=$DFLT_AGENT_HOST
+
+SGI_WALK=snmpwalk
+CMU_WALK=cmu_snmpwalk
+SNMPGET=cmu_snmpget
+DFLT_WALK="cmu_snmpwalk"
+
+NULL_DATAFILE=/dev/null
+DFLT_DATAFILE=$NULL_DATAFILE
+DATAFILE=$DFLT_DATAFILE
+DFLT_SAVE_STATS_RUNS=-1
+DFLT_SAVE_STATS=$DFLT_SAVE_STATS_RUNS		# means print at end of all runs
+
+FILEXT=`date +%b%d_%Y_%H%M%S`
+PWD=`pwd`
+#TMPDIR=$PWD
+TMPDIR="/tmp"
+TMPFILE="$TMPDIR/date.$$"
+date > $TMPFILE
+ERR=$?
+if [ x$ERR != x0 ]; then
+    echo Cannot save data or stats in $TMPDIR
+    exit
+else
+    echo Stats and/or stats will be saved in $TMPDIR
+fi
+rm -f $TMPFILE
+
+FILEPREFIX="$TMPDIR/mib"
+# FILEPREFIX="TMPDIR/mib"
+STATSFILE=$FILEPREFIX.stats.$FILEXT
+
+rm -f $STATSFILE
+
+#
+# Define values for menu entries
+#
+SEL_TOP=0	
+SEL_HPUX=1
+SEL_MIBII=2	
+SEL_HPCOMPSYS=3
+SEL_HPFS=4
+SEL_HPPROC=5
+SEL_HPTRAP=6
+SEL_HPCONF=7
+SEL_HPICMP=8
+SEL_HPAUTH=9
+SEL_SGI=10
+SEL_STATS=11
+SEL_OBJS=12
+SEL_CLEAN=13
+
+SEL_MIB2_SYS=14
+SEL_MIB2_IF=15
+SEL_MIB2_AT=16
+SEL_MIB2_IP=17
+SEL_MIB2_IP_SCALARS=18
+SEL_MIB2_IP_ADDRTBL=19
+SEL_MIB2_IP_ROUTETBL=20
+SEL_MIB2_IP_ATTBL=21
+SEL_MIB2_ICMP=22
+SEL_MIB2_TCP=23
+SEL_MIB2_TCP_SCALARS=24
+SEL_MIB2_TCP_CONNTBL=25
+SEL_MIB2_UDP=26
+SEL_MIB2_UDP_SCALARS=27
+SEL_MIB2_UDP_LISTTBL=28
+
+SEL_LAST=$SEL_MIB2_UDP_LISTTBL
+
+#
+# GJB -- Add the new menu entry above the SEL_LAST line,
+# by assigning the next integer value.
+# Make sure you also set the line with SEL_LAST to the 
+# last entry you defined.
+#
+
+MIN_SEL=1
+MAX_SEL=$SEL_LAST
+DFLT_SEL=$SEL_HPUX
+
+# ######### #
+# MAIN LOOP #
+# ######### #
+while [ 1 -eq 1 ]
+do
+trap "continue" 2 3
+
+# ---------------------------------------------------------------
+# Prompt for MIB group
+# ---------------------------------------------------------------
+cat << FOO
+
+Select which MIB group you want to walk:
+
+$SEL_TOP. Exit		 		$SEL_MIB2_SYS. MIB-II system
+$SEL_HPUX. all HP-UX MIB		$SEL_MIB2_IF. MIB-II interfaces
+$SEL_MIBII. all MIB-II 			$SEL_MIB2_AT. MIB-II at group
+$SEL_HPCOMPSYS. HP computerSystem		$SEL_MIB2_IP. MIB-II ip group
+$SEL_HPFS. HP fileSystem		$SEL_MIB2_IP_SCALARS. MIB-II ip scalars
+$SEL_HPPROC. HP processes			$SEL_MIB2_IP_ADDRTBL. MIB-II ip address table
+$SEL_HPTRAP. HP trapDestinations		$SEL_MIB2_IP_ROUTETBL. MIB-II ip routing table
+$SEL_HPCONF. HP snmpdConf			$SEL_MIB2_IP_ATTBL. MIB-II ip address translation table
+$SEL_HPICMP. HP icmpEchoReq		$SEL_MIB2_ICMP. MIB-II icmp group
+$SEL_HPAUTH. HP authFail			$SEL_MIB2_TCP. MIB-II tcp group
+$SEL_SGI. SGI Private MIB		$SEL_MIB2_TCP_SCALARS. MIB-II tcp scalars
+$SEL_STATS. View Statistics File	$SEL_MIB2_TCP_CONNTBL. MIB-II tcp connection table
+$SEL_OBJS. View Collected Objects	$SEL_MIB2_UDP. MIB-II udp group
+$SEL_CLEAN. Remove stats & data files	$SEL_MIB2_UDP_SCALARS. MIB-II udp scalars
+				$SEL_MIB2_UDP_LISTTBL. MIB-II udp listener table
+	
+FOO
+#
+# GJB -- Add new menu entries above
+#
+
+    DFLT_VAL=$DFLT_SEL
+    echo -n "Enter selection [$DFLT_VAL]:  "
+    read ANS
+    if [ -n "$ANS" ]; then
+	if [ $ANS -eq 0 ]; then
+	    exit
+	fi
+        if [ $ANS -lt $MIN_SEL -o $ANS -gt $MAX_SEL ]; then
+	    echo "Invalid entry. Assuming default MIB group: " $DFLT_VAL
+	    SEL=$DFLT_VAL
+        else
+            SEL=$ANS
+        fi
+    else
+	SEL=$DFLT_VAL
+    fi
+    DFLT_SEL=$SEL
+
+# ---------------------------------------------------------------
+# If cleanup, just do it now.
+# ---------------------------------------------------------------
+    if [ $SEL -eq $SEL_CLEAN ]; then
+	CMD="rm -f $FILEPREFIX*"
+	echo "Removing all temporary files... ("$CMD")"
+	$CMD
+    	continue;
+    fi
+
+# ---------------------------------------------------------------
+# Verify if just want to view stats or collected objects
+# ---------------------------------------------------------------
+    if [ $SEL -eq $SEL_STATS ]; then
+	vi $STATSFILE
+	continue;
+    fi
+
+    if [ $SEL -eq $SEL_OBJS ]; then
+	vi $DATAFILE
+	continue;
+    fi
+
+# ---------------------------------------------------------------
+# Prompt to not prompt again if second time
+# ---------------------------------------------------------------
+    DFLT_VAL=$DFLT_ANS_NO
+    echo " "
+    echo -n "Do you want the same defaults [$DFLT_VAL] ? "
+    read ANS
+    if [ -z "$ANS" -o x$ANS = xn -o x$ANS = xN ]; then
+	RUN_WITH_DFLTS=0
+    else
+	RUN_WITH_DFLTS=1	
+    fi
+
+# ---------------------------------------------------------------
+# Prompt for node name to poll
+# ---------------------------------------------------------------
+    DFLT_VAL=$DFLT_AGENT_HOST
+    if [ $RUN_WITH_DFLTS -eq 1 ]; then
+	HOST=$DFLT_AGENT_HOST
+    else
+    	echo " "
+        echo -n "Which node do you wish to query [$DFLT_VAL] ? "
+        read ANS
+        if [ -n "$ANS" ]; then
+            HOST=$ANS
+        else
+            HOST=$DFLT_VAL
+        fi
+        echo "Polling node: " $HOST
+    fi
+    DFLT_AGENT_HOST=$HOST
+
+# ---------------------------------------------------------------
+# Prompt for community string
+# ---------------------------------------------------------------
+    if [ $RUN_WITH_DFLTS -eq 1 ]; then
+        COMM=$DFLT_COMMUNITY
+    else
+    	DFLT_VAL=$DFLT_COMMUNITY
+        echo " "
+        echo -n "Which community string to use [$DFLT_VAL] ? "
+        read ANS
+        if [ -n "$ANS" ]; then
+            COMM=$ANS
+        else
+            COMM=$DFLT_COMMUNITY
+        fi
+        echo "Using community: " $COMM
+    fi
+    DFLT_COMMUNITY=$COMM
+
+# ---------------------------------------------------------------
+# Prompt for number of times to run
+# ---------------------------------------------------------------
+    if [ $RUN_WITH_DFLTS -eq 1 ]; then
+	MAX_COUNT=$DFLT_MAX_COUNT
+    else
+        DFLT_VAL=$DFLT_MAX_COUNT
+        echo " "
+        echo -n "How many times do you want to run it? [$DFLT_VAL]: "
+        read ANS
+        if [ -n "$ANS" ]; then
+            if [ $ANS -lt 1 ]; then
+	        echo "Invalid entry. Assuming default value: " $DFLT_VAL
+	        MAX_COUNT=$DFLT_VAL
+            else
+                MAX_COUNT=$ANS
+            fi
+        else
+	    MAX_COUNT=$DFLT_MAX_COUNT
+        fi
+    fi
+    DFLT_MAX_COUNT=$MAX_COUNT
+
+    COUNT=0
+
+# ---------------------------------------------------------------
+# Prompt for number of seconds between runs
+# ---------------------------------------------------------------
+    if [ $RUN_WITH_DFLTS -eq 1 ]; then
+	SLEEP=$DFLT_SLEEP
+    else
+	if [ $MAX_COUNT -gt 1 ]; then
+            DFLT_VAL=$DFLT_SLEEP
+            echo -n "How many seconds do you want hold between runs? [$DFLT_VAL]: "
+            read ANS
+            if [ -n "$ANS" ]; then
+                if [ $ANS -lt 0 ]; then
+        	     echo "Invalid entry. Assuming default value: " $DFLT_VAL
+        	     SLEEP=$DFLT_VAL
+                else
+                    SLEEP=$ANS
+                fi
+            else
+                SLEEP=$DFLT_VAL
+            fi
+	else
+	    SLEEP=$DFLT_SLEEP
+	fi
+    fi
+    DFLT_SLEEP=$SLEEP
+
+# ---------------------------------------------------------------
+# Prompt for printing stats
+# ---------------------------------------------------------------
+    if [ $RUN_WITH_DFLTS -eq 1 ]; then
+	PRINT_STATS=$DFLT_PRINT_STATS
+    else
+	if [ $DFLT_PRINT_STATS -eq 1 ]; then
+	    DFLT_VAL="yes"
+	else
+	    DFLT_VAL="no"
+	fi
+    	echo -n "Do you want to print agent stats? [$DFLT_VAL]: "
+    	read ANS
+    	if [ -n "$ANS" ]; then
+            if [ x"$ANS" = "xyes" -o x"$ANS" = "xy" -o x"$ANS" = "xY" -o x"$ANS" = "xYES" ]
+		then
+                    PRINT_STATS=1
+	    else
+            	if [ x"$ANS" = "xno" -o x"$ANS" = "xn" -o x"$ANS" = "xN" -o x"$ANS" = "xNO" ]
+        	    then
+                    PRINT_STATS=0
+        	fi
+	    fi
+    	else
+            PRINT_STATS=$DFLT_PRINT_STATS
+	fi
+    fi
+    DFLT_PRINT_STATS=$PRINT_STATS
+    if [ $PRINT_STATS -eq 0 ]; then
+	echo "Stats will NOT be printed"
+    else
+	echo "Stats will be printed"
+    fi
+
+# ---------------------------------------------------------------
+# Prompt for number of runs between printing stats
+# ---------------------------------------------------------------
+    if [ $PRINT_STATS -eq 1 ]; then
+        if [ $RUN_WITH_DFLTS -eq 1 ]; then
+	    SAVE_STATS=$DFLT_SAVE_STATS
+        else
+	    if [ $MAX_COUNT -gt 1 ]; then
+	        if [ $DFLT_SAVE_STATS -eq $DFLT_SAVE_STATS_RUNS ]; then
+                    DFLT_VAL="END_ONLY"
+	        else 
+		    DFLT_VAL=$DFLT_SAVE_STATS
+	        fi
+                echo -n "Every how many runs do you want to print agent stats? [$DFLT_VAL]: "
+                read ANS
+                if [ -n "$ANS" ]; then
+                    if [ $ANS -lt 1 ]; then
+                        echo "Invalid entry. Assuming default value: " $DFLT_VAL
+                        SAVE_STATS=$DFLT_SAVE_STATS_RUNS
+                    else
+                        SAVE_STATS=$ANS
+                    fi
+                else
+                    SAVE_STATS=$DFLT_SAVE_STATS_RUNS
+                fi
+	    else
+	        SAVE_STATS=$DFLT_SAVE_STATS_RUNS
+	    fi
+        fi
+    else
+	SAVE_STATS=$DFLT_SAVE_STATS_RUNS
+    fi
+    DFLT_SAVE_STATS=$SAVE_STATS
+
+# ---------------------------------------------------------------
+# Place a marker in the STATSFILE
+# ---------------------------------------------------------------
+
+    if [ $PRINT_STATS -eq 1 ]; then
+    	echo $MARKER >> $STATSFILE
+    	echo $PREFIX "Started at " $START >> $STATSFILE
+    fi
+
+# ---------------------------------------------------------------
+# Do some pre-processing of the information
+# ---------------------------------------------------------------
+
+    GET_OPT=0
+
+case "$SEL"
+in
+    $SEL_HPUX) 		SUBSYS=hpux
+    			SYSTEM="HP-UX MIB"
+        		GET_OPT=0;;
+
+    $SEL_MIBII) 	SUBSYS=mib2
+        		SYSTEM="MIB-II"
+        		GET_OPT=0;;
+
+    $SEL_HPCOMPSYS) 	SUBSYS=hpcompsys
+        		SYSTEM=computerSystem
+        		GET_OPT=1;;
+
+    $SEL_HPFS) 		SUBSYS=hpfs
+        		SYSTEM=fileSystem
+        		GET_OPT=0;;
+
+    $SEL_HPPROC) 	SUBSYS=hpprocs
+        		SYSTEM=processes
+        		GET_OPT=0;;
+
+    $SEL_HPTRAP) 	SUBSYS=hptrapdest
+        		SYSTEM=trap
+        		GET_OPT=0;;
+
+    $SEL_HPCONF) 	SUBSYS=hpconf
+        		SYSTEM=snmpdConf
+        		GET_OPT=1;;
+
+    $SEL_HPICMP) 	SUBSYS=hpicmp
+        		SYSTEM=icmpEchoRequest
+        		GET_OPT=2;;
+
+    $SEL_HPAUTH) 	SUBSYS=hpauth
+        		SYSTEM=snmpAuthFail
+        		GET_OPT=0;;
+
+    $SEL_SGI) 		SUBSYS=sgi
+        		SYSTEM=sgiMib
+        		GET_OPT=0;;
+
+    $SEL_MIB2_SYS) 	SUBSYS=mib2sys
+        		SYSTEM=mib2System
+        		GET_OPT=1;;
+
+    $SEL_MIB2_IF) 	SUBSYS=mib2if
+        		SYSTEM=mib2Interfaces
+        		GET_OPT=0;;
+
+    $SEL_MIB2_AT) 	SUBSYS=mib2at
+        		SYSTEM=mib2AddrTransl
+        		GET_OPT=0;;
+
+    $SEL_MIB2_IP) 	SUBSYS=mib2ip
+        		SYSTEM=mib2IP
+        		GET_OPT=0;;
+
+    $SEL_MIB2_IP_SCALARS) 	SUBSYS=mib2ips
+        		SYSTEM=mib2IPScalars
+        		GET_OPT=1;;
+
+    $SEL_MIB2_IP_ADDRTBL) 	SUBSYS=mib2ipatbl
+        		SYSTEM=mib2IPAddrTbl
+        		GET_OPT=0;;
+
+    $SEL_MIB2_IP_ROUTETBL) 	SUBSYS=mib2iprtbl
+        		SYSTEM=mib2IPRteTbl
+        		GET_OPT=0;;
+
+    $SEL_MIB2_IP_ATTBL) 	SUBSYS=mib2ipattbl
+        		SYSTEM=mib2IPATTbl
+        		GET_OPT=0;;
+
+    $SEL_MIB2_ICMP) 	SUBSYS=mib2icmp
+        		SYSTEM=mib2ICMP
+        		GET_OPT=0;;
+
+    $SEL_MIB2_TCP) 	SUBSYS=mib2tcp
+        		SYSTEM=mib2TCP
+        		GET_OPT=0;;
+
+    $SEL_MIB2_TCP_SCALARS) 	SUBSYS=mib2tcps
+        		SYSTEM=mib2TCPScalars
+        		GET_OPT=1;;
+
+    $SEL_MIB2_TCP_CONNTBL) 	SUBSYS=mib2tcpctbl
+        		SYSTEM=mib2TCPConnTbl
+        		GET_OPT=0;;
+
+    $SEL_MIB2_UDP) 	SUBSYS=mib2udp
+        		SYSTEM=mib2UDP
+        		GET_OPT=0;;
+
+    $SEL_MIB2_UDP_SCALARS) 	SUBSYS=mib2udps
+        		SYSTEM=mib2UDPScalars
+        		GET_OPT=1;;
+
+    $SEL_MIB2_UDP_LISTTBL) 	SUBSYS=mib2udpltbl
+        		SYSTEM=mib2UDPListTbl
+        		GET_OPT=0;;
+
+esac
+#
+# GJB -- Add corresponding "elif" entry above to define
+# the two strings associated with the MIB group(s):
+# 	SUBSYS: a string used to create the filenames where data may be
+#		collected.
+#	SYSTEM: a string used when saving stats in the stats file.
+#
+# GET_OPT = 0 means that the MIB group is a table and only GetNext applies
+# GET_OPT = 1 means that this MIB group can be queried with Get as well
+# GET_OPT = 2 means that user needs to select a node that applies to i
+#	      this MIB group. This option applies only to the icmpEchoRequest
+#	      MIB group.
+#
+
+    echo You selected $SYSTEM
+    MAX_OPT=2
+
+# ---------------------------------------------------------------
+# If ICMP ECHO REQUEST in HP-UX MIB, prompt for node to ping
+# ---------------------------------------------------------------
+    if [ $GET_OPT -eq 2 ]; then
+    	if [ $RUN_WITH_DFLTS -eq 1 ]; then
+            MACHINE=$DFLT_MACHINE
+        else
+
+
+cat << FOO
+Which machine do you want to ping:
+
+	1. machine
+	2. this
+	3. blacktron
+	4. froggie (down)
+	5. wombat
+
+FOO
+	    MAX_MACHINE=5
+
+	    DFLT_VAL=machine
+	    echo -n "Enter selection [$DFLT_VAL]: "
+    	    read ANS
+            if [ -n "$ANS" ]; then
+                if [ $ANS -lt 1 -o $ANS -gt $MAX_MACHINE ]; then
+                    echo "Invalid entry. Assuming default value: " $DFLT_VAL
+                    MACHINE=machine
+                elif [ $ANS -eq 2 ]; then
+                    MACHINE=this
+                elif [ $ANS -eq 3 ]; then
+                    MACHINE=blacktron
+                elif [ $ANS -eq 4 ]; then
+                    MACHINE=froggie
+                elif [ $ANS -eq 5 ]; then
+                    MACHINE=wombat
+	        else
+		    MACHINE=machine
+                fi
+            else
+                MACHINE=machine
+            fi
+
+	    WALK=$SNMPGET
+	    # Beware if there are more than one entry per host in NIS
+	    # Note the hack to eliminate slotmachine when lloking for machine
+	    IP_MACHINE=`ypcat hosts | grep $MACHINE |grep -v slotmachine | cut -f1 | head -1`
+	    echo You selected $MACHINE $IP_MACHINE
+	fi
+	DFLT_MACHINE=$MACHINE
+    else
+
+# ---------------------------------------------------------------
+# Otherwise, prompt for which WALK utility to use
+# ---------------------------------------------------------------
+        if [ $RUN_WITH_DFLTS -eq 1 ]; then
+            WALK=$DFLT_WALK
+        else
+
+
+cat << FOO
+
+Select which utility you wish to use:
+
+	1. CMU snmpwalk (timeout + names + stop at end of group)
+	2. SGI snmpwalk (No timeout + no names + go over end of group)
+FOO
+
+            if [ $GET_OPT -eq 1 -a $COUNT -eq 0 ]; then
+                MAX_OPT=3
+cat << FOO
+        3. Get individual elements (SNMP Gets)
+FOO
+
+#
+# GJB -- If you create other GET_OPT values, you will need to define
+# their behavior here.
+#
+            fi
+
+            DFLT_VAL=1
+            echo " "
+            echo -n "Enter selection [$DFLT_VAL]: "
+            read ANS
+
+            if [ -n "$ANS" ]; then
+                if [ $ANS -lt 1 -o $ANS -gt $MAX_OPT ]; then
+	            echo "Invalid entry. Assuming default value: " $DFLT_VAL
+	            ANS=$DFLT_VAL
+                fi
+            else
+                ANS=$DFLT_VAL
+            fi
+    
+            if [ $ANS = 2 ]; then
+	        WALK=$SGI_WALK
+            elif [ $ANS = 3 ]; then
+	        WALK=$SNMPGET
+            else
+                WALK=$CMU_WALK
+            fi
+	fi
+	DFLT_WALK=$WALK
+    fi
+
+# ---------------------------------------------------------------
+# Prompt whether to log data or not to a file
+# ---------------------------------------------------------------
+
+    if [ $RUN_WITH_DFLTS -eq 1 ]; then
+        DATAFILE=$DFLT_DATAFILE
+    else
+	if [ x"$DATAFILE" = x"$NULL_DATAFILE" ]; then
+	    DFLT_VAL=n
+	else
+	    DFLT_VAL=y
+	fi
+        DATAFILE=$FILEPREFIX.$SUBSYS.$FILEXT
+        echo " "
+        echo -n "Do you wish to log the data to $DATAFILE [$DFLT_VAL]? "
+        read ANS
+    
+	if [ -n "$ANS" ]; then
+	    if [ x$ANS = xn -o x$ANS = xN -o x$ANS = xno -o x$ANS = xNO ]; then
+		DATAFILE=$NULL_DATAFILE
+	        echo Data will NOT be saved
+	    else
+                DATAFILE=$DATAFILE
+    	        echo Data will be saved to $DATAFILE
+	    fi
+	else
+	    if [ "$DFLT_VAL" = "y" ]; then
+		DATAFILE=$DATAFILE
+   		echo Data will be saved to $DATAFILE
+	    else
+		DATAFILE=$NULL_DATAFILE
+		echo Data will NOT be saved
+	    fi
+	fi
+    fi
+    rm -f $DATAFILE
+    DFLT_DATAFILE=$DATAFILE
+
+# ---------------------------------------------------------------
+# Perform actual work here
+# ---------------------------------------------------------------
+    if [ $PRINT_STATS -eq 1 ]; then
+        ps -elf | grep snmpd | grep -v grep >> $STATSFILE
+    fi
+
+    while [ 1 -eq 1 ]
+    do
+	trap "break" 2 3
+
+        if [ $SEL = $SEL_TOP ]; then
+		    break
+
+	elif [ $SEL = $SEL_HPUX ]; then
+            $WALK $HOST $COMM .1.3.6.1.4.1.11 | tee -a $DATAFILE
+
+        elif [ $SEL = $SEL_MIBII ]; then
+            $WALK $HOST $COMM .1.3.6.1.2.1 | tee -a $DATAFILE
+
+        elif [ "$SEL" = $SEL_HPCOMPSYS ]; then
+            if [ $WALK = $SNMPGET ]; then
+                $WALK $HOST $COMM .1.3.6.1.4.1.11.2.3.1.1.1.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.4.1.11.2.3.1.1.2.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.4.1.11.2.3.1.1.3.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.4.1.11.2.3.1.1.4.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.4.1.11.2.3.1.1.5.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.4.1.11.2.3.1.1.6.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.4.1.11.2.3.1.1.7.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.4.1.11.2.3.1.1.8.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.4.1.11.2.3.1.1.9.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.4.1.11.2.3.1.1.10.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.4.1.11.2.3.1.1.11.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.4.1.11.2.3.1.1.12.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.4.1.11.2.3.1.1.13.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.4.1.11.2.3.1.1.14.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.4.1.11.2.3.1.1.15.0 | tee -a $DATAFILE
+            else
+    	        $WALK $HOST $COMM .1.3.6.1.4.1.11.2.3.1.1 | tee -a $DATAFILE
+            fi
+
+        elif [ $SEL = $SEL_HPFS ]; then
+            $WALK $HOST $COMM .1.3.6.1.4.1.11.2.3.1.2 | tee -a $DATAFILE
+        
+        elif [ $SEL = $SEL_HPPROC ]; then
+            $WALK $HOST $COMM .1.3.6.1.4.1.11.2.3.1.4 | tee -a $DATAFILE
+
+        elif [ $SEL = $SEL_HPTRAP ]; then
+            $WALK $HOST $COMM .1.3.6.1.4.1.11.2.13.1 | tee -a $DATAFILE
+    
+        elif [ $SEL = $SEL_HPCONF ]; then
+            if [ $WALK = $SNMPGET ]; then
+                $WALK $HOST $COMM .1.3.6.1.4.1.11.2.13.2.1.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.4.1.11.2.13.2.2.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.4.1.11.2.13.2.3.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.4.1.11.2.13.2.4.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.4.1.11.2.13.2.5.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.4.1.11.2.13.2.6.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.4.1.11.2.13.2.7.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.4.1.11.2.13.2.8.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.4.1.11.2.13.2.9.0 | tee -a $DATAFILE
+            else
+                $WALK $HOST $COMM .1.3.6.1.4.1.11.2.13.2 | tee -a $DATAFILE
+            fi
+
+        elif [ $SEL = $SEL_HPICMP ]; then
+	    # There is no concept of snmpwalk here
+	    # Packet size is hard coded: 56 bytes
+	    # Timeout is hard coded: 2 seconds
+            $WALK $HOST $COMM .1.3.6.1.4.1.11.2.7.1.56.2.${IP_MACHINE}.0 | tee -a $DATAFILE
+
+        elif [ $SEL = $SEL_HPAUTH ]; then
+            $WALK $HOST $COMM .1.3.6.1.4.1.11.2.13.4 | tee -a $DATAFILE
+
+        elif [ $SEL = $SEL_SGI ]; then
+	    WALK=$SGI_WALK
+            $WALK $HOST $COMM .1.3.6.1.4.1.59 | tee -a $DATAFILE
+
+        elif [ $SEL = $SEL_MIB2_SYS ]; then
+            $WALK $HOST $COMM .1.3.6.1.2.1.1 | tee -a $DATAFILE
+
+        elif [ $SEL = $SEL_MIB2_IF ]; then
+            $WALK $HOST $COMM .1.3.6.1.2.1.2 | tee -a $DATAFILE
+
+        elif [ $SEL = $SEL_MIB2_AT ]; then
+            $WALK $HOST $COMM .1.3.6.1.2.1.3 | tee -a $DATAFILE
+
+        elif [ $SEL = $SEL_MIB2_IP ]; then
+            $WALK $HOST $COMM .1.3.6.1.2.1.4 | tee -a $DATAFILE
+
+        elif [ $SEL = $SEL_MIB2_IP_SCALARS ]; then
+	    WALK=$SNMPGET				# Override
+            $WALK $HOST $COMM .1.3.6.1.2.1.4.1.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.4.2.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.4.3.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.4.4.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.4.5.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.4.6.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.4.7.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.4.8.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.4.9.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.4.10.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.4.11.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.4.12.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.4.13.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.4.14.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.4.15.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.4.16.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.4.17.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.4.18.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.4.19.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.4.23.0 | tee -a $DATAFILE
+
+        elif [ $SEL = $SEL_MIB2_IP_ADDRTBL ]; then
+            $WALK $HOST $COMM .1.3.6.1.2.1.4.20 | tee -a $DATAFILE
+
+        elif [ $SEL = $SEL_MIB2_IP_ROUTETBL ]; then
+            $WALK $HOST $COMM .1.3.6.1.2.1.4.21 | tee -a $DATAFILE
+
+        elif [ $SEL = $SEL_MIB2_IP_ATTBL ]; then
+            $WALK $HOST $COMM .1.3.6.1.2.1.4.22 | tee -a $DATAFILE
+
+        elif [ $SEL = $SEL_MIB2_ICMP ]; then
+            if [ $WALK = $SNMPGET ]; then
+                $WALK $HOST $COMM .1.3.6.1.2.1.5.1.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.2.1.5.2.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.2.1.5.3.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.2.1.5.4.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.2.1.5.5.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.2.1.5.6.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.2.1.5.7.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.2.1.5.8.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.2.1.5.9.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.2.1.5.10.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.2.1.5.11.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.2.1.5.12.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.2.1.5.13.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.2.1.5.14.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.2.1.5.15.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.2.1.5.16.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.2.1.5.17.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.2.1.5.18.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.2.1.5.19.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.2.1.5.20.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.2.1.5.21.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.2.1.5.22.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.2.1.5.23.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.2.1.5.24.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.2.1.5.25.0 | tee -a $DATAFILE
+                $WALK $HOST $COMM .1.3.6.1.2.1.5.26.0 | tee -a $DATAFILE
+	    else
+                $WALK $HOST $COMM .1.3.6.1.2.1.5 | tee -a $DATAFILE
+	    fi
+
+        elif [ $SEL = $SEL_MIB2_TCP ]; then
+            $WALK $HOST $COMM .1.3.6.1.2.1.6 | tee -a $DATAFILE
+
+        elif [ $SEL = $SEL_MIB2_TCP_SCALARS ]; then
+	    WALK=$SNMPGET				# Override
+            $WALK $HOST $COMM .1.3.6.1.2.1.6.1.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.6.2.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.6.3.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.6.4.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.6.5.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.6.6.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.6.7.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.6.8.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.6.9.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.6.10.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.6.11.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.6.12.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.6.14.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.6.15.0 | tee -a $DATAFILE
+
+        elif [ $SEL = $SEL_MIB2_TCP_CONNTBL ]; then
+            $WALK $HOST $COMM .1.3.6.1.2.1.6.13 | tee -a $DATAFILE
+
+        elif [ $SEL = $SEL_MIB2_UDP ]; then
+            $WALK $HOST $COMM .1.3.6.1.2.1.7 | tee -a $DATAFILE
+
+        elif [ $SEL = $SEL_MIB2_UDP_SCALARS ]; then
+	    WALK=$SNMPGET				# Override
+            $WALK $HOST $COMM .1.3.6.1.2.1.7.1.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.7.2.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.7.3.0 | tee -a $DATAFILE
+            $WALK $HOST $COMM .1.3.6.1.2.1.7.4.0 | tee -a $DATAFILE
+
+        elif [ $SEL = $SEL_MIB2_UDP_LISTTBL ]; then
+            $WALK $HOST $COMM .1.3.6.1.2.1.7.5 | tee -a $DATAFILE
+#
+# GJB -- Add a new "elif" statement above applying to the new MIB group 
+#
+        fi
+
+# ---------------------------------------------------------------
+# Print statistics on screen and in file if applicable
+# ---------------------------------------------------------------
+        COUNT=`expr $COUNT + 1`
+        if [ $MAX_COUNT -gt 1 ]; then
+            echo "-----------------------------------------------"
+            echo $PREFIX COUNT=$COUNT
+            echo "-----------------------------------------------"
+        fi
+
+	if [ $SAVE_STATS -gt 0 ]; then
+	    INT_COUNT=`expr $COUNT / $SAVE_STATS`
+	    MODULO=`expr $COUNT - $INT_COUNT \* $SAVE_STATS`
+	else
+	    MODULO=1
+	fi
+
+        if [ $MODULO -eq 0 -o $COUNT -ge $MAX_COUNT ]; then
+	    echo " "
+    	    if [ $PRINT_STATS -eq 1 ]; then
+	        ps -elf | grep snmpd | grep -v grep 			>> $STATSFILE
+	        echo $PREFIX Ran $WALK on $SYSTEM test $COUNT times 	>> $STATSFILE
+	        echo $PREFIX "Ended   at " `date`			>> $STATSFILE
+	        echo $PREFIX Data saved in file: $DATAFILE 		>> $STATSFILE
+	    fi
+	    echo " " 							>> $STATSFILE
+	    if [ $PRINT_STATS -eq 1 ]; then
+	        cat $STATSFILE
+	    fi
+    	    echo $MARKER
+	fi
+
+        if [ $COUNT -ge $MAX_COUNT ]; then
+    	    echo $MARKER >> $TMP_FILE
+	    break
+        fi
+
+        sleep $SLEEP
+    done
+done
+
+# ---------------------------------------------------------------
+# Cleanup at the end of the work
+# ---------------------------------------------------------------
+DFLT_VAL=n
+echo "Do you want to remove the datafile? [$DFLT_VAL] "
+read ANS
+
+if [ x$ANS = xy -o x$ANS = xY ]; then
+    rm -f $DATAFILE
+    Echo Removed $DATAFILE
+fi
+exit 0
+
+

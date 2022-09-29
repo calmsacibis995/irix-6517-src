@@ -1,0 +1,228 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	tu.tlib
+# Version:	$Revision: 1.5 $
+# Synopsis:	General functions for managing templates.
+# Packages:	Template-Base
+#		Template-Util
+#%COMMENT_END
+
+
+#%COMMENT_BEGIN
+# Package:	Template-Base
+# Functions:	tu:getCategories
+#		tu:getTemplates
+#
+# Function:	tu:getCategories
+# Synopsis:	Returns a list of existing template classes.
+# Arguments:	None
+#
+# Function:	tu:getTemplates
+# Synopsis:	Returns a list of templates for a given class.
+# Arguments:	- class		The desired class of templates.
+#%COMMENT_END
+
+#@package: Template-Base	tu:getCategories tu:getTemplates 
+
+proc tu:getCategories {} \
+{
+	set dirs [glob -nocomplain /var/xfsm/templates/*]
+	set categories ""
+	foreach i $dirs {
+		lappend categories [file tail $i]
+	}
+
+	return $categories
+}
+
+proc tu:getTemplates { class } \
+{
+	set tmpl_dir	/var/xfsm/templates/$class/*
+	set files	[glob -nocomplain $tmpl_dir]
+
+	if {[cequal $class "DISK"]} {
+		set defaults [xdk:getDefTmpls] 
+	} else {
+		set defaults ""
+	}
+
+	set tmpl ""
+	foreach fname $files {
+		if {! [file readable $fname]} {
+			continue
+		}
+		set fid [open $fname]
+		if {[gets $fid obj] != -1} {
+			set obj [lindex $obj 0]
+			if {! [obj:isXfsmTemplate $obj $class]} {
+				continue;
+			}
+
+			obj:parse $obj o_class o_host o_nm o_type
+			if {! [cequal $o_nm [file tail $fname]]} {
+				continue
+			}
+			
+			set is_reserved false
+			foreach item $defaults {
+				obj:parse $item d_class d_host d_nm d_type
+				if {[cequal $o_nm $d_nm]} {
+					set is_reserved true
+					break;
+				}
+			}
+
+			if {[cequal $is_reserved "false"]} {
+				lappend tmpl $obj
+			}
+		}
+		close $fid
+	}
+
+	return [concat $defaults [lsort -command obj:sort $tmpl]]
+}
+#@packend
+
+
+#%COMMENT_BEGIN
+# Package:	Template-Util
+# Functions:	tu:read
+#		tu:write
+#		tu:rename
+#		tu:drop
+#
+# Function:	tu:read
+# Synopsis:	Reads in a file, verifies that it is a template and
+#		stores the data in the reference variable passed in.
+# Arguments:	- class		The class of the template to write.
+#		- name		The name of the template to write.
+#		- obj		An object id that identifies the template.
+#		- data		A reference to a variable in which the
+#				data is to be stored.
+#
+# Function:	tu:write
+# Synopsis:	Reads in a file, verifies that it is a template and
+#		stores the data in the reference variable passed in.
+# Arguments:	- class		The class of the template to read.
+#		- name		The name of the template to read.
+#		- data		The data associated with the template.
+#
+# Function:	tu:rename
+# Synopsis:	Renames a template.
+# Arguments:	- obj		An object id that identifies the desired
+#				template.
+#		- newname	The new name for the template.
+#		- newobject	An object id that will be used from now on
+#				to identify the template.
+#
+# Function:	tu:drop
+# Synopsis:	Disallows dropping of icons on the template icon panel, while
+#		allowing templates to be moved within the icon panel.
+# Arguments:	- class		The template icon panel class (DISK, VOL, FS).
+#		- panel		The template icon panel.
+#%COMMENT_END
+
+#@package: Template-Util	tu:read tu:write tu:rename tu:drop
+
+proc tu:read { class name data } \
+{
+        upvar $data	dat
+	set fname	/var/xfsm/templates/$class/$name
+	set rval	0
+
+	if {[file readable $fname]} {
+		set fid [open $fname]
+		if {[gets $fid obj] != -1} {
+			set obj [lindex $obj 0]
+			if {[obj:isXfsmTemplate $obj $class]} {
+				set dat [read -nonewline $fid]
+				set rval 1
+			} else {
+				em:simpleMsg tmpl error \
+				"Unable to read template $name. @n @n Invalid template format."
+			}
+		}
+		close $fid
+	} else {
+		em:simpleMsg tmpl error \
+		    "Unable to read template $name: @n @n [list $error]"
+	}
+
+	return $rval
+}
+
+proc tu:write { class name obj data } \
+{
+	set rval	0
+	set fname	/var/xfsm/templates/$class/$name
+
+	if {[catch {set fid [open $fname w]} error]} {
+		em:simpleMsg tmpl error \
+		    "Unable to save to template $name: @n @n [list $error]"
+	} else {
+		puts $fid $obj
+		puts $fid $data
+		close $fid
+		set rval 1
+	}
+
+	return $rval
+}
+
+proc tu:rename { obj newname newobject } \
+{
+	upvar $newobject newobj
+
+	obj:parse $obj o_class o_host o_nm o_type
+
+	set o_fname /var/xfsm/templates/$o_class/$o_nm
+	set n_fname /var/xfsm/templates/$o_class/$newname
+
+	if {[catch {set str [frename $o_fname $n_fname]} error]} {
+		em:simpleMsg tmpl error \
+		    "Unable to rename $o_nm to $newname. @n @n [list $error]"
+		return 0
+	} else {
+		set newobj " _TEMPLATE_ $o_class $newname $o_type "
+		return 1
+	}
+}
+
+proc tu:drop { class panel } \
+{
+	set chosen [$panel selection -encode]
+	if {! [ip:encodeToObject $chosen selected]} {
+		foreach item $chosen {
+			lappend rmObjs [ip:uniqueName $item]
+		}
+	} else {
+		set templates [tu:getTemplates $class]
+		foreach item $selected {
+			if {[lsearch -exact $templates $item] == -1} {
+				lappend badObjs $item
+			}
+		}
+		if {[info exists badObjs]} {
+			ip:objectToUnique $badObjs rmObjs
+		}
+	}
+
+	if {[info exists rmObjs]} {
+		foreach item $rmObjs {
+			$panel remove $item
+		}
+		$panel render
+	}
+}
+#@packend

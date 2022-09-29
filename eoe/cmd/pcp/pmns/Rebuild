@@ -1,0 +1,589 @@
+#!/bin/sh
+#
+# Copyright 1997, Silicon Graphics, Inc.
+# ALL RIGHTS RESERVED
+# 
+# UNPUBLISHED -- Rights reserved under the copyright laws of the United
+# States.   Use of a copyright notice is precautionary only and does not
+# imply publication or disclosure.
+# 
+# U.S. GOVERNMENT RESTRICTED RIGHTS LEGEND:
+# Use, duplication or disclosure by the Government is subject to restrictions
+# as set forth in FAR 52.227.19(c)(2) or subparagraph (c)(1)(ii) of the Rights
+# in Technical Data and Computer Software clause at DFARS 252.227-7013 and/or
+# in similar or successor clauses in the FAR, or the DOD or NASA FAR
+# Supplement.  Contractor/manufacturer is Silicon Graphics, Inc.,
+# 2011 N. Shoreline Blvd. Mountain View, CA 94039-7311.
+# 
+# THE CONTENT OF THIS WORK CONTAINS CONFIDENTIAL AND PROPRIETARY
+# INFORMATION OF SILICON GRAPHICS, INC. ANY DUPLICATION, MODIFICATION,
+# DISTRIBUTION, OR DISCLOSURE IN ANY FORM, IN WHOLE, OR IN PART, IS STRICTLY
+# PROHIBITED WITHOUT THE PRIOR EXPRESS WRITTEN PERMISSION OF SILICON
+# GRAPHICS, INC.
+#Tag 0x00010D13
+#
+# Rebuild the binary PMNS, handling assorted errors
+#
+# $Id: Rebuild,v 2.47 1999/05/27 18:55:08 kenmcd Exp $
+
+# Note. has to be run from where the PMNS files are installed, as
+#	pmnscomp uses dirname <root> as first in search path for #include
+
+# Some degree of paranoia here ...
+PATH=/usr/sbin:/usr/bsd:/sbin:/usr/bin:/bin:/usr/pcp/bin
+export PATH
+
+tmp=./$$
+status=1
+rm -f $tmp.*
+trap "rm -f $tmp.*; exit \$status" 0 1 2 3 15
+
+# Cleanup any bad side-effects of previous attempts
+#
+rm -f root_irix.new
+
+_trace()
+{
+    if $silent
+    then
+	:
+    else
+	if $nochanges
+	then
+	    echo "$*"
+	else
+	    echo "$*" >>$tmp.trace
+	fi
+    fi
+}
+
+_syslog()
+{
+    logger -p user.alert -t PCP "$*"
+    _trace "$*"
+}
+
+_die()
+{
+    [ -f $tmp.trace ] && cat $tmp.trace
+    exit
+}
+
+prog=`basename $0`
+debug=false
+nochanges=false
+root=root
+root_updated=false
+update=false
+verbose=""
+dupok=""
+silent=false
+
+_usage()
+{
+    _trace "Usage: Rebuild [-dnuv]"
+    _trace "Options:"
+    _trace "  -d    allow duplicate PMIDs in the PMNS"
+    _trace "  -n    dry run, show me what would be done"
+    _trace "  -s    silent, exit status says it all"
+    _trace "  -u    once only upgrade processing for a new PCP version"
+    _trace "  -v    verbose, for the paranoid"
+}
+
+# Fixup "root" after PCP upgrade
+#
+_upgrade_root()
+{
+    [ ! -f root ] && return
+    _trace "Rebuild: PCP upgrade processing for \"root\" PMNS changes ..."
+
+    # Exclude all deprecated PMNS include files
+    # and metrics from pcp1.2 and earlier.
+    #
+    # Only metrics and include files for add-on
+    # products will remain (except webmeter).
+    # 
+    $nochanges && _trace "+ cull irix names from PMNS ... <root >$tmp.root"
+    nawk <root >$tmp.root '
+BEGIN	{   # exclude these ones from the top-level names
+	    #
+	    exc = "irix hinv hw kernel disk mem swap swapdev network origin gfx rpc" \
+		 " nfs nfs3 resource name_cache buffer_cache vnodes efs filesys" \
+		 " ipc xfs kaio xpc pmda engr pmcd proc hpux hpuxhinv"
+	    n = split(exc, e)
+	    for (i=1; i <= n; i++) {
+		not_in_root[e[i]] = 1
+	    }
+
+	    # do not #include any of these
+	    #
+	    no_inc = "kernel percpu disk memory swap network resource rpc nfs" \
+		" filesys ipc xfs engr proc pmcd hw irix-root irix-pmns"
+	    n = split(no_inc, f)
+	    for (i=1; i <= n; i++) {
+		not_included["\"" f[i] "\""] = 1
+	    }
+	    in_root = 0
+	    skip = 0
+	}
+$1 == "root" && $2 == "\{"	{ in_root = 1 }
+in_root && $1 == "\}"		{ in_root = 0 }
+$1 == "\#include"		{ if ($2 in not_included) next }
+in_root				{ if ($1 in not_in_root) next }
+/^irix[ .]/ && $2 == "\{"	{ skip = 1; next }
+/^hinv[ .]/ && $2 == "\{"	{ skip = 1; next }
+/^hw[ .]/ && $2 == "\{"		{ skip = 1; next }
+/^kernel[ .]/ && $2 == "\{"     { skip = 1; next }
+/^disk[ .]/ && $2 == "\{"       { skip = 1; next }
+/^mem[ .]/ && $2 == "\{"        { skip = 1; next }
+/^swap[ .]/ && $2 == "\{"       { skip = 1; next }
+/^swapdev[ .]/ && $2 == "\{"    { skip = 1; next }
+/^network[ .]/ && $2 == "\{"    { skip = 1; next }
+/^origin[ .]/ && $2 == "\{"     { skip = 1; next }
+/^gfx[ .]/ && $2 == "\{"        { skip = 1; next }
+/^rpc[ .]/ && $2 == "\{"        { skip = 1; next }
+/^nfs[ .]/ && $2 == "\{"        { skip = 1; next }
+/^nfs3[ .]/ && $2 == "\{"       { skip = 1; next }
+/^resource[ .]/ && $2 == "\{"   { skip = 1; next }
+/^name_cache[ .]/ && $2 == "\{" { skip = 1; next }
+/^buffer_cache[ .]/ && $2 == "\{"       { skip = 1; next }
+/^vnodes[ .]/ && $2 == "\{"     { skip = 1; next }
+/^efs[ .]/ && $2 == "\{"        { skip = 1; next }
+/^filesys[ .]/ && $2 == "\{"    { skip = 1; next }
+/^ipc[ .]/ && $2 == "\{"        { skip = 1; next }
+/^xfs[ .]/ && $2 == "\{"        { skip = 1; next }
+/^kaio[ .]/ && $2 == "\{"       { skip = 1; next }
+/^xpc[ .]/ && $2 == "\{"        { skip = 1; next }
+/^pmda[ .]/ && $2 == "\{"       { skip = 1; next }
+/^engr[ .]/ && $2 == "\{"       { skip = 1; next }
+/^pmcd[ .]/ && $2 == "\{"	{ skip = 1; next }
+/^proc[ .]/ && $2 == "\{"	{ skip = 1; next }
+/^hpux[ .]/ && $2 == "\{"	{ skip = 1; next }
+/^hpuxhinv[ .]/ && $2 == "\{"	{ skip = 1; next }
+skip && $1 == "\}"		{ skip = 0; next }
+skip				{ next }
+				{ print }'
+    if cmp -s root $tmp.root >/dev/null 2>&1
+    then
+	# no changes ... already been here?
+	:
+    else
+	# we will usually end up here
+	root=$tmp.root
+	root_updated=true
+    fi
+}
+
+_xlate_irix_names()
+{
+    # may need to xlate root_irix to remove irix. prefixes
+    # for metric names, and do some name mapping
+    #
+    if [ -f root_irix ] && grep '^[ 	]*irix[ 	]*{' root_irix >/dev/null 
+    then
+	eval $RM -f bad.root_irix
+	if ./Xlate-irix-names root_irix >$tmp.root_irix 2>$tmp.err
+	then
+	    if pmnscomp -n $tmp.root_irix $tmp.compxl >/dev/null 2>$tmp.err
+	    then
+		:
+	    else
+		echo "$prog: Cannot compile translated namespace, see bad.root_irix" >>$tmp.err
+		cp $tmp.root_irix bad.root_irix
+	    fi
+	fi
+
+	if [ -s $tmp.err ]
+	then
+	    _syslog "$prog: Translation of root_irix failed, cannot proceed"
+	    cat $tmp.err \
+	    | while read line
+	    do
+		_trace "$line"
+	    done
+	    _die
+	fi
+    fi
+}
+
+# Handle PCP versions prior to 1.2, and merge changes there into the new
+# PMNS regime
+#
+_files_moved()
+{
+    _trace "Rebuild: PCP upgrade processing for migrated PMNS files ..."
+
+    PMNS_OLD=${PMNS_OLD-/usr/pcp/pmns}
+    PMNS_NEW=${PMNS_NEW-/var/pcp/pmns}
+
+    # if you cannot write $PMNS_OLD, don't bother updating this directory
+    # ... required for diskless systems where /usr is read-only
+    #
+    if touch $PMNS_OLD/.check >/dev/null 2>&1
+    then
+	rm -f $PMNS_OLD/.check
+	OLD_RM="$RM"
+	OLD_MV="$MV"
+    else
+	OLD_RM=:
+	OLD_MV="$CP"
+    fi
+    # similar test for the parent of $PMNS_OLD
+    #
+    if touch `dirname $PMNS_OLD`/.check >/dev/null 2>&1
+    then
+	rm -f `dirname $PMNS_OLD`/.check
+	OLD_LN="$LN"
+    else
+	OLD_LN=:
+    fi
+
+    if [ -d $PMNS_NEW ]
+    then
+	# the new regime
+	if [ -l $PMNS_OLD ]
+	then
+	    :
+	elif [ -d $PMNS_OLD ]
+	then
+	    # PCP 1.2 fix-up
+	    #
+	    _trace "Relocating $PMNS_OLD files to $PMNS_NEW ..."
+
+	    # pass 1, get the likely "active" files
+	    #
+	    for file in $PMNS_OLD/*
+	    do
+		case $file
+		in
+
+		    $tmp.*)
+			    ;;
+
+		    $PMNS_OLD'/*'|*.O|*.N)
+			    ;;
+
+		    */Brand|*/Makefile|*/Rebuild)
+			    eval $OLD_RM -f $file
+			    ;;
+
+		    *)
+			    base=`basename $file`
+			    if [ -f $base ]
+			    then
+				# file in both places
+				if diff -q $file $base >/dev/null
+				then
+				   # no difference, easy option
+				   eval $OLD_RM -f $file
+				else
+				    # not the same file
+				    if [ -f $base.N ]
+				    then
+					# hard, old one becomes .O
+					eval $RM -f $base.O
+					eval $OLD_MV $file $base.O
+				    else
+					# prefer old one, keep newie as .N
+					eval $MV $base $base.N
+					eval $OLD_MV $file $base
+				    fi
+				fi
+			    else
+				# not here, salvage from the other place
+				eval $OLD_MV $file $base
+			    fi
+			    ;;
+		esac
+	    done
+
+	    # pass 2, deal with the leftovers
+	    #
+	    for file in $PMNS_OLD/*
+	    do
+		case $file
+		in
+		    $PMNS_OLD'/*')
+			    ;;
+
+		    *)
+			    base=`basename $file`
+			    if [ ! -f $base ]
+			    then
+				# copy across, no apparent conflict
+				eval $OLD_MV $file $base
+			    else
+				# nuke the old one
+				eval $OLD_RM -f $file
+			    fi
+			    ;;
+		esac
+	    done
+
+	    # cleanup
+	    #
+	    if [ "$PMNS_OLD" = "/usr/pcp/pmns" -a "$PMNS_NEW" = "/var/pcp/pmns" ]
+	    then
+		# special case for PCP upgrades ...
+		#
+		eval $OLD_RM -rf $PMNS_OLD
+		eval $OLD_LN -s ../..$PMNS_NEW $PMNS_OLD
+	    fi
+	elif [ -f $PMNS_OLD ]
+	then
+	    # a file and not a dir not a symlink ... this is bad news
+	    _syslog "$prog: \"$PMNS_OLD\" is neither a directory nor a symbolic link, cannot proceed"
+	    _die
+	else
+	    # does not exist, make symlink
+	    eval $OLD_LN -s ../..$PMNS_NEW $PMNS_OLD
+	fi
+    fi
+
+    if [ "`echo *.N`" != "*.N" ]
+    then
+	_trace "Warning: the following new PMNS files may have to be merged ..."
+	_trace "    `echo *.N`"
+    fi
+}
+
+while getopts dnusv\? c
+do
+    case $c
+    in
+	d)	dupok="-d"
+		;;
+	n)	nochanges=true
+		echo "$prog: Warning: dry run, no changes will be made"
+		;;
+	u)	update=true
+		;;
+	s)	silent=true
+		;;
+	v)	verbose="-v"
+		;;
+	\?)	_usage
+		status=0
+		_die
+		;;
+    esac
+done
+shift `expr $OPTIND - 1`
+
+# some preliminary checks
+#
+for file in /usr/pcp/lib/pmnsproc.sh /usr/pcp/bin/pmnsmerge /usr/pcp/bin/pmnscomp
+do
+    if [ ! -x $file ]
+    then
+	_syslog "$prog: $file is missing. Cannot proceed."
+	_die
+    fi
+done
+
+. /usr/pcp/lib/pmnsproc.sh
+
+if _can_load_ascii
+then
+    :
+else
+    # No license, nothing to do
+    #
+    $nochanges && _syslog "Warning: current PCP license does not allow PMNS updates"
+    status=0
+    _die
+fi
+
+here=`pwd`
+_trace "Rebuilding the Performance Metrics Name Space (PMNS) in $here ..."
+
+if [ $# -ne 0 ]
+then
+    _usage
+    _die
+fi
+
+if $nochanges
+then
+    CP="_trace + cp"
+    MV="_trace + mv"
+    LN="_trace + ln"
+    RM="_trace + rm"
+    PMNSMERGE="_trace + /usr/pcp/bin/pmnsmerge ..."
+else
+    CP=cp
+    MV=mv
+    LN=ln
+    RM=rm
+    PMNSMERGE=
+
+    id=`id | sed -e 's/(.*//' -e 's/.*=//'`
+    if [ "X$id" != X0 ]
+    then
+	_syslog "$prog: script must be run as \"root\", cannot proceed"
+	_die
+    fi
+fi
+
+if $update
+then
+    # PCP upgrade fix ups
+    #
+    _files_moved
+    _upgrade_root
+fi
+
+if [ -f $root ]
+then
+    haveroot=true
+else
+    haveroot=false
+    if $nochanges
+    then
+	_trace "+ create empty root PMNS ..."
+    else
+	root=$tmp.root
+	cat <<EOFEOF >$root
+root {
+}
+EOFEOF
+    fi
+fi
+
+# Prior to Irix6.4 we did not ship any pmns files. To cater
+# for this we now ship the Irix pmns as part of root_pcp.
+#
+# The 6.4 Irix ism ships irix-pmns and irix-root. So, if root_irix
+# does not exist, we need to create it to include irix-pmns and
+# irix-root in the right places.
+#
+# After Irix 6.4, we will just ship root_irix.
+#
+# NOTE	This is here, and outside scope of -u processing because these
+#	changes may be needed by an IRIX upgrade after the PCP installation
+#	or upgrade
+#
+if [ -f irix-root -a -f irix-pmns -a ! -f root_irix ]
+then
+    # Create root_irix
+    if $nochanges
+    then
+	_trace "+ creating root_irix ..."
+    else
+	cat << EOFEOF > root_irix
+/*
+ * Irix PMNS for Irix 6.4
+ * frozen on 21 November 1996.
+ */
+
+#define _DATESTAMP 961121
+
+root {
+#include "irix-root"
+}
+
+#include "irix-pmns"
+EOFEOF
+    fi
+fi
+
+# Merge $root and root_* to produce the new root.
+# Each root_* file should be a complete namespace,
+# i.e. it should include an entry for root.
+# Some of these may be disabled with cpp conditional code.
+#
+mergelist=""
+if [ "`echo root_*`" != "root_*" ]
+then
+    # PCP 2.1 changes for IRIX names, translate root_irix on the fly
+    #
+    _xlate_irix_names
+
+    mergelist=`ls -1 root_* | nawk '
+    /root_.*\.bin/	{next}
+    /root_web/		{next}
+    /root_.*\.[ON]/	{next}
+			{print}'`
+
+    if [ -f $tmp.root_irix -a -f root_irix ]
+    then
+	# may want to substitute $tmp.root_irix for root_irix in the merge 
+	# list if the update has xlated the irix part of the namespace
+	#
+	mergelist=`echo $mergelist | sed -e 's/^/ /g' \
+					 -e 's/$/ /g' \
+					 -e "s; root_irix ; $tmp.root_irix ;g" \
+					 -e 's/^ //g' \
+					 -e 's/ $//g'`
+    fi
+fi
+
+_trace "$prog: merging the following PMNS files: "
+_trace $root $mergelist | fmt | sed -e 's/^/    /'
+
+eval $PMNSMERGE
+/usr/pcp/bin/pmnsmerge $verbose $dupok $root $mergelist $tmp.newroot >$tmp.out 2>&1
+
+if [ $? != 0 -o ! -f $tmp.newroot.bin ]
+then
+    cat $tmp.out
+    _syslog "$prog: /usr/pcp/bin/pmnsmerge failed"
+    _trace "         \"root\" and \"root.bin\" have not been changed."
+    _die
+fi
+
+# Multiple Rebuilds in succession should be a no-op.
+#
+if [ -f root ]
+then
+    cp root $tmp.tmp		# cp to avoid any root.bin problems
+    pminfo -m -n $tmp.tmp 2>/dev/null | sort >$tmp.list.old
+fi
+if [ ! -s $tmp.list.old ]
+then
+    cp $root $tmp.tmp		# cp to avoid any root.bin problems
+    pminfo -m -n $tmp.tmp 2>/dev/null | sort >$tmp.list.old
+fi
+pminfo -m -n $tmp.newroot | sort >$tmp.list.new
+if cmp -s $tmp.list.old $tmp.list.new > /dev/null 2>&1
+then
+    [ ! -f root ] && eval $MV $tmp.newroot root
+    [ ! -f root.bin ] && eval $MV $tmp.newroot.bin root.bin
+    _trace "$prog: PMNS is unchanged."
+else
+    # Install the new root
+    #
+    [ ! -z "$verbose" ] && cat $tmp.out
+    if $haveroot
+    then
+	_trace "$prog: PMNS \"$here/root\" updated."
+	_trace "... previous version saved as \"$here/root.prev\""
+	eval $MV root root.prev
+    else
+	_trace "$prog: new PMNS \"$here/root\" created."
+    fi
+    eval $MV $tmp.newroot root
+    eval $MV $tmp.newroot.bin root.bin
+
+    # signal pmcd if it is running
+    #
+    pminfo -v pmcd.version >/dev/null 2>&1 && killall -HUP pmcd
+
+    if [ ! -z "$verbose" ] && $haveroot
+    then
+	_trace "+ PMNS differences ..."
+	diff -c $tmp.list.old $tmp.list.new
+	_trace
+	_trace "+ root differences ..."
+	diff -c root.prev root
+    fi
+fi
+
+# remake stdpmid
+#
+[ -f Make.stdpmid ] && ./Make.stdpmid
+
+[ X"$verbose" = X-v -a -f $tmp.trace ] && cat $tmp.trace
+
+status=0
+exit

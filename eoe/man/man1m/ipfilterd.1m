@@ -1,0 +1,334 @@
+'\"!tbl|mmdoc
+'\"macro stdmacro
+.\" Copyright (c) 1990 Silicon Graphics Computer Systems Inc.
+.\" All rights reserved.
+.TH ipfilterd 1M
+.SH NAME
+ipfilterd \- \&IP packet filtering daemon
+.SH SYNOPSIS
+.nf
+\f3/usr/etc/ipfilterd\f1 [ \f3\-d\f1 ]
+.fi
+.SH DESCRIPTION
+.I ipfilterd
+is a networking daemon that screens all inbound packets that use the
+Internet Protocol (IP).
+Packets are filtered based on their source or
+destination IP address, the network interface they arrived on, their
+IP protocol number, their source or destination TCP/UDP port number,
+or any combination of the above.
+Supported IP protocols include TCP, UDP,
+ICMP, and IGMP.
+.P
+.I ipfilterd
+is started at system initialization from
+.I /etc/init.d/network
+if the configuration flag
+.I ipfilterd
+is set ``on'' with
+.IR chkconfig (1M).
+When
+.I ipfilterd
+is started,
+it reads its configuration information from the file
+.I /etc/ipfilterd.conf
+and compiles the packet filters specified there, storing them in an array
+in the order in which they were specified.
+Inbound IP code passes
+packet information to the daemon, requesting verdicts based on the
+filter database.
+An inbound packet is compared with
+each filter in the array until a match is found; the verdict
+associated with that filter is then returned to IP, which will process the packet
+unless it has been dropped by the filtering code.
+If no match is found,
+the packet is dropped by default.
+.P
+During filter initialization,
+.I ipfilterd
+reads
+.I /etc/ipfilterd.conf
+one line at a time.
+Lines that begin with "#" are comments and
+are ignored.
+All other lines begin with a keyword,
+followed by either a macro or a filter.
+Macros and filters use
+.IR netsnoop (1M)
+filter syntax; however, the optional specification of a network interface
+must precede all protocol filter information.
+All standard
+.IR netsnoop (1M)
+macros relating to
+.I ipfilterd's
+supported protocols can be used.
+.P
+Currently supported keywords include
+.if n .sp .5v
+.RS 3
+.TS
+l l.
+accept	accept all packets matching this filter
+grab	grab all packets matching this filter rather than forwarding them
+reject	silently discard all packets matching this filter
+define	define a new macro
+.TE
+.RE
+.P
+IP addresses may be specified in hexadecimal, in Internet dot format
+(see
+.IR inet (3N)),
+or by the fully qualified hostname or its nickname:
+.Ex
+0xC000022C  192.0.2.44   bambi.test.com  bambi
+.Ee
+.P
+IP protocols may be referenced either by their assigned IP protocol number
+or by their well-known name (TCP, UDP, ICMP, IGMP),
+as listed in
+.IR /etc/protocols .
+Ports may likewise
+be referenced directly by number; port numbers assigned to specific
+Internet network or UNIX-specific services may also be referenced by the
+well-known names found in
+.I /etc/services
+(e.g., ftp, telnet, snmp, sunrpc, login, etc.).
+.P
+.I Ipfilterd
+will support up to 1000 discrete filters.
+There is no limit on the number
+of macros that can be defined.
+.P
+IP maintains a kernel cache of recent
+.I ipfilterd
+filtering verdicts, arranged in a most-recently-used linked list.
+The size of this cache is configurable, as is the search depth into
+the cache before a filter match causes the matched entry to be moved to
+the head of the cache (MRU reordering).
+With the 5.0 release of IRIX,
+cache entries will be aged and deleted when idle for a configurable
+interval (default 60 seconds).
+Use of the cache decreases the number of times that IP must poll the daemon,
+reducing system overhead associated with context switching out
+of the kernel.
+.P
+Although a larger cache minimizes context switches, its size adds
+a longer search path overhead to the IP kernel code before a decision
+to consult the daemon can be made.
+The optimum cache size will vary
+with system usage\(emfor example, an external
+gateway will have more filtering
+responsibility and will see many more IP address/protocol/port combinations
+than will a workstation on a LAN; hence it will require a larger cache.
+.P
+The number of verdicts cached in the kernel is defined by the constant
+.I NUMIPKFLT
+in the IP filtering configuration file
+.IR /var/sysgen/master.d/ipfilter .
+To change the size, as the superuser, edit this file and then use
+.IR autoconfig (1M)
+to generate a new kernel and reboot.
+.P
+The effects of kernel cache size can be empirically observed by
+monitoring network performance also by explicitly observing how often
+and to what effect the daemon is being used.
+Executing
+.I ipfilterd
+with the
+.B \-d
+option provides that information.
+It turns on additional use of
+.IR syslogd (1M)
+to log data about each filter that is built and also about
+each daemon-filtering request.
+This
+includes an indication of whether the packet
+matched a filter or was dropped by default; an idication
+of  whether the
+filter was one that specified an interface only or included
+protocol information; a timestamp;
+and a running count of
+the number of times that kind of decision happened.
+.SH FILES
+.PD 0
+.TP \w' /var/sysgen/master.d/ipfilter\ \ \ \ \ 'u
+.I /var/adm/SYSLOG
+is the general
+.IR syslogd (1M)
+data file.
+It contains all events and data logged by
+.IR ipfilterd .
+.TP
+.I /etc/ipfilterd.conf
+contains macro and filter definitions.
+.TP
+.I /dev/ipfilter
+is used by
+.I ipfilterd
+to communicate with the kernel.  You should create it on your
+system by invoking the
+.I /dev/MAKEDEV
+script if
+.I ipfilterd
+complains it cannot open its device file.
+.TP
+.I /var/sysgen/master.d/ipfilter
+is used when generating a kernel to specify the
+size of the kernel cache of recent filtering verdicts,
+the cache search depth that must be exceeded before any
+MRU reordering of the cache is performed, and the treatment
+of inbound IP packets when the filtering daemon has died
+or been killed.
+.IP
+The constant
+.I NUMIPKFLT
+defines the size of the kernel cache
+of recent filtering verdicts.
+This should be tuned based on system
+load.
+.IP
+The
+.I filtercache_search_depth
+variable is used to minimize the thrashing of the cache that would occur
+if every filter hit were moved to the head of the cache.
+It is
+defaulted to 4, which permits two simultaneous file transfers
+to occur withour MRU reordering.
+This value should be tuned based
+on the expected system workload.
+.IP
+The
+.I ipfilterd_inactive_behavior
+varible specifies how inbound IP packets will be treated when the
+daemon has died or been killed.
+A value of 0 specifies that
+inbound IP processing should proceed as though filtering
+were not configured.
+A value of 1 specifies that all inbound
+IP packets (except those from the local host) will be dropped.
+Use of this value ensures that routing will be disabled in IP firewalls
+whose daemon is inactive, preventing security holes.
+.IP
+With the 5.0 release of IRIX, the
+.I ipfilter_ttl
+variable
+is used to set a maximum lifetime for idle kernel cache entries.
+Entries idle longer than that interval (default 60 seconds) are
+deleted.
+.SH EXAMPLES
+.P
+Examples of use of "define" to create macros:
+.sp .8v
+A filter for all possible traffic between two machines, each of
+which is multi-homed:
+.Ex
+define ip.betwixt between($1,$3) || between($1,$4) || between($2,$3)
+|| between($2,$4)
+.Ee
+(Note: This one-line example is shown on two lines because of
+formatting constraints.)
+.sp .8v
+A macro to specify any host not on a given Class C network (or on a Class B
+network with 8-bit subnet masks) as the source.
+When masking against an IP address in a
+macro, hex must be used.
+However, the IP (sub)network number specified in the
+filter may be either in hex or dot format.
+Parentheses are used to establish
+binding and precedence:
+.Ex
+define ip.notnetCsrc  not((src & 0xffffff00) = $1)
+.Ee
+.sp .8v
+Filter examples:
+.sp .8v
+.br
+To accept all IP traffic between two single-homed hosts:
+.Ex
+accept between speaker squaw
+.Ee
+.sp .8v
+To reject all IP traffic over one network interface between two hosts:
+.Ex
+reject -i ec0 between speaker dizzy
+.Ee
+.sp .8v
+To reject Sun RPC traffic between two hosts:
+.Ex
+reject between teton 192.99.99.99 and udp.port sunrpc
+.Ee
+.sp .8v
+To grab all packets from one host over a given network interface:
+.Ex
+grab -i ec0 src=boston
+.Ee
+.sp .8v
+An example of ip.betwixt:
+.Ex
+reject ip.betwixt foo1 foo2 boo1 boo2 and tcp.port login
+.Ee
+.sp .8v
+To reject all FTP connections that do not originate from a given Class B net:
+.Ex
+reject ip.notnetBsrc 192.26.00.00 and tcp.port ftp
+.Ee
+.SH NOTES
+IP filtering may be initiated or disabled only by the superuser.
+The command
+.Ex
+/etc/killall ipfilterd
+.Ee
+kills the filtering daemon and
+zeros out the kernel cache of filtering verdicts.
+It may also disable all IP forwarding and receipt of
+any inbound IP traffic except that from the local host
+(see the discussion of the
+.I ipfilterd_inactive_behavior
+variable in the FILES section above).
+.PP
+The command
+.Ex
+/usr/etc/ipfilterd
+.Ee
+.if n .sp .5v
+which is normally executed from
+.IR /etc/init.d/network ,
+starts up the daemon and initializes the configured filters.
+Only one instance of ipfilterd may be active at any time; attempts
+to start a second daemon will fail benignly.
+.PP
+Macros must be defined before they are referenced in filters in
+.IR /etc/ipfilterd.conf .
+Each macro definition must be on one line and have a maximum of 255 characters.
+.PP
+The daemon's array of filters is generated in the order specified in
+.IR /etc/ipfilterd.conf .
+The filtering daemon examines filters from the top of the array
+each time.
+As soon as it detects a match, it returns the associated verdict.
+It is possible to have more than one filter match a given packet, such as
+wishing to reject
+.I rlogin
+requests from a given net except one
+particular host.
+In that case, the particular filter should appear first:
+.Ex
+accept ip.src bambi and tcp.port login
+.Ee
+.if n .sp .5v
+followed by the general case:
+.Ex
+reject ip.netBsrc 199.0.2.0 and tcp.port login
+.Ee
+.PP
+Several macros relating to (sub)networks rather than hosts
+are predefined in
+.IR /etc/ipfilterd.conf .
+.SH NOTES
+By default rejects all packets for which no 'accept' entry is defined.
+.SH SEE ALSO
+netsnoop(1M),
+master(4).
+.SH FILES
+/etc/ipfilterd.conf
+/dev/ipfilter

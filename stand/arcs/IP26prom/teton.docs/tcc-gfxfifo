@@ -1,0 +1,190 @@
+
+Hi folks,
+
+     The following is a proposal for the way PIO stores to graphics will be
+handled on Teton (TFP processor card for Fullhouse system).  You are
+receiving this message either because you have already been part of the
+discussions which led to the proposal; or because your name was brought up
+as someone who might have a valuable opinion about, or a vested interest in
+this design.  I'd greatly appreciate it if you could take the time to read
+it over and send me any feedback.  As I'm leaving on vacation tomorrow
+afternoon, I probably won't respond to any comments until after the 15th of
+March.  
+           Thanks in advance,
+
+                   Dave Parry.
+
+I. High Level Concept
+
+     The TFP processor has both a much higher peak PIO store bandwidth and
+a much larger amount of "skid" on interrupt than the R4000 or R4400.  What
+the Teton ASICs will seek to do is provide for some additional elasticity
+to help take advantage of the higher peak PIO rate, and some additional
+buffering to absorb the larger amount of skid.  This will be accomplished
+by implementing a graphics PIO FIFO on the Teton ASICs which will operate
+as a logical extension of the FIFO(s) on the graphics card(s).  The ASICs
+will maintain flow control between this local FIFO and the graphics
+FIFO(s), as well as handling generation of interrupts when the combination
+of the two FIFOs becomes full, and later empties.
+
+
+II. Hardware Model
+
+     The Teton ASICs will treat uncacheable stores in one of two ways,
+depending upon the cache algorithm associated with the line.  For
+sequentially ordered uncacheable stores, the operations will be
+single-threaded from the processor, through the ASICs, out to the sysAD
+bus.  These stores will go around the PIO FIFO, and will take precedence
+over the PIO FIFO.  The only hardware flow control for these stores will be
+assertion of ~WrRdy on the sysAD by the MC chip.  
+
+     Processor ordered uncacheable stores will go through the PIO FIFO.
+The FIFO will be sufficiently deep to allow for all of the processor skid
+(around 12 transactions), in addition to a reasonable number of entries for
+queueing writes to the sysAD.  We currently expect that it will have not
+less than 32 entries, and not more than 64 entries.  The FIFO will have
+programmable high-water detection, and the ASICs will prevent the processor
+from filling it above the high-water mark by asserting flow control on the
+processor-to-cache interface (T-Bus).  
+
+    The FIFO will also flow control its output, using a new wire which will
+be added to the Full House motherboard and daughtercard connector.  This
+signal will be the logical OR of the three signals S0_IRQ_N<2>, S1_IRQ_N<2>, 
+and S2_IRQ_N<2> (gfx_fifo_full for each of the three GIO slots).  The FIFO
+will be inhibited from sending of any new graphics PIO store transactions
+to the MC whenever this line is active.  
+
+     The ASICs will be capable of generating an interrupt to the processor,
+to signal when both the graphics FIFO and the local FIFO fill, as well as
+when they subsequently empty.  The full and empty interrupts will be
+individually maskable.  The following table describes the behavior of the
+hardware given the states of the graphics FIFO, local FIFO, and interrupt
+enables (HW stands for high-water; LW stands for low-water):
+
+Gfx   local full    empty  | Action
+FIFO  FIFO  int     int    |
+---------------------------+--------------------------------------------------
+~full ~HW    x      disable| FIFO input and output open (flow control off)
+                           |
+~full  LW    x      enable | FIFO input and output open; generate interrupt
+                           | on transition to this state
+                           |
+full  ~HW    x       x     | FIFO input open; FIFO output closed (flow 
+                           | control on)
+                           |
+~full  HW    x       x     | FIFO input closed; FIFO output open
+                           |
+full   HW   enable   x     | FIFO input open (accept processor skid); FIFO
+                           | output closed; generate interrupt on
+                           | transition to this state
+                           |
+full   HW   disable  x     | FIFO input open (accept processor skid); FIFO
+                           | output closed* 
+------------------------------------------------------------------------------
+* Note that this state must *only* happen when the ASICs have caused a
+FIFO_full interrupt to be generated and are subsequently draining the FIFO.
+In this case, once the initial processor skid has been accepted, there
+should be no additional stores to the FIFO.  Violating this rule will have
+undefined results.
+
+Both high-water and low-water for the FIFO will be fully programmable by
+software.  In addition, hardware will provide a local register address
+through which software may read the number of entries in the FIFO.
+
+
+III. Software Model
+
+Software causes a particular store to go to the graphics FIFO by setting
+the cache algorithm field of the page through which that store is mapped to
+uncacheable processor-ordered (C-field of TLB entry equal to 000).  It
+causes a store to go around the graphics FIFO by setting the cache
+algorithm to uncacheable sequential-ordered.  Alternatively, software may
+use Kernel Physical (KP) space to perform either type of store (see the
+"Blackbird Architecture Specification for a description of KP space).
+
+Software is expected to use the graphics FIFO for all graphics PIO stores
+which must have hardware flow control.  Software may, if it wishes, have
+some graphics PIO stores go around the graphics FIFO by performing the stores
+through uncacheable sequential-ordered pages.  Any such stores must be flow
+controlled by software.  Failure to do this could result in the GIO bus
+being held for a sufficiently long time to crash the system.
+
+The graphics FIFO is only guaranteed to work for graphics PIO stores.
+Putting stores to any other I/O device into this FIFO will produce
+undefined results.  
+
+FIFO_full and FIFO_empty interrupts will be generated locally on the Teton
+ASICs, so software should disable these interrupts on the INT2 chip.  When
+software is using the graphics subsytem, the FIFO_full interrupt should be
+enabled on the ASICs.  If the graphics becomes sufficiently backed-up, this
+interrupt will be sent to the processor.  At this point software is
+expected to drive no new stores to the FIFO until FIFO has drained to at
+least below high-water.  This may be determined by either enabling the
+FIFO_empty interrupt, and waiting for this interrupt to be generated by
+hardware; by polling the FIFOs on the Teton ASICs and the graphics board;
+or by some combination of the two.
+
+Stores which go into the graphics FIFO are not guaranteed to complete prior
+to later sequential-ordered stores, loads (which all go around the FIFO),
+or any non-memory operation.  However, any load or sequential-ordered store is
+guaranteed to complete prior to any later store to the graphics FIFO.
+
+
+IV. Additional Issues
+
+     There are a couple of additional issues software in particular needs
+to be aware of.  First, note that the hardware is logically OR'ing the
+FIFO_full lines for the three graphics slots in order to flow control the
+graphics FIFO and to generate interrupts.  This means that if multiple
+graphics heads are installed, software will have to be responsible for
+determining which head is causing the FIFO to back up.  
+
+     Second, we are using the Sn_IRQ<2> line as though its meaning is
+graphics_fifo_full - no more, no less.  So if some other GIO board (FDDI?)
+uses this line for some other purpose, we need to investigate whether this
+will cause a problem.
+
+     Finally, as I mentioned in the meeting on Wednesday, software may want
+to be careful about scheduling of the graphics PIO stores, particularly for
+benchmarks.  The case to avoid is where the hardware ends up issuing two
+processor-ordered uncacheable stores in the same cycle; where one is to an
+even doubleword address, and the other is to an odd doubleword address.
+Due to the superscaler nature of the processor, this can happen even if the
+stores are not back-to-back; depending upon what other instructions are
+between them.  The result of this "bad" scheduling is that the processor
+ends up stalling a lot.  In the worstcase, the code would look like:
+      .
+      .
+      .
+   gfx store (even doubleword addr)
+   gfx store (odd doubleword addr)
+   gfx store (even doubleword addr)
+   gfx store (odd doubleword addr)
+   gfx store (even doubleword addr)
+   gfx store (odd doubleword addr)
+      .
+      .
+      .
+In this case, each pair of stores (one even plus one odd) will be separated
+by a 5-cycle stall, so the two stores take a total of 7 cycles rather than
+2 cycles, as one might expect.  During the 5-cycle stall, the entire
+processor is stalled; so no computation may be hidden under this stall.
+There are two ways in which software could schedule around this problem.
+  * Ensure that all graphics stores (or at least the ones we care about the
+    performance of) have the same value for bit 3 of their address.  That
+    is either make them all go to even doublewords or all to odd
+    doublewords. 
+  * Pad the stores with other operations to prevent them from being issued
+    in the same cycle.  The safest and simplest way to do this is to insert
+    an lwc1 instruction between any pair of back-to-back stores.  If this
+    is done, the performance can be made fairly consistent and predictable
+    even if the addresses of the stores are unknown by alternating between
+    even and odd doubleword addresses for the "dummy" loads.
+On other option would be to have hardware fix the problem by providing
+address-shifting logic.  Software would left-shift all graphics FIFO
+addresses by some number of bits, and the Teton ASICs would right-shift the
+address back.  This would allow all addresses seen by the processor to be
+to even doublewords, while placing no requirements on what the addresses
+driven onto the sysAD have to be.  I would strongly prefer to use one of the
+software solutions if possible, as adding this shifter would put gates into
+what will likely be a critical path on our ASICs.

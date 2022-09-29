@@ -1,0 +1,136 @@
+#!/usr/bin/perl
+#
+# prfcmp:
+#
+# Process two ``prfpr'' output streams and display the results side by
+# side with computed deltas.  The results are sorted by deltas, largest
+# to smallest.
+#
+# The optional cutoff% arg specifies the cutoff point below which a function
+# is not printed.  The cutoff must hold true for both output streams.
+#
+if ($#ARGV != 1 && $#ARGV != 2) {
+    printf STDERR "usage: $0 prfpr1.out prfpr2.out [cutoff%]\n";
+    exit 1;
+}
+if ($#ARGV == 2) {
+    $cutoff = @ARGV[2];
+} else {
+    $cutoff=0.5;		# default
+}
+
+#
+# Convert prfpr streams to arrays.
+#
+%sarray1 = &convert_prfpr_to_sample_array(@ARGV[0]);
+%sarray2 = &convert_prfpr_to_sample_array(@ARGV[1]);
+
+#
+# Compute delta array.
+#
+%delta = %sarray2;
+foreach $f (keys(%sarray1)) {
+    $delta{$f} -= $sarray1{$f};
+}
+
+#
+# Print summary.
+#
+print "\n";
+print "Profiling Summary          Run1        Run2       R2/R1\n";
+print "Sum of all cpus           (sec)       (sec)\n";
+print "-------------------------------------------------------\n";
+printf "%-21s%8s    %8s\n", "Number of cpu's",
+    $sarray1{"NUMBER-CPUS"}, $sarray2{"NUMBER-CPUS"};
+
+printf "%-24s%8.3f    %8.3f   %8.2f\n", "Elapsed time",
+    $sarray1{"TOTAL-SAMPLES"}*.001, $sarray2{"TOTAL-SAMPLES"}*.001,
+    defined($sarray1{"TOTAL-SAMPLES"}) ? 
+    sprintf("%-8.2f", $sarray2{"TOTAL-SAMPLES"}/$sarray1{"TOTAL-SAMPLES"}) :"";
+
+printf "%-24s%8.3f    %8.3f   %8.2f\n", "Idle time",
+    $sarray1{"IDLE-SAMPLES"}*.001, $sarray2{"IDLE-SAMPLES"}*.001,
+    defined($sarray1{"IDLE-SAMPLES"}) ? 
+    sprintf("%-8.2f", $sarray2{"IDLE-SAMPLES"}/$sarray1{"IDLE-SAMPLES"}) : "";
+
+printf "%-24s%8.3f    %8.3f   %8.2f\n", "CPU time",
+    $sarray1{"CPU-SAMPLES"}*.001, $sarray2{"CPU-SAMPLES"}*.001,
+    defined($sarray1{"CPU-SAMPLES"}) ? 
+    sprintf("%-8.2f", $sarray2{"CPU-SAMPLES"}/$sarray1{"CPU-SAMPLES"}) : "";
+    
+#
+# CPU time analysis
+#
+print "\n\n";
+print "CPU Time Analysis          Run1        Run2       R2-R1    R2-R1/total R1 CPU\n";
+printf "Function (cutoff=%3.2f%%)   (sec)       (sec)       (sec)         (%%)\n", $cutoff;
+print "-----------------------------------------------------------------------------\n";
+
+foreach $f (sort(bydelta keys(%delta))) {
+    next if $f eq "TOTAL-SAMPLES";
+    next if $f eq "IDLE-SAMPLES";
+    next if $f eq "CPU-SAMPLES";
+    next if $f eq "NUMBER-CPUS";
+    next if $f eq "idle";
+    next if $f eq "checkRunq";
+    $fp1 = $sarray1{$f}/$sarray1{"CPU-SAMPLES"}*100.0;
+    $fp2 = $sarray2{$f}/$sarray2{"CPU-SAMPLES"}*100.0;
+    if (!defined($sarray1{$f}) || $fp1 < $cutoff) {
+	if (!defined($sarray2{$f}) || $fp2 < $cutoff) {
+	    next;
+	}
+    }
+    printf "%-24s%8s    %8s    %8.3f    %8.2f\n", $f,
+	defined($sarray1{$f}) ? sprintf("%8.3f", $sarray1{$f}*.001) : "",
+	defined($sarray2{$f}) ? sprintf("%8.3f", $sarray2{$f}*.001) : "",
+	$delta{$f}*.001, $delta{$f}/$sarray1{"CPU-SAMPLES"}*100.0;
+}
+print "\n";
+print "Notes: 1 msec profiling sample rate.\n";
+print "       idle time calcualted as sum of \"idle\" and \"checkRunq\" functions.\n";
+
+#
+# Comparison function.
+#
+sub bydelta {
+    $delta{$b} <=> $delta{$a};
+}
+
+#
+# Return an associative array containing (function name, num samples)
+# (key, value) tuples.  Some special tuples are also returned, keyed
+# by the following special keys:
+#    TOTAL-SAMPLES
+#    CPU-SAMPLES
+#    IDLE-SAMPLES
+#    NUMBER-CPUS
+#
+sub convert_prfpr_to_sample_array {
+    local($filename) = @_;
+    local(@line, $cpu_samples, $cur_samples, %sample_array);
+    if (!open(FILE, $filename)) {
+	print STDERR "$0: unable to open \"$filename\"\n";
+	exit 1;
+    }
+    cpu: while (<FILE>) {
+	@line = split(/[\s\t\n]+/, $_);
+	next if (@line[0] ne "CPU");
+	$cpu_samples = @line[3];
+	$sample_array{"TOTAL-SAMPLES"} += $cpu_samples;
+	$sample_array{"NUMBER-CPUS"}++;
+	while (<FILE>) {
+	    @line = split(/[\s\t\n]+/, $_);
+	    last if (@line[0] eq "");
+	    last cpu if (@line[0] eq "Total");
+	    $cur_samples = $line[1]*$cpu_samples/100.0;
+	    $sample_array{$line[0]} += $cur_samples;
+	    if (@line[0] eq "idle" || @line[0] eq "checkRunq") {
+		$sample_array{"IDLE-SAMPLES"} += $cur_samples;
+	    } else {
+		$sample_array{"CPU-SAMPLES"} += $cur_samples;
+	    }
+	}
+    }
+    close(FILE);
+    %sample_array;
+}

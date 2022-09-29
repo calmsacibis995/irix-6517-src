@@ -1,0 +1,349 @@
+#!/bin/sh
+#
+# run [nowin|dbx|kdbx|kdbx|sdbx|dbg] [[prom|kern|kernel|ide|symmon|program] [r4k|r10k|mp]]
+
+KEY=/usr/tmp/sablekey.$$
+STANDDIR=$WORKAREA/stand/arcs
+PROMDIR=$STANDDIR/IP30prom
+
+promify=
+
+rm -f $KEY
+trap "" 2
+
+echo "setenv console_window 1" >> $KEY
+
+# run dbx on the binary
+if [ "$1" = "dbx" ]
+then
+	SABLE=dbx
+	shift
+fi
+
+# run dbx on sable
+if [ "$1" = "sdbx" ]
+then
+	DBXIT=1
+	shift
+fi
+
+# run released sable from /usr/tmp (do not run locally built sable)
+if [ "$1" = "dbg" ]
+then
+	if [ -x /s2/sable/sable/Ragnarok.obj/sable ]
+	then
+		SABLE=/s2/sable/sable/Ragnarok.obj/sable
+	fi
+	shift
+fi
+
+# make mp work w/o args.
+if [ "$1" = "mp" ]
+then
+	MP=true
+	shift
+fi
+
+# run kdbx to currently running sable
+if [ "$1" = "rkdbx" ]
+then
+	SABLE=kdbx
+	shift
+	if [ ! -x /usr/local/bin/kdbx ]
+	then
+		echo "/usr/local/bin/kdbx not found."
+		echo "rcp from ddt:/usr/local/bin"
+		exit 1
+	fi
+	if [ ! -x /usr/local/bin/dbxpcs ]
+	then
+		echo "/usr/local/bin/dbxpcs not found."
+		echo "rcp from ddt:/usr/local/bin"
+		exit 1
+	fi
+	KDBXINIT=/usr/tmp/kdbxinit.$$
+	rm -f $KDBXINIT
+	if [ -r ~/.dbxinit ]
+	then
+		cat ~/.dbxinit >> $KDBXINIT
+	fi
+	if [ -r .dbxinit ]
+	then
+		cat .dbxinit >> $KDBXINIT
+	fi
+
+	if [ -n "$1" ]
+	then
+		echo 'set $kdbxport="'$2'"' >> $KDBXINIT
+		shift
+	else
+		echo 'set $kdbxport="65535"' >> $KDBXINIT
+	fi
+fi
+
+if [ "$1" = "kdbx" ]
+then
+	KDBX=1
+	shift
+	if [ ! -x /usr/local/bin/kdbx ]
+	then
+		echo "/usr/local/bin/kdbx not found."
+		echo "rcp from ddt:/usr/local/bin"
+		exit 1
+	fi
+	if [ ! -x /usr/local/bin/dbxpcs ]
+	then
+		echo "/usr/local/bin/dbxpcs not found."
+		echo "rcp from ddt:/usr/local/bin"
+		exit 1
+	fi
+	KDBXINIT=/usr/tmp/kdbxinit.$$
+	rm -f $KDBXINIT
+	if [ -r ~/.dbxinit ]
+	then
+		cat ~/.dbxinit >> $KDBXINIT
+	fi
+	if [ -r .dbxinit ]
+	then
+		cat .dbxinit >> $KDBXINIT
+	fi
+	echo 'set $kdbxport="65535"' >> $KDBXINIT
+fi
+
+# force console window off
+if [ "$1" = "nowin" ]
+then
+	echo "setenv console_window 0" >> $KEY
+	shift
+fi
+
+if [ -z "$1" ]
+then
+	DIR=`pwd`
+	if [ -n "`pwd | egrep 'kern'`" ]
+	then
+		LOAD=kern
+	elif [ -n "`pwd | egrep 'IO6prom'`" ]
+	then
+		LOAD=IO6prom
+	elif [ -n "`pwd | egrep 'prom'`" ]
+	then
+		LOAD=prom
+	elif [ -n "`pwd | egrep 'ide'`" ]
+	then
+		LOAD=ide
+	elif [ -n "`pwd | egrep 'symmon'`" ]
+	then
+		LOAD=symmon
+	else
+		LOAD=kernel
+	fi
+else
+	LOAD=$1
+fi
+
+case $LOAD in
+"dprom")
+	LOADFILE=$PROMDIR/$PRODUCT.O/dprom
+	;;
+"dprom.DBG")
+	LOADSYMMON=$STANDDIR/symmon/RACER10S.O/symmon
+	LOADFILE=$PROMDIR/$PRODUCT.O/dprom.DBG
+	;;
+"prom")
+	LOADFILE=$PROMDIR/$PRODUCT.O/prom
+	;;
+"symmon")
+	LOADFILE=$STANDDIR/symmon/$PRODUCT.O/symmon
+	;;
+"ide")
+	LOADFILE=$STANDDIR/ide/$PRODUCT.O/shell.ide
+	;;
+"kernel"|"kern")
+	if [ $PRODUCT = "RACER4S" ]
+	then
+		LOADFILE=$ROOT/usr/sysgen/IP30R4KSABLEboot/unix.kdebug
+		LOADSYMMON=$STANDDIR/symmon/RACERS.O/symmon
+		promify=promify
+	elif [ $PRODUCT = "RACER10S" ]
+	then
+		LOADFILE=$ROOT/usr/sysgen/IP30SABLEboot/unix.kdebug
+		LOADSYMMON=$STANDDIR/symmon/RACER10S.O/symmon
+		promify=promify
+	elif [ $PRODUCT = "RACER4" ]
+	then
+		LOADFILE=$ROOT/usr/sysgen/IP30R4Kboot/unix.kdebug
+		LOADSYMMON=$STANDDIR/symmon/RACERS.O/symmon
+		promify=promify
+	elif [ $PRODUCT = "SN0" ]
+	then
+		LOADFILE=$ROOT/usr/sysgen/IP27boot/unix.kdebug
+		# no symmon support for sn0 as it's load addr is different.
+	elif [ $PRODUCT = "T5I2" ]
+	then
+		# just for less typing for jeff's dbxing
+		LOADFILE=$ROOT/usr/sysgen/IP28boot/unix.kdebug
+	else
+		echo "unknown PRODUCT=$PRODUCT"
+		exit 1
+	fi
+	if [ $LOAD = "kern" ] 
+	then
+		LOADSYMMON=
+	else
+		# check starting address vs kernel.
+		SYMSTART=`$TOOLROOT/usr/bin/nm -Bnx $LOADSYMMON | grep ' T start' | sed 's/ T start//'`
+		KSYMSTART=`cat $WORKAREA/irix/kern/klocaldefs | grep 'SABLE_SYMMON_INITPC' | sed 's/^DBOPTS=[^=]*SYMMON_INITPC=//'`
+		if [ "$SYMSTART" -eq "$KSYMSTART" ]
+		then
+			echo "Kernel notion of symmon and symmon do not match $SYMSTART != $KSYMSTART"
+			exit 1
+		fi
+	fi
+	;;
+
+"IO6prom")
+	LOADFILE=$STANDDIR/IO6prom/SN0sprom
+	;;
+
+*)
+	LOADFILE=$1
+	;;
+esac
+
+if [ -z "$2" ]
+then
+	case "$PRODUCT" in
+	"RACER"|"RACERS"|"RACER4"|"RACER4S")
+		COMPLEX=r4k
+		;;
+	"RACER10"|"RACER10S")
+		COMPLEX=r10k
+		;;
+	"SN0")
+		COMPLEX=sn0
+		;;
+	esac
+
+	if [ -n "$MP" ]
+	then
+		COMPLEX=mp
+	fi
+else
+	COMPLEX=$2
+fi
+
+if [ -z "$FILESYSNAME" ]
+then
+	if [ -r $PROMDIR/sable/RootDev ]
+	then
+		FILESYSNAME="setenv filesysname $PROMDIR/sable/RootDev"
+	elif [ -r $WORKAREA/irix/kern/.rootdev ]
+	then
+		FILESYSNAME="setenv filesysname $WORKAREA/irix/kern/.rootdev"
+	fi
+else
+	FILESYSNAME="setenv filesysname $FILESYSNAME"
+fi
+
+case $COMPLEX in
+"mp")
+	echo "running MP R10000 config"
+	SYSKEY="$PROMDIR/sable/sable.mp.key"
+	BASEKEY="$PROMDIR/sable/sable.base.key"
+	;;
+"r4k")
+	echo "running R4000 config"
+	SYSKEY="$PROMDIR/sable/sable.r4k.key"
+	BASEKEY="$PROMDIR/sable/sable.base.key"
+	;;
+"sn0")
+	echo "running SN0 config"
+	SYSKEY="$WORKAREA/irix/kern/.sable.key.sn0"
+	;;
+"r10k"|"t5"|*)
+	echo "running R10000 config"
+	SYSKEY="$PROMDIR/sable/sable.r10k.key"
+	BASEKEY="$PROMDIR/sable/sable.base.key"
+	;;
+esac
+
+# run $SABLE, /usr/tmp/sable or just 'sable'.
+if [ -z "$SABLE" ]
+then
+	if [ -x /usr/tmp/sable ]
+	then
+		SABLE=/usr/tmp/sable
+	else
+		SABLE=sable
+	fi
+fi
+
+if [ -n "$FILESYSNAME" ]
+then
+	echo $FILESYSNAME >> $KEY
+fi
+
+cat $SYSKEY >> $KEY
+if [ -n "$BASEKEY" ]
+then
+	cat $BASEKEY >> $KEY
+fi
+
+if [ -n "$LOADSYMMON" ]
+then
+	echo "load " $LOADSYMMON >> $KEY
+fi
+
+if [ -n "$LOADPROM" ]
+then
+	echo "load " $LOADPROM >> $KEY
+fi
+
+echo "load " $LOADFILE >> $KEY
+
+PROM=`echo $LOADFILE | egrep 'prom' | egrep -v 'dprom'`
+if [ -n "$PROM" ]
+then
+	echo "reset_vector" >> $KEY
+fi
+
+echo $promify >> $KEY
+
+if [ -n "$KDBX" ]
+then
+	echo "debug x" >> $KEY
+	xwsh -icontitle sable -title "sable $LOADFILE" -e $SABLE -c $KEY &
+	XWSHPID=$?
+	kdbx -c $KDBXINIT -pcs /usr/local/bin/dbxpcs $LOADFILE
+	echo rm -f $KEY
+	rm -f $KEY
+	echo rm -f $KDBXINIT
+	rm -f $KDBXINIT
+	kill -9 $XWSHPID
+else
+	if [ -n "$DBXIT" ]
+	then
+		echo "run -c $KEY"
+		$TOOLROOT/usr/bin/dbx $SABLE
+	elif [ $SABLE = "dbx" ]
+	then
+		$TOOLROOT/usr/bin/dbx $LOADFILE
+	elif [ $SABLE = "kdbx" ]
+	then
+		kdbx -c $KDBXINIT -pcs /usr/local/bin/dbxpcs $LOADFILE
+	else
+		$SABLE -c $KEY
+	fi
+fi
+
+echo rm -f $KEY
+rm -f $KEY
+
+if [ -n "$KDBXINIT" ]
+then
+	echo rm -f $KDBXINIT
+	rm -f $KDBXINIT
+fi
+
+exit 0

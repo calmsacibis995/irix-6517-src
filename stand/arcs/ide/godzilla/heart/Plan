@@ -1,0 +1,200 @@
+#ident "ide/godzilla/heart/Plan: $Revision 1.1$"
+
+
+		HEART LEVEL 1 DIAG PLAN
+		=======================
+
+Summary
+-------
+The Heart level 1 Diagnostics check as much functionality as possible for a
+system comprising the processor, the heart, the bridge and the local memory 
+(plus eprom and serial port and scsi).
+The current discussions and open issues are also listed.
+Read the ide/IP30/Plan for the overall plan: the first priority is to get
+the emulation tests running, i.e. with an R4k type processor.
+
+Assumptions
+-----------
+- The pon_heart test has passed
+- The prom has already configured the memory
+- The connection heart-bridge needs to be established and working in order to 
+  fetch ide either from the prom or from disk; the bridge per se is not 
+  tested or used beyond that purpose.
+
+
+1. R/W to registers
+===================
+All R/W bits from all registers can be checked (each register is given a RW
+mask), except the following registers:
+	- entire Mode register 
+	- SDRAM mode register
+	- mem configuration (tested when we test the different memory
+	   configurations)
+
+QUESTION>> Is the write recovery time an issue for W/R registers ?
+		For some in IOU clock domain?
+Yau> I would put some nop's between write and read of the same register, any
+heart register. Widget Config registers in IOU may have more restrictions.
+We'll know more after some simulation.
+
+R/W is be done in 64 bits.
+
+
+2. Special function tests
+=========================
+
+ECC functionality
+-----------------
+Use the SB/DB_ErrGen bits in the mode register to test single/double bit ECC.
+See ide/IP30/ecc/README for details.
+
+memory tests
+-------------
+Assumption: the memory probe was completed. The type/size of DIMM's are known.
+Most tests are ported from IP26 (Teton).
+
+fetch and Ops (T5 only)
+-----------------------
+For each of the "fetch and Ops" functions, check that the function works
+with local memory.
+For each of Fetch&Inc (load and store), Fetch&Dec (load and store), Fetch&Clr
+(load only), AND (store only), OR (store only), test on one memory address:
+1/ write a know non-zero value to the memory address,
+2/ perform the fetch&op operation on it (load or store)
+3/ check the final value against the expected value
+This must be written in assembly code.
+
+
+3. Register functionality tests
+===============================
+Summary
+-------
+Basically the widget and flow control registers are not tested at 
+the heart level 1 diags.
+The other registers can be grouped under 3 classes:
+the error registers (hr_piu_acc.c, some are checked in ecc.c), 
+interrupt registers (hr_intr.c), and misc registers (hr_misc.c). 
+All can be tested at the heart level 1 diags.
+
+a couple more general purpose functions are also provided:
+- hr_regs: to R/W heart registers (contains register description)
+- hr_reset: to reset the whole system
+- hr_util: to read and write heart registers
+
+Widget Configuration Registers
+------------------------------
+Widget Identification Register: 	read REV_NUM, PART_NUM, MFG_NUM for the
+					heart widget only (widget 8) and
+					compare with expected values
+
+Widget Status Register:				|
+Widget Error Upper Address Reg			|
+Widget Error Lower Address Reg.			|
+Widget Control Register				|
+Widget Request Time-out Value Register		| Some of these registers could
+Widget Error Command Word Reg.			|  be tested in Level2 diags
+Widget LLP Configuration Register		|
+Widget Target Flush Register			|
+Widget Interrupt Status Register		|
+Widget Error Type Register			|
+Widget Error Mask Register			|
+
+Control Registers
+------------------------------
+Mode Register 				perform RW tests only on selected bits
+					 (IntEn, GP_Flag, CorrECC_Lock,
+					 ReducedPower, MemERE, SB/DB_ERRGen,
+					 REFS) and define a set of diag "modes"
+					 to be used.
+SDRAM Mode Register			check access to different physical
+					 banks during mem tests.
+Memory Refresh Period Register		will not be tested: the value is loaded 
+					 into a counter, which is not readable.
+Memory Request Arbitration Reg.		define one state in which diags can be
+					 run
+MemCfg0 Register				| given
+MemCfg1 Register				| given
+MemCfg2 Register				| N/A for SR
+MemCfg3 Register				| N/A for SR
+
+Flow Control Mode Register		use IncFC_Cntr/Timer to test the flow
+					 control credit counter and timer
+QUESTION>> what is the credit bias?
+Yau> It is a number for the maximum en-route graphics write packets. 
+There is a mail that I will dig up to show how to determine this number. 
+Some system simulation will be done to determine the correct number.
+
+
+Flow Control Timer Limit Register	check that content is loaded into the
+					 timers when a loading condition is met
+Flow-Controlled Pipe Head 0 Address Register	| 
+Flow-Controlled Pipe Head 1 Address Register	|  
+QUESTION>> can this be tested without another widget?
+Yau> You can read/write to it. That's pretty much it. i
+To test the full function, you need a widget that can return Write Response 
+Packet to adjust flow control credits.
+
+Flow Control Credit Counter 0		tested with the mode register (above)
+Flow Control Credit Counter 1		tested with the mode register (above)
+Flow Control Timer 0			tested with the mode register (above)
+Flow Control Timer 1			tested with the mode register (above)
+
+QUESTION>> How can we test part of the functionality of these?
+Yau> We need to find a way to get Write Responses back to test it. I think
+bridge can do it. We may set graphic pipe head address to where bridge is.
+Steve, will this work?
+Miller> Not to sure what the question is but I take a guess, If you want to 
+know does the bridge response to crosstalk write request w/ response packets?
+THe answer is yes the bridge will generate a write response packet after the
+write has been done.
+
+(error registers)
+Status Register				read and check against the expected
+					 value
+Processor Bus Error Address Reg.	generate a bus error (create bus error
+Processor Bus Error Misc. Reg.		 diags) 
+					 the syndrome is tested with the ECC 
+					 diags
+
+Memory Addr/Data Error Register			| tested with ECC
+Bad Memory Data Register			| tested with ECC
+PIU Access Error Register		access a reserved PIUregister and check
+					 the contents of this register.
+
+QUESTION>> when is a PIU access error generated ?
+
+QUESTION>> Are all the undefined addresses reserved ? Which *are* reserved ?
+Yau> Yes, they are reserved. The range of PIU register space is shown in 
+the address map in Chap. 3 in HEART Spec. Besides the ones listed in the 
+register address table, they are all reserved.
+
+Interrupt Registers
+------------------------------
+Interrupt Mask Register, IM0		see the effect of masking on Interrupt
+					 Status Register to Interrupt Masked
+					 status register
+Interrupt Mask Register, IM1			| used by pon_heart
+Interrupt Mask Register, IM2			| N/A for SR
+Interrupt Mask Register, IM3			| N/A for SR
+Set Interrupt Status Register		use both set/clear and check the effect
+					 let it interrupt the processor (?)
+Clear Interrupt Status Register		 on the Interrupt Status Register
+Interrupt Status Register		see above
+Interrupt Masked Status Register	see above
+Exception Cause Register		check the status, depending on the
+					 error condition (these bits will
+					 normally be tested as parts of other
+					 diagnostics)
+
+For all error testing, check the Interrupt Status Register or Exception Cause
+Register where applicable.
+
+Misc. Registers
+------------------------------
+Fixed Timebase Register			use all 3 registers (timebase, compare,
+Compare Register			 trigger) to code a time base to be
+Trigger Register			 checked with analyzer (HW) or wait for
+					 heart to set the interrupt bit (SW)
+					 Both should be implemented.
+Processor ID Register			read and compare with expected value
+Sync Register				read and check it is 0

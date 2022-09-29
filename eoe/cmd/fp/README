@@ -1,0 +1,153 @@
+
+	Support for creation of DOS partitions (extended/logical)	4/17/96
+	=========================================================
+
+This file contains some informal documentation about the changes that I 
+introduced in mkfp in order to support creation of DOS partitions on various
+devices. Earlier versions of mkfp merely supported creation of one large 
+DOS partition on floppies and flopticals. Now, with the changes that I've 
+introduced, one can:
+
+(1) Create DOS Type 6 (Huge partitions).
+(2) Create DOS Type 5 (Extended partitions, with logical volumes inside).
+
+on a variety of devices such as PC cards, syquest, zip, hard-drives. My 
+addition doesn't override any previously existing functionality, but rather
+adds to it. Currently, floppies and flopticals are still formatted by the
+old code (that doesn't allow partitions to be placed on them). 
+
+What this program is not
+========================
+mkfp is not a partition table manipulator. Each invocation of mkfp will lead
+to the device being reformatted, and new partitions being placed on it. It is
+not possible to modify the sizes/types of existing DOS partitions using mkfp.
+
+Indexing of partitions
+======================
+A user could specify an arbitrary number of DOS partitions that are to be 
+created (with the -p option). Each partition that is created has an index,
+which is also used by mount_dos to identify partitions.
+
+The first three partitions that are requested to be created result in regular 
+primary partitions. They have indices 1, 2, 3. The fourth and subsequent
+partitions that are created, are actually logical volumes that are created
+inside an extended partition. The index of the extended partition is 4, and
+the logical partitions inside this would be 5, 6, 7....
+
+Hence a mkfp request to create (say) 5 DOS partitions would result in:
+
+partitions with index: 1, 2, 3, 5, 6 being created.
+
+partition: 1, 2, 3 	- Regular primary partition.
+partition: 5, 6		- Logical volumes inside extended partition.
+partition: 4		- Extended partition, Implicitly created.
+
+Since DOS has exactly four partition table entries in the primary partition
+table, it is necessary to create an extended partition and logical volumes 
+within this, when the user requests more than four partitions to be created.
+
+Implementation Notes
+====================
+
+Initially, a DOS formatting/partitioning utility was developed as a standalone
+tool and then it was merged with mkfp. The bulk of this can be found in the
+files:
+
+(1) part.c 	- Routines to handle partition table creation.
+(2) device.c	- Routines to perform SCSI query.
+(3) dos.c	- Routines to create dos file system inside partitions.
+(4) misc.c	- Routines for other miscellaneous purposes.
+
+When primary partitions are created, entries are placed in the primary
+partition table. The starting head/sector/cylinder and the ending head/sector/
+cylinder for the partition needs be stored in the partition table entry. Along
+with this, information about the starting logical sector number as well as the
+total number of sectors in the partition have got to be stored in partition
+table entry. Partitions are cylinder aligned. 
+
+DOS doesn't use the physical disk geometry. Instead, it *assumes* a fake
+geometry, that depends upon the capacity of the device in question. The
+logic used in Adaptec is:
+
+	Capacity >= 1Gbyte => heads = 255, sectors = 63, compute C = cyl.
+	Capacity <  1Gbyte => heads = 64,  sectors = 32, compute C = cyl.
+
+Starting head number for:
+
+	Primary partition #1: 		starting head = 1.
+	Primary partition #2, #3, #4:	starting head = 0.
+	Logical partition #5, #6, ...:	starting head = 1.
+
+Logical partitions
+==================
+
+In order to get around the fact that can be only four primary partitions,
+one could create an extended primary partition, within which any number
+of logical partitions can be created. Logical partitions are slightly
+different from primary partitions. They form a linked list of sorts.
+Each logical partition has a partition table that has two meaningful
+partition table entries. The first entry has information about the start
+of the current partition (with respect to the beginning of this partition
+table) as well as the number of sectors in it. The second entry has some
+information about the next logical partition (Its offset with respect to
+the beginning of the extended partition). 
+
+Below is a sample extended partition, with three logical volumes, with
+indices: 5, 6, 7.
+
+Here 
+p1, p2 are the first two partition table entries, in Log. Vol (5)
+q1, q2 are the first two partition table entries, in Log. Vol (6)
+r1, r2 are the first two partition table entries, in Log. Vol (7)
+
+
+
+    <-------------------- Extended Partition ------------------------> 
+
+    <---- Log Vol (5)------><---- Log Vol (6)---><---- Log Vol (7)--->
+ ---+-------+-------+------+------+------+------+------+------+------+------
+    |Partn  |       |Data  |Partn |      |Data  |Partn |      |Data  | 
+    |Tbl    |       |Area  |Tbl   |      |Area  |Tbl   |      |Area  | 
+    |       |       |      |      |      |      |      |      |      | 
+    |-------|       |      |------|      |      |------|      |      | 
+    |p1     |       |      |q1    |      |      |r1    |      |      | 
+    |-------|       |      |------|      |      |------|      |      | 
+    |p2     |       |      |q2    |      |      |r2    |      |      | 
+ ---+-------+-------+------+------+------+------+------+------+------+------
+    |               |      |             |      |             |      |
+    |<------------->|<---->|<----------->|<---->|<----------->|<---->|
+    |   p1->start   p1->num|  q1->start  q2->num|  r1->start  r1->num|
+    |                      |                    |
+    |<-------------------->|                    |
+    |       p2->start                           |
+    |<----------------------------------------->|
+    |           q2->start
+
+
+p1, q1, r1 contain information about the partitions: 5, 6, 7.
+p2, q2, r2 contain information about the "next" logical partition: 6, 7, 8.
+
+p1->start = starting sector of partition 5, with respect to partn. tbl 5.
+p1->num   = numbr of sectors in partition 5.
+p2->start = starting sector of partition 6 
+            with respect to start of extended partition.
+
+q1->start = starting sector of partition 6, with respect to partn. tbl 6.
+q1->num   = numbr of sectors in partition 6.
+q2->start = starting sector of partition 7
+	    with respect to start of extended partition.
+
+r1->start = starting sector of partition 7, with respect to partn. tbl 7.
+r1->num   = numbr of sectors in partition 7.
+r2->start = zero (last logical volume)
+	
+
+The offset of the data portion of each logical partition, with respect to
+the beginning of its partition table, is always one track size. Please note
+that there can be only one extended partition on any media.
+
+
+
+
+
+

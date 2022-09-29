@@ -1,0 +1,51 @@
+#! /sbin/sh
+#Tag 0x00000f00
+
+is_deskside ()
+{
+	maxslot=0
+	hinv -c iobd | grep Ebus | sed "s/://g" | ( \
+	while read io brd ebus slot slotnum io4 rev revnum; do
+		if [ $slotnum -gt $maxslot ]; then
+			maxslot=$slotnum;
+		fi;
+	done;
+	if [ $maxslot -gt 0 -a $maxslot -lt 11 ]; then
+		echo 1
+	else
+		echo 0
+	fi)
+}
+
+case "$1" in
+'start')
+	# check to see if any drives need firmware downloaded, on powerup
+	# This is to handle any drives moved from another system, etc.,
+	# This just warns if any drives should be upgraded.
+	/sbin/diskpatch -W
+	;;
+'stop')
+	# if we are rebooting, then don't spin down any of the drives.
+	# otherwise spin down all of the drives that benefit from this
+	set "`/sbin/who -r`"
+	if [ "$7" != "6" ]
+	then
+	    if hinv -c iobd | grep IO4 > /dev/null
+	    then # [Power] Challenge/Onyx DM/L/XL  (EVEREST Machines)
+		    if [ `is_deskside` -eq 1 ]; then
+			    spinagain=-S11
+		    else
+			    spinagain=-S5
+		    fi
+	    elif [ "`hinv -c disk | grep 'Disk.*controller *[1-4]' | wc -l`" -gt 3 ]
+	    then
+			# challenge S, jag or indigo2/challenge M w/external drives
+		    spinagain=-S4
+	    fi
+	    /sbin/diskpatch -H 20 $spinagain
+	fi
+	;;
+*)
+	echo "usage: $0 {start|stop}"
+	;;
+esac

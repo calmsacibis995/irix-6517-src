@@ -1,0 +1,392 @@
+#!/bin/csh
+#
+# Verify basic fsr/fsctl functionality and obvious corner cases
+#
+# fsrverify testdir
+#
+#	testdir should be in an otherwise quiescient file system
+#	(Free block counts are checked before and after various tests.
+#	Discrepancies cause this script to fail).
+#
+# uses the following un-distributed programs -- expected to be in .
+#	testfsctl
+#	exop ne|dump|split|cat|ilock
+#	rsf		-disorganize file
+#	fop verify|mk
+#	indir
+#
+if ( $#argv != 1 ) then
+	echo usage: $0 testdir
+	exit 1
+endif
+set testfsctl=./testfsctl
+set exop=./exop
+set rsf=./rsf
+set fop=./fop
+set indir=./indir
+#set fsr=/usr/etc/fsr
+set fsr=../fsr/fsr
+
+set dir=$1
+set dev=`/etc/devnm $dir|awk '{print $1}'`
+
+#
+# XXX unmount and fsck the file system to make sure we're starting with
+# XXX a clean slate
+#
+
+#
+# "naturally" create a couple of files with many fragmented extents
+#
+set nonomatch
+echo ==== rm -f $dir/u?
+rm -f $dir/u?
+unset nonomatch
+
+set freebb=`df -b $dir | tail -1 | awk '{print $5}'`
+set unixbb=`ls -s /unix | awk '{print $1}'`
+set nunix=`expr $freebb / $unixbb`
+if ( $nunix < 3 ) then
+	echo ==== Not enough space in $dev.  Need space for 3 copies of /unix.
+	exit 1
+endif
+if ( $nunix > 3 ) @ nunix = 3
+while ( $nunix != 0 )
+	cp /unix $dir/u$nunix &
+	@ nunix -= 1
+end
+wait
+set targetf=$dir/u
+mv $dir/u1 $targetf
+rm $dir/u?
+
+# ---------------------------------------------------------------------------
+#
+# Part One - easy tests
+#
+echo ==== `date`
+echo ====
+echo ==== Part One 
+echo ====
+echo ==== Verify basic functionality
+echo ====
+
+ls -l $targetf >/tmp/ls.before.$$
+
+echo ==== exop ne $targetf
+$exop ne $targetf
+echo ==== $fsr $targetf
+$fsr $targetf
+if ( $status ) then
+	echo fsr failed: status = $status
+	exit
+endif
+echo ==== exop ne $targetf
+$exop ne $targetf
+echo ==== cmp /unix $targetf
+cmp /unix $targetf
+if ( $status ) then
+	echo cmp failed
+	exit
+endif
+
+echo ==== comparing meta-data: /unix $targetf
+ls -l $targetf >/tmp/ls.after.$$
+cmp /tmp/ls.before.$$ /tmp/ls.after.$$
+if ( $status ) then
+	echo meta-data does not compare: \(ls -l before and after\)
+	echo \(was there other activity in the file system\?\)
+	cat /tmp/ls.before.$$
+	cat /tmp/ls.after.$$
+else
+	rm /tmp/ls.before.$$ /tmp/ls.after.$$
+endif
+echo ==== rm $targetf
+rm $targetf
+
+set f0=`df -b $dir | tail -1 | awk '{print $5}'`
+if ( $f0 != $freebb ) then
+	echo ==== warning: before fsr freebb was $freebb, now $f0...
+	exit 1
+endif
+
+echo ==== sync
+sync
+
+echo ==== Part One: PASS PASS PASS PASS PASS PASS PASS PASS
+
+# ---------------------------------------------------------------------------
+#
+# Part Two - fsctl driver code paths
+#
+
+echo ==== `date`
+echo ====
+echo ==== Part Two
+echo ====
+echo ==== Verify /dev/fsctl
+
+#driver ICOMMIT	- properly flags extent error cases 
+#	-direct extents
+#		- fail if ne < 1 or ne > EFS_MAXEXTENTS
+#		- fail if bn+len not valid
+#		- fail if bn+len not allocated
+#		- fail if any ex_offset invalid
+#		- fail if i_size and #blocks in extents inconsistent
+#	-indirect extents
+#		- fail if ne < 1 or ne > EFS_DIRECTEXTENTS
+#		- fail if numindirbbs inconsistent with #direct extents
+#		- fail if bad ex_offset
+#	-ICOMMIT action
+#		- times preserved on inode
+#
+cp /unix $targetf
+echo ==== testfsctl $targetf
+$testfsctl $targetf
+if ( $status == 1 ) then
+	echo testfsctl FAILed
+	exit 1
+endif
+
+rm $targetf
+
+sync
+
+set f0=`df -b $dir | tail -1 | awk '{print $5}'`
+if ( $f0 != $freebb ) then
+	echo ==== warning: freebb was $freebb, now $f0...
+	exit 1
+endif
+
+#driver open(2) - properly fails to allow multiple open(2)s
+
+#driver ILOCK	- fail on multiple ILOCK
+#		- fail on bogus dev
+#		- fail on bogus inum
+#		- fail on unallocated dev/ino
+#		- fail on dev/ino not reg file
+#		- fail on not EFS file system
+
+#driver
+
+echo ==== Part Two: PASS PASS PASS PASS PASS PASS PASS PASS
+
+# ---------------------------------------------------------------------------
+#
+# Part Three - lib.c/movex() and driver transition cases
+#
+#                11->12
+#                12->13          0->1 indirbbs
+#                13->12          1->0 indirbbs
+#                12->1
+#                13->1           1->0 indirbbs
+#                63->64
+#                64->65          1->2 indirbbs
+#                65->64          2->1 indirbbs
+#                128->129        2->3 indirbbs
+#                129->1          3->0 indirbbs
+#
+echo ==== `date`
+echo ====
+echo ==== Part Three
+echo ====
+echo ==== Verify movex -- fsr library
+echo ====
+
+
+echo ==== 11 to 12
+set file=$dir/11to12
+rm -f $file
+$fop -o m -b 22 $file
+$rsf 2 $file
+if ( `$exop ne $file | awk '{print $1}'` != 11 ) then
+	echo ==== $file not 11 extents
+	exit 1
+endif
+$fop -o v $file
+$exop split 5 $file
+if ( `$exop ne $file | awk '{print $1}'` != 12 ) then
+	echo ==== $file not 12 extents
+	exit 1
+endif
+$fop -o v $file
+rm $file
+
+sync
+
+echo ==== 12 to 13
+set file=$dir/12to13
+rm -f $file
+$fop -o m -b 24 $file
+$rsf 2 $file
+if ( `$exop ne $file | awk '{print $1}'` != 12 ) then
+	echo ==== $file not 12 extents
+	exit 1
+endif
+$fop -o v $file
+$exop split 5 $file
+if ( `$exop ne $file | awk '{print $1}'` != 13 ) then
+	echo ==== $file not 13 extents
+	exit 1
+endif
+$fop -o v $file
+rm $file
+
+sync
+
+echo ==== 13 to 12
+set file=$dir/13to12
+rm -f $file
+$fop -o m -b 13 $file
+$rsf 1 $file
+if ( `$exop ne $file | awk '{print $1}'` != 13 ) then
+	echo ==== $file not 13 extents
+	exit 1
+endif
+$fop -o v $file
+$exop cat 2 $file
+if ( `$exop ne $file | awk '{print $1}'` != 12 ) then
+	echo ==== $file not 12 extents
+	exit 1
+endif
+$fop -o v $file
+rm $file
+
+sync
+
+echo ==== 13 to 1
+set file=$dir/13to1
+rm -f $file
+$fop -o m -b 13 $file
+$rsf 1 $file
+if ( `$exop ne $file | awk '{print $1}'` != 13 ) then
+	echo ==== $file not 13 extents
+	exit 1
+endif
+$fop -o v $file
+$fsr $file
+if ( `$exop ne $file | awk '{print $1}'` != 1 ) then
+	echo ==== \(warning\) $file not 1 extent...
+	$exop dump $file
+endif
+$fop -o v $file
+rm $file
+
+echo ==== 64 to 65
+set file=$dir/64to65
+rm -f $file
+$fop -o m -b 128 $file
+$rsf 2 $file
+if ( `$exop ne $file | awk '{print $1}'` != 64 ) then
+	echo ==== $file not 64 extents
+	exit 1
+endif
+$fop -o v $file
+$exop split 30 $file
+if ( `$exop ne $file | awk '{print $1}'` != 65 ) then
+	echo ==== $file not 65 extents
+	exit 1
+endif
+rm $file
+
+echo ==== 129 to 1
+set file=$dir/129to1
+rm -f $file
+$fop -o m -b 129 $file
+$rsf 1 $file
+if ( `$exop ne $file | awk '{print $1}'` != 129 ) then
+	echo ==== $file not 129 extents
+	exit 1
+endif
+sleep 1
+$fsr $file
+if ( `$exop ne $file | awk '{print $1}'` != 1 ) then
+	echo ==== \(warning\) $file not 1 extents...
+	$exop dump $file
+endif
+echo ==== $exop ne $file
+$exop ne $file
+rm $file
+
+#
+# XXX fake up some _indirect_ extent lists, too
+#	(beat on trimix)
+#
+
+echo ==== 'indir 2 1 -> 2'
+set file=$dir/129i
+rm -f $file
+$fop -o m -b 129 $file
+echo ==== rsf 1 $file
+$rsf 1 $file
+echo ==== indir $file 2 1
+$indir $file 2 1
+echo ==== excat 2 $file
+$exop cat 2 $file
+$fop -o v $file
+if ( $status != 0 ) then
+	echo ==== verify $file FAILED
+	exit 1
+endif
+rm $file
+
+echo ==== medium size file
+set medfile=$dir/medfile
+
+set nblocks=1000
+$fop -o m -b $nblocks $medfile
+echo ==== ls -l $medfile
+ls -l $medfile
+$rsf 5 $medfile
+$fsr $medfile
+$fop -o v $medfile
+if ( $status != 0 ) then
+	echo ==== verify $medfile FAILED
+	exit 1
+endif
+rm $medfile
+
+set f0=`df -b $dir | tail -1 | awk '{print $5}'`
+if ( $f0 != $freebb ) then
+	echo ==== warning: freebb was $freebb before fsr medfile, now $f0...
+	exit 1
+endif
+
+echo ==== big file
+set bigfile=$dir/bigfile
+set nblocks=`expr $freebb / 4`
+#make sure there's room for 12*MAXINDIRBBS x 2
+set nblocks=`expr $nblocks - 768`
+if ($nblocks > 24576) set nblocks=24576
+
+echo ==== '[mkfile]' fop -o m -b $nblocks $bigfile
+$fop -o m -b $nblocks $bigfile
+
+echo ==== $rsf 1 $bigfile
+$rsf 1 $bigfile
+
+echo ==== $exop ne $bigfile
+$exop ne $bigfile
+
+echo ==== $fsr $bigfile
+$fsr $bigfile
+
+echo ==== $exop ne $bigfile
+$exop ne $bigfile
+
+echo ==== $fop -o v $bigfile
+$fop -o v $bigfile
+if ( $status != 0 ) then
+	echo ==== verify $bigfile FAILED
+	exit 1
+endif
+
+rm $bigfile
+
+set f0=`df -b $dir | tail -1 | awk '{print $5}'`
+if ( $f0 != $freebb ) then
+	echo ==== warning: freebb was $freebb before bigfile, now $f0...
+	exit 1
+endif
+
+echo ==== Part Three: PASS PASS PASS PASS PASS PASS PASS PASS

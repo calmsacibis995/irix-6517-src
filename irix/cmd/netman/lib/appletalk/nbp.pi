@@ -1,0 +1,92 @@
+/*
+ * Copyright 1991, Silicon Graphics, Inc.
+ * All Rights Reserved.
+ *
+ * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Silicon Graphics, Inc.;
+ * the contents of this file may not be disclosed to third parties, copied or
+ * duplicated in any form, in whole or in part, without the prior written
+ * permission of Silicon Graphics, Inc.
+ *
+ * RESTRICTED RIGHTS LEGEND:
+ * Use, duplication or disclosure by the Government is subject to restrictions
+ * as set forth in subdivision (c)(1)(ii) of the Rights in Technical Data
+ * and Computer Software clause at DFARS 252.227-7013, and/or in similar or
+ * successor clauses in the FAR, DOD or NASA FAR Supplement. Unpublished -
+ * rights reserved under the Copyright Laws of the United States.
+ *
+ * $Revision: 1.4 $
+ */
+
+/*
+ * AppleTalk Name Binding Protocol
+ */
+
+import ddp, atp, asp, afp, pap;
+
+protocol nbp "AppleTalk Name Binding Protocol" : ddp(2)
+{
+    enum function {
+	BrRq=1, LkUp=2, LkUpReply=3, FwdReq=4
+    };
+
+    struct ntuple
+    {
+	u_short		netnum "Network Number" -v;
+	u_char		nodeid "Node ID" -v;
+	u_char		socknum "Socket Number" -v;
+	u_char		enumerator "Enumerator" -v;
+	u_char		objlen "Object Length" -vv;
+	char		object "Object" [objlen]-v;
+	u_char		typelen "Type Length" -vv;
+	char		type "Type" [typelen] -v;
+	u_char		zonelen "Zone Length" -vv;
+	char		zone "Zone" [zonelen] -v;
+
+	if (func == LkUpReply)
+	{
+	    if (!strncmp(type, "AFPServer", typelen))
+	    {
+		// It is afp packets
+		nest asp : atp(3:(netnum<<16)|(nodeid<<8)|socknum);
+		nest asp : atp(3:(nodeid<<8)|socknum);
+		// Save object name and long and short header.
+		ddp_addhost (object, (netnum<<16)|(nodeid<<8)|socknum);
+		ddp_addhost (object, (nodeid<<8)|socknum);
+	    }
+	    else if (!strncmp(type, "LaserWriter", typelen))
+	    { 
+		// It is pap packets
+		nest pap : atp(3:(netnum<<16)|(nodeid<<8)|socknum);
+		nest pap : atp(3:(nodeid<<8)|socknum);
+		// Save object name and long and short header.
+		ddp_addhost (object, (netnum<<16)|(nodeid<<8)|socknum);
+		ddp_addhost (object, (nodeid<<8)|socknum);
+	    }
+	}
+    };
+
+    function		func "Function" : 4;
+    u_char		tcnt "Tuple Count" : 4 -v;
+    u_char		id "NBP ID";
+    ntuple		nbptuple "NBP Tuples" [tcnt] -v;
+}
+
+%{
+/*
+ * TODO: optimize this to search for and decode only LkUpReply tuples.
+ */
+static void nbp_decode(DataStream *, ProtoStack *, PacketView *);
+
+void
+nbp_snoop_lkupreply(DataStream *ds, ProtoStack *ps)
+{
+	int tell;
+	static PacketView *nullpv;
+
+	if (nullpv == 0)
+		nullpv = null_packetview();
+	tell = ds_tell(ds);
+	nbp_decode(ds, ps, nullpv);
+	(void) ds_seek(ds, tell, DS_ABSOLUTE);
+}
+%}

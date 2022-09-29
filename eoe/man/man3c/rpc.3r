@@ -1,0 +1,1598 @@
+'\"!  tbl | mmdoc
+'\"macro stdmacro
+.\" @(#)rpc.3n	2.4 88/08/08 4.0 RPCSRC; from 1.19 88/06/24 SMI
+.TH RPC 3R
+.SH NAME
+rpc \- Remote Procedure Call (RPC) library routines
+.SH SYNOPSIS AND DESCRIPTION
+These routines allow C programs to make procedure
+calls on other machines across the network.
+First, the client calls a procedure to send a
+data packet to the server.
+Upon receipt of the packet, the server calls a dispatch routine
+to perform the requested service, and then sends back a
+reply.
+Finally, the procedure call returns to the client.
+.\".LP
+.\"Routines that are used for Secure RPC (DES authentication) are described in
+.\".BR rpc_secure (3N).
+.\"Secure RPC can be used only if DES encryption is available.
+.Ex
+#include <rpc/rpc.h>
+.Ee
+.if t .ne 8
+.Ex
+void
+auth_destroy(AUTH *auth)
+.Ee
+.IP
+A macro that destroys the authentication information associated with
+.IR auth .
+Destruction usually involves deallocation of private data
+structures. The use of
+.I auth
+is undefined after calling
+.IR auth_destroy(\|) .
+'\"-----------------
+.sp
+.if t .ne 6
+.Ex
+AUTH *
+authnone_create(void)
+.Ee
+.IP
+Create and returns an
+.SM RPC
+authentication handle that passes nonusable authentication
+information with each remote procedure call. This is the
+default authentication used by
+.SM RPC.
+'\"-----------------
+.sp
+.if t .ne 10
+.Ex
+AUTH *
+authunix_create(const char *host, int uid,
+	int gid, int len, int *aup_gids)
+.Ee
+.IP
+Create and return an
+.SM RPC
+authentication handle that contains
+.SM UNIX
+authentication information.
+The parameter
+.I host
+is the name of the machine on which the information was
+created;
+.I uid
+is the user's user
+ID;
+.I gid
+is the user's current group
+ID;
+.I len
+and
+.I aup_gids
+refer to a counted array of groups to which the user belongs.
+It is easy to impersonate a user.
+'\"-----------------
+.sp
+.if t .ne 5
+.Ex
+AUTH *
+authunix_create_default(void)
+.Ee
+.IP
+Call
+.I authunix_create(\|)
+with the appropriate parameters.
+'\"-----------------
+.sp
+.if t .ne 13
+.Ex
+enum clnt_stat
+callrpc(const char *host, u_long prognum,
+	u_long versnum, u_long procnum, 
+	xdrproc_t inproc, void *in,
+	xdrproc_t outproc, void *out) 
+.Ee
+.IP
+Call the remote procedure associated with
+.IR prognum ,
+.IR versnum ,
+and
+.I procnum
+on the machine,
+.IR host .
+The parameter
+.I in
+is the address of the procedure's argument(s), and
+.I out
+is the address of where to place the result(s);
+.I inproc
+is used to encode the procedure's parameters, and
+.I outproc
+is used to decode the procedure's results.
+This routine returns 0 if it succeeds, or the value of
+.I "enum clnt_stat"
+cast to an integer if it fails.
+The routine
+.I clnt_perrno(\|)
+is handy for translating failure statuses into messages.
+.IP
+Warning: calling remote procedures with this routine
+uses
+.SM UDP/IP
+as a transport; see
+.I clntudp_create(\|)
+for restrictions.
+You do not have control of timeouts or authentication using
+this routine.
+'\"-----------------
+.sp
+.if t .ne 16
+.Ex
+enum clnt_stat
+clnt_broadcast(u_long prognum,
+    u_long versnum, u_long procnum,
+    xdrproc_t inproc, void *in, 
+    xdrproc_t outproc, void *out, 
+    bool_t (*eachresult)(void *, struct sockaddr_in *))
+.Ee
+.IP
+Like
+.IR callrpc(\|) ,
+except the call message is broadcast to all locally
+connected broadcast nets. Each time it receives a
+response, this routine calls
+.IR eachresult(\|) ,
+whose form is:
+.RS
+.Ex
+bool_t
+eachresult(void *out, struct sockaddr_in *addr)
+.Ee
+where
+.I out
+is the same as
+.I out
+passed to
+.IR clnt_broadcast(\|) ,
+except that the remote procedure's output is decoded there;
+.I addr
+points to the address of the machine that sent the results.
+If
+.I eachresult(\|)
+returns 0,
+.I clnt_broadcast(\|)
+waits for more replies; otherwise it returns with appropriate
+status.
+Initially, it waits 4 seconds for a response before retrying.
+The next wait interval is doubled until it reaches a total wait time of
+45 seconds.
+See also
+\f2clnt_setbroadcastbackoff()\f1.
+.P
+Warning: broadcast sockets are limited in size to the
+maximum transfer unit of the data link.
+For ethernet, this value is 1500 bytes.
+For FDDI, this value is 4532 bytes.
+.RE
+'\"-----------------
+.sp
+.if t .ne 10
+.Ex
+enum clnt_stat
+clnt_broadcast_exp(u_long prognum,
+    u_long versnum, u_long procnum,
+    xdrproc_t inproc, void *in, 
+    xdrproc_t outproc, void *out, 
+    bool_t (*eachresult)(void *, struct sockaddr_in *),
+    int inittime, waittime)
+.Ee
+.IP
+Like
+\f2clnt_broadcast()\f1,
+except you can specify the initial and total wait time.
+See also
+\f2clnt_setbroadcastbackoff()\f1.
+'\"-----------------
+.sp
+.if t .ne 13
+.Ex
+enum clnt_stat
+clnt_call(CLIENT *clnt, u_long procnum, 
+	xdrproc_t inproc, void *in, 
+	xdrproc_t outproc, void *out,
+	struct timeval tout)
+.Ee
+.IP
+A macro that calls the remote procedure
+.I procnum
+associated with the client handle,
+.IR clnt ,
+which is obtained with an
+.SM RPC
+client creation routine such as
+.IR clntudp_create(\|) .
+The parameter
+.I in
+is the address of the procedure's argument(s), and
+.I out
+is the address of where to place the result(s);
+.I inproc
+is used to encode the procedure's parameters, and
+.I outproc
+is used to decode the procedure's results;
+.I tout
+is the time allowed for results to come back.
+'\"-----------------
+.sp
+.if t .ne 10
+.Ex
+void
+clnt_control(CLIENT *clnt, u_int request, void *info)
+.Ee
+.IP
+A macro used to change or retrieve various information
+about a client object.
+.I request
+indicates the type of operation, and
+.I info
+is a pointer to the information. For both UDP and TCP,
+the supported values of
+.I request
+and their argument types and what they do are:
+.sp .5
+.TS
+lp-2 lp-1 lp-1.
+CLSET_TIMEOUT	struct timeval	set total timeout
+CLGET_TIMEOUT	struct timeval	get total timeout
+CLGET_SERVER_ADDR	struct sockaddr_in	get server's address
+CLGET_FD	int	get connection's file descriptor
+CLSET_FD_CLOSE	(ignored)	let clnt_destroy close fd 
+CLSET_FD_NCLOSE	(ignored)	don't let clnt_destroy close fd
+.TE
+.sp 
+Note: if you set the timeout using
+.IR clnt_control(\|) ,
+the timeout parameter passed to
+.I clnt_call(\|)
+will be ignored in all future calls.
+.IP
+The following operations are valid for UDP only:
+.sp .5
+.TS
+lp-2 lp-1 lp-1.
+CLSET_RETRY_TIMEOUT	struct timeval	set the retry timeout
+CLGET_RETRY_TIMEOUT	struct timeval	get the retry timeout
+.TE
+.sp .5
+The retry timeout is the time that UDP RPC
+waits for the server to reply before
+retransmitting the request.
+.IP
+The following operations are valid for TCP only:
+.sp .5
+.TS
+lp-2 lp-1 lp-1.
+CLSET_EINTR_RETURN	bool_t	set param to 1 to return on EINTR
+CLGET_EINTR_RETURN	bool_t	get return on EINTR flag
+.TE
+.DT
+'\"-----------------
+.sp
+.if t .ne 10
+.Ex
+CLIENT *
+clnt_create(const char *host, u_long prog, u_long vers,
+	const char *proto)
+.Ee
+.IP
+Generic client creation routine.
+.I host
+identifies the name of the remote host where the server
+is located.
+.I proto
+indicates which kind of transport protocol to use. The
+currently supported values for this field are \(lqudp\(rq
+and \(lqtcp\(rq.
+Default timeouts are set, but can be modified using
+.IR clnt_control(\|) .
+.IP
+Warning: Using
+.SM UDP
+has its shortcomings.  Since
+.SM UDP\s0-based
+.SM RPC
+messages can only hold up to 8 kilobytes of encoded data,
+this transport cannot be used for procedures that take
+large arguments or return huge results.
+'\"-----------------
+.sp
+.if t .ne 10
+.Ex
+CLIENT *
+clnt_create_vers(const char *host, u_long prog,
+	u_long *vers_out, u_long vers_low,
+	u_long vers_high, const char *proto)
+.Ee
+.IP
+Generic client creation with version checking. 
+The server must support a version between 
+.I vers_low 
+and 
+.IR vers_high ,
+inclusive.
+An error results if this can not be done.
+The value of
+.I vers_out 
+is set to the highest server-supported value.
+'\"-----------------
+.sp
+.if t .ne 7
+.Ex
+void
+clnt_destroy(CLIENT *clnt)
+.Ee
+.IP
+A macro that destroys the client's
+.SM RPC
+handle. Destruction usually involves deallocation
+of private data structures, including
+.I clnt
+itself.  Use of
+.I clnt
+is undefined after calling
+.IR clnt_destroy(\|) .
+If the
+.SM RPC
+library opened the associated socket, it will close it also.
+Otherwise, the socket remains open and
+it is the responsibility of the caller to close the socket.
+Use the CLGET_FD request to
+.IR clnt_control (\|)
+to obtain the descriptor or the CLSET_FD_CLOSE request to
+have \f2clnt_destroy\f1(\|) close it.
+'\"-----------------
+.sp
+.if t .ne 10
+.Ex
+bool_t
+clnt_freeres(CLIENT *clnt, xdrproc_t outproc, void *out)
+.Ee
+.IP
+A macro that frees any data allocated by the
+.SM RPC/XDR
+system when it decoded the results of an
+.SM RPC
+call.  The
+parameter
+.I out
+is the address of the results, and
+.I outproc
+is the
+.SM XDR
+routine describing the results.
+This routine returns 1 if the results were successfully
+freed,
+and 0 otherwise.
+'\"-----------------
+.sp
+.if t .ne 6
+.Ex
+void
+clnt_geterr(CLIENT *clnt, struct rpc_err *errp)
+.Ee
+.IP
+A macro that copies the error structure out of the client
+handle
+to the structure at address
+.IR errp .
+'\"-----------------
+.sp
+.if t .ne 8
+.Ex
+void
+clnt_pcreateerror(const char *s)
+.Ee
+.IP
+Print a message to standard error indicating
+why a client
+.SM RPC
+handle could not be created.
+The message is prepended with string
+.I s
+and a colon.
+Used when a
+.IR clnt_create(\|) ,
+.IR clntraw_create(\|) ,
+.IR clnttcp_create(\|) ,
+or
+.I clntudp_create(\|)
+call fails.
+'\"-----------------
+.sp
+.if t .ne 8
+.Ex
+void
+clnt_perrno(enum clnt_stat stat)
+.Ee
+.IP
+Print a message to standard error corresponding
+to the condition indicated by
+.IR stat .
+Used after
+.IR callrpc(\|) .
+'\"-----------------
+.sp
+.if t .ne 8
+.Ex
+void
+clnt_perror(CLIENT *clnt, const char *s)
+.Ee
+.IP
+Print a message to standard error indicating why an
+.SM RPC
+call failed;
+.I clnt
+is the handle used to do the call.
+The message is prepended with string
+.I s
+and a colon.
+Used after
+.IR clnt_call(\|) .
+'\"-----------------
+.sp
+.if t .ne 9
+.Ex
+void
+clnt_setbroadcastbackoff(void (*first)(struct timeval *tv),
+    	int (*next)(struct timeval *tv))
+.Ee
+.IP
+Set the timeout backoff iterator for clnt_broadcast().  The initial
+timeout is stored in 
+.I *tv 
+by
+.IR first() .
+Subsequent timeouts are computed
+in 
+.I *tv
+by
+.I next() ,
+which returns 1 until a backoff limit is reached,
+and thereafter returns 0.
+'\"-----------------
+.sp
+.if t .ne 9
+.Ex
+char *
+clnt_spcreateerror(const char *s)
+.Ee
+.IP
+Like
+.IR clnt_pcreateerror(\|) ,
+except that it returns a string
+instead of printing to the standard error.
+.IP
+Bugs: returns a pointer to static data that is overwritten
+on each call.
+'\"-----------------
+.sp
+.if t .ne 9
+.Ex
+char *
+clnt_sperrno(enum clnt_stat stat)
+.Ee
+.IP
+Take the same arguments as
+.IR clnt_perrno(\|) ,
+but instead of sending a message to the standard error
+indicating why an
+.SM RPC
+call failed, return a pointer to a string which contains
+the message.  The string ends with a
+.SM NEWLINE\s0.
+.IP
+.I clnt_sperrno(\|)
+is used instead of
+.I clnt_perrno(\|)
+if the program does not have a standard error
+(a server program quite likely does not), or if the
+programmer
+does not want the message to be output with
+.IR printf ,
+or if a message format different than that supported by
+.I clnt_perrno(\|)
+is to be used.
+.IP
+Note: unlike
+.I clnt_sperror(\|)
+and
+.IR clnt_spcreaterror(\|) ,
+.I clnt_sperrno(\|)
+returns a pointer to static data, but the
+result will not get overwritten on each call.
+'\"-----------------
+.sp
+.if t .ne 7
+.Ex
+char *
+clnt_sperror(CLIENT *clnt, const char *s)
+.Ee
+.IP
+Like
+.IR clnt_perror(\|) ,
+except that (like
+.IR clnt_sperrno(\|) )
+it returns a string instead of printing to standard error.
+.IP
+Bugs: returns a pointer to static data that is overwritten
+on each call.
+'\"-----------------
+.sp
+.Ex
+.if t .ne 9
+void
+clnt_syslog(CLIENT *clnt, const char *s)
+.Ee
+.IP
+Logs a LOG_ERR error to
+.IR syslog (3)
+indicating why an RPC call failed;
+\f2clnt\f1
+is the handle used to do the call.
+The message is prepended with string
+\f7s\f1
+and a colon.
+'\"-----------------
+.sp
+.if t .ne 10
+.Ex
+CLIENT *
+clntraw_create(u_long prognum, u_long versnum)
+.Ee
+.IP
+This routine creates a toy
+.SM RPC
+client for the remote program
+.IR prognum ,
+version
+.IR versnum .
+The transport used to pass messages to the service is
+actually a buffer within the process's address space, so the
+corresponding
+.SM RPC
+server should live in the same address space; see
+.IR svcraw_create(\|) .
+This allows simulation of
+.SM RPC
+and acquisition of
+.SM RPC
+overheads, such as round trip times, without any
+kernel interference. This routine returns
+.SM NULL
+if it fails.
+'\"-----------------
+.sp
+.if t .ne 15
+.Ex
+CLIENT *
+clnttcp_create(struct sockaddr_in *addr,
+	u_long prognum, u_long versnum,
+	int *sockp, u_int sendsize, u_int recvsize)
+.Ee
+.IP
+This routine creates an
+.SM RPC
+client for the remote program
+.IR prognum ,
+version
+.IR versnum ;
+the client uses
+.SM TCP/IP
+as a transport. The remote program is located at Internet
+address
+.IR *addr .
+If
+.I \%addr\->sin_port
+is 0, then it is set to the actual port that the remote
+program is listening on (the remote
+.I portmap
+service is consulted for this information). The parameter
+.I sockp
+is a socket; if it is
+.BR \s-1RPC_ANYSOCK\s0 ,
+then this routine opens a new one and sets
+.IR sockp .
+Since
+.SM TCP\s0-based
+.SM RPC
+uses buffered
+.SM I/O ,
+the user may specify the size of the send and receive buffers
+with the parameters
+.I sendsize
+and
+.IR recvsize ;
+values of 0 choose suitable defaults.
+This routine returns
+.SM NULL
+if it fails.
+'\"-----------------
+.sp
+.if t .ne 15
+.Ex
+CLIENT *
+clntudp_create(struct sockaddr_in *addr,
+	u_long prognum, u_long versnum, 
+	struct timeval wait, int *sockp)
+.Ee
+.IP
+This routine creates an
+.SM RPC
+client for the remote program
+.IR prognum ,
+version
+.IR versnum ;
+the client uses use
+.SM UDP/IP
+as a transport. The remote program is located at Internet
+address
+.IR addr .
+If
+.I \%addr\->sin_port
+is 0, then it is set to actual port that the remote
+program is listening on (the remote
+.I portmap
+service is consulted for this information). The parameter
+.I sockp
+is a socket; if it is
+.BR \s-1RPC_ANYSOCK\s0 ,
+then this routine opens a new one and sets
+.IR sockp .
+The
+.SM UDP
+transport resends the call message in intervals of
+.I wait
+time until a response is received or until the call times
+out.
+The total time for the call to time out is specified by
+.IR clnt_call(\|) .
+.IP
+Warning: since
+.SM UDP\s0-based
+.SM RPC
+messages can only hold up to 8 kilobytes
+of encoded data, this transport cannot be used for procedures
+that take large arguments or return huge results.
+'\"-----------------
+.sp
+.if t .ne 10
+.Ex
+CLIENT *
+clntudp_bufcreate(struct sockaddr_in *addr,
+	u_long prognum, u_long versnum,
+	struct timeval wait, int *sockp,
+	u_int sendsize, u_int recvsize)
+.Ee
+.IP
+Like 
+.IR clntudp_create(\|) ,
+except this call allows the user to specify the maximum 
+packet size for sending and receiving 
+.SM UDP\s0-based
+.SM RPC
+messages.
+'\"-----------------
+.sp
+.if t .ne 7
+.Ex
+void
+get_myaddress(struct sockaddr_in *addr)
+.Ee
+.IP
+Stuff the machine's
+.SM IP
+address into
+.IR *addr ,
+without consulting the library routines that deal with
+.IR /etc/hosts .
+The port number is always set to
+.IR htons(\f3\s-1PMAPPORT\s0\fP) .
+'\"-----------------
+.sp
+.if t .ne 10
+.Ex
+struct pmaplist *
+pmap_getmaps(addr)
+	struct sockaddr_in *addr;
+.Ee
+.IP
+A user interface to the
+.I portmap
+service, which returns a list of the current
+.SM RPC
+program-to-port mappings
+on the host located at
+.SM IP
+address
+.IR *addr .
+This routine can return
+.SM NULL\c
+\&.
+The command
+.RB ` "rpcinfo \-p" '
+uses this routine.
+'\"-----------------
+.sp
+.if t .ne 12
+.Ex
+u_short
+pmap_getport(struct sockaddr_in *addr, u_long prognum,
+	u_long versnum, u_int protocol)
+.Ee
+.IP
+A user interface to the
+.I portmap
+service, which returns the port number
+on which waits a service that supports program number
+.IR prognum ,
+version
+.IR versnum ,
+and speaks the transport protocol associated with
+.IR protocol .
+The value of
+.I protocol
+is most likely
+.B
+.SM IPPROTO_UDP
+or 
+.BR \s-1IPPROTO_TCP\s0 .
+A return value of 0 means that the mapping does not exist
+or that
+the
+.SM RPC
+system failured to contact the remote
+.I portmap
+service.  In the latter case, the global variable
+.I rpc_createerr(\|)
+contains the
+.SM RPC
+status.
+'\"-----------------
+.sp
+.if t .ne 15
+.Ex
+enum clnt_stat
+pmap_rmtcall(struct sockaddr_in *addr,
+	u_long prognum, u_long versnum, u_long procnum,
+	xdrproc_t inproc, void *in, 
+	xdrproc_t outproc, void *out,
+	struct timeval tout, u_long *portp)
+.Ee
+.IP
+A user interface to the
+.I portmap
+service, which instructs
+.I portmap
+on the host at
+.SM IP
+address
+.I *addr
+to make an
+.SM RPC
+call on your behalf to a procedure on that host.
+The parameter
+.I *portp
+will be modified to the program's port number if the
+procedure
+succeeds. The definitions of other parameters are discussed
+in
+.I callrpc(\|)
+and
+.IR clnt_call(\|) .
+This procedure should be used for a \(lqping\(rq and nothing else.
+See also
+.IR clnt_broadcast(\|) .
+.IR pmap_settimeouts(\|) ,
+and
+.IR pmap_setrmtcalltimeout(\|) .
+'\"-----------------
+.sp
+.if t .ne 9
+.Ex
+bool_t
+pmap_set(u_long prognum, u_long versnum,
+	u_long protocol, u_short port)
+.Ee
+.IP
+A user interface to the
+.I portmap
+service, which establishes a mapping between the triple
+.RI [ prognum ", " versnum ", " protocol\f1]
+and
+.I port
+on the machine's
+.I portmap
+service. The value of
+.I protocol
+is most likely
+.B
+.SM IPPROTO_UDP
+or 
+.BR \s-1IPPROTO_TCP\s0 .
+This routine returns 1 if it succeeds, 0 otherwise.
+Automatically done by
+.IR svc_register(\|) .
+'\"-----------------
+.sp
+.if t .ne 7
+.Ex
+void
+pmap_setrmtcalltimeout(struct timeval intertry)
+.Ee
+.IP
+Set the retry timeout for \f2pmap_rmtcall()\fP.  Note that the total timeout
+per call is an argument to \f2pmap_rmtcall()\fP.
+'\"-----------------
+.sp
+.if t .ne 8
+.Ex
+void
+pmap_settimeouts(struct timeval intertry,
+	struct timeval percall)
+.Ee
+.IP
+Set the retry and total timeouts for RPCs to the portmapper.  These
+timeouts are used explicitly by \f2pmap_set()\fP and \f2pmap_getport()\fP, and
+implicitly by \f2clnt*_create()\fP.
+'\"-----------------
+.sp
+.if t .ne 10
+.Ex
+bool_t
+pmap_unset(u_long prognum, u_long versnum)
+.Ee
+.IP
+A user interface to the
+.I portmap
+service, which destroys all mapping between the triple
+.RI [ prognum ", " versnum ", " *\f1]
+and
+.I ports
+on the machine's
+.I portmap
+service. This routine returns 1 if it succeeds, 0
+otherwise.
+'\"-----------------
+.sp
+.if t .ne 15
+.Ex
+int
+registerrpc(u_long prognum,
+	u_long versnum, u_long procnum,
+	void *(*procname)(void *),
+	xdrproc_t inproc, xdrproc_t outproc)
+.Ee
+.IP
+Register procedure
+.I procname
+with the
+.SM RPC
+service package.  If a request arrives for program
+.IR prognum ,
+version
+.IR versnum ,
+and procedure
+.IR procnum ,
+.I procname
+is called with a pointer to its parameter(s);
+.I progname
+should return a pointer to its static result(s);
+.I inproc
+is used to decode the parameters while
+.I outproc
+is used to encode the results.
+This routine returns 0 if the registration succeeded, \-1
+otherwise.
+.IP
+Warning: remote procedures registered in this form
+are accessed using the
+.SM UDP/IP
+transport; see
+.I svcudp_create(\|)
+for restrictions.
+'\"-----------------
+.sp
+.if t .ne 5
+.Ex
+struct rpc_createerr     rpc_createerr
+.Ee
+.IP
+A global variable whose value is set by any
+.SM RPC
+client creation routine
+that does not succeed.  Use the routine
+.I clnt_pcreateerror(\|)
+to print the reason why.
+'\"-----------------
+.sp
+.if t .ne 5
+.Ex
+void 
+_rpc_errorhandler(int priority, const char *format, ...)
+.Ee
+.IP
+Called by the RPC library routines to print an error message
+to \f2stderr\fP or to
+.IR syslog (3),
+if
+.IR openlog (3)
+was called. \f2priority\fP values are defined in
+.RI < syslog.h >. 
+\f2format\fP is printf-like format string.
+See comments in 
+.RI < rpc/errorhandler.h > 
+for details on defining 
+your own version for more sophisticated error handling.
+'\"-----------------
+.sp
+.if t .ne 8
+.Ex
+void
+svc_destroy(SVCXPRT *xprt)
+.Ee
+.IP
+A macro that destroys the
+.SM RPC
+service transport handle,
+.IR xprt .
+Destruction usually involves deallocation
+of private data structures, including
+.I xprt
+itself.  Use of
+.I xprt
+is undefined after calling this routine.
+'\"-----------------
+.sp
+.if t .ne 8
+.Ex
+fd_set svc_fdset;
+.Ee
+.IP
+A global variable reflecting the
+.SM RPC
+service side's
+read file descriptor bit mask; it is suitable as a parameter
+to the
+.IR select (2)
+system call. This is only of interest
+if a service implementor does not call
+.IR svc_run(\|) ,
+in order to do asynchronous event processing, for example.
+This variable is read-only (do not pass its address to
+.IR select !),
+yet it may change after calls to
+.I svc_getreqset(\|)
+or any creation routines.
+'\"-----------------
+.sp
+.if t .ne 6
+.Ex
+int svc_fds
+.Ee
+.IP
+Similar to
+.IR svc_fdset ,
+but limited to 32 descriptors. This
+interface is obsoleted by
+.IR svc_fdset .
+'\"-----------------
+.sp
+.if t .ne 9
+.Ex
+bool_t
+svc_freeargs(SVCXPRT *xprt, xdrproc_t inproc, void *in)
+.Ee
+.IP
+A macro that frees any data allocated by the
+.SM RPC/XDR
+system when it decoded the arguments to a service procedure
+using
+.IR svc_getargs(\|) .
+This routine returns 1 if the results were successfully
+freed,
+and 0 otherwise.
+'\"-----------------
+.sp
+.if t .ne 10
+.Ex
+bool_t
+svc_getargs(SVCXPRT *xprt, xdrproc_t inproc, void *in)
+.Ee
+.IP
+A macro that decodes the arguments of an
+.SM RPC
+request
+associated with the
+.SM RPC
+service transport handle,
+.IR xprt .
+The parameter
+.I in
+is the address where the arguments will be placed;
+.I inproc
+is the
+.SM XDR
+routine used to decode the arguments.
+This routine returns 1 if decoding succeeds, and 0
+otherwise.
+Only after this routine is called can the server call
+.IR fork (2)
+to create a child process to handle the request.
+'\"-----------------
+.sp
+.if t .ne 9
+.Ex
+struct sockaddr_in *
+svc_getcaller(SVCXPRT *xprt)
+.Ee
+.IP
+The approved way of getting the network address of the caller
+of a procedure associated with the
+.SM RPC
+service transport handle,
+.IR xprt .
+'\"-----------------
+.sp
+.if t .ne 9
+.Ex
+void
+svc_getreq(int rdfds)
+.Ee
+.IP
+This routine is provided for compatibility with old code.
+Use 
+.I svc_getreqset ()
+when developing new code.
+'\"-----------------
+.sp
+.if t .ne 9
+.Ex
+void
+svc_getreqset(fd_set *rdfds)
+.Ee
+.IP
+This routine is only of interest if a service implementor
+does not call
+.IR svc_run(\|) ,
+but instead implements custom asynchronous event processing.
+It is called when the
+.IR select (2)
+system call has determined that an
+.SM RPC
+request has arrived on some
+.SM RPC
+.IR socket(s) ;
+.I rdfds
+is the resultant read file descriptor bit mask.
+The routine returns when all sockets associated with the
+value of
+.I rdfds
+have been serviced.
+'\"-----------------
+.sp
+.if t .ne 10
+.Ex
+bool_t
+svc_register(SVCXPRT *xprt,
+    u_long prognum, u_long versnum,
+    void (*dispatch)(struct svc_req *,SVCXPRT *),
+    int protocol)
+.Ee
+.IP
+Associates
+.I prognum
+and
+.I versnum
+with the service dispatch procedure,
+.IR dispatch .
+If
+.I protocol
+is 0, the service is not registered with the
+.I portmap
+service.  If
+.I protocol
+is non-zero, then a mapping of the triple
+.RI [ prognum ", " versnum ", " protocol\f1]
+to
+\f2\%xprt\->xp_port\f1
+is established with the local
+.I portmap
+service (generally
+.I protocol
+is 0,
+.B
+.SM IPPROTO_UDP
+or 
+.B
+.SM IPPROTO_TCP
+).
+The procedure
+.I dispatch
+has the following form:
+.RS
+.Ex
+void
+dispatch(struct svc_req *request, SVCXPRT *xprt)
+.Ee
+.P
+The
+.I svc_register(\|)
+routine returns 1 if it succeeds, and 0 otherwise.
+.RE
+'\"-----------------
+.sp
+.if t .ne 6
+.Ex
+void
+svc_run(void)
+.Ee
+.IP
+This routine never returns. It waits for
+.SM RPC
+requests to arrive, and calls the appropriate service
+procedure using
+.I svc_getreq(\|)
+when one arrives. This procedure is usually waiting for a
+.I select(\|)
+system call to return.
+'\"-----------------
+.sp
+.if t .ne 9
+.Ex
+bool_t
+svc_sendreply(SVCXPRT *xprt, xdrproc_t outproc, void *out)
+.Ee
+.IP
+Called by an
+.SM RPC
+service's dispatch routine to send the results of a
+remote procedure call.  The parameter
+.I xprt
+is the request's associated transport handle;
+.I outproc
+is the
+.SM XDR
+routine which is used to encode the results; and
+.I out
+is the address of the results.
+This routine returns 1 if it succeeds, 0 otherwise.
+'\"-----------------
+.sp
+.if t .ne 8
+.Ex
+void
+svc_unregister(u_long prognum, u_long versnum)
+.Ee
+.IP
+Remove all mapping of the double
+.RI [ prognum ", " versnum ]
+to dispatch routines, and of the triple
+.RI [ prognum ", " versnum ", " *\f1]
+to port number.
+'\"-----------------
+.sp
+.if t .ne 8
+.Ex
+void
+svc_versquiet(SVCXPRT *xprt)
+.Ee
+.IP
+Tell the RPC library to not complain about version errors to the client.  This
+is useful when revving broadcast protocols that sit on a fixed address.
+'\"-----------------
+.sp
+.if t .ne 9
+.Ex
+void
+svcerr_auth(SVCXPRT *xprt, enum auth_stat why)
+.Ee
+.IP
+Called by a service dispatch routine that refuses to perform
+a remote procedure call due to an authentication error.
+'\"-----------------
+.sp
+.if t .ne 8
+.Ex
+void
+svcerr_decode(SVCXPRT *xprt)
+.Ee
+.IP
+Called by a service dispatch routine that cannot successfully
+decode its parameters. See also
+.IR svc_getargs(\|) .
+'\"-----------------
+.sp
+.if t .ne 8
+.Ex
+void
+svcerr_noproc(SVCXPRT *xprt)
+.Ee
+.IP
+Called by a service dispatch routine that does not implement
+the procedure number that the caller requests.
+'\"-----------------
+.sp
+.if t .ne 8
+.Ex
+void
+svcerr_noprog(SVCXPRT *xprt)
+.Ee
+.IP
+Called when the desired program is not registered with the
+.SM RPC
+package. Service implementors usually do not need this routine.
+'\"-----------------
+.sp
+.if t .ne 8
+.Ex
+void
+svcerr_progvers(SVCXPRT *xprt,
+	u_long low_vers, u_long high_vers)
+.Ee
+.IP
+Called when the desired version of a program is not registered
+with the
+.SM RPC
+package. Service implementors usually do not need this routine.
+'\"-----------------
+.sp
+.if t .ne 8
+.Ex
+void
+svcerr_systemerr(SVCXPRT *xprt)
+.Ee
+.IP
+Called by a service dispatch routine when it detects a system
+error
+not covered by any particular protocol.
+For example, if a service can no longer allocate storage,
+it may call this routine.
+'\"-----------------
+.sp
+.if t .ne 8
+.Ex
+void
+svcerr_weakauth(SVCXPRT *xprt)
+.Ee
+.IP
+Called by a service dispatch routine that refuses to perform
+a remote procedure call due to insufficient
+authentication parameters.  The routine calls
+.IR "svcerr_auth(xprt, \s-1AUTH_TOOWEAK\s0)" .
+'\"-----------------
+.sp
+.if t .ne 11
+.Ex
+SVCXPRT *
+svcraw_create(void)
+.Ee
+.IP
+This routine creates a toy
+.SM RPC
+service transport, to which it returns a pointer.  The
+transport
+is really a buffer within the process's address space,
+so the corresponding
+.SM RPC
+client should live in the same
+address space;
+see
+.IR clntraw_create(\|) .
+This routine allows simulation of
+.SM RPC
+and acquisition of
+.SM RPC
+overheads (such as round trip times), without any kernel
+interference.
+This routine returns
+.SM NULL
+if it fails.
+'\"-----------------
+.sp
+.if t .ne 11
+.Ex
+SVCXPRT *
+svctcp_create(int sock, u_int sendsize, u_int recvsize)
+.Ee
+.IP
+This routine creates a
+.SM TCP/IP\s0-based
+.SM RPC
+service transport, to which it returns a pointer.
+The transport is associated with the socket
+.IR sock ,
+which may be
+.BR \s-1RPC_ANYSOCK\s0 ,
+in which case a new socket is created.
+If the socket is not bound to a local
+.SM TCP
+port, then this routine binds it to an arbitrary port.  Upon
+completion,
+.I \%xprt\->xp_sock
+is the transport's socket descriptor, and
+.I \%xprt\->xp_port
+is the transport's port number.
+This routine returns
+.SM NULL
+if it fails. Since
+.SM TCP\s0-based
+.SM RPC
+uses buffered
+.SM I/O\s0,
+users may specify the size of the
+\f2send\f1
+and
+\f2receive\f1
+buffers; values of 0 choose suitable defaults.
+'\"-----------------
+.sp
+.if t .ne 11
+.Ex
+SVCXPRT *
+svcfd_create(int fd, u_int sendsize, u_int recvsize)
+.Ee
+.IP
+Create a service on top of any open descriptor. Typically,
+this
+descriptor is a connected socket for a stream protocol such
+as
+.SM TCP\s0.
+.I sendsize
+and
+.I recvsize
+indicate sizes for the send and receive buffers.  If they are
+zero, a reasonable default is chosen.
+'\"-----------------
+.sp
+.if t .ne 10
+.Ex
+SVCXPRT *
+svcudp_bufcreate(int sock,
+	u_int sendsize, u_int recvsize)
+.Ee
+.IP
+This routine creates a
+.SM UDP/IP\s0-based
+.SM RPC
+service transport, to which it returns a pointer.
+The transport is associated with the socket
+.IR sock ,
+which may be
+.BR \s-1RPC_ANYSOCK\s0 ,
+in which case a new socket is created.
+If the socket is not bound to a local
+.SM UDP
+port, then this routine binds it to an arbitrary port. Upon
+completion,
+.I \%xprt\->xp_sock
+is the transport's socket descriptor, and
+.I \%xprt\->xp_port
+is the transport's port number.
+This routine returns
+.SM NULL
+if it fails.
+.IP
+This allows the user to specify the maximun packet size for sending and 
+receiving
+.SM UDP\s0-based
+.SM RPC messages.
+'\"-----------------
+.if t .ne 10
+.sp
+.Ex
+SVCXPRT *
+svcudp_create(int sock)
+.Ee
+.IP
+This routine creates a UDP/IP-based RPC service transport,
+to which it returns a pointer.
+The transport is associated with the socket
+\f2sock\f1,
+which may be 
+.BR \s-1RPC_ANYSOCK\s0 ,
+in which case a new socket is created.
+If the socket is not bound to a local UDP port, then this routine
+binds it to an arbitrary port.  
+Upon completion,
+\f2\%xprt\->xp_sock\f1
+is the transport's socket number, and
+\f2\%xprt\->xp_port\f1
+is the transport's port number.
+This routine returns 
+.SM NULL
+if it fails.
+.IP
+Warning: since UDP-based RPC messages can only hold up to 8 kilobytes
+of encoded data, this transport cannot be used for procedures
+that take large arguments or return huge results.
+'\"-----------------
+.sp
+.if t .ne 8
+.Ex
+bool_t
+xdr_accepted_reply(XDR *xdrs, struct accepted_reply *ar)
+.Ee
+.IP
+Used for encoding
+.SM RPC
+reply messages. This routine is useful for users who
+wish to generate
+\s-1RPC\s0-style
+messages without using the
+.SM RPC
+package.
+'\"-----------------
+.sp
+.if t .ne 8
+.Ex
+bool_t
+xdr_authunix_parms(XDR *xdrs,
+	struct authunix_parms *aupp)
+.Ee
+.IP
+Used for describing
+.SM UNIX
+credentials. This routine is useful for users
+who wish to generate these credentials without using the
+.SM RPC
+authentication package.
+'\"-----------------
+.sp
+.if t .ne 8
+.Ex
+bool_t
+xdr_callhdr(XDR *xdrs, struct rpc_msg *chdr)
+.Ee
+.IP
+Used for describing
+.SM RPC
+call header messages.
+This routine is useful for users who wish to generate
+.SM RPC\s0-style
+messages without using the
+.SM RPC
+package.
+'\"-----------------
+.sp
+.if t .ne 8
+.Ex
+bool_t
+xdr_callmsg(XDR *xdrs, struct rpc_msg *cmsg)
+.Ee
+.IP
+Used for describing
+.SM RPC
+call messages.
+This routine is useful for users who wish to generate
+.SM RPC\s0-style
+messages without using the
+.SM RPC
+package.
+'\"-----------------
+.sp
+.if t .ne 7
+.Ex
+bool_t
+xdr_opaque_auth(XDR *xdrs, struct opaque_auth *ap)
+.Ee
+.IP
+Used for describing
+.SM RPC
+authentication information messages.
+This routine is useful for users who wish to generate
+.SM RPC\s0-style
+messages without using the
+.SM RPC
+package.
+'\"-----------------
+.sp
+.if t .ne 8
+.Ex
+bool_t
+xdr_pmap(XDR *xdrs, struct pmap *regs)
+.Ee
+.IP
+Used for describing parameters to various
+.I portmap
+procedures, externally.
+This routine is useful for users who wish to generate
+these parameters without using the
+.I pmap
+interface.
+'\"-----------------
+.sp
+.if t .ne 8
+.Ex
+bool_t
+xdr_pmaplist(XDR *xdrs, struct pmaplist **rp)
+.Ee
+.IP
+Used for describing a list of port mappings, externally.
+This routine is useful for users who wish to generate
+these parameters without using the
+.I pmap
+interface.
+'\"-----------------
+.sp
+.if t .ne 8
+.Ex
+bool_t
+xdr_rejected_reply(XDR *xdrs, struct rejected_reply *rr)
+.Ee
+.IP
+Used for describing
+.SM RPC
+reply messages.
+This routine is useful for users who wish to generate
+.SM RPC\s0-style
+messages without using the
+.SM RPC
+package.
+'\"-----------------
+.sp
+.if t .ne 8
+.Ex
+bool_t
+xdr_replymsg(XDR *xdrs, struct rpc_msg *rmsg)
+.Ee
+.IP
+Used for describing
+.SM RPC
+reply messages.
+This routine is useful for users who wish to generate
+.SM RPC
+style messages without using the
+.SM RPC
+package.
+'\"-----------------
+.sp
+.if t .ne 8
+.Ex
+void
+xprt_register(SVCXPRT *xprt)
+.Ee
+.IP
+After
+.SM RPC
+service transport handles are created,
+they should register themselves with the
+.SM RPC
+service package.
+This routine modifies the global variable
+.IR svc_fds .
+Service implementors usually do not need this routine.
+'\"-----------------
+.sp
+.if t .ne 8
+.Ex
+void
+xprt_unregister(SVCXPRT *xprt)
+.Ee
+.IP
+Before an
+.SM RPC
+service transport handle is destroyed,
+it should unregister itself with the
+.SM RPC
+service package.
+This routine modifies the global variable
+.IR svc_fds .
+Service implementors usually do not need this routine.
+.SH SEE ALSO
+xdr(3R),
+.IR "IRIX Network Programming Guide" .

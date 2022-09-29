@@ -1,0 +1,960 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	dkMPtDlg
+# Version:	$Revision: 1.3 $
+# Synopsis:	Encapsulates the dialog that allows the user to partition
+#		multiple disk drives with the same partition layout.
+# Functions:	dkMPt:realize
+#		dkMPt:manage
+#		dkMPt:unmanage
+#		dkMPt:fill
+#		dkMPt:setState
+#		dkMPt:displayMsg
+#		dkMPt:updatePercent
+#		dkMPt:_create
+#		dkMPt:_createGeneralArea
+#		dkMPt:_createStatusArea
+#		dkMPt:_dialogCb
+#		dkMPt:_selectTemplateCb
+#		dkMPt:_cancel
+#		dkMPt:_accept
+#		dkMPt:_doAccept
+#		dkMPt:_loopDisks
+#		dkMPt:_prepareToPartition
+#		dkMPt:_getDiskInfo
+#		dkMPt:_getPartInfo
+#		dkMPt:_chkSimilarity
+#		dkMPt:_partition
+#		dkMPt:_stop
+#		dkMPt:_doStop
+#%COMMENT_END
+
+#########################################
+#		Public			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	dkMPt:realize
+# Synopsis:	Initializes any class-wide data and creates an instance of
+#		the dialog.  If an instance of this dialog already exists for
+#		the given handle, no action is taken.
+# Arguments:	- handle	An identifier that is used as a key for storing
+#				(and later retrieving) the created widgets and
+#				any instance specific data.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc dkMPt:realize { handle parent } \
+{
+	global		_GW_mpt _GD_mpt
+
+	if {! [info exists _GD_mpt(initialized)]} {
+		set _GD_mpt(buttons)	{accept stop cancel help}
+		set _GD_mpt(keys)	{DISK_TYPE DISK_DRIVECAP DISK_SEC_LEN}
+		set _GD_mpt(stop,opts)	{continue skip abort}
+
+		set _GD_mpt(accept,stop) false
+		set _GD_mpt(accept,answer) false
+		trace variable _GD_mpt(accept,answer) w dkMPt:_doAccept
+	}
+
+	if {! [info exists _GW_mpt($handle,dialog)]} {
+		set _GD_mpt($handle,state) ""
+		set _GD_mpt($handle,cursor) ""
+		set _GW_mpt($handle,dialog) [dkMPt:_create $handle $parent]
+
+		####	This must happen after the dialog is realized
+		$_GW_mpt($handle,dialog) realizeWidget
+		$_GW_mpt($handle,dialog) getValues -width width -height height
+		.$_GW_mpt($handle,dialog) setValues -minWidth $width
+
+		####	Panes
+		$_GW_mpt($handle,ga) getValues -height height
+		$_GW_mpt($handle,ga) setValues \
+				-paneMinimum $height 
+		$_GW_mpt($handle,buttons) getValues -height height
+		$_GW_mpt($handle,buttons) setValues \
+				-paneMinimum $height \
+				-paneMaximum $height
+		$_GW_mpt($handle,dialog) setValues -height 300
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	dkMPt:manage
+# Synopsis:	Manages an instance of the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc dkMPt:manage { handle } \
+{
+	global	_GW_mpt; $_GW_mpt($handle,dialog) manageChild
+}
+
+#%COMMENT_BEGIN
+# Function:	dkMPt:unmanage
+# Synopsis:	Unmanages an instance of the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc dkMPt:unmanage { handle } \
+{
+	global	_GW_mpt; $_GW_mpt($handle,dialog) unmanageChild
+}
+
+#%COMMENT_BEGIN
+# Function:	dkMPt:fill
+# Synopsis:	Given an object signature, retrieve the export information
+#		for that object and fill the dialog
+# Arguments:	- handle	The identifier for the desired instance.
+#		- obj		The object signature.
+#%COMMENT_END
+proc dkMPt:fill { handle objects } \
+{
+	global	_GW_mpt _GD_mpt _GD_resources
+
+	if {[lempty $objects]} { return 0 }
+
+	set _GD_mpt($handle,objects) $objects
+	foreach item $objects {
+		obj:parse $item o_class o_host o_nm o_type
+		regsub -- "^/dev/rdsk/" $o_nm "" dname
+		lappend items $dname
+	}
+	hu:getIpAddress $o_host hfn hpd hip $_GD_resources(hostsFile)
+	$_GW_mpt($handle,hpd) setValues -labelString "$hpd"
+
+	$_GW_mpt($handle,objSL) setValues \
+			-items $items \
+			-itemCount [llength $items]
+
+	unset items
+	set templates [tu:getTemplates DISK]
+	foreach item $templates {
+		obj:parse $item o_class o_host o_nm o_type
+		lappend items $o_nm
+	}
+
+	$_GW_mpt($handle,tmplSL) setValues \
+			-items $items \
+			-itemCount [llength $items]
+
+	dkMPt:setState $handle initial
+
+	return 1
+}
+
+#%COMMENT_BEGIN
+# Function:	dkMPt:setState
+# Synopsis:	Reset the dialog to its' initial state.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc dkMPt:setState { handle state } \
+{
+	global	_GW_mpt _GD_mpt _GD_resources
+
+	set _GD_mpt($handle,state) $state
+
+	switch $state {
+	    initial {
+		####	Reset everything
+		set cursor ""
+		$_GW_mpt($handle,scale) unmapWidget
+		$_GW_mpt($handle,tmplSL) deselectAllItems
+		$_GW_mpt($handle,buttons).accept setSensitive false
+		$_GW_mpt($handle,buttons).cancel setSensitive true
+		$_GW_mpt($handle,buttons).stop setSensitive false
+		dkMPt:displayMsg $handle information \
+				$_GD_resources(dkmpt,msg,selTmpl)
+
+		dkMPt:updatePercent $handle 1 1
+
+		set _GD_mpt(accept,stop) false
+	    }
+	    selected {
+		####	A template has been selected
+		$_GW_mpt($handle,buttons).accept setSensitive true
+		dkMPt:displayMsg $handle information \
+				$_GD_resources(dkmpt,msg,selAccept) 
+	    }
+	    partitioning {
+		####	The partitioning has begun
+		set cursor watch
+		$_GW_mpt($handle,scale) mapWidget
+		$_GW_mpt($handle,buttons).accept setSensitive false
+		$_GW_mpt($handle,buttons).cancel setSensitive false
+		$_GW_mpt($handle,buttons).stop setSensitive true
+	    }
+	}
+
+	if {[info exists cursor] && \
+	    ! [cequal $cursor $_GD_mpt($handle,cursor)]} {
+		set _GD_mpt($handle,cursor) $cursor
+		if {[info exists _GW_mpt($handle,confirm)]} {
+			$_GW_mpt($handle,confirm) defineCursor $cursor
+		}
+		if {[info exists _GW_mpt($handle,dialog)]} {
+			$_GW_mpt($handle,dialog) defineCursor $cursor
+		}
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	dkMPt:displayMsg
+# Synopsis:	Display a message in the status window.  The sets the pixmap
+#		in the status window based upon the severity of the message.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- severity	The severity of the message (working,
+#				information, warning, or error).
+#		- msg		The message to be displayed.
+#%COMMENT_END
+proc dkMPt:displayMsg { handle severity msg } \
+{
+	global	_GW_mpt _GD_mpt
+
+	switch $severity {
+		working	    { set fg $_GD_mpt($handle,fg); set bg cyan }
+		information { set fg blue; set bg $_GD_mpt($handle,bg) }
+		warning	    { set fg yellow; set bg $_GD_mpt($handle,bg) }
+		error	    { set fg red; set bg $_GD_mpt($handle,bg) }
+	}
+
+	if {[info exists fg]} {
+		####	If these two are combined, then the color change
+		####	does not occur until the next call
+		$_GW_mpt($handle,pixLabel) setValues \
+				-foreground $fg \
+				-background $bg
+		$_GW_mpt($handle,pixLabel) setValues \
+				-labelPixmap xm_$severity
+	}
+
+	$_GW_mpt($handle,msgLabel) setValues -labelString $msg
+	#### . flush
+}
+
+#%COMMENT_BEGIN
+# Function:	dkMPt:updatePercent
+# Synopsis:	Sets the scale value in the status window.
+#		in the status window based upon the severity of the message.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- left		The number of actions yet to be performed.
+#		- total		The total number of actions to be performed.
+#%COMMENT_END
+proc dkMPt:updatePercent { handle left total } \
+{
+	global	_GW_mpt
+
+	$_GW_mpt($handle,scale) setValues \
+		-value [int [expr 100 - (($left * 100.0) / $total)]]
+	#### . flush
+}
+
+#########################################
+#		Private			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	dkMPt:_create
+# Synopsis:	Creates an instance of the dialog.
+# Arguments:	- handle	The identifier for the new instance.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc dkMPt:_create { handle parent } \
+{
+	global		_GW_mpt _GD_mpt
+	set name	dkMPt
+
+	set dialog [xmFormDialog $parent.$name]
+	set pane [xmPanedWindow $dialog.$handle \
+			-sashWidth 1 \
+			-sashHeight 1 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form]
+
+	set _GW_mpt($handle,ga) [dkMPt:_createGeneralArea $handle $pane]
+	set _GW_mpt($handle,sa) [dkMPt:_createStatusArea $handle $pane]
+	set _GW_mpt($handle,buttons) \
+		[xfs:createDialogButtons $pane $_GD_mpt(buttons)]
+
+	foreach i $_GD_mpt(buttons) {
+		$_GW_mpt($handle,buttons).$i \
+				activateCallback "dkMPt:_dialogCb $handle $i"
+	}
+
+	$_GW_mpt($handle,ga) manageChild
+	$_GW_mpt($handle,sa) manageChild
+	$_GW_mpt($handle,buttons) manageChild
+	$pane manageChild
+
+	return $dialog
+}
+
+#%COMMENT_BEGIN
+# Function:	dkMPt:_createGeneralArea
+# Synopsis:	Creates the list of disks to be partitioned and the list
+#		of templates from which to choose.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- parent	The parent for the created widgets.
+#%COMMENT_END
+proc dkMPt:_createGeneralArea { handle parent } \
+{
+	global	_GW_mpt _GD_mpt
+
+	set container [xmForm $parent.ga]
+
+	set item objSL
+	xmLabel $container.$item-label managed \
+			-alignment alignment_beginning \
+			-marginLeft 10 \
+			-marginRight 40 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_position \
+			-bottomAttachment attach_none \
+			-rightPosition 50 \
+			-leftOffset 10 \
+			-rightOffset 5
+	set _GW_mpt($handle,$item) [xmScrolledList $container.$item managed \
+			-visibleRows 8 \
+			-translations "#override \
+			    <Btn1Down>:action(xfs:actionIgnore)" \
+			-topAttachment attach_widget \
+			-leftAttachment attach_form \
+			-rightAttachment attach_position \
+			-bottomAttachment attach_form \
+			-topWidget $container.$item-label \
+			-rightPosition 50 \
+			-leftOffset 10 \
+			-rightOffset 5 \
+			-bottomOffset 5]
+
+	set item tmplSL
+	xmLabel $container.$item-label managed \
+			-alignment alignment_beginning \
+			-marginLeft 10 \
+			-marginRight 40 \
+			-topAttachment attach_form \
+			-leftAttachment attach_position \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none \
+			-leftPosition 50 \
+			-leftOffset 5 \
+			-rightOffset 10
+	set _GW_mpt($handle,$item) [xmScrolledList $container.$item managed \
+			-visibleRows 8 \
+			-selectionPolicy single_select \
+			-topAttachment attach_widget \
+			-leftAttachment attach_position \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form \
+			-topWidget $container.$item-label \
+			-leftPosition 50 \
+			-leftOffset 5 \
+			-rightOffset 10 \
+			-bottomOffset 5]
+	$_GW_mpt($handle,$item) defaultActionCallback \
+		"dkMPt:_selectTemplateCb $handle %w %item %selected_item_count"
+	$_GW_mpt($handle,$item) singleSelectionCallback \
+		"dkMPt:_selectTemplateCb $handle %w %item %selected_item_count"
+
+	return $container
+}
+
+#%COMMENT_BEGIN
+# Function:	dkMPt:_createStatusArea
+# Synopsis:	Creates the area which tells the user the current state of
+#		the procedure.  This includes a symbol, a label, and a scale
+#		(to show the percent completed).
+# Arguments:	- handle	The identifier for the desired instance.
+#		- parent	The parent for the created widgets.
+#%COMMENT_END
+proc dkMPt:_createStatusArea { handle parent } \
+{
+	global	_GW_mpt _GD_mpt
+
+	set container [xmForm $parent.sa -skipAdjust true]
+
+	set item status
+	xmLabel $container.$item-label managed \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-leftOffset 10
+	set item hpd
+	set _GW_mpt($handle,$item) [xmLabel $container.$item managed \
+			-topAttachment attach_form \
+			-rightAttachment attach_form \
+			-rightOffset 10]
+	xmLabel $container.$item-label managed \
+			-topAttachment attach_form \
+			-rightAttachment attach_widget \
+			-rightWidget $_GW_mpt($handle,$item) \
+			-rightOffset 5
+	xmFrame $container.$item-frame managed \
+			-shadowType shadow_in \
+			-topAttachment attach_widget \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form \
+			-topWidget $_GW_mpt($handle,$item) \
+			-leftOffset 10 \
+			-rightOffset 10 \
+			-bottomOffset 5
+	set subform [xmForm $container.$item-frame.form managed]
+
+	set item pixLabel
+	set _GW_mpt($handle,$item) [xmLabel $subform.$item managed \
+			-labelType pixmap \
+			-labelPixmap xm_information \
+			-foreground blue \
+			-recomputeSize false \
+			-width 20 \
+			-height 20 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-topOffset 10 \
+			-leftOffset 10]
+
+	set item msgLabel
+	set _GW_mpt($handle,$item) [xmLabel $subform.$item managed \
+			-alignment alignment_beginning \
+			-labelString "this is a line of text @n text" \
+			-topAttachment attach_form \
+			-leftAttachment attach_widget \
+			-leftWidget $subform.pixLabel \
+			-rightAttachment attach_form \
+			-topOffset 10 \
+			-leftOffset 5 \
+			-rightOffset 5]
+
+	set item scale
+	set _GW_mpt($handle,$item) [xmScale $subform.$item managed \
+			-titleString "" \
+			-orientation horizontal \
+			-mappedWhenManaged false \
+			-topAttachment attach_widget \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none \
+			-topWidget $subform.pixLabel \
+			-topOffset 10 \
+			-leftOffset 10 \
+			-rightOffset 10]
+	loop i 0 125 25 {
+		xmLabel $_GW_mpt($handle,$item).$i managed
+	}
+
+	$_GW_mpt($handle,msgLabel) getValues \
+			-foreground _GD_mpt($handle,fg) \
+			-background _GD_mpt($handle,bg)
+	return $container
+}
+
+#########################################
+#	Callbacks			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	dkMPt:_dialogCb
+# Synopsis:	The callback function defined on the dialog buttons.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- op		Indicates which button the user selected.
+#%COMMENT_END
+proc dkMPt:_dialogCb { handle op } \
+{
+	global	_GW_mpt _GD_mpt
+
+	switch $op {
+		accept { dkMPt:_accept $handle }
+		cancel { dkMPt:_cancel $handle }
+		stop   { set _GD_mpt(accept,stop) user }
+		help   { sgiHelpMsg $_GW_mpt($handle,dialog) }
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	dkMPt:_selectTemplateCb
+# Synopsis:	The callback function defined on the list of templates.  If a
+#		list item is selected, then the status area message is updated.
+#		If no list item is selected, the dialog is set to its' initial
+#		state.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- w		The widget id of the list widget.
+#		- item		The item that was selected.
+#		- count		The number of items selected.
+#%COMMENT_END
+proc dkMPt:_selectTemplateCb { handle w item count } \
+{
+	global	_GD_mpt
+
+	if {[cequal $_GD_mpt($handle,state) partitioning]} {
+		$w selectItem $_GD_mpt($handle,tmpl) false
+		return
+	}
+
+	if {$count > 0} {
+		dkMPt:setState $handle selected
+		set _GD_mpt($handle,tmpl) $item
+	} else {
+		dkMPt:setState $handle initial
+		set _GD_mpt($handle,tmpl) ""
+	}
+}
+
+#########################################
+#	Callback Utilities		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	dkMPt:_cancel
+# Synopsis:	This is called when the user presses the "Cancel" dialog
+#		button.  It currently unmanages the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc dkMPt:_cancel { handle } \
+{
+	global	_GW_mpt; $_GW_mpt($handle,dialog) unmanageChild
+}
+
+#%COMMENT_BEGIN
+# Function:	dkMPt:_accept
+# Synopsis:	This is called when the user presses the "Accept" dialog
+#		button.  If the selected template is not one of the built in
+#		(pre-defined) templates, then the template is read from disk.
+#		A confirmation dialog is displayed to give the user one last
+#		chance to bail out.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc dkMPt:_accept { handle } \
+{
+	global	_GW_mpt _GD_mpt _GD_resources _GD_dkm
+
+	set _GD_mpt($handle,workSet) $_GD_mpt($handle,objects)
+	set _GD_mpt(confirm,handle) $handle
+
+	####	Read in the partitioning data
+	if {[lsearch -exact $_GD_dkm(schemas) $_GD_mpt($handle,tmpl)] == -1} {
+		if {! [tu:read DISK $_GD_mpt($handle,tmpl) data]} {
+			return
+		}
+		set _GD_mpt($handle,tmplData) [split $data \n]
+		set x [lmatch $data size.10:*]
+		lassign [split $x :] key val
+		set _GD_mpt($handle,tmplSize) $val
+	}
+
+	if {! [info exists _GW_mpt($handle,confirm)]} {
+		set _GW_mpt($handle,confirm) [xmQuestionDialog \
+			$_GW_mpt($handle,dialog).cfrmMPtDlg \
+				-dialogStyle dialog_full_application_modal]
+		$_GW_mpt($handle,confirm) okCallback \
+			"set _GD_mpt(accept,answer) true"
+		$_GW_mpt($handle,confirm) cancelCallback \
+			"set _GD_mpt(accept,answer) false"
+	}
+	$_GW_mpt($handle,confirm) setValues -messageString \
+		[format $_GD_resources(dkmpt,msg,partition) \
+			[obj:getHost [lindex $_GD_mpt($handle,objects) 0]]]
+
+	$_GW_mpt($handle,confirm) manageChild
+}
+
+#%COMMENT_BEGIN
+# Function:	dkMPt:_doAccept
+# Synopsis:	This is called when the user confirms the accept action.  It is
+#		called by setting a trace on a variable which is updated when
+#		the user presses a dialog button in the confirmation dialog.
+#		If the user accepts the action, the disks are partitioned.
+# Arguments:	- vname		The name of the traced variable.
+#		- element	The variables element name if it is an array
+#				element, otherwise an empty string.
+#		-op		"r" for read, "w" for write, "u" for unset.
+#%COMMENT_END
+proc dkMPt:_doAccept { vname element op } \
+{
+	global		_GW_mpt _GD_mpt
+
+	if {$element != ""} {
+		set vname ${vname}($element)
+	}
+	upvar $vname x
+
+	if {$x} {
+		set handle $_GD_mpt(confirm,handle)
+		dkMPt:setState $handle partitioning
+
+		#### . flush
+		. addTimer 100 "dkMPt:_loopDisks $handle"
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	dkMPt:_loopDisks
+# Synopsis:	This reads the first object from the list of objects yet to be
+#		partitioned.  It calls "dkMPt:_prepareToPartition" to make
+#		sure that everything is cool with the disk.  If so, the disk
+#		is partitioned.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc dkMPt:_loopDisks { handle } \
+{
+	global	_GW_mpt _GD_mpt _GD_resources
+
+	if {[lempty $_GD_mpt($handle,workSet)]} {
+		$_GW_mpt($handle,dialog) unmanageChild
+		return 1
+	} else {
+		set object [lindex $_GD_mpt($handle,workSet) 0]
+		set dname [obj:getName $object]
+		regsub -- "^/dev/rdsk/" $dname "" dname
+		dkMPt:displayMsg $handle working \
+			[format $_GD_resources(dkmpt,msg,inProgress) $dname]
+
+		if {[dkMPt:_prepareToPartition $handle $object]} {
+			. addTimer 100 "dkMPt:_partition $handle"
+		}
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	dkMPt:_prepareToPartition
+# Synopsis:	This gets the information on a disk, checks to see if the disk
+#		is currently in use, and finally to see if the user has asked
+#		that the operation be interrupted.  If any problem arises, the
+#		procedure "dkMPt:_stop" is called to alert the user.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- object	The object signature of the disk to check.
+#%COMMENT_END
+proc dkMPt:_prepareToPartition { handle object } \
+{
+	global	_GD_mpt
+
+	if {! [dkMPt:_getDiskInfo $handle $object msg]} {
+		dkMPt:_stop $handle error $msg
+		return 0
+	} elseif {! [dkMPt:_getPartInfo $handle $object msg]} {
+		dkMPt:_stop $handle error $msg
+		return 0
+	} elseif {! [dkMPt:_chkSimilarity $handle $object msg]} {
+		dkMPt:_stop $handle warning $msg
+		return 0
+	} elseif {[xdk:chkMounts $object hdr msg]} {
+		dkMPt:_stop $handle warning $msg
+		return 0
+	} elseif {! [cequal $_GD_mpt(accept,stop) "false"]} {
+		dkMPt:_stop $handle $_GD_mpt(accept,stop)
+		return 0
+	}
+
+	return 1
+}
+
+#%COMMENT_BEGIN
+# Function:	dkMPt:_getDiskInfo
+# Synopsis:	This gets the information on a disk and checks to make sure
+#		that the required information was returned and is valid.
+#		This information is used to compute the size of the disk, which
+#		may be used if the template needs to be scaled to fit the disk.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- object	The object signature of the disk to check.
+#		- message	A reference to a variable in which to store a
+#				message indicating that an error occured.
+#%COMMENT_END
+proc dkMPt:_getDiskInfo { handle object message } \
+{
+	global	_GW_mpt _GD_mpt _dkData _GD_resources
+	upvar $message	msg
+
+	if {[info exists _dkData]} { unset _dkData }
+	set dname [obj:getName $object]
+	regsub -- "^/dev/rdsk/" $dname "" dname
+
+	####	Get the information for the disk
+	if {[catch {set data [xfsInfo $object]} error]} {
+	    regsub -all -- "\n" [string trim $error] " @n \\\ \\\ " nerror
+	    set msg [format $_GD_resources(dkmpt,msg,noInfo) $dname $nerror]
+	    return 0
+	}
+	foreach item [split $data \n] {
+	    set value [lassign [split $item :] key]
+	    set _dkData($key) $value
+	}
+
+	####	Verify the information
+	foreach item $_GD_mpt(keys) {
+	    if {! [info exists _dkData($item)]} {
+		set msg [format $_GD_resources(dkmpt,msg,badInfo) $dname]
+		return 0
+	    }
+	}
+	foreach item {DISK_DRIVECAP DISK_SEC_LEN} {
+	    if {$_dkData($item) == 0} {
+		set msg [format $_GD_resources(dkmpt,msg,badInfo) $dname]
+		return 0
+	    }
+	}
+
+	return 1
+}
+
+#%COMMENT_BEGIN
+# Function:	dkMPt:_getPartInfo
+# Synopsis:	This gets the partition table for a disk.  This is used when
+#		scaling the template to fit the disk.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- object	The object signature of the disk to check.
+#		- message	A reference to a variable in which to store a
+#				message indicating that an error occured.
+#%COMMENT_END
+proc dkMPt:_getPartInfo { handle object message } \
+{
+	global	_GW_mpt _GD_mpt _ptData _GD_resources
+	upvar $message	msg
+
+	if {[info exists _ptData]} { set _ptData "" }
+
+	####	Get the partition table for the disk
+	if {[catch {set data [xfsGetPartTable $object]} error]} {
+		set dname [obj:getName $object]
+		regsub -- "^/dev/rdsk/" $dname "" dname
+		regsub -all -- "\n" [string trim $error] " @n \\\ \\\ " nerror
+		set msg [format $_GD_resources(dkmpt,msg,noInfo) $dname $nerror]
+		return 0
+	}
+
+	set _ptData $data
+
+	return 1
+}
+
+#%COMMENT_BEGIN
+# Function:	dkMPt:_chkSimilarity
+# Synopsis:	This checks to make sure that the disk to be partitioned is
+#		sufficiently similar to the template such that the partitioning
+#		can be done without getting input from the user.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- object	The object signature of the disk to check.
+#		- message	A reference to a variable in which to store a
+#				message indicating that an error occured.
+#%COMMENT_END
+proc dkMPt:_chkSimilarity { handle object message } \
+{
+	global	_GD_dkm _GD_mpt _dkData _ptData _GD_resources
+	upvar $message	msg
+	set rval	1
+
+	if {[lsearch -exact $_GD_dkm(schemas) $_GD_mpt($handle,tmpl)] != -1} {
+		return 1
+	}
+	set tdata $_GD_mpt($handle,tmplData)
+
+	####	Compare the size of the disk and the size of the template
+	if {[set idx [lsearch $_ptData "end.10:*"]] != -1} {
+		set disk_size [lindex [split [lindex $_ptData $idx] :] 1]
+	}
+	if {[set idx [lsearch $tdata "end.10:*"]] != -1} {
+		set tmpl_size [lindex [split [lindex $tdata $idx] :] 1]
+	}
+	if {[info exists disk_size] && [info exists tmpl_size] && \
+	    ! [cequal $disk_size $tmpl_size]} {
+		lappend reason $_GD_resources(msg,dkSize)
+		set rval 0
+	}
+
+	####	Infer if the disk and the template are of the same type.
+	if {[set idx [lsearch $_ptData "end.9:*"]] != -1} {
+		set disk_pt9 true
+	}
+	if {[set idx [lsearch $tdata "end.9:*"]] != -1} {
+		set tmpl_pt9 true
+	}
+	if {([info exists disk_pt9] && ! [info exists tmpl_pt9]) || \
+	    (! [info exists disk_pt9] && [info exists tmpl_pt9])} {
+		lappend reason $_GD_resources(msg,dkType)
+		set rval 0
+	}
+
+	if {$rval == 0} {
+		set dname [obj:getName $object]
+		regsub -- "^/dev/rdsk/" $dname "" dname
+		set reason [join $reason " / "]
+		set msg [format $_GD_resources(dkmpt,msg,diffDiskTmpl) \
+			$_GD_mpt($handle,tmpl) $reason $dname]
+	}
+
+	return $rval
+}
+
+#%COMMENT_BEGIN
+# Function:	dkMPt:_partition
+# Synopsis:	This partitions a single disk.  It updates that status area,
+#		creates the data necessary to partition the disk, and sends
+#		a message to the server to request that a partition done.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc dkMPt:_partition { handle } \
+{
+	global	_GW_mpt _GD_mpt _GD_dkm _dkData _ptData _GD_resources
+
+	#### . flush
+	$_GW_mpt($handle,buttons).stop setSensitive true
+	set object [lvarpop _GD_mpt($handle,workSet)]
+	set objName [obj:getName $object]
+	regsub -- "^/dev/rdsk/" $objName "" objNameS
+
+	dkMPt:updatePercent $handle \
+			[llength $_GD_mpt($handle,workSet)] \
+			[llength $_GD_mpt($handle,objects)]
+
+	if {[lsearch -exact $_GD_dkm(schemas) $_GD_mpt($handle,tmpl)] != -1} {
+		xdk:mkStdParts data $_GD_mpt($handle,tmpl) \
+				$_dkData(DISK_TYPE) \
+				$_dkData(DISK_DRIVECAP) \
+				$_dkData(DISK_SEC_LEN)
+
+		lappend rdata "diskname:$objName"
+		foreach item [lsort [array names data]] {
+			lassign [split $item ,] a b
+			lappend rdata "$b.$a:$data($item)"
+		}
+
+	} else {
+		set rdata $_GD_mpt($handle,tmplData)
+		if {[set idx [lsearch -regexp $rdata "^diskname:.*"]] != -1} {
+			lvarpop rdata $idx "diskname:$objName"
+		} else {
+			lvarpush rdata "diskname:$objName"
+		}
+
+		if {$_dkData(DISK_DRIVECAP) != $_GD_mpt($handle,tmplSize)} {
+		    xdk:autoscale $_GD_mpt($handle,tmplSize) rdata \
+				      $_dkData(DISK_DRIVECAP) $_ptData
+		}
+	}
+
+	####	Set the new partitions
+	if {[catch {set ec [xfsSetPartTable $object [join $rdata \n]]} error]} {
+		regsub -all -- "\n" [string trim $error] "\n\t" nerr
+		em:storeMsg $handle error \
+		    "Unable to change partition table for $objName.\n\t$nerr"
+	}
+
+	dkMPt:displayMsg $handle working \
+		[format $_GD_resources(dkmpt,msg,diskDone) $objNameS]
+	. addTimer 100 "dkMPt:_loopDisks $handle"
+}
+
+#%COMMENT_BEGIN
+# Function:	dkMPt:_stop
+# Synopsis:	This is called when there is a request from the user to
+#		interrupt the partitioning, or if a problem is detected that
+#		requires user intervention.  A dialog is displayed to explain
+#		the problem and to request user input as to how to proceed.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- reason	Indicates the reason that the procedure was
+#				called.  It is one of: user, warning, or error.
+#		- msg		An optional explanatory message that can be
+#				displayed above the toggle buttons in the
+#				dialog.
+#%COMMENT_END
+proc dkMPt:_stop { handle reason {msg ""} } \
+{
+	global	_GW_mpt _GD_mpt _GD_resources
+
+	if {! [info exists _GW_mpt($handle,stopDlg)]} {
+		set _GW_mpt($handle,stopDlg) [xmMessageDialog \
+				$_GW_mpt($handle,dialog).stopDlg \
+				-noResize true \
+				-dialogStyle dialog_full_application_modal]
+		$_GW_mpt($handle,stopDlg).Cancel unmanageChild
+		$_GW_mpt($handle,stopDlg) okCallback "dkMPt:_doStop $handle"
+
+		set rc [xmRowColumn $_GW_mpt($handle,stopDlg).rc managed \
+				-spacing 2 \
+				-packing pack_tight \
+				-radioBehavior true \
+				-radioAlwaysOne true]
+		foreach item $_GD_mpt(stop,opts) {
+			set _GW_mpt($handle,stop,$item) \
+				[xmToggleButton $rc.$item managed]
+		}
+	}
+
+	set object [lindex $_GD_mpt($handle,workSet) 0]
+	set dname [obj:getName $object]
+	regsub -- "^/dev/rdsk/" $dname "" dname
+
+	switch $reason {
+	    user {
+		set message [format $_GD_resources(dkmpt,msg,userIntr) $dname]
+		set dtype dialog_question
+		set toggles {continue skip abort}
+	    }
+	    warning {
+		set message [format $_GD_resources(dkmpt,msg,warnIntr) $dname]
+		set dtype dialog_warning
+		set toggles {continue skip abort}
+	    }
+	    error {
+		set message [format $_GD_resources(dkmpt,msg,fatalIntr) $dname]
+		set dtype dialog_error
+		set toggles {skip abort}
+	    }
+	}
+
+	if {! [cequal $msg ""]} {
+		set message "$message @n @n $msg"
+	}
+	$_GW_mpt($handle,stopDlg) setValues \
+			-dialogType $dtype \
+			-messageString $message
+
+	foreach item $_GD_mpt(stop,opts) {
+		if {[lsearch -exact $toggles $item] != -1} {
+			$_GW_mpt($handle,stop,$item) manageChild
+		} else {
+			$_GW_mpt($handle,stop,$item) unmanageChild
+		}
+		$_GW_mpt($handle,stop,$item) setValues -set false
+	}
+	$_GW_mpt($handle,stop,[lindex $toggles 0]) setValues -set true
+
+	$_GW_mpt($handle,stopDlg) manageChild
+}
+
+#%COMMENT_BEGIN
+# Function:	dkMPt:_doStop
+# Synopsis:	This takes the action specified by the user in the "stop"
+#		dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc dkMPt:_doStop { handle } \
+{
+	global	_GW_mpt _GD_mpt
+
+	set action ""
+	foreach item $_GD_mpt(stop,opts) {
+		$_GW_mpt($handle,stop,$item) getValues -set set
+		if {$set} { set action $item; break }
+	}
+
+	switch $action {
+		continue { . addTimer 100 "dkMPt:_partition $handle" }
+		abort	 { $_GW_mpt($handle,dialog) unmanageChild }
+		skip {
+			lvarpop _GD_mpt($handle,workSet)
+			dkMPt:updatePercent $handle \
+					[llength $_GD_mpt($handle,workSet)] \
+					[llength $_GD_mpt($handle,objects)]
+			. addTimer 100 "dkMPt:_loopDisks $handle"
+		}
+	}
+
+	set _GD_mpt(accept,stop) false
+}

@@ -1,0 +1,121 @@
+
+stest :
+  s(cheduler) test can be used to quickly and efficiently test various
+  parts of the scheduler.
+  It effectively tests alone or in any combination:
+   - the deadline scheduler
+   - the effect of having processes with different ndrpi and nice
+   values execute simultaneously.
+
+USAGE:
+  stest [-t|-g|-f <infile>]
+    -t report time elapsed using gettimeofday 
+    -g report time elapsed using an even more accurate timer
+    -f <infile> file that specifies type of test. 
+       If -f option is not used, the program looks for an stest.config
+       file in its current directory.
+  Input File Specification
+  -----------------------
+  The input files consists of an optional 's' parameter followed by a
+  series of lines beginning with 'p' for each process followed by a
+  series of qualifiers to indicate what kind of process.
+
+  s <num> optional command that must appear at the beginning of the text file,
+          specifying how much time in seconds the individual processes
+          should all run
+  Commands
+  
+  dlint <num>   length of an interval for a deadline processs in clock ticks
+  dlalloc <num> allocation in an interval for a deadline process in
+                clock ticks  dlint and dlalloc must be used together. 
+    If the process is a deadline process you can also use the following
+     block | release : blocks whenever it is scheduled or releases the
+                       remaining time
+     only : sets the deadline process in only mode
+  
+  ndrpi <num> : sets the ndpri of the process
+  nice <num> : sets the nice value of the process
+
+  Examples:
+  The following line sets a deadline process with an interval of 10
+  clock ticks and an  allocation of 1 clock tick in only mode
+  
+  p dlint 10 dlalloc 1 only
+
+  The following line creates a process with a nice value of 5
+ 
+  p nice 5
+
+OUTPUTS
+  The output is of the form for each process with no options:
+  <process number> : <total time> elapsed  <time> user <time> sys>, ratio <(user+sys) / total>
+  	 : <num> blk/rls, <num> events (<dlalloc/total> expected)
+
+  for each process if the -t flag is used the following is also
+  outputed for each process:
+         : <time in mS> elapsed counter      ( <time> secs) [error =  <1 - time / total>]      
+  
+  and with the -g flag the following is also outputed
+	: <time in mS>  elapsed gettimeofday ( <time> secs) [error =   <1 - time/total>]
+
+  What does it all mean? OR How can I use stest to test the various parts of the scheduler?
+  
+  TESTING DEADLINE PROCESSES:
+   (Sample file deadline.tst run as root) 
+   1. Create an input file of  deadline processes with only scheduling mode.
+   2. Run stest.
+   3. If the scheduler worked correctly
+      events == expected
+      ratio = dlalloc/dlint
+   NB: The deadline scheduler is a best effort scheduler so if
+       interrupts occur, the deadline schedule will not be
+       met. Current test show that on a single processor machine with
+       normal usage an error of 4% is reasonable.
+
+  TESTING RELEASE
+   (Sample file release.tst run as root)
+   1. Create an input file of  deadline processes with only scheduling mode
+   2. Run stest.
+   3. If the scheduler worked correctly
+      blk/rls = events
+
+  TESTING BLOCK
+   (Sample file block.tst  run as root)
+   1. Create an input file of  deadline processes 
+   2. Run stest.
+   3. If the scheduler worked correctly
+      blk/rls = events
+
+  TESTING NICE
+   (Sample file nice.tst run as root)
+   1. Create an input file of processes with different nice values
+      Note: The number of processes must be greater than the number of
+            available processors or else each process will be scheduled on 
+            a different processor.
+   2. Run stest.
+   3. If the scheduler worked correctly the ratio should vary like this
+      if p1 has a nice value 1 and p2 has a nice value of 2 then p1
+      should take twice as much processor time as p2.
+   
+  NB: This is currently broken on 5.3
+
+  TESTING NDPRI
+   
+
+
+HOW DOES stest WORK?
+
+  The idea behind stest is to start a number of concurrent processes
+simultaneously, have them execute for the same amount of time and then
+display the data in such a way that it is possible at a glance to see
+whether the scheduler is working.
+  stest first reads in an input file and creates the appropriate
+number of processes with the desired values. It then creates a shared
+memory block where it puts all that data in. After the shared memory
+area is set up it starts the processes which wait on a shared
+flag. When the parent process is finished setting up all the
+processes, it sets the start condition variable. All processes begin
+executing until the parent wakes up from a user specified sleep and
+sets the stop variable to true After the processes finish executing
+they write their data into the shared memory block. The parent process
+then outputs that data in tabular form to stdout.

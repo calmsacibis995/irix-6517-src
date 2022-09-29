@@ -1,0 +1,239 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	hostUtil.tlib
+# Version:	$Revision: 1.4 $
+# Synopsis:	General functions for getting host related information.
+# Packages:	HostUtil-Base
+#
+#
+#%COMMENT_END
+
+
+#%COMMENT_BEGIN
+# Package:	HostUtil-Base
+# Functions:	hu:getHosts
+#		hu:getRealHostName
+#		hu:getIpAddress
+#		hu:getHostPlusDom
+#
+# Function:	hu:getHosts
+# Synopsis:	Returns a list of hosts retrieved from the given host.
+# Arguments:	- host		The host from which to retrieve the list
+#				of hosts.
+#		- type		An optional argument that specifies where
+#				to get the information.  This may have the
+#				value "etc" or "nis".  If the value is given
+#				as "etc" the the "hostfile" argument is read.
+#				If the value is "nis" the list of hosts will
+#				be retrieved from the nis server.
+#				The default value is "etc".
+#		- hostfile	An optional argument that specifies which
+#				file to read as a hosts file.  This permits
+#				users to define custom host files that contain
+#				the list of hosts they most commonly work with.
+#				The format for this file is the same as for
+#				/etc/hosts (the default).
+#
+# Function:	hu:getRealHostName
+# Synopsis:	
+# Arguments:	- host		The host from which to retrieve the real
+#				host name.
+#
+# Function:	hu:getIpAddress
+# Synopsis:	
+# Arguments:	- host		The host from which to retrieve the real
+#				host name.
+#		- fullname	A reference to a variable in which to store
+#				the fully qualified host name.
+#		- ipaddr	A reference to a variable in which to store
+#				the IP address (in dot notation) of the host.
+#		- hostfile	An optional parameter that specifies which
+#				file to use as the hosts file.
+# Function:	hu:getHostPlusDom
+# Synopsis:	Given a hostname, this function attempts to return the
+#		host+domain name (e.g., bonnie.engr.sgi.com --> bonnie.engr).
+#		It first looks in it's cache to see if its' there.  If not,
+#		then it tries to construct it.
+# Arguments:	- host		The hostname for which to retrieve the
+#				host+domain name.
+#%COMMENT_END
+
+#@package: HostUtil-Base	hu:getHosts hu:getRealHostName \
+				hu:getIpAddress hu:getHostPlusDom
+
+proc hu:getHosts { host {type etc} {hostfile /etc/hosts} } \
+{
+    global	_GD_hu
+
+    if {[hu:getIpAddress $host hfn hpd hip $hostfile]} {
+	if {[info exists _GD_hu($hip,hostlist)]} {
+		return $_GD_hu($hip,hostlist)
+	}
+    }
+
+    lappend data XFS_HOST:$host
+    if {$type == "etc"} {
+	lappend data XFS_GETHOSTS_SRC:ETC_HOSTS
+	lappend data XFS_LOCAL_HOSTS_FILE:$hostfile
+	if {[catch {set objects [xfsGetHostNames [join $data \n]]} err]} {
+	    regsub -all -- "\n" [string trim $err] "\n\t" nerr
+	    em:storeMsg hu error \
+		"Unable to get host list from $host ($hostfile).\n\t$nerr"
+	    return ""
+	}
+    } else {
+	if {$type == "nis"} {
+	    lappend data XFS_GETHOSTS_SRC:NIS_HOSTS
+	} else {
+	    lappend data XFS_GETHOSTS_SRC:ETC_NETGROUP
+	}
+	if {[catch {set objects [xfsGetHostNames [join $data \n]]} err]} {
+	    return ""
+	}
+    } else {
+	em:storeMsg hu error "Bad type ($type) passed to hu:getHosts."
+	return ""
+    }
+
+    if {$hip != ""} {
+	set _GD_hu($hip,hostlist) [exec sort -u << $objects | grep -v "\\.$"]
+	return $_GD_hu($hip,hostlist)
+    } else {
+	return [exec sort -u << $objects | grep -v "\\.$"]
+    }
+}
+
+proc hu:getRealHostName { {host localhost} } \
+{
+	lappend data "XFS_GET_SERVER_IP_ADDR:true"
+	lappend data "XFS_GETHOSTS_SRC:ETC_HOSTS"
+	lappend data "XFS_LOCAL_HOSTS_FILE:/etc/hosts"
+	lappend data "XFS_HOST:$host"
+
+	if {[catch {set ret [xfsGetHostNames [join $data \n]]} err]} {
+		return localhost
+	}
+	set ip [lindex [split $ret :] 1]
+
+	lvarpop data 0 "XFS_GET_NAME_BY_IP_ADDR:$ip"
+	if {[catch {set ret [xfsGetHostNames [join $data \n]]} err]} {
+		return localhost
+	}
+	set hostname [lindex [split $ret :] 1]
+
+	return [string trim $hostname]
+}
+
+proc hu:getIpAddress { host fullname plusdom ipaddr {hostfile /etc/hosts} } \
+{
+	global	_GD_hu
+	upvar $fullname	hfn
+	upvar $plusdom	hpd
+	upvar $ipaddr	hip
+
+	if {[info exists _GD_hu($host,hfn)]} {
+		set hfn $_GD_hu($host,hfn)
+		set hip $_GD_hu($hfn,hip)
+		set hpd $_GD_hu($hfn,hpd)
+		return 1
+	}
+
+	set hip ""; set hfn ""; set hpd ""
+	if {! [catch {set ret [exec /usr/sbin/nslookup $host]} err]} {
+	    set ret [split $ret \n]
+	    if {[lsearch $ret "*No address*"] == -1} {
+		set nms [lmatch $ret "Name:*"]
+		set addrs [lmatch $ret "Address:*"]
+		if {$nms != ""} {
+			set hfn [lindex [lindex $nms 0] 1]
+			set hpd [hu:_hostPlusDomain $hfn]
+		}
+		if {[llength $addrs] == 2} {
+			set hip [lindex [lindex $addrs 1] 1]
+		}
+		if {$hfn != "" && $hip != ""} {
+		    set _GD_hu($host,hfn) $hfn
+		    set _GD_hu($hfn,hfn) $hfn
+		    set _GD_hu($hfn,hpd) $hpd
+		    set _GD_hu($hfn,hip) $hip
+		    return 1
+		}
+	    }
+	}
+
+	set hfn $host
+
+        lappend data "XFS_HOST:$host"
+        lappend data "XFS_GET_SERVER_IP_ADDR:true"
+        lappend data "XFS_GETHOSTS_SRC:ETC_HOSTS"
+        lappend data "XFS_LOCAL_HOSTS_FILE:$hostfile"
+        if {! [catch {set ret [xfsGetHostNames [join $data \n]]} err]} {
+	    set hip [lindex [split $ret :] 1]
+
+	    lvarpop data 1 "XFS_GET_NAME_BY_IP_ADDR:$hip"
+	    if {! [catch {set ret [xfsGetHostNames [join $data \n]]} err]} {
+		set hfn [string trim [lindex [split $ret :] 1]]
+	    }
+	    set hpd [hu:_hostPlusDomain $hfn]
+	    set _GD_hu($host,hfn) $hfn
+	    set _GD_hu($hfn,hfn) $hfn
+	    set _GD_hu($hfn,hpd) $hpd
+	    set _GD_hu($hfn,hip) $hip
+
+	    return 1
+        }
+
+	if {$hostfile != "/etc/hosts"} {
+	    lvarpop data 3 "XFS_LOCAL_HOSTS_FILE:/etc/hosts"
+	    if {! [catch {set ret [xfsGetHostNames [join $data \n]]} err]} {
+		set hip [lindex [split $ret :] 1]
+
+		lvarpop data 1 "XFS_GET_NAME_BY_IP_ADDR:$hip"
+		if {! [catch {set ret [xfsGetHostNames [join $data \n]]} err]} {
+		    set hfn [string trim [lindex [split $ret :] 1]]
+		}
+		set hpd [hu:_hostPlusDomain $hfn]
+		set _GD_hu($host,hfn) $hfn
+		set _GD_hu($hfn,hfn) $hfn
+		set _GD_hu($hfn,hpd) $hpd
+		set _GD_hu($hfn,hip) $hip
+
+		return 1
+	    }
+	}
+
+	return 0
+}
+
+proc hu:getHostPlusDom { host } \
+{
+	global  _GD_hu
+
+	if {[info exists _GD_hu($host,hpd)]} {
+		return $_GD_hu($host,hpd)
+	} else {
+		return [hu:_hostPlusDomain $host]
+	}
+}
+
+proc hu:_hostPlusDomain { hfn } \
+{
+	set h [split $hfn .]
+	if {[llength $h] >= 2} {
+		return [lindex $h 0].[lindex $h 1]
+	} else {
+		return $hfn
+	}
+}
+#@packend

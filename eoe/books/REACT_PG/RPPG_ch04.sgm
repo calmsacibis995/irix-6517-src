@@ -1,0 +1,1260 @@
+<!-- Produced by version 3.14 (11/22/96) of SGI Frame/SGML translator -->
+<CHAPTER LBL="4"><TITLE><XREFTARGET ID="96303">Using the Frame Scheduler</TITLE><PARAGRAPH>The REACT/Pro Frame Scheduler (FRS) makes it easy to structure a real-time program as a family of independent, cooperating activities, running on multiple CPUs, scheduled in sequence at the frame rate of the application.<INDEXTARGET ID="RPPG_ch041"><!-- POSTPROCESSDATA: RPPG_ch041|Frame Scheduler --></PARAGRAPH>
+<PARAGRAPH>This chapter contains details on the operation and use of the Frame Scheduler, under these main headings:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH><XREF IDREF="46755" TYPE="TITLE">&ldquo;Frame Scheduler Concepts&rdquo;</XREF> details the operation and methods of the Frame Scheduler.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="12213" TYPE="TITLE">&ldquo;Selecting a Time Base&rdquo;</XREF> covers the important choice of which source of interrupts should define a frame interval.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="97767" TYPE="TITLE">&ldquo;Using the Scheduling Disciplines&rdquo;</XREF> explains the options for scheduling activities of different kinds.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="21771" TYPE="TEXT"></XREF><XREF IDREF="21771" TYPE="TITLE">&ldquo;Designing an Application for the Frame Scheduler&rdquo;</XREF> presents an overview of the steps in the design process.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="37845" TYPE="TITLE">&ldquo;Preparing the System&rdquo;</XREF> reviews the system administration steps needed to prepare the CPUs that the Frame Scheduler will use.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="48091" TYPE="TITLE">&ldquo;Implementing a Single Frame Scheduler&rdquo;</XREF> outlines the structure of an application that uses one CPU.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="82868" TYPE="TITLE">&ldquo;Implementing Synchronized Schedulers&rdquo;</XREF> outlines the structure of an application that needs the power of multiple CPUs.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="43451" TYPE="TITLE">&ldquo;Handling Frame Scheduler Exceptions&rdquo;</XREF> describes how overrun and underrun exceptions are dealt with.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="72300" TYPE="TITLE">&ldquo;Using Signals Under the Frame Scheduler&rdquo;</XREF> discusses the issue of signal latency and the signals the Frame Scheduler generates.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="55284" TYPE="TITLE">&ldquo;Using Timers with the Frame Scheduler&rdquo;</XREF> covers the use of itimers with the Frame Scheduler.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="38756" TYPE="TITLE">&ldquo;FRS Kernel-Level Device Driver Interface&rdquo;</XREF> documents the way that a kernel-level device driver can generate time-base interrupts for a Frame Scheduler.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="46755">Frame Scheduler Concepts</TITLE><PARAGRAPH>One Frame Scheduler dispatches selected threads at a real-time rate on one CPU. You can also create multiple, synchronized Frame Schedulers that dispatch concurrent threads on multiple CPUs.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>Frame Scheduler Basics</TITLE><PARAGRAPH>When a Frame Scheduler takes over scheduling and dispatching threads on one CPU, it isolates the CPU (see <XREF IDREF="74709" TYPE="TITLE">&ldquo;Isolating a CPU From TLB Interrupts&rdquo;</XREF>), and completely supersedes the operation of the normal IRIX scheduler on that CPU. Only threads queued to the Frame Scheduler can use the CPU. IRIX thread dispatching priorities are not relevant on that CPU.</PARAGRAPH>
+<PARAGRAPH>The execution of normal processes, daemons, and pending timeouts are all migrated to other CPUs&mdash;typically to CPU 0, which cannot be owned by a Frame Scheduler. All interrupt handling is usually directed away from a Frame Scheduler CPU as well (see <INDEXTARGET ID="RPPG_ch042"><!-- POSTPROCESSDATA: RPPG_ch042|Frame Scheduler:CPU 0 not used by --><INDEXTARGET ID="RPPG_ch043"><!-- POSTPROCESSDATA: RPPG_ch043|CPU:CPU 0 not used by Frame Scheduler --><XREF IDREF="37845" TYPE="TITLE">&ldquo;Preparing the System&rdquo;</XREF>). However, a Frame Scheduler CPU can be used to handle interrupts, although doing so runs a risk of causing overruns.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Thread Programming Models</TITLE><PARAGRAPH>The Frame Scheduler in REACT/Pro version 3.2 supports two thread programming models: sprocs and pthreads. Both threading models allow multiprogramming, but sprocs are proprietary to Silicon Graphics, while pthreads are standardized by the IEEE POSIX 1003.1c specification.</PARAGRAPH>
+<PARAGRAPH>In this guide, a <ITALICS>thread</ITALICS> is defined as an independent flow of execution that consists of a set of registers (including a program counter and a stack). </PARAGRAPH>
+<PARAGRAPH>A traditional IRIX process has a single active thread that starts once the program is executed and runs until the program terminates. A multithreaded process may have several threads active at one time. Hence, a process can be viewed as a receptacle that contains the threads of execution and the resources they share (that is, data segments, text segments, file descriptors, synchronizers, and so forth).</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Frame Scheduling</TITLE><PARAGRAPH>Instead of scheduling threads according to priorities, the Frame Scheduler dispatches them according to a strict, cyclic rotation governed by a repetitive time base. The time base determines the fundamental frame rate. (See <INDEXTARGET ID="RPPG_ch044"><!-- POSTPROCESSDATA: RPPG_ch044|Frame Scheduler:time base selection --><XREF IDREF="12213" TYPE="TITLE">&ldquo;Selecting a Time Base&rdquo;</XREF>.) Some examples of the time base are</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>a specific clocked interval in microseconds</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>the Vsync (vertical retrace) interrupt from the graphics subsystem</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>an external interrupt (see <XREF IDREF="21988" TYPE="TITLE">&ldquo;External Interrupts&rdquo;</XREF>)</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>a device interrupt from a specially modified device driver</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>a system call (normally used for debugging)</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>The interrupts from the time base define <INDEXTARGET ID="RPPG_ch045"><!-- POSTPROCESSDATA: RPPG_ch045|Frame Scheduler:major frame --><INDEXTARGET ID="RPPG_ch046"><!-- POSTPROCESSDATA: RPPG_ch046|Frame Scheduler:minor frame --><INDEXTARGET ID="RPPG_ch047"><!-- POSTPROCESSDATA: RPPG_ch047|major frame --><INDEXTARGET ID="RPPG_ch048"><!-- POSTPROCESSDATA: RPPG_ch048|minor frame --><GLOSSARYITEM>minor frame</GLOSSARYITEM><ITALICS>s</ITALICS>. Together, a fixed number of minor frames make up a <GLOSSARYITEM>major frame</GLOSSARYITEM>. The length of a major frame defines the application's true frame rate. The minor frames allow you to divide a major frame into sub-frames. Major and minor frames are shown in <XREF IDREF="62382" TYPE="GRAPHIC">Figure&nbsp;4-1</XREF>.</PARAGRAPH>
+<PARAGRAPH>In the simplest case, you have a single frame rate, such as 60&nbsp;Hz, and every activity your program does must be done once per frame. In this case, the major and minor frame rates are the same.</PARAGRAPH>
+<PARAGRAPH>In other cases, you have some activities that must be done in every minor frame, but you also have activities that are done less often: in every other minor frame or in every third one. In these cases, you define the major frame so that its rate is the rate of the least-frequent activity. The major frame contains as many minor frames as necessary to schedule activities at their relative rates.</PARAGRAPH>
+<PARAGRAPH><FIGURE><GRAPHIC FILE="frames.gif" POSITION="INLINE" SCALE="FALSE"><CAPTION LBL="4-1"><PREFIX>Figure 4-1 </PREFIX><XREFTARGET ID="62382">Major and Minor Frames</CAPTION>
+</FIGURE>
+</PARAGRAPH>
+<PARAGRAPH>As pictured in <XREF IDREF="62382" TYPE="GRAPHIC">Figure&nbsp;4-1</XREF>, the Frame Scheduler maintains a queue of threads for each minor frame. Queue each activity thread of your program to a specific minor frame. Determine the order of cyclic execution within a minor frame by the order in which you queue threads. You can:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>Queue multiple threads in one minor frame. They are run in the queued sequence within the frame. All must complete their work within the minor frame interval.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Queue the same thread to run in more than one minor frame. Say that thread <VARIABLE>double</VARIABLE> is to run twice as often as thread <VARIABLE>solo</VARIABLE>. You queue <VARIABLE>double</VARIABLE> to Q0 and Q2 in <XREF IDREF="62382" TYPE="GRAPHIC">Figure&nbsp;4-1</XREF>, and queue <VARIABLE>solo</VARIABLE> to Q1.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Queue a thread that takes more than a minor frame to complete its work. If thread <VARIABLE>sloth</VARIABLE> needs more than one minor interval, you queue it to Q0, Q1, and Q2 in <XREF IDREF="62382" TYPE="GRAPHIC">Figure&nbsp;4-1</XREF>, such that it can continue working in all three minor frames until it completes.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Queue a background thread that is allowed to run only when all others have completed, to use up any remaining time within a minor frame.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>All these options are controlled by scheduling disciplines you specify for each thread as you queue it (see <XREF IDREF="97767" TYPE="TITLE">&ldquo;Using the Scheduling Disciplines&rdquo;</XREF>).</PARAGRAPH>
+<PARAGRAPH>Typically a frame scheduler is driven by a single interrupt source and contains minor frames having the same duration, but a variable frame scheduler may be used to implement an FRS having multiple interrupt sources and/or minor frames of variable duration (see the <FUNCTION>frs_create_vmaster()</FUNCTION> function).</PARAGRAPH>
+<PARAGRAPH>The relationship between threads and a Frame Scheduler depends upon the thread model in use. </PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>The pthread programming model requires that all threads scheduled by the Frame Scheduler and controlling the Frame Scheduler be system scope threads. These threads must also reside in the same process.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The <FUNCTION>sproc()</FUNCTION> and <FUNCTION>fork()</FUNCTION> programming models do not require that the participating threads reside in the same process.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>See <XREF IDREF="48091" TYPE="TITLE">&ldquo;Implementing a Single Frame Scheduler&rdquo;</XREF> for details.</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="27151">The FRS Controller Thread</TITLE><PARAGRAPH>The thread that creates a Frame Scheduler is called the FRS controller thread. It is privileged in these respects:<INDEXTARGET ID="RPPG_ch049"><!-- POSTPROCESSDATA: RPPG_ch049|thread:FRS controller --><INDEXTARGET ID="RPPG_ch0410"><!-- POSTPROCESSDATA: RPPG_ch0410|FRS controller --><INDEXTARGET ID="RPPG_ch0411"><!-- POSTPROCESSDATA: RPPG_ch0411|Frame Scheduler:FRS controller --></PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>Its identifier is used to identify its Frame Scheduler in various functions. If you are using POSIX threads, the FRS controller thread uses a pthread ID; if you are using <FUNCTION>sproc()</FUNCTION>, the FRS controller process uses a PID.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>It can receive signals when errors are detected by the Frame Scheduler (see <XREF IDREF="72300" TYPE="TITLE">&ldquo;Using Signals Under the Frame Scheduler&rdquo;</XREF>).</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>It cannot itself be queued to the Frame Scheduler. It continues to be dispatched by IRIX, and executes on a CPU other than the one the Frame Scheduler uses.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="95148">The Frame Scheduler API</TITLE><PARAGRAPH>An overview of the Frame Scheduler API can be found in the <INDEXTARGET ID="RPPG_ch0412"><!-- POSTPROCESSDATA: RPPG_ch0412|Frame Scheduler:interface to --><REFPAGE>frs(3)</REFPAGE> reference page, which provides a complete listing of all the FRS functions. Separate reference pages for each of the FRS functions provide the details of the Frame Scheduler API. The API elements are declared in <FILENAME>/usr/include/sys/frs.h</FILENAME>. The following are some important types that are declared in <FILENAME>/usr/include/sys/frs.h</FILENAME>:</PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="126"><PARAGRAPH>typedef frs_fsched_info_t</PARAGRAPH>
+</CELL>
+<CELL LEFT="135" WIDTH="261"><PARAGRAPH>A structure containing information about one scheduler, 
+including its CPU number, interrupt source and time base, 
+and number of minor frames. Used when creating a Frame 
+Scheduler.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="126"><PARAGRAPH>typedef frs_t</PARAGRAPH>
+</CELL>
+<CELL LEFT="135" WIDTH="261"><PARAGRAPH>A structure that identifies a Frame Scheduler.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="126"><PARAGRAPH>typedef frs_queue_info_t</PARAGRAPH>
+</CELL>
+<CELL LEFT="135" WIDTH="261"><PARAGRAPH>A structure containing information about one activity 
+thread: the Frame Scheduler and minor frame it uses and 
+its scheduling discipline. Used when enqueuing a thread.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="126"><PARAGRAPH>typedef frs_recv_info_t</PARAGRAPH>
+</CELL>
+<CELL LEFT="135" WIDTH="261"><PARAGRAPH>A structure containing error recovery options.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="126"><PARAGRAPH>typedef frs_intr_info_t</PARAGRAPH>
+</CELL>
+<CELL LEFT="135" WIDTH="261"><PARAGRAPH>A structure that <FUNCTION>frs_create_vmaster()</FUNCTION> uses for defining 
+interrupt information templates (see below).</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>Additionally the pthreads interface adds the following types, as declared in <FILENAME>/usr/include/sys/pthread.h</FILENAME>:</PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="126"><PARAGRAPH>typedef pthread_t</PARAGRAPH>
+</CELL>
+<CELL LEFT="135" WIDTH="261"><PARAGRAPH>An integer identifying the pthread ID.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="126"><PARAGRAPH>typedef pthread_attr_t</PARAGRAPH>
+</CELL>
+<CELL LEFT="135" WIDTH="261"><PARAGRAPH>A structure containing information about the attributes of 
+the FRS controller thread.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Interrupt Information Templates</TITLE><PARAGRAPH>Variable frame schedulers may drive each minor frame with a different interrupt source, as well as define a different duration for each minor frame. These two characteristics may be used together or separately, and are defined using an interrupt information template.</PARAGRAPH>
+<PARAGRAPH>An interrupt information template consists of an array of <VARIABLE>frs_intr_info_t</VARIABLE> data structures, where each element in the array represents a minor frame. For example, the first element in the array represents the interrupt information for the first minor frame, and so on for <VARIABLE>n</VARIABLE> minor frames.</PARAGRAPH>
+<PARAGRAPH>The <VARIABLE>frs_intr_info_t</VARIABLE> data structure contains two fields for defining the interrupt source and its qualifier: <VARIABLE>intr_source</VARIABLE> and <VARIABLE>intr_qualifier</VARIABLE>.</PARAGRAPH>
+<PARAGRAPH>The following example demonstrates how to define an interrupt information template for a frame scheduler having minor frames of different duration. Assume the application requires four minor frames, where each minor frame is triggered by the synchronized clock timer, and the duration of each minor frame is as follows: 100 ms, 150 ms, 200 ms, and 250 ms. The interrupt information template may be defined as:</PARAGRAPH>
+<CODE>
+frs_intr_info_t intr_info[4];
+intr_info[0].intr_source    = FRS_INTRSOURCE_CCTIMER;
+intr_info[0].intr_qualifier = 100000;
+intr_info[1].intr_source    = FRS_INTRSOURCE_CCTIMER;
+intr_info[1].intr_qualifier = 150000;
+intr_info[2].intr_source    = FRS_INTRSOURCE_CCTIMER;
+intr_info[2].intr_qualifier = 200000;
+intr_info[3].intr_source    = FRS_INTRSOURCE_CCTIMER;
+intr_info[3].intr_qualifier = 250000;
+</CODE>
+<PARAGRAPH>The following example demonstrates how to define an interrupt information template for a frame scheduler using multiple interrupt sources. Assume the application requires two minor frames, where the first minor frame is triggered by the vertical retrace interrupt and the second minor frame is triggered by the CPU timer. Also assume the vertical retrace interrupt is running at 60 Hz (every 16.6 ms). The following interrupt information template defines the CPU timer interrupt of the second frame to fire 8.3 ms after the vertical retrace interrupt:</PARAGRAPH>
+<CODE>
+frs_intr_info_t intr_info[2];
+intr_info[0].intr_source    = FRS_INTRSOURCE_VSYNC;
+intr_info[0].intr_qualifier = 0;
+intr_info[1].intr_source    = FRS_INTRSOURCE_CPUTIMER;
+intr_info[1].intr_qualifier = 8300;
+</CODE>
+<PARAGRAPH>Note that 8.3 ms was chosen in the example because it is known that the timer interrupt will fire before the next major frame's <VARIABLE>vsync</VARIABLE> interrupt. If 20 ms were chosen for the timer instead, then a sequence error would occur (see section <XREF IDREF="43574" TYPE="TITLE">&ldquo;Sequence Error&rdquo;</XREF>) and an error signal would be sent to the controller thread.</PARAGRAPH>
+<PARAGRAPH>Detailed programming examples are available, demonstrating use of variable frame schedulers, which can be found in the <FILENAME>/usr/share/src/react/examples</FILENAME> directory. For more information, see the <REFPAGE>frs_create_vmaster(3)</REFPAGE> reference page.</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE>Library Interface for C Programs</TITLE><PARAGRAPH>The API library functions in <FILENAME>/usr/lib/libfrs.a</FILENAME> are summarized in <XREF IDREF="50426" TYPE="TABLE">Table&nbsp;4-1</XREF> for convenient reference. </PARAGRAPH>
+<TABLE COLUMNS="3"><CAPTION LBL="4-1"><PREFIX>Table 4-1 </PREFIX>&space;<EMPHASIS>(continued)        </EMPHASIS><XREFTARGET ID="50426">Frame Scheduler Operations</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="90"><PARAGRAPH>Operation</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="63"><PARAGRAPH>Used For</PARAGRAPH>
+</CELL>
+<CELL LEFT="165" WIDTH="234"><PARAGRAPH>Frame Scheduler API</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH>Create a Frame 
+Scheduler</PARAGRAPH>
+<PARAGRAPH></PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="63"><PARAGRAPH>Process setup</PARAGRAPH>
+</CELL>
+<CELL LEFT="165" WIDTH="234"><PARAGRAPH>frs_t*<FUNCTION> frs_create(</FUNCTION>int <VARIABLE>cpu</VARIABLE>, int <VARIABLE>intr_source</VARIABLE>, int <VARIABLE>intr_qualifier</VARIABLE>, int 
+<VARIABLE>n_minors</VARIABLE>, pid_t <VARIABLE>sync_master_pid</VARIABLE>, int <VARIABLE>num_slaves</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH></PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="63"><PARAGRAPH>Process or 
+pthread setup</PARAGRAPH>
+</CELL>
+<CELL LEFT="165" WIDTH="234"><PARAGRAPH>frs_t*<FUNCTION> frs_create_master(</FUNCTION>int <VARIABLE>cpu</VARIABLE>, int <VARIABLE>intr_source</VARIABLE>, int 
+<VARIABLE>intr_qualifier</VARIABLE>, int <VARIABLE>n_minors</VARIABLE>, int <VARIABLE>num_slaves</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH></PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="63"><PARAGRAPH>Process or 
+pthread setup</PARAGRAPH>
+</CELL>
+<CELL LEFT="165" WIDTH="234"><PARAGRAPH>frs_t* <FUNCTION>frs_create_slave(</FUNCTION>int <VARIABLE>cpu</VARIABLE>, frs_t* <VARIABLE>sync_master_frs</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH></PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="63"><PARAGRAPH>Process or 
+pthread setup</PARAGRAPH>
+</CELL>
+<CELL LEFT="165" WIDTH="234"><PARAGRAPH>frs_t*<FUNCTION> frs_create_vmaster(</FUNCTION>int <VARIABLE>cpu</VARIABLE>, int <VARIABLE>n_minors</VARIABLE>, int 
+<VARIABLE>n_slaves</VARIABLE>, frs_intr_info_t *<VARIABLE>intr_info</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH>Queue to an FRS 
+minor frame</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="63"><PARAGRAPH>Process setup</PARAGRAPH>
+</CELL>
+<CELL LEFT="165" WIDTH="234"><PARAGRAPH>int <FUNCTION>frs_enqueue(</FUNCTION>frs_t* <VARIABLE>frs</VARIABLE>, pid_t <VARIABLE>pid</VARIABLE>, int <VARIABLE>minor_frame</VARIABLE>, 
+unsigned int <VARIABLE>discipline</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH></PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="63"><PARAGRAPH>Pthread setup</PARAGRAPH>
+</CELL>
+<CELL LEFT="165" WIDTH="234"><PARAGRAPH>int <FUNCTION>frs_pthread_enqueue(</FUNCTION>frs_t* <VARIABLE>frs</VARIABLE>, pthread_t <VARIABLE>pthread</VARIABLE>, int 
+<VARIABLE>minor_frame</VARIABLE>, unsigned int <VARIABLE>discipline</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>);</FUNCTION></PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH>Insert into a queue, 
+possibly changing 
+discipline</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="63"><PARAGRAPH>Process setup</PARAGRAPH>
+</CELL>
+<CELL LEFT="165" WIDTH="234"><PARAGRAPH>int <FUNCTION>frs_pinsert(</FUNCTION>frs_t* <VARIABLE>frs</VARIABLE>, int <VARIABLE>minor_frame</VARIABLE>, pid_t <VARIABLE>target_pid</VARIABLE>, 
+int <VARIABLE>discipline</VARIABLE>, pid_t <VARIABLE>base_pid</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH></PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="63"><PARAGRAPH>Pthread setup</PARAGRAPH>
+</CELL>
+<CELL LEFT="165" WIDTH="234"><PARAGRAPH>int <FUNCTION>frs_pthread_insert(</FUNCTION>frs_t* <VARIABLE>frs</VARIABLE>, int <VARIABLE>minor_index</VARIABLE>, 
+pthread_t <VARIABLE>target_pthread</VARIABLE>, int <VARIABLE>discipline</VARIABLE>, pthread_t 
+<VARIABLE>base_pthread</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH>Set error recovery 
+options</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="63"><PARAGRAPH>Process setup</PARAGRAPH>
+</CELL>
+<CELL LEFT="165" WIDTH="234"><PARAGRAPH>int <FUNCTION>frs_setattr(</FUNCTION>frs_t* <VARIABLE>frs</VARIABLE>, int <VARIABLE>minor_frame</VARIABLE>, pid_t <VARIABLE>pid</VARIABLE>, 
+frs_attr_t <VARIABLE>attribute</VARIABLE>, void* <VARIABLE>param</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH></PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="63"><PARAGRAPH>Pthread setup</PARAGRAPH>
+</CELL>
+<CELL LEFT="165" WIDTH="234"><PARAGRAPH>int <FUNCTION>frs_pthread_setattr(</FUNCTION>frs_t* <VARIABLE>frs</VARIABLE>, int <VARIABLE>minor_frame</VARIABLE>, 
+pthread_t <VARIABLE>pthread</VARIABLE>, frs_attr_t <VARIABLE>attribute</VARIABLE>, void* <VARIABLE>param</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH>Join an FRS (activity 
+is ready to start)</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="63"><PARAGRAPH>Process or 
+pthread 
+execution</PARAGRAPH>
+</CELL>
+<CELL LEFT="165" WIDTH="234"><PARAGRAPH>int <FUNCTION>frs_join(</FUNCTION>frs_t* <VARIABLE>frs</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH>Start scheduling (all 
+activities queued)</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="63"><PARAGRAPH>Process or 
+pthread 
+execution</PARAGRAPH>
+</CELL>
+<CELL LEFT="165" WIDTH="234"><PARAGRAPH>int <FUNCTION>frs_start(</FUNCTION>frs_t* <VARIABLE>frs</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH>Yield control after 
+completing activity</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="63"><PARAGRAPH>Process or 
+pthread 
+execution</PARAGRAPH>
+</CELL>
+<CELL LEFT="165" WIDTH="234"><PARAGRAPH>int <FUNCTION>frs_yield(</FUNCTION>frs_t* <VARIABLE>frs</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH>Pause scheduling at 
+end of minor frame</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="63"><PARAGRAPH>Process or 
+pthread 
+execution</PARAGRAPH>
+</CELL>
+<CELL LEFT="165" WIDTH="234"><PARAGRAPH>int <FUNCTION>frs_stop(</FUNCTION>frs_t* <VARIABLE>frs</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH>Resume scheduling 
+at next time-base 
+interrupt</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="63"><PARAGRAPH>Process or 
+pthread 
+execution</PARAGRAPH>
+</CELL>
+<CELL LEFT="165" WIDTH="234"><PARAGRAPH>int <FUNCTION>frs_resume(</FUNCTION>frs_t* <VARIABLE>frs</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH>Trigger a user-level 
+FRS interrupt</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="63"><PARAGRAPH>Process or 
+pthread 
+execution</PARAGRAPH>
+</CELL>
+<CELL LEFT="165" WIDTH="234"><PARAGRAPH>int <FUNCTION>frs_userintr(</FUNCTION>frs_t* <VARIABLE>frs</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH>Interrogate a minor 
+frame queue</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="63"><PARAGRAPH>Process or 
+pthread query</PARAGRAPH>
+</CELL>
+<CELL LEFT="165" WIDTH="234"><PARAGRAPH>int <FUNCTION>frs_getqueuelen(</FUNCTION>frs_t* <VARIABLE>frs</VARIABLE>, int <VARIABLE>minor_index</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH></PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="63"><PARAGRAPH>Process query</PARAGRAPH>
+</CELL>
+<CELL LEFT="165" WIDTH="234"><PARAGRAPH>int <FUNCTION>frs_readqueue(</FUNCTION>frs_t* <VARIABLE>frs</VARIABLE>, int <VARIABLE>minor_frame</VARIABLE>, pid_t 
+*<VARIABLE>pidlist</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH></PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="63"><PARAGRAPH>Pthread query</PARAGRAPH>
+</CELL>
+<CELL LEFT="165" WIDTH="234"><PARAGRAPH>int <FUNCTION>frs_pthread_readqueue(</FUNCTION>frs_t* <VARIABLE>frs</VARIABLE>, int <VARIABLE>minor_frame</VARIABLE>, 
+pthread_t *<VARIABLE>pthreadlist</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH>Retrieve error 
+recovery options</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="63"><PARAGRAPH>Process query</PARAGRAPH>
+</CELL>
+<CELL LEFT="165" WIDTH="234"><PARAGRAPH>int <FUNCTION>frs_getattr(</FUNCTION>frs_t* <VARIABLE>frs</VARIABLE>, int <VARIABLE>minor_frame</VARIABLE>, pid_t <VARIABLE>pid</VARIABLE>, 
+frs_attr_t <VARIABLE>attribute</VARIABLE>, void* <VARIABLE>param</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH></PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="63"><PARAGRAPH>Pthread query</PARAGRAPH>
+</CELL>
+<CELL LEFT="165" WIDTH="234"><PARAGRAPH>int <FUNCTION>frs_pthread_getattr(</FUNCTION>frs_t* <VARIABLE>frs</VARIABLE>, int <VARIABLE>minor_frame</VARIABLE>, 
+pthread_t <VARIABLE>pthread</VARIABLE>, frs_attr_t <VARIABLE>attribute</VARIABLE>, void* <VARIABLE>param</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH>Destroy FRS and 
+send SIGKILL to its 
+FRS controller</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="63"><PARAGRAPH>Process or 
+pthread 
+teardown</PARAGRAPH>
+</CELL>
+<CELL LEFT="165" WIDTH="234"><PARAGRAPH>int <FUNCTION>frs_destroy(</FUNCTION>frs_t* <VARIABLE>frs</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH>Remove a process or 
+thread from a queue</PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="63"><PARAGRAPH>Process 
+teardown</PARAGRAPH>
+</CELL>
+<CELL LEFT="165" WIDTH="234"><PARAGRAPH>int <FUNCTION>frs_premove(</FUNCTION>frs_t* <VARIABLE>frs</VARIABLE>, int <VARIABLE>minor_frame</VARIABLE>, pid_t 
+<VARIABLE>remove_pid</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="90"><PARAGRAPH></PARAGRAPH>
+</CELL>
+<CELL LEFT="95" WIDTH="63"><PARAGRAPH>Pthread 
+teardown</PARAGRAPH>
+</CELL>
+<CELL LEFT="165" WIDTH="234"><PARAGRAPH>int <FUNCTION>frs_pthread_remove(</FUNCTION>frs_t* <VARIABLE>frs</VARIABLE>, int <VARIABLE>minor_frame</VARIABLE>, 
+pthread_t <VARIABLE>remove_pthread</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>System Call Interface for Fortran and Ada</TITLE><PARAGRAPH>Each Frame Scheduler function is available in two ways: as a system call to <INDEXTARGET ID="RPPG_ch0413"><!-- POSTPROCESSDATA: RPPG_ch0413|<FUNCTION>schedctl()</FUNCTION>:with Frame Scheduler --><FUNCTION>schedctl()</FUNCTION>, or as one or more library calls to functions in the <FILENAME>frs</FILENAME> library, <FILENAME>/usr/lib/libfrs.a</FILENAME>. The system call is accessible from FORTRAN and Ada programs because both languages have bindings for <FUNCTION>schedctl()</FUNCTION> (see the <REFPAGE>schedctl(2)</REFPAGE> reference page). The correspondence between the library functions and <FUNCTION>schedctl()</FUNCTION> calls is shown in <XREF IDREF="13614" TYPE="TABLE">Table&nbsp;4-2</XREF>.</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>The pthread functions for the Frame Scheduler are not supported for FORTRAN applications.</NOTE>
+<TABLE COLUMNS="2"><CAPTION LBL="4-2"><PREFIX>Table 4-2 </PREFIX>&space;<EMPHASIS>(continued)        </EMPHASIS><XREFTARGET ID="13614">Frame Scheduler schedctl() Support</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="81"><PARAGRAPH>Library Function</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Schedctl Syntax</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH><FUNCTION>frs_create()</FUNCTION>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>int <FUNCTION>schedctl(</FUNCTION>MPTS_FRS_CREATE, frs_info_t* <VARIABLE>frs_info</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH><FUNCTION>frs_enqueue()</FUNCTION>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>int <FUNCTION>schedctl(</FUNCTION>MPTS_FRS_ENQUEUE, frs_queue_info_t* <VARIABLE>frs_queue_info</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH><FUNCTION>frs_join()</FUNCTION>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>int <FUNCTION>schedctl(</FUNCTION>MPTS_FRS_JOIN, pid_t <VARIABLE>frs_master</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH><FUNCTION>frs_start()</FUNCTION>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>int <FUNCTION>schedctl(</FUNCTION>MPTS_FRS_START, pid_t <VARIABLE>frs_master</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH><FUNCTION>frs_yield()</FUNCTION>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>int <FUNCTION>schedctl(</FUNCTION>MPTS_FRS_YIELD<FUNCTION>)</FUNCTION>; </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>f<FUNCTION>rs_stop()</FUNCTION>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>int <FUNCTION>schedctl(</FUNCTION>MPTS_FRS_STOP, pid_t <VARIABLE>frs_master</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH><FUNCTION>frs_resume()</FUNCTION>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>int <FUNCTION>schedctl(</FUNCTION>MPTS_FRS_RESUME, pid_t <VARIABLE>frs_master</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH><FUNCTION>frs_destroy()</FUNCTION>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>int <FUNCTION>schedctl(</FUNCTION>MPTS_FRS_DESTROY, pid_t <VARIABLE>frs_master</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH><FUNCTION>frs_getqueuelen()</FUNCTION></PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>int <FUNCTION>schedctl(</FUNCTION>MPTS_FRS_GETQUEUELEN, frs_queue_info_t* 
+<VARIABLE>frs_queue_info</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH><FUNCTION>frs_readqueue()</FUNCTION></PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>int <FUNCTION>schedctl(</FUNCTION>MPTS_FRS_READQUEUE, frs_queue_info_t* <VARIABLE>frs_queue_info</VARIABLE>,&lbreak;pid_t* <VARIABLE>pidlist</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH><FUNCTION>frs_premove()</FUNCTION>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>int <FUNCTION>schedctl(</FUNCTION>MPTS_FRS_PREMOVE, frs_queue_info_t* <VARIABLE>frs_queue_info</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH><FUNCTION>frs_pinsert()</FUNCTION>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>int <FUNCTION>schedctl(</FUNCTION>MPTS_FRS_PINSERT, frs_queue_info_t* <VARIABLE>frs_queue_info</VARIABLE>,&lbreak;pid_t *<VARIABLE>base_pid</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH><FUNCTION>frs_getattr()</FUNCTION>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>int <FUNCTION>schedctl(</FUNCTION>MPTS_FRS_GETATTR, frs_attr_info_t* <VARIABLE>frs_attr_info</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH><FUNCTION>frs_setattr()</FUNCTION>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>int <FUNCTION>schedctl(</FUNCTION>MPTS_FRS_SETATTR, frs_attr_info_t* <VARIABLE>frs_attr_info</VARIABLE>
+<FUNCTION></FUNCTION><FUNCTION>)</FUNCTION>;</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Thread Execution</TITLE><PARAGRAPH>An activity thread that is queued to a Frame Scheduler has the basic structure shown in <INDEXTARGET ID="RPPG_ch0414"><!-- POSTPROCESSDATA: RPPG_ch0414|Frame Scheduler:thread structure --><XREF IDREF="40108" TYPE="TEXT">Example&nbsp;4-1</XREF>.</PARAGRAPH>
+
+<!-- WARNING: (47) Example captions should come at end of Example - detected on page 51 -->
+<!-- WARNINGLOCATION: PAGE = "51" SRC = "RPPG_ch04.mif" TAGTYPE = "PARA" TAG = "ExampleTitle" TAGCOUNT = "1" UID = "617494" TEXT = "."-->
+<EXAMPLE><CAPTION LBL="4-1"><PREFIX>Example 4-1 </PREFIX><XREFTARGET ID="40108">Skeleton of an Activity Thread <INDEXTARGET ID="RPPG_ch0415"><!-- POSTPROCESSDATA: RPPG_ch0415|<FUNCTION>frs_yield</FUNCTION> --><INDEXTARGET ID="RPPG_ch0416"><!-- POSTPROCESSDATA: RPPG_ch0416|<FUNCTION>frs_join()</FUNCTION> --></CAPTION></EXAMPLE>
+<CODE>
+/* Initialize data structures etc. */
+frs_join(<VARIABLE>scheduler-handle</VARIABLE>)
+do
+{
+&nbsp;&nbsp;&nbsp;/* Perform the activity. */
+&nbsp;&nbsp;&nbsp;frs_yield();
+} while(1);
+_exit(); 
+</CODE>
+<PARAGRAPH>When the thread is ready to start real-time execution, it calls <FUNCTION>frs_join()</FUNCTION>. This call blocks until all queued threads are ready and scheduling begins (see <XREF IDREF="71560" TYPE="TITLE">&ldquo;Starting Multiple Schedulers&rdquo;</XREF>). When <FUNCTION>frs_join()</FUNCTION> returns, the thread is running in its first minor frame. For more information about <FUNCTION>frs_join()</FUNCTION>, see <REFPAGE>frs_join(3)</REFPAGE>.</PARAGRAPH>
+<PARAGRAPH>The thread then performs whatever activity is needed to complete the minor frame and calls <FUNCTION>frs_yield()</FUNCTION>. This gives up control of the CPU until the next minor frame where the thread is queued and executes. For more information about <FUNCTION>frs_yield()</FUNCTION>, see <REFPAGE>frs_yield(3)</REFPAGE>.</PARAGRAPH>
+<PARAGRAPH>An activity thread is never preempted within a minor frame. As long as it yields before the end of the frame, it can do its assigned work without interruption from other threads (it can be interrupted by hardware interrupts, if any hardware interrupts are allowed in that CPU). The Frame Scheduler preempts the thread at the end of the minor frame.</PARAGRAPH>
+<TIP><PREFIX>Tip</PREFIX>Because an activity thread cannot be preempted, it can often use global data without locks or semaphores. When the thread that modifies a global variable is queued in a different minor frame than the threads that read the variable, there can be no access conflicts between them.</TIP>
+<PARAGRAPH>Conflicts are still possible between two threads that are queued to the same minor frame in different, synchronized Frame Schedulers. However, such threads are guaranteed to be running concurrently. This means they can use spin-locks (see <XREF IDREF="22620" TYPE="TITLE">&ldquo;Locks&rdquo;</XREF>) with high efficiency.</PARAGRAPH>
+<TIP><PREFIX>Tip</PREFIX>When a very short minor frame interval is used, it is possible for a thread to have an overrun error in its first frame due to cache misses. A simple variation on the basic structure shown in <INDEXTARGET ID="RPPG_ch0417"><!-- POSTPROCESSDATA: RPPG_ch0417|Frame Scheduler:warming up cache --><INDEXTARGET ID="RPPG_ch0418"><!-- POSTPROCESSDATA: RPPG_ch0418|cache:warming up in first frame --><XREF IDREF="40108" TYPE="TEXT">Example&nbsp;4-1</XREF> is to spend the first minor frame touching a set of important data structures in order to &ldquo;warm up&rdquo; the cache. This is sketched in <XREF IDREF="41040" TYPE="TEXT">Example&nbsp;4-2</XREF>.</TIP>
+
+<!-- WARNING: (47) Example captions should come at end of Example - detected on page 52 -->
+<!-- WARNINGLOCATION: PAGE = "52" SRC = "RPPG_ch04.mif" TAGTYPE = "PARA" TAG = "ExampleTitle" TAGCOUNT = "1" UID = "617509" TEXT = "."-->
+<EXAMPLE><CAPTION LBL="4-2"><PREFIX>Example 4-2 </PREFIX><XREFTARGET ID="41040">Alternate Skeleton of Activity Thread</CAPTION></EXAMPLE>
+<CODE>
+/* Initialize data structures etc. */
+frs_join(<VARIABLE>scheduler-handle</VARIABLE>); /* Much time could pass here. */
+/* First frame: merely touch important data structures. */
+do
+{
+&nbsp;&nbsp;&nbsp;frs_yield();
+&nbsp;&nbsp;&nbsp;/* Second and later frames: perform the activity. */
+} while(1);
+_exit(); 
+</CODE>
+<PARAGRAPH>When an activity thread is scheduled on more than one minor frame in a major frame, it can be designed to do nothing except warm the cache in the entire first major frame. To do this, the activity thread function has to know how many minor frames it is scheduled on, and calls <FUNCTION>frs_yield()</FUNCTION> that many times in order to pass the first major frame.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="74203">Scheduling Within a Minor Frame</TITLE><PARAGRAPH>Threads in a minor frame queue are dispatched in the order they appear on the queue (priority is irrelevant). Queue ordering can be modified by:<INDEXTARGET ID="RPPG_ch0419"><!-- POSTPROCESSDATA: RPPG_ch0419|<FUNCTION>frs_pthread_enqueue()</FUNCTION> --><INDEXTARGET ID="RPPG_ch0420"><!-- POSTPROCESSDATA: RPPG_ch0420|minor frame --><INDEXTARGET ID="RPPG_ch0421"><!-- POSTPROCESSDATA: RPPG_ch0421|Frame Scheduler:scheduling rules of --></PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>appending a thread at the end of the queue with frs_pthread_enqueue() or frs_enqueue()</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>inserting a thread after a specific target thread via&space;frs_pthread_insert() or&space;frs_pinsert()</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>deleting a thread in the queue with <FUNCTION>frs_pthread_remove()</FUNCTION> or <FUNCTION>frs_premove()</FUNCTION></PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>See the reference pages <REFPAGE>frs_enqueue(3)</REFPAGE>, <REFPAGE>frs_pinsert(3)</REFPAGE>, <REFPAGE>frs_premove(3)</REFPAGE>, and <XREF IDREF="44733" TYPE="TITLE">&ldquo;Managing Activity Threads&rdquo;</XREF>.</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE>Scheduler Flags frs_run and frs_yield</TITLE><PARAGRAPH>The Frame Scheduler keeps two status flags per queued thread, named <INDEXTARGET ID="RPPG_ch0422"><!-- POSTPROCESSDATA: RPPG_ch0422|Frame Scheduler:<VARIABLE>frs_yield</VARIABLE> flag --><INDEXTARGET ID="RPPG_ch0423"><!-- POSTPROCESSDATA: RPPG_ch0423|Frame Scheduler:<VARIABLE>frs_run</VARIABLE> flag --><VARIABLE>frs_run</VARIABLE> and <VARIABLE>frs_yield</VARIABLE>. If a thread is ready to run when its turn comes, it is dispatched and its frs_run flag is set to indicate that this thread has run at least once within this minor frame.</PARAGRAPH>
+<PARAGRAPH>When a thread yields, its frs_yield flag is set to indicate that the thread has released the processor. It is not activated again within this minor frame.</PARAGRAPH>
+<PARAGRAPH>If a thread is not ready (usually because it is blocked waiting for I/O, a semaphore, or a lock), it is skipped. Upon reaching the end of the queue, the scheduler goes back to the beginning, in a round-robin fashion, searching for threads that have not yielded and may have become ready to run. If no ready threads are found, the Frame Scheduler goes into idle mode until a thread becomes available or until an interrupt marks the end of the frame. </PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Detecting Overrun and Underrun</TITLE><PARAGRAPH>When a time base interrupt occurs to indicate the end of the minor frame, the Frame Scheduler checks the flags for each thread. If the frs_run flag has not been set, that thread never ran and therefore is a candidate for an <GLOSSARYITEM>underrun exception</GLOSSARYITEM>. If the frs_run flag is set but the frs_yield flag is not, the thread is a candidate for an <GLOSSARYITEM>overrun exception</GLOSSARYITEM>.</PARAGRAPH>
+<PARAGRAPH>Whether these exceptions are declared depends on the scheduling discipline assigned to the thread. Scheduling disciplines are explained under <XREF IDREF="97767" TYPE="TITLE">&ldquo;Using the Scheduling Disciplines&rdquo;</XREF>).</PARAGRAPH>
+<PARAGRAPH>At the end of a minor frame, the Frame Scheduler resets all <VARIABLE>frs_run</VARIABLE> flags, except for those of threads that use the Continuable discipline in that minor frame. For those threads, the residual <VARIABLE>frs_yield</VARIABLE> flags keeps the threads that have yielded from being dispatched in the next minor frame.</PARAGRAPH>
+<PARAGRAPH>Underrun and overrun exceptions are typically communicated via IRIX signals. The rules for sending these signals are covered under <XREF IDREF="72300" TYPE="TITLE">&ldquo;Using Signals Under the Frame Scheduler&rdquo;</XREF>.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Estimating Available Time</TITLE><PARAGRAPH>It is up to the application to make sure that all the threads queued to any minor frame can actually complete their work in one minor-frame interval. If there is too much work for the available CPU cycles, overrun errors will occur.</PARAGRAPH>
+<PARAGRAPH>Estimation is simplified by the fact that only the queued threads can execute on a CPU controlled by the Frame Scheduler. You need to estimate the maximum time each thread can consume between one call to <FUNCTION>frs_yield()</FUNCTION> and the next.</PARAGRAPH>
+<PARAGRAPH>Frame Scheduler threads do compete for CPU cycles with I/O interrupts on the same CPU. If you direct I/O interrupts away from the CPU (see <XREF IDREF="50476" TYPE="TITLE">&ldquo;Isolating a CPU From Sprayed Interrupts&rdquo;</XREF> and <XREF IDREF="16684" TYPE="TITLE">&ldquo;Redirecting Interrupts&rdquo;</XREF>), then the only competition for CPU cycles (other than a very few essential TLB interrupts) is the overhead of the Frame Scheduler itself, and it has been carefully optimized for least overhead.</PARAGRAPH>
+<PARAGRAPH>Alternatively, you may assign specific I/O interrupts to a CPU used by the Frame Scheduler. In that case, you must estimate the time that interrupt service will consume (see <XREF IDREF="23937" TYPE="TITLE">&ldquo;Maximum Response Time Guarantee&rdquo;</XREF>) and allow for it.</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Synchronizing Multiple Schedulers</TITLE><PARAGRAPH>When the activities of one frame cannot be completed by one CPU, you need to recruit additional CPUs and execute some activities concurrently. However, it is important that each of the CPUs have the same time base, so that each starts and ends frames at the same time.<INDEXTARGET ID="RPPG_ch0424"><!-- POSTPROCESSDATA: RPPG_ch0424|multiprocessor architecture:and Frame Scheduler --><INDEXTARGET ID="RPPG_ch0425"><!-- POSTPROCESSDATA: RPPG_ch0425|Frame Scheduler:multiple synchronized --></PARAGRAPH>
+<PARAGRAPH>You can create one master Frame Scheduler, which owns the time base and one CPU, and as many synchronized (slave) Frame Schedulers as you need, each managing an additional CPU. The slave schedulers take their time base from the master, so that all start minor frames at the same instant.</PARAGRAPH>
+<PARAGRAPH>Each FRS requires its own controller thread. Therefore, to create multiple, synchronized Frame Schedulers, you must create a controller thread for the master and each slave FRS. <INDEXTARGET ID="RPPG_ch0426"><!-- POSTPROCESSDATA: RPPG_ch0426|FRS controller --><INDEXTARGET ID="RPPG_ch0427"><!-- POSTPROCESSDATA: RPPG_ch0427|Frame Scheduler:FRS controller --></PARAGRAPH>
+<PARAGRAPH>Each Frame Scheduler has its own queues of threads. A given thread can be queued to only one CPU. (However, you can create multiple threads based on the same code, and queue each to a different CPU.) All synchronized Frame Schedulers use the same number of minor frames per major frame, which is taken from the definition of the master FRS.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Starting a Single Scheduler</TITLE><PARAGRAPH>A single Frame Scheduler is created when the FRS controller thread calls <FUNCTION>frs_create_master()</FUNCTION> or <FUNCTION>frs_create()</FUNCTION>. The FRS controller calls <FUNCTION>frs_pthread_enqueue()</FUNCTION> or <FUNCTION>frs_enqueue()</FUNCTION> one or more times to notify the new Frame Scheduler of the threads to schedule in each of the minor frames. The FRS controller calls <FUNCTION>frs_start()</FUNCTION> when it has queued all the threads. Each scheduled thread must call <FUNCTION>frs_join()</FUNCTION> after it has initialized and is ready to be scheduled.</PARAGRAPH>
+<PARAGRAPH>Each activity thread must be queued to at least one minor frame before it can join the FRS via <FUNCTION>frs_join()</FUNCTION>. Once all activity threads have joined and the FRS is started by the controller thread, the first minor frame begins executing. For more information about these functions, see the <REFPAGE>frs_enqueue(3)</REFPAGE>, <REFPAGE>frs_join(3)</REFPAGE>, and <REFPAGE>frs_start(3)</REFPAGE> reference pages.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="71560">Starting Multiple Schedulers</TITLE><PARAGRAPH>A Frame Scheduler cannot start dispatching activities until<INDEXTARGET ID="RPPG_ch0428"><!-- POSTPROCESSDATA: RPPG_ch0428|Frame Scheduler:starting up --></PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>the FRS controller has queued all the activity threads to their minor frames.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>all the queued threads have done their own initial setup and have joined.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>When multiple Frame Schedulers are used, none can start until all are ready.</PARAGRAPH>
+<PARAGRAPH>Each FRS controller notifies its Frame Scheduler that it has queued all activities by calling <INDEXTARGET ID="RPPG_ch0429"><!-- POSTPROCESSDATA: RPPG_ch0429|<FUNCTION>frs_start()</FUNCTION> --><FUNCTION>frs_start()</FUNCTION>. Each activity thread signals its Frame Scheduler that it is ready to begin real-time processing by calling <FUNCTION>frs_join()</FUNCTION>.<INDEXTARGET ID="RPPG_ch0430"><!-- POSTPROCESSDATA: RPPG_ch0430|<FUNCTION>frs_join()</FUNCTION> --></PARAGRAPH>
+<PARAGRAPH>A Frame Scheduler is ready when it has received one or more <FUNCTION>frs_pthread_enqueue()</FUNCTION> or <FUNCTION>frs_enqueue() </FUNCTION>calls, a matching number of <FUNCTION>frs_join()</FUNCTION> calls, and an <FUNCTION>frs_start()</FUNCTION> call for each Frame Scheduler. Each slave Frame Scheduler notifies the master Frame Scheduler when it is ready. When all the schedulers are ready, the master Frame Scheduler gives the downbeat, and the first minor frame begins.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Pausing Frame Schedulers</TITLE><PARAGRAPH>Any Frame Scheduler can be made to pause and restart. Any thread (typically but not necessarily the FRS controller) can call <INDEXTARGET ID="RPPG_ch0431"><!-- POSTPROCESSDATA: RPPG_ch0431|<FUNCTION>frs_resume()</FUNCTION> --><INDEXTARGET ID="RPPG_ch0432"><!-- POSTPROCESSDATA: RPPG_ch0432|<FUNCTION>frs_stop()</FUNCTION> --><INDEXTARGET ID="RPPG_ch0433"><!-- POSTPROCESSDATA: RPPG_ch0433|Frame Scheduler:pausing --><FUNCTION>frs_stop()</FUNCTION>, specifying a particular Frame Scheduler. That scheduler continues dispatching threads from the current minor frame until all have yielded. Then it goes into an idle loop until a call to <FUNCTION>frs_resume()</FUNCTION> tells it to start. It resumes on the next time-base interrupt, with the next minor frame in succession. For more information, see the<REFPAGE>&space;frs_stop(3)</REFPAGE> and <REFPAGE>frs_resume(3)</REFPAGE> reference pages.</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>If there is a thread running Background discipline in the current minor frame, it continues to execute until it yields or is blocked on a system service.</NOTE>
+<PARAGRAPH>Since a Frame Scheduler does not stop until the end of a minor frame, you can stop and restart a group of synchronized schedulers by calling <FUNCTION>frs_stop()</FUNCTION> for each one before the end of a minor frame. There is no way to restart all of a group of schedulers with the certainty that they start up on the same time-base interrupt.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="44733">Managing Activity Threads</TITLE><PARAGRAPH>The FRS control thread identifies the initial set of activity threads by calling <FUNCTION>frs_pthread_enqueue()</FUNCTION> or <FUNCTION>frs_enqueue()</FUNCTION> prior to starting the Frame Scheduler. All the queued threads must call <FUNCTION>frs_join()</FUNCTION> before scheduling can begin. However, the FRS controller can change the set of activity threads dynamically while the Frame Scheduler is working, using the following functions: </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="126"><PARAGRAPH><FUNCTION>frs_getqueuelen()</FUNCTION>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="135" WIDTH="261"><PARAGRAPH>Get the number of threads currently in the queue for a 
+specified minor frame.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="126"><PARAGRAPH>f<FUNCTION>rs_pthread_readqueue()</FUNCTION> 
+or f<FUNCTION>rs_readqueue()</FUNCTION></PARAGRAPH>
+</CELL>
+<CELL LEFT="135" WIDTH="261"><PARAGRAPH>Return the ID values of all queued threads for a specified 
+minor frame as a vector of integers.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="126"><PARAGRAPH><FUNCTION>frs_pthread_remove()</FUNCTION> or 
+<FUNCTION>frs_premove()</FUNCTION></PARAGRAPH>
+</CELL>
+<CELL LEFT="135" WIDTH="261"><PARAGRAPH>Remove a thread (specified by its ID) from a minor frame 
+queue.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="126"><PARAGRAPH><FUNCTION>frs_pthread_insert()</FUNCTION> or 
+<FUNCTION>frs_pinsert()</FUNCTION>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="135" WIDTH="261"><PARAGRAPH>Insert a thread (specified by its ID and discipline) into a 
+given position in a minor frame queue.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>Using these functions, the FRS controller can change the queueing discipline (overrun, underrun, continuable) of a thread by removing it and inserting it with a new discipline. The FRS controller can suspend a thread by removing it from its queue; or can restart a thread by putting it back in its queue.</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>When an activity thread is removed from the last or only queue it was in, it is returned to the normal IRIX scheduler and can begin to execute on another CPU. When an activity thread is removed from a queue, a signal may be sent to the removed thread (see <XREF IDREF="88749" TYPE="TITLE">&ldquo;Handling Signals in an Activity Thread&rdquo;</XREF>). If a signal is sent to it, it begins executing in its specified or default signal handler; otherwise, it simply begins executing following <FUNCTION>frs_yield()</FUNCTION>. Once returned to the IRIX scheduler, a call to an FRS function such as <FUNCTION>frs_yield()</FUNCTION> returns an error (this also can be used to indicate the resumption of normal scheduling).</NOTE>
+<PARAGRAPH>The FRS controller can also queue new threads that have not been scheduled before. The Frame Scheduler does not reject an <FUNCTION>frs_pthread_insert()</FUNCTION> or <FUNCTION>frs_pinsert()</FUNCTION> call for a thread that has not yet joined the scheduler. However, a thread must call <FUNCTION>frs_join()</FUNCTION> before it can be scheduled. For more information, see the <REFPAGE>frs_pinsert(3)</REFPAGE> reference page.</PARAGRAPH>
+<PARAGRAPH>If an queued thread should be terminated for any reason, the Frame Scheduler removes the thread from all queues in which it appears.</PARAGRAPH>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="12213">Selecting a Time Base</TITLE><PARAGRAPH>Your program specifies an interrupt source for the time base when it creates the master (or only) Frame Scheduler. The master Frame Scheduler initializes the necessary hardware resources and redirects the interrupt to the appropriate CPU and handler.<INDEXTARGET ID="RPPG_ch0434"><!-- POSTPROCESSDATA: RPPG_ch0434|Frame Scheduler:time base selection --><INDEXTARGET ID="RPPG_ch0435"><!-- POSTPROCESSDATA: RPPG_ch0435|time base for Frame Scheduler --></PARAGRAPH>
+<PARAGRAPH>The Frame Scheduler time base is fundamental because it determines the duration of a minor frame, and hence the frame rate of the program. This section explains the different time bases that are available.</PARAGRAPH>
+<PARAGRAPH>When you use multiple, synchronized Frame Schedulers, the master Frame Scheduler distributes the time-base interrupt to each synchronized CPU. This ensures that minor-frame boundaries are synchronized across all the Frame Schedulers. <INDEXTARGET ID="RPPG_ch0436"><!-- POSTPROCESSDATA: RPPG_ch0436|interrupt:group. <ITALICS>See</ITALICS> interrupt group --><INDEXTARGET ID="RPPG_ch0437"><!-- POSTPROCESSDATA: RPPG_ch0437|interrupt group --></PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>On-Chip Timer Interrupt</TITLE><PARAGRAPH>Each processor chip contains a free-running timer that is used by IRIX for normal process scheduling. This timer is not synchronized between processors, so it cannot be used to drive multiple synchronized schedulers. The on-chip timer can be used as a time base when only one CPU is used.<INDEXTARGET ID="RPPG_ch0438"><!-- POSTPROCESSDATA: RPPG_ch0438|Frame Scheduler:and the on-chip timer --></PARAGRAPH>
+<PARAGRAPH>To use the on-chip timer, specify FRS_INTRSOURCE_CPUTIMER as the interrupt source, and the minor frame interval in microseconds, to <FUNCTION>frs_create_master()</FUNCTION> or <FUNCTION>frs_create()</FUNCTION>.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>High-Resolution Timer</TITLE><PARAGRAPH>The high-resolution timer and clock is a timer that is synchronous across all processors, and is ideal to drive synchronous schedulers. On Origin, Onyx2, CHALLENGE, and Onyx systems, this timer is based on the high-resolution counter discussed under <INDEXTARGET ID="RPPG_ch0439"><!-- POSTPROCESSDATA: RPPG_ch0439|Frame Scheduler:and cycle counter --><INDEXTARGET ID="RPPG_ch0440"><!-- POSTPROCESSDATA: RPPG_ch0440|cycle counter:as Frame Scheduler time base --><XREF IDREF="59558" TYPE="TITLE">&ldquo;Hardware Cycle Counter&rdquo;</XREF>.</PARAGRAPH>
+<PARAGRAPH>To use this timer, specify FRS_INTRSOURCE_CCTIMER, and specify the minor frame interval in microseconds to <FUNCTION>frs_create_master() </FUNCTION>or <FUNCTION>frs_create()</FUNCTION>.</PARAGRAPH>
+<PARAGRAPH>The IRIX kernel uses this timer for managing timer events. When your program creates the master Frame Scheduler, the Frame Scheduler migrates all timeout events to CPU 0, leaving the timer on the scheduled CPU free.</PARAGRAPH>
+<PARAGRAPH>The high-resolution timers in all CPUs are synchronized automatically.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="84592">Vertical Sync Interrupt</TITLE><PARAGRAPH>An interrupt is generated for every vertical retrace by the graphics subsystem (see <INDEXTARGET ID="RPPG_ch0441"><!-- POSTPROCESSDATA: RPPG_ch0441|vertical sync interrupt --><INDEXTARGET ID="RPPG_ch0442"><!-- POSTPROCESSDATA: RPPG_ch0442|interrupt:vertical sync --><INDEXTARGET ID="RPPG_ch0443"><!-- POSTPROCESSDATA: RPPG_ch0443|Frame Scheduler:and vertical sync --><XREF IDREF="82053" TYPE="TITLE">&ldquo;Understanding the Vertical Sync Interrupt&rdquo;</XREF>). The frame rate is either 50 Hz or 60 Hz, depending on the installed hardware. This interrupt is especially appropriate for a visual simulator, since it defines a frame rate that matches the graphics subsystem frame rate.</PARAGRAPH>
+<PARAGRAPH>To use the vertical sync interrupt, specify FRS_INTRSOURCE_VSYNC to <FUNCTION>frs_create_master()</FUNCTION> or <FUNCTION>frs_create()</FUNCTION>. An error is returned if this system is not configured with a graphics subsystem.</PARAGRAPH>
+<PARAGRAPH>When multiple synchronized schedulers are used, the master Frame Scheduler distributes the vertical sync interrupt.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="21988">External Interrupts</TITLE><PARAGRAPH>An external interrupt is generated via a signal applied to the external interrupt socket on systems supporting such a hardware feature, such as Origin, CHALLENGE, and Onyx systems (see <INDEXTARGET ID="RPPG_ch0444"><!-- POSTPROCESSDATA: RPPG_ch0444|Frame Scheduler:and external interrupt --><INDEXTARGET ID="RPPG_ch0445"><!-- POSTPROCESSDATA: RPPG_ch0445|external interrupt:with Frame Scheduler --><XREF IDREF="78160" TYPE="TITLE">&ldquo;External Interrupts&rdquo;</XREF>). To use external interrupts as a time base:</PARAGRAPH>
+<ORDEREDLIST><LIST><PARAGRAPH>Redirect the external interrupt to the master FRS CPU using the appropriate device administration directive in <FILENAME>/var/sysgen/system/irix.sm</FILENAME>.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>For the directives take effect, rebuild the kernel using the command <COMMAND>/etc/autoconfig&nbsp;-vf</COMMAND>, and reboot. </PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Specify FRS_INTRSOURCE_EXTINTR to <FUNCTION>frs_create_master() </FUNCTION>or <FUNCTION>frs_create()</FUNCTION>.</PARAGRAPH>
+</LIST>
+</ORDEREDLIST>
+<PARAGRAPH>For example, in<FILENAME>&space;irix.sm</FILENAME>, a directive similar to the following causes PCI interrupt 4 of the first I/O slot to be handled by CPU 1. (The actual directive depends on the hardware configuration of the target platform.)</PARAGRAPH>
+<CODE>
+DEVICE_ADMIN: /hw/module/1/slot/io1/baseio/pci/4 INTR_TARGET=/hw/cpunum/1
+</CODE>
+<PARAGRAPH>When multiple synchronized schedulers are used, the master Frame Scheduler receives the interrupt and allocates it simultaneously to the synchronized schedulers.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="25121">Device Driver Interrupt</TITLE><PARAGRAPH>A user-written, kernel-level device driver can supply the time-base interrupt (see <XREF IDREF="38756" TYPE="TITLE">&ldquo;FRS Kernel-Level Device Driver Interface&rdquo;</XREF>). The Frame Scheduler registers the driver and assigns it a unique registration number, then allocates an interrupt group. The device driver must direct interrupts to it.</PARAGRAPH>
+<PARAGRAPH>To use a device driver as a time base, specify FRS_INTRSOURCE_DRIVER and the device driver's registration number to frs_create_master() or frs_create(). See <XREF IDREF="48091" TYPE="TITLE">&ldquo;Implementing a Single Frame Scheduler&rdquo;</XREF>.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="35769">Software Interrupt</TITLE><PARAGRAPH>A programmed, software-generated interrupt can be used as the time base. Any user process can send this interrupt to the master Frame Scheduler by calling <INDEXTARGET ID="RPPG_ch0446"><!-- POSTPROCESSDATA: RPPG_ch0446|Frame Scheduler:software interrupt to --><INDEXTARGET ID="RPPG_ch0447"><!-- POSTPROCESSDATA: RPPG_ch0447|<FUNCTION>frs_userintr()</FUNCTION> --><FUNCTION>frs_userintr()</FUNCTION>.</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>Software interrupts are primarily intended for application debugging. It is not feasible for a user process to generate the low-latency and determinism for interrupts required by a real-time application.</NOTE>
+<PARAGRAPH>To use software interrupts as a time base, specify FRS_INTRSOURCE_USER to <FUNCTION>frs_create_master() </FUNCTION>or <FUNCTION>frs_create()</FUNCTION>.</PARAGRAPH>
+<CAUTION><PREFIX>Caution</PREFIX>The use of software interrupts has a potential for causing a system deadlock if the interrupt-generating process contends for a resource that is also used by a frame-scheduled activity thread. If any activity thread calls IRIX system functions, the only way to be absolutely sure of avoiding deadlock is for the interrupt-generating process to avoid using any IRIX system functions. Note that C library functions such as <FUNCTION>printf()</FUNCTION> invoke system functions, and can lead to deadlocks in this case.</CAUTION>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>User-Level Interrupts</TITLE><PARAGRAPH>The user level interrupt (ULI) facility allows a hardware interrupt to be handled by a user process, enabling device drivers to reside at the user-level; see the <REFPAGE>uli(3)</REFPAGE> reference page for details. To use ULI to drive the frame scheduler, specify FRS_INTRSOURCE_ULI as the interrupt source to the <FUNCTION>frs_create_master()</FUNCTION> or <FUNCTION>frs_create_vmaster()</FUNCTION> functions.</PARAGRAPH>
+<PARAGRAPH>The ULI capability is supported only for Origin and Onyx2 platforms. The PCI or VME interrupt must be routed to the master Frame Scheduled processor in order for the frame scheduler to recognize it.</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>The frame scheduler is invoked after the user-level portion of the interrupt handler has completed servicing the interrupt.</NOTE>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="97767">Using the Scheduling Disciplines</TITLE><PARAGRAPH>When an FRS controller thread queues an activity thread to a minor frame (using <INDEXTARGET ID="RPPG_ch0448"><!-- POSTPROCESSDATA: RPPG_ch0448|<FUNCTION>frs_pthread_enqueue()</FUNCTION> --><INDEXTARGET ID="RPPG_ch0449"><!-- POSTPROCESSDATA: RPPG_ch0449|scheduling discipline: <ITALICS>See also</ITALICS> Frame Scheduler scheduling disciplinesscheduling discipline:ZZZ --><INDEXTARGET ID="RPPG_ch0450"><!-- POSTPROCESSDATA: RPPG_ch0450|Frame Scheduler:scheduling disciplines --><FUNCTION>frs_pthread_enqueue()</FUNCTION> or <FUNCTION>frs_enqueue()</FUNCTION>), it must specify a <GLOSSARYITEM>scheduling discipline</GLOSSARYITEM> that tells the Frame Scheduler how the thread is expected to use its time within that minor frame.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>Real-Time Discipline</TITLE><PARAGRAPH>In the simplest case, an activity thread starts during the minor frame in which it is queued, and completes its work and yields within the same minor frame.<INDEXTARGET ID="RPPG_ch0451"><!-- POSTPROCESSDATA: RPPG_ch0451|Frame Scheduler:real-time discipline --></PARAGRAPH>
+<PARAGRAPH>If the thread is not ready to run (for example, blocked on I/O) during the entire minor frame, an underrun exception is said to occur. If the thread fails to complete its work and yield within the minor frame interval, an overrun exception is said to occur.<INDEXTARGET ID="RPPG_ch0452"><!-- POSTPROCESSDATA: RPPG_ch0452|Frame Scheduler:overrun exception --><INDEXTARGET ID="RPPG_ch0453"><!-- POSTPROCESSDATA: RPPG_ch0453|overrun in Frame Scheduler --><INDEXTARGET ID="RPPG_ch0454"><!-- POSTPROCESSDATA: RPPG_ch0454|Frame Scheduler:underrun exception --><INDEXTARGET ID="RPPG_ch0455"><!-- POSTPROCESSDATA: RPPG_ch0455|underrun, in Frame Scheduler --></PARAGRAPH>
+<PARAGRAPH>The Frame Scheduler calls this strict discipline the Real-time scheduling discipline.</PARAGRAPH>
+<PARAGRAPH>This model could describe a simple kind of simulator in which certain activities&mdash;poll the inputs; calculate the new status; update the display&mdash;must be repeated in that order during every frame. In this scenario, each activity must start and must finish in every frame. If one fails to start, or fails to finish, the real-time program is broken in some way and must take some action.</PARAGRAPH>
+<PARAGRAPH>However, realistic designs need the flexibility to have threads that</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>need not start every frame; for instance, threads that sleep on a semaphore until there is work for them to do</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>may run longer than one minor frame</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>should run only when time is available, and whose rate of progress is not critical</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>The other disciplines are used, in combination with Real-time and with each other, to allow these variations.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Background Discipline</TITLE><PARAGRAPH>The Background discipline is mutually exclusive with the other disciplines. The Frame Scheduler dispatches a Background thread only when all other threads queued to that minor frame have run and have yielded. Since the Background thread cannot be sure it will run and cannot predict how much time it will have, the concepts of underrun and overrun do not apply to it.<INDEXTARGET ID="RPPG_ch0456"><!-- POSTPROCESSDATA: RPPG_ch0456|Frame Scheduler:background discipline --></PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>A thread with the Background discipline must be queued to its frame following all non-Background threads. Do not queue a real-time thread after a Background thread.</NOTE>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Underrunable Discipline</TITLE><PARAGRAPH>You specify Underrunable discipline with Real-time discipline to prevent detection of underrun exceptions. You specify Underrunable in two cases:<INDEXTARGET ID="RPPG_ch0457"><!-- POSTPROCESSDATA: RPPG_ch0457|Frame Scheduler:underrunable discipline --></PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>When a thread needs to run only when an event has occurred, such as a lock being released or a semaphore being posted.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>When a thread may need more than one minor frame (see <XREF IDREF="16055" TYPE="TITLE">&ldquo;Using Multiple Consecutive Minor Frames&rdquo;</XREF>).</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>When you specify Real-time+Underrunable, the thread is not required to start in that minor frame. However, if it starts, it is required to yield before the end of the frame or an overrun exception is raised.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Overrunnable Discipline</TITLE><PARAGRAPH>You specify Overrunnable discipline with Real-time discipline to prevent detection of overrun exceptions. You specify it in two cases:<INDEXTARGET ID="RPPG_ch0458"><!-- POSTPROCESSDATA: RPPG_ch0458|Frame Scheduler:overrunnable discipline --></PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>When it truly does not matter if the thread fails to complete its work within the minor frame&mdash;for example, a calculation of a game strategy which, if it fails to finish, merely makes the computer a less dangerous opponent.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>When a thread may need more than one minor frame (see <XREF IDREF="16055" TYPE="TITLE">&ldquo;Using Multiple Consecutive Minor Frames&rdquo;</XREF>).</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>When you specify Overrunnable+Real-time, the thread is not required to call <INDEXTARGET ID="RPPG_ch0459"><!-- POSTPROCESSDATA: RPPG_ch0459|<FUNCTION>frs_yield()</FUNCTION>:with overrunable discipline --><FUNCTION>frs_yield()</FUNCTION> before the end of the frame. Even so, the thread is preempted at the end of the frame. It does not have a chance to run again until the next minor frame in which it is queued. At that time it resumes where it was preempted, with no indication that it was preempted.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Continuable Discipline</TITLE><PARAGRAPH>You specify Continuable discipline with Real-time discipline to prevent the Frame Scheduler from clearing the flags at the end of this minor frame (see <INDEXTARGET ID="RPPG_ch0460"><!-- POSTPROCESSDATA: RPPG_ch0460|Frame Scheduler:continuable discipline --><XREF IDREF="74203" TYPE="TITLE">&ldquo;Scheduling Within a Minor Frame&rdquo;</XREF>).</PARAGRAPH>
+<PARAGRAPH>The result is that, if the thread yields in this frame, it need not run or yield in the following frame. The residual <VARIABLE>frs_yield</VARIABLE> flag value, carried forward to the next frame, applies. You specify Continuable discipline with other disciplines in order to let a thread execute just once in a block of consecutive minor frames.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="16055">Using Multiple Consecutive Minor Frames</TITLE><PARAGRAPH>There are cases when a thread sometimes or always requires more than one minor frame to complete its work. Possibly the work is lengthy, or possibly the thread could be delayed by a system call or a lock or semaphore wait.<INDEXTARGET ID="RPPG_ch0461"><!-- POSTPROCESSDATA: RPPG_ch0461|Frame Scheduler:using consecutive minor frames --></PARAGRAPH>
+<PARAGRAPH>You must decide the absolute maximum time the thread could consume between starting up and calling <FUNCTION>frs_yield()</FUNCTION>. If this is unpredictable, or if it is predictably longer than the major frame, the thread cannot be scheduled by the Frame Scheduler. Hence, it should probably run on another CPU under the IRIX real-time scheduler.</PARAGRAPH>
+<PARAGRAPH>However, when the worst-case time is bounded and is less than the major frame, you can queue the thread to enough consecutive minor frames to allow it to finish. A combination of disciplines is used in these frames to ensure that the thread starts when it should, finishes when it must, and does not cause an error if it finishes early.</PARAGRAPH>
+<PARAGRAPH>The discipline settings for each frame should be:</PARAGRAPH>
+<HANGLIST><HANGPAIR><HANGITEM>First frame</HANGITEM>
+<HANGBODY><PARAGRAPH>Real-time + Overrunnable + Continuable&mdash;the thread must start in this frame (not Underrunable) but is not required to yield (Overrunnable). If it yields, it is not restarted in the following minor frame (Continuable).</PARAGRAPH>
+</HANGBODY>
+</HANGPAIR>
+<HANGPAIR><HANGITEM>Intermediate</HANGITEM>
+<HANGBODY><PARAGRAPH>Real-time+Underrunable+Overrunnable+Continuable&mdash;the thread need not start (it might already have yielded, or might be blocked) but is not required to yield. If it does yield (or if it had yielded in a preceding minor frame), it is not restarted in the following minor frame (Continuable).</PARAGRAPH>
+</HANGBODY>
+</HANGPAIR>
+<HANGPAIR><HANGITEM>Final frame</HANGITEM>
+<HANGBODY><PARAGRAPH>Real-time+Underrunable&mdash;the thread need not start (it might already have yielded) but if it starts, it must yield in this frame (not Overrunnable). The thread can start a new run in the next minor frame to which it is queued (not Continuable).</PARAGRAPH>
+</HANGBODY>
+</HANGPAIR>
+</HANGLIST>
+<PARAGRAPH>A thread can be queued for one or more of these multiframe sequences in one major frame. For example, suppose that the minor frame rate is 60 Hz, and a major frame contains 60 minor frames (1 Hz). You have a thread that should run at a rate of 5 Hz and can use up to 3/60 second at each dispatch. You can queue the thread to 5 sequences of 3 consecutive frames each. It could start in frames 0, 12, 24, 36, and 48. Frames 1, 13, 25, 37 and 49 could be intermediate frames, and 2, 14, 26, 38 and 50 could be final frames. </PARAGRAPH>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="21771">Designing an Application for the Frame Scheduler</TITLE><PARAGRAPH>When using the Frame Scheduler, consider the following guidelines when designing your real-time application.<INDEXTARGET ID="RPPG_ch0462"><!-- POSTPROCESSDATA: RPPG_ch0462|Frame Scheduler:design process --></PARAGRAPH>
+<ORDEREDLIST><LIST><PARAGRAPH>Determine the programming model for implementing the activities in your program, choosing among POSIX threads, IRIX<FUNCTION>&space;sproc()</FUNCTION>, or SVR4<FUNCTION>&space;fork()</FUNCTION> calls. (You cannot mix pthreads and other disciplines within your program.)</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Partition the program into activities, where each activity is an independent piece of work that can be done without interruption.</PARAGRAPH>
+<PARAGRAPH>For example, in a simple vehicle simulator, activities might include &ldquo;poll the joystick,&rdquo; &ldquo;update the positions of moving objects,&rdquo; &ldquo;cull the set of visible objects,&rdquo; and so forth.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Decide the relationships among the activities:</PARAGRAPH>
+<BULLETLISTIND><BULLETIND><PARAGRAPH>Some must be done once per minor frame, others less frequently.</PARAGRAPH>
+</BULLETIND>
+<BULLETIND><PARAGRAPH>Some must be done before or after others.</PARAGRAPH>
+</BULLETIND>
+<BULLETIND><PARAGRAPH>Some may be conditional. For example, an activity could poll a semaphore and do nothing unless an event had completed.</PARAGRAPH>
+</BULLETIND>
+</BULLETLISTIND>
+</LIST>
+<LIST><PARAGRAPH>Estimate the worst-case time required to execute each activity. Some activities may need more than one minor frame interval (the Frame Scheduler allows for this).</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Schedule the activities: If all are executed sequentially, will they complete in one major frame? If not, choose activities that can execute concurrently on two or more CPUs, and estimate again. You may have to change the design in order to get greater concurrency.</PARAGRAPH>
+</LIST>
+</ORDEREDLIST>
+<PARAGRAPH>When the design is complete, implement each activity as an independent thread that communicates with the others using shared memory, semaphores, and locks (see <XREF IDREF="42590" TYPE="TITLE">&ldquo;Synchronization and Communication&rdquo;</XREF>).</PARAGRAPH>
+<PARAGRAPH>The Frame Scheduler is created, stopped, and resumed by a controller thread. The controller thread can also interrogate and receive signals from the Frame Scheduler (see <XREF IDREF="45686" TYPE="TITLE">&ldquo;Signals&rdquo;</XREF>).</PARAGRAPH>
+<PARAGRAPH>A Frame Scheduler seizes its assigned CPU, isolates it, and controls the scheduling on it. It waits for all queued threads to initialize themselves and &ldquo;join&rdquo; the scheduler. The FRS begins dispatching the threads in the specified sequence during each frame interval. Errors are monitored (such as a thread that fails to complete its work within its frame) and a specified action is taken when an error occurs. Typically the error action is to send a signal to the controller thread. </PARAGRAPH>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="37845">Preparing the System</TITLE><PARAGRAPH>Before a real-time program executes, you must set up the system in the following ways.</PARAGRAPH>
+<ORDEREDLIST><LIST><PARAGRAPH>Choose the CPU or CPUs that the real-time program will use. CPU 0 (at least) must be reserved for IRIX system functions.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Decide which CPUs will handle I/O interrupts. By default, IRIX distributes I/O interrupts across all available processors as a means of balancing the load (referred to as <GLOSSARYITEM>spraying interrupts</GLOSSARYITEM>). CPUs that are used for real-time programs should be removed from the distribution set (see <XREF IDREF="16684" TYPE="TITLE">&ldquo;Redirecting Interrupts&rdquo;</XREF>).</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>If using an external interrupt as a time base, make sure it is redirected to the CPU of the master FRS (see <XREF IDREF="21988" TYPE="TITLE">&ldquo;External Interrupts&rdquo;</XREF>).</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Make sure that none of the real-time CPUs is managing the clock (see <XREF IDREF="38943" TYPE="TITLE">&ldquo;Assigning the Clock Processor&rdquo;</XREF>). Normally the responsibility of handling 10ms scheduler interrupts is given to CPU 0.</PARAGRAPH>
+</LIST>
+</ORDEREDLIST>
+<PARAGRAPH>Each Frame Scheduler takes care of restricting and isolating its CPU, so that the CPU is used only for threads scheduled by the Frame Scheduler.</PARAGRAPH>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="48091">Implementing a Single Frame Scheduler</TITLE><PARAGRAPH>When the activities of your real-time program can be handled within a major frame interval by a single CPU, your program needs to create only one Frame Scheduler. Examples for implementing a single FRS can be found in the <INDEXTARGET ID="RPPG_ch0463"><!-- POSTPROCESSDATA: RPPG_ch0463|Frame Scheduler:process outline for single --><FILENAME>simple</FILENAME> and <FILENAME>simple_pt</FILENAME> programs, described in <XREF IDREF="23374" TYPE="TITLE">Appendix&nbsp;A</XREF>.</PARAGRAPH>
+<PARAGRAPH>Typically your program has a top-level process (called the controller thread) to handle startup and termination, and one or more activity threads that are dispatched by the Frame Scheduler. The activity threads are typically lightweight threads (pthreads or sprocs), but that is not a requirement&mdash;they can also be created with fork(); they need not be children of the controller thread. (See, for instance, <XREF IDREF="83528" TYPE="TITLE">&ldquo;Example of Scheduling Separate Programs&rdquo;</XREF>.).</PARAGRAPH>
+<PARAGRAPH>In general, these are the steps for setting up a single Frame Scheduler:</PARAGRAPH>
+<ORDEREDLIST><LIST><PARAGRAPH>Initialize global resources such as memory-mapped segments, memory arenas, files, asynchronous I/O, semaphores, locks, and other resources.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Lock the shared address space segments. (When fork() is used, each child process must lock its own address space.)</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>If using pthreads, create a controller thread; otherwise, the initial thread of execution may be used as the controller thread.</PARAGRAPH>
+<BULLETLISTIND><BULLETIND><PARAGRAPH>Create a system scope attribute structure using <FUNCTION>pthread_attr_init() <INDEXTARGET ID="RPPG_ch0464"><!-- POSTPROCESSDATA: RPPG_ch0464|<FUNCTION>pthread_attr_init()</FUNCTION> --></FUNCTION>and <FUNCTION>pthread_attr_setscope()<INDEXTARGET ID="RPPG_ch0465"><!-- POSTPROCESSDATA: RPPG_ch0465|<FUNCTION>pthread_attr_setscope()</FUNCTION> --></FUNCTION>. See the <REFPAGE>pthread_attr_init(3P)</REFPAGE> and <REFPAGE>pthread_attr_setscope(3P)</REFPAGE> references pages for details.</PARAGRAPH>
+</BULLETIND>
+<BULLETIND><PARAGRAPH>Create a system scope controller thread using <FUNCTION>pthread_create()</FUNCTION> and the attribute structure you just set up. See <REFPAGE>pthread_create(3P)</REFPAGE> for details.</PARAGRAPH>
+</BULLETIND>
+<BULLETIND><PARAGRAPH>Exit the initial thread, since it cannot execute any FRS operations.</PARAGRAPH>
+</BULLETIND>
+</BULLETLISTIND>
+</LIST>
+<LIST><PARAGRAPH>Create the Frame Scheduler using <INDEXTARGET ID="RPPG_ch0466"><!-- POSTPROCESSDATA: RPPG_ch0466|<FUNCTION>frs_create()</FUNCTION> --><FUNCTION>frs_create_master()</FUNCTION>, <FUNCTION>frs_create_vmaster()</FUNCTION>, or <FUNCTION>frs_create()</FUNCTION> (see the <REFPAGE>frs_create(3)</REFPAGE> reference page for details).</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Create the activity threads using one of the following interfaces (depending on the thread model being used):</PARAGRAPH>
+<BULLETLISTIND><BULLETIND><PARAGRAPH>pthread_create()</PARAGRAPH>
+</BULLETIND>
+<BULLETIND><PARAGRAPH>sproc()</PARAGRAPH>
+</BULLETIND>
+<BULLETIND><PARAGRAPH>fork()</PARAGRAPH>
+</BULLETIND>
+</BULLETLISTIND>
+</LIST>
+<LIST><PARAGRAPH>Queue the activity threads on the target minor frame queues, using frs_pthread_enqueue() or frs_enqueue(). <INDEXTARGET ID="RPPG_ch0467"><!-- POSTPROCESSDATA: RPPG_ch0467|<FUNCTION>frs_enqueue()</FUNCTION><FUNCTION>frs_pthread_enqueue()</FUNCTION> --></PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Optionally, initialize the Frame Scheduler signal handler to catch frame overrun, underrun, and activity dequeue events (see <XREF IDREF="54102" TYPE="TITLE">&ldquo;Setting Frame Scheduler Signals&rdquo;</XREF> and <XREF IDREF="51755" TYPE="TITLE">&ldquo;Setting Exception Policies&rdquo;</XREF>). The handlers are set at this time, after creation of the activity threads, so that the activity threads do not inherit them.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Use frs_start() (<INDEXTARGET ID="RPPG_ch0468"><!-- POSTPROCESSDATA: RPPG_ch0468|<FUNCTION>frs_start()</FUNCTION> --><XREF IDREF="50426" TYPE="TABLE">Table&nbsp;4-1</XREF>) to enable scheduling.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Have the activity threads call frs_join(). The Frame Scheduler begins scheduling processes as soon as all the activity threads have called frs_join().</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Wait for error signals from the Frame Scheduler and for the termination of child processes.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Use <INDEXTARGET ID="RPPG_ch0469"><!-- POSTPROCESSDATA: RPPG_ch0469|<FUNCTION>frs_destroy()</FUNCTION> --><FUNCTION>frs_destroy()</FUNCTION> to terminate the Frame Scheduler.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Tidy up the global resources, as required.</PARAGRAPH>
+</LIST>
+</ORDEREDLIST>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="82868">Implementing Synchronized Schedulers</TITLE><PARAGRAPH>When the real-time application requires the power of multiple CPUs, you must add one more level to the program design for a single CPU. The program creates multiple Frame Schedulers, one master and one or more synchronized slaves.<INDEXTARGET ID="RPPG_ch0470"><!-- POSTPROCESSDATA: RPPG_ch0470|Frame Scheduler:process outline for multiple --></PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>Synchronized Scheduler Concepts</TITLE><PARAGRAPH>The first Frame Scheduler provides the time base for the others. It is called the master scheduler. The other schedulers take their time base interrupts from the master, and so are called slaves. The combination is called a sync group.</PARAGRAPH>
+<PARAGRAPH>No single thread may create more than one Frame Scheduler. This is because every Frame Scheduler must have a unique FRS controller thread to which it can send signals. As a result, the program has three types of threads:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>a master controller thread that sets up global data and creates the master Frame Scheduler</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>one slave controller thread for each slave Frame Scheduler</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>activity threads</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>The master Frame Scheduler must be created before any slave Frame Schedulers can be created. Slave Frame Schedulers must be specified to have the same time base and the same number of minor frames as the master.</PARAGRAPH>
+<PARAGRAPH>Slave Frame Schedulers can be stopped and restarted independently. However, when any scheduler, master or slave, is destroyed, all are immediately destroyed.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Implementing a Master Controller Thread</TITLE><PARAGRAPH>A variety of program designs are possible but the simplest is possibly the set of steps described in the following paragraphs. </PARAGRAPH>
+<PARAGRAPH>The master controller thread performs these steps:</PARAGRAPH>
+<ORDEREDLIST><LIST><PARAGRAPH>Initializes global resource. One global resource is the thread ID of the master controller thread.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Creates the master Frame Scheduler using either the <INDEXTARGET ID="RPPG_ch0471"><!-- POSTPROCESSDATA: RPPG_ch0471|<FUNCTION>frs_create_master()</FUNCTION> --><FUNCTION>frs_create_master()</FUNCTION> or <FUNCTION>frs_create_vmaster()</FUNCTION> call, and stores its handle in a global location.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Creates one slave controller thread for each synchronized CPU to be used.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Creates the activity threads that will be scheduled by the master Frame Scheduler and queues them to their assigned minor frames.<INDEXTARGET ID="RPPG_ch0472"><!-- POSTPROCESSDATA: RPPG_ch0472|<FUNCTION>frs_pthread_enqueue()</FUNCTION> --></PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Sets up signal handlers for signals from the Frame Scheduler (see <INDEXTARGET ID="RPPG_ch0473"><!-- POSTPROCESSDATA: RPPG_ch0473|signal handler:when setting up Frame Scheduler --><XREF IDREF="72300" TYPE="TITLE">&ldquo;Using Signals Under the Frame Scheduler&rdquo;</XREF>).</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Uses frs_start() (<INDEXTARGET ID="RPPG_ch0474"><!-- POSTPROCESSDATA: RPPG_ch0474|<FUNCTION>frs_start()</FUNCTION> --><XREF IDREF="50426" TYPE="TABLE">Table&nbsp;4-1</XREF>) to tell the master Frame Scheduler that its activity threads are all queued and ready to commence scheduling.</PARAGRAPH>
+<PARAGRAPH>The master Frame Scheduler starts scheduling threads as soon as all threads have called frs_join() for their respective schedulers.<INDEXTARGET ID="RPPG_ch0475"><!-- POSTPROCESSDATA: RPPG_ch0475|<FUNCTION>frs_join()</FUNCTION> --></PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Waits for error signals.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Uses <INDEXTARGET ID="RPPG_ch0476"><!-- POSTPROCESSDATA: RPPG_ch0476|<FUNCTION>frs_destroy()</FUNCTION> --><FUNCTION>frs_destroy()</FUNCTION> to terminate the master Frame Scheduler.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Tidies up global resources as required.</PARAGRAPH>
+</LIST>
+</ORDEREDLIST>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Implementing Slave Controller Threads</TITLE><PARAGRAPH>Each slave controller thread performs these steps:</PARAGRAPH>
+<ORDEREDLIST><LIST><PARAGRAPH>Creates a synchronized Frame Scheduler using <FUNCTION>frs_create_slave()<INDEXTARGET ID="RPPG_ch0477"><!-- POSTPROCESSDATA: RPPG_ch0477|<FUNCTION>frs_create_slave()</FUNCTION> --></FUNCTION>, specifying information about the master Frame Scheduler stored by the master controller thread. The master FRS must exist. A slave FRS must specify the same time base and number of minor frames as the master FRS.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Changes the Frame Scheduler signals or exception policy, if desired (see <XREF IDREF="54102" TYPE="TITLE">&ldquo;Setting Frame Scheduler Signals&rdquo;</XREF> and <XREF IDREF="51755" TYPE="TITLE">&ldquo;Setting Exception Policies&rdquo;</XREF>).</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Creates the activity threads that are scheduled by this slave Frame Scheduler, and queues them to their assigned minor frames.<INDEXTARGET ID="RPPG_ch0478"><!-- POSTPROCESSDATA: RPPG_ch0478|<FUNCTION>frs_pthread_enqueue()</FUNCTION> --></PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Sets up signal handlers for signals from the slave Frame Scheduler.<INDEXTARGET ID="RPPG_ch0479"><!-- POSTPROCESSDATA: RPPG_ch0479|signal handler:when setting up Frame Scheduler --></PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Use frs_start() to tell the slave Frame Scheduler that all activity threads have been queued.<INDEXTARGET ID="RPPG_ch0480"><!-- POSTPROCESSDATA: RPPG_ch0480|<FUNCTION>frs_start()</FUNCTION> --></PARAGRAPH>
+<PARAGRAPH>The slave Frame Scheduler notifies the master when all threads have called frs_join(). When the master Frame Scheduler starts broadcasting interrupts, scheduling begins.<INDEXTARGET ID="RPPG_ch0481"><!-- POSTPROCESSDATA: RPPG_ch0481|<FUNCTION>frs_join()</FUNCTION> --></PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Waits for error signals.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Uses <INDEXTARGET ID="RPPG_ch0482"><!-- POSTPROCESSDATA: RPPG_ch0482|<FUNCTION>frs_destroy()</FUNCTION> --><FUNCTION>frs_destroy()</FUNCTION> to terminate the slave Frame Scheduler.</PARAGRAPH>
+</LIST>
+</ORDEREDLIST>
+<PARAGRAPH>For an example of this kind of program structure, refer to <XREF IDREF="24688" TYPE="TITLE">&ldquo;Examples of Multiple Synchronized Schedulers&rdquo;</XREF>.</PARAGRAPH>
+<TIP><PREFIX>Tip</PREFIX>In this design sketch, the knowledge of which activity threads to create, and on which frames to queue them, is distributed throughout the code of multiple threads, where it might be hard to maintain. However, it is possible to centralize the plan of schedulers, activities, and frames in one or more arrays that are statically initialized. This improves the maintainability of a complex program.</TIP>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="43451">Handling Frame Scheduler Exceptions</TITLE><PARAGRAPH>The FRS control thread for a scheduler controls the handling of the Overrun and Underrun exceptions. It can specify how these exceptions should be handled, and what signals the Frame Scheduler should send. These policies have to be set before the scheduler is started. While the scheduler is running, the FRS controller can query the number of exceptions that have occurred.<INDEXTARGET ID="RPPG_ch0483"><!-- POSTPROCESSDATA: RPPG_ch0483|Frame Scheduler:exception handling --></PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>Exception Types</TITLE><PARAGRAPH>The Overrun exception indicates that a thread failed to yield in a minor frame where it was expected to yield, and was preempted at the end of the frame. An Overrun exception indicates that an unknown amount of work that should have been done was not done, and will not be done until the next frame in which the overrunning thread is queued.<INDEXTARGET ID="RPPG_ch0484"><!-- POSTPROCESSDATA: RPPG_ch0484|Frame Scheduler:overrun exception --></PARAGRAPH>
+<PARAGRAPH>The Underrun exception indicates that a thread that should have started in a minor frame did not start. Possibly the thread has terminated. More likely it was blocked in some kind of wait because of an unexpected delay in I/O, or a deadlock on a lock or semaphore.<INDEXTARGET ID="RPPG_ch0485"><!-- POSTPROCESSDATA: RPPG_ch0485|Frame Scheduler:underrun exception --></PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Exception Handling Policies</TITLE><PARAGRAPH>The FRS control thread can establish one of four policies for handling overrun and underrun exceptions. When it detects an exception, the Frame Scheduler can:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>Send a signal to the FRS controller</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Inject an additional minor frame</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Extend the frame by a specified number of microseconds</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Steal a specified number of microseconds from the following frame</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>The default action is to send a signal (the specific signals are listed under <XREF IDREF="54102" TYPE="TITLE">&ldquo;Setting Frame Scheduler Signals&rdquo;</XREF>). The scheduler continues to run. The FRS control thread can then take action, for example, terminating the Frame Scheduler.</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE>Injecting a Repeat Frame</TITLE><PARAGRAPH>The policy of injecting an additional minor frame can be used with any time base. The Frame Scheduler inserts another complete minor frame, essentially repeating the minor frame in which the exception occurred. In the case of an overrun, the activity threads that did not finish have another frame's worth of time to complete. In the case of an underrun, there is that much more time for the waiting thread to wake up. Because exactly one frame is inserted, all other threads remain synchronized to the time base.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Extending the Current Frame</TITLE><PARAGRAPH>The policies of extending the frame, either with more time or by stealing time from the next frame, are allowed only when the time base is an on-chip or high-resolution timer (see <XREF IDREF="12213" TYPE="TITLE">&ldquo;Selecting a Time Base&rdquo;</XREF>).</PARAGRAPH>
+<PARAGRAPH>When adding time, the current frame is made longer by a fixed amount of time. Since the minor frame becomes a variable length, it is possible for the Frame Scheduler to drop out of synch with an external device.</PARAGRAPH>
+<PARAGRAPH>When stealing time from the following frame, the Frame Scheduler returns to the original time base at the end of the following minor frame&mdash;provided that the threads queued to that following frame can finish their work in a reduced amount of time. If they do not, the Frame Scheduler steals time from the next frame still.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Dealing With Multiple Exceptions</TITLE><PARAGRAPH>You decide how many consecutive exceptions are allowed within a single minor frame. After injecting, stretching, or stealing time that many times, the Frame Scheduler stops trying to recover, and sends a signal instead.</PARAGRAPH>
+<PARAGRAPH>The count of exceptions is reset when a minor frame completes with no remaining exceptions.</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="51755">Setting Exception Policies</TITLE><PARAGRAPH>The <FUNCTION>frs_pthread_setattr()<INDEXTARGET ID="RPPG_ch0486"><!-- POSTPROCESSDATA: RPPG_ch0486|<FUNCTION>frs_pthread_setattr()</FUNCTION> --></FUNCTION> or <FUNCTION>frs_setattr() <INDEXTARGET ID="RPPG_ch0487"><!-- POSTPROCESSDATA: RPPG_ch0487|<FUNCTION>frs_setattr()</FUNCTION> --></FUNCTION>function is used to change exception policies. This function must be called before the Frame Scheduler is started. After scheduling has begun, an attempt to change the policies or signals is rejected.</PARAGRAPH>
+<PARAGRAPH>In order to allow for future enhancements, <FUNCTION>frs_pthread_setattr()</FUNCTION> or <FUNCTION>frs_setattr() </FUNCTION>accepts arguments for minor frame number and thread ID; however it currently allows setting exception policies only for all policies and all minor frames. The most significant argument to it is the <VARIABLE>frs_recv_info</VARIABLE> structure, declared with these fields.</PARAGRAPH>
+<CODE>
+typedef struct frs_recv_info {
+&nbsp;&nbsp;&nbsp;&nbsp;mfbe_rmode_t&nbsp;&nbsp;rmode;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/* Basic recovery mode */
+&nbsp;&nbsp;&nbsp;&nbsp;mfbe_tmode_t&nbsp;&nbsp;tmode;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/* Time expansion mode */
+&nbsp;&nbsp;&nbsp;&nbsp;uint&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;maxcerr;&nbsp;&nbsp;&nbsp;&nbsp;/* Max consecutive errors */
+&nbsp;&nbsp;&nbsp;&nbsp;uint&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;xtime;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/* Recovery extension time */
+} frs_recv_info_t;
+</CODE>
+<PARAGRAPH>The recovery modes and other constants are declared in <FILENAME>/usr/include/sys/frs.h</FILENAME>. The function in <XREF IDREF="97483" TYPE="TEXT">Example&nbsp;4-3</XREF> sets the policy of injecting a repeat frame. The caller specifies only the Frame Scheduler and the number of consecutive exceptions allowed.</PARAGRAPH>
+
+<!-- WARNING: (47) Example captions should come at end of Example - detected on page 72 -->
+<!-- WARNINGLOCATION: PAGE = "72" SRC = "RPPG_ch04.mif" TAGTYPE = "PARA" TAG = "ExampleTitle" TAGCOUNT = "1" UID = "617704" TEXT = " sets the policy of injec"-->
+<EXAMPLE><CAPTION LBL="4-3"><PREFIX>Example 4-3 </PREFIX><XREFTARGET ID="97483">Function to Set INJECTFRAME Exception Policy</CAPTION></EXAMPLE>
+<CODE>
+int
+setInjectFrameMode(frs_t *frs, int consecErrs)
+{
+&nbsp;&nbsp;frs_recv_info_t work;
+&nbsp;&nbsp;bzero((void*)&amp;work,sizeof(work));
+&nbsp;&nbsp;work.rmode = MFBERM_INJECTFRAME;
+&nbsp;&nbsp;work.maxcerr = consecErrs;
+&nbsp;&nbsp;return frs_setattr(frs,0,0,FRS_ATTR_RECOVERY,(void*)&amp;work);
+}
+<INDEXTARGET ID="RPPG_ch0488"><!-- POSTPROCESSDATA: RPPG_ch0488|<FUNCTION>frs_pthread_setattr()</FUNCTION>:example code --></CODE>
+<PARAGRAPH>The function in <XREF IDREF="94737" TYPE="TEXT">Example&nbsp;4-4</XREF> sets the policy of stretching the current frame (a function to set the policy of stealing time from the next frame is nearly identical). The caller specifies the Frame Scheduler, the number of consecutive exceptions, and the stretch time in microseconds.</PARAGRAPH>
+
+<!-- WARNING: (47) Example captions should come at end of Example - detected on page 72 -->
+<!-- WARNINGLOCATION: PAGE = "72" SRC = "RPPG_ch04.mif" TAGTYPE = "PARA" TAG = "ExampleTitle" TAGCOUNT = "3" UID = "617715" TEXT = " sets the policy of stret"-->
+<EXAMPLE><CAPTION LBL="4-4"><PREFIX>Example 4-4 </PREFIX><XREFTARGET ID="94737">Function to Set STRETCH Exception Policy</CAPTION></EXAMPLE>
+<CODE>
+int
+setStretchFrameMode(frs_t *frs,int consecErrs,uint microSecs)
+{
+&nbsp;&nbsp;frs_recv_info_t work;
+&nbsp;&nbsp;bzero((void*)&amp;work,sizeof(work));
+&nbsp;&nbsp;work.rmode = MFBERM_EXTENDFRAME_STRETCH;
+&nbsp;&nbsp;work.tmode = EFT_FIXED; /* only choice available */
+&nbsp;&nbsp;work.maxcerr = consecErrs;
+&nbsp;&nbsp;work.xtime = microSecs;
+&nbsp;&nbsp;return frs_setattr(frs,0,0,FRS_ATTR_RECOVERY,(void*)&amp;work);
+}
+<INDEXTARGET ID="RPPG_ch0489"><!-- POSTPROCESSDATA: RPPG_ch0489|<FUNCTION>frs_pthread_setattr()</FUNCTION>:example code --></CODE>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Querying Counts of Exceptions</TITLE><PARAGRAPH>When you set a policy that permits exceptions, the FRS controller thread can query for counts of exceptions. This is done with a call to <FUNCTION>frs_pthread_getattr()<INDEXTARGET ID="RPPG_ch0490"><!-- POSTPROCESSDATA: RPPG_ch0490|<FUNCTION>frs_pthread_getattr()</FUNCTION> --></FUNCTION> or<FUNCTION> frs_getattr()<INDEXTARGET ID="RPPG_ch0491"><!-- POSTPROCESSDATA: RPPG_ch0491|<FUNCTION>frs_getattr()</FUNCTION> --></FUNCTION>, passing the handle to the Frame Scheduler, the number of the minor frame, and the thread ID of the thread within that frame.</PARAGRAPH>
+<PARAGRAPH>The values returned in a structure of type <VARIABLE>frs_overrun_info_t</VARIABLE> are the counts of overrun and underrun exceptions incurred by that thread in that minor frame. In order to find the count of all overruns in a given minor frame, you must sum the counts for all threads queued to that frame. If a thread is queued to more than one minor frame, separate counts are kept for it in each frame.</PARAGRAPH>
+<PARAGRAPH>The function in <XREF IDREF="48489" TYPE="TEXT">Example&nbsp;4-5</XREF> takes a Frame Scheduler handle and a minor frame number. It gets the list of thread IDs queued to that minor frame, and returns the sum of all exceptions for all of them.</PARAGRAPH>
+
+<!-- WARNING: (47) Example captions should come at end of Example - detected on page 73 -->
+<!-- WARNINGLOCATION: PAGE = "73" SRC = "RPPG_ch04.mif" TAGTYPE = "PARA" TAG = "ExampleTitle" TAGCOUNT = "1" UID = "617731" TEXT = " takes a Frame Scheduler "-->
+<EXAMPLE><CAPTION LBL="4-5"><PREFIX>Example 4-5 </PREFIX><XREFTARGET ID="48489">Function to Return a Sum of Exception Counts (pthread Model)</CAPTION></EXAMPLE>
+<CODE>
+#define THE_MOST_TIDS 250
+int
+totalExcepts(frs_t * theFRS, int theMinor)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;int numTids = frs_getqueuelen(theFRS, theMinor);
+&nbsp;&nbsp;&nbsp;&nbsp;int j, sum;
+&nbsp;&nbsp;&nbsp;&nbsp;pthread_t allTids[THE_MOST_TIDS];
+&nbsp;&nbsp;&nbsp;&nbsp;if ( (numTids &lt;= 0) || (numTids > THE_MOST_TIDS) )
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return 0; /* invalid minor #, or no threads queued? */
+
+&nbsp;&nbsp;&nbsp;&nbsp;if (frs_pthread_readqueue(theFRS, theMinor, allTids) == -1)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return 0; /* unexpected problem with reading IDs */
+
+&nbsp;&nbsp;&nbsp;&nbsp;for (sum = j = 0; j&lt;numTids; ++j)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;frs_overrun_info_t work;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;frs_pthread_getattr(theFRS&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/* the scheduler */
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;theMinor,&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/* the minor frame */
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;allTids[j],&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/* the threads */
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;FRS_ATTR_OVERRUNS, /* want counts */
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&amp;work);&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/* put them here */
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;sum += (work.overruns + work.underruns);
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;return sum;
+}
+</CODE>
+<TIP><PREFIX>Tip</PREFIX>The FRS read queue functions return the number of threads present on the queue at the time of the read. Applications can use this returned value to eliminate calls to <FUNCTION>frs_getqueuelen()</FUNCTION>.</TIP>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="72300">Using Signals Under the Frame Scheduler</TITLE><PARAGRAPH>The Frame Scheduler itself sends signals to the threads using it. And threads can communicate by sending signals to each other. In brief, an FRS sends signals to indicate that<INDEXTARGET ID="RPPG_ch0492"><!-- POSTPROCESSDATA: RPPG_ch0492|signal:with Frame Scheduler --></PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>The FRS has been terminated</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Overrun or underrun have been detected</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>A thread has been dequeued</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>The rest of this topic details how to specify the signal numbers and how to handle the signals.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="54747">Signal Delivery and Latency</TITLE><PARAGRAPH>When a process is scheduled by the IRIX kernel, it receives a pending signal the next time the process exits from the kernel domain. For most signals, this could occur<INDEXTARGET ID="RPPG_ch0493"><!-- POSTPROCESSDATA: RPPG_ch0493|signal:latency --></PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>when the process is dispatched after a wait or preemption</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>upon return from some system call</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>upon return from the kernel's usual 10-millisecond tick interrupt</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>(SIGALRM is delivered as soon as the kernel is ready to return to user processing after the timer interrupt, in order to preserve timer accuracy.) Thus, for a process that is ready to run, in a CPU that has not been made nonpreemptive, normal signal latency is at most 10 milliseconds, and SIGALARM latency is less. However, when the receiving process is not ready to run, or when there are competing processes with higher priorities, the delivery of a signal is delayed until the next time the receiving process is scheduled.</PARAGRAPH>
+<PARAGRAPH>When the CPU is nonpreemptive (see <XREF IDREF="27459" TYPE="TITLE">&ldquo;Making a CPU Nonpreemptive&rdquo;</XREF>), there are no clock tick interrupts, so signals can only be delivered following a system call.</PARAGRAPH>
+<PARAGRAPH>Signal latency can be greater when running under the Frame Scheduler. Like the normal IRIX scheduler, the Frame Scheduler delivers pending signals to a process when it next returns to the process from the kernel domain. This can occur</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>when the process is dispatched at the start of a minor frame where it is queued</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>upon return from some system call</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>The upper bound on signal latency in this case is the interval between the minor frames to which that process is queued. If the process is scheduled only once in a major frame, it might not receive a signal until a full major frame interval after the signal is sent.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Handling Signals in the FRS Controller</TITLE><PARAGRAPH>When a Frame Scheduler detects an Overrun or Underrun exception that it cannot recover from, and when it is ready to terminate, it sends a signal to the FRS controller.<INDEXTARGET ID="RPPG_ch0494"><!-- POSTPROCESSDATA: RPPG_ch0494|Frame Scheduler:signals produced by --></PARAGRAPH>
+<TIP><PREFIX>Tip</PREFIX>Child processes inherit signal handlers from the parent, so a parent should not set up handlers prior to <FUNCTION>sproc()</FUNCTION> or <FUNCTION>fork()</FUNCTION> unless they are meant to be inherited.</TIP>
+<PARAGRAPH>The FRS controller for a synchronized Frame Scheduler should have handlers for Underrun and Overrun signals. The handler could report the error and issue <FUNCTION>frs_destroy()</FUNCTION> to shut down its scheduler. An FRS controller for a synchronized scheduler should use the default action for SIGHUP (Exit) so that completion of the <FUNCTION>frs_destroy()</FUNCTION> quietly terminates the FRS controller.</PARAGRAPH>
+<PARAGRAPH>The FRS controller for the master (or only) Frame Scheduler should catch Underrun and Overrun exceptions, report them, and shut down its scheduler.</PARAGRAPH>
+<PARAGRAPH>When an FRS is terminated with <FUNCTION>frs_destroy()</FUNCTION>, it sends SIGKILL to its FRS controller. This cannot be changed; and SIGKILL cannot be handled. Hence <FUNCTION>frs_destroy()</FUNCTION> is equivalent to termination for the FRS controller. </PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="88749">Handling Signals in an Activity Thread</TITLE><PARAGRAPH>A Frame Scheduler can send a signal to an activity thread when the thread is removed from any queue using&space;<INDEXTARGET ID="RPPG_ch0495"><!-- POSTPROCESSDATA: RPPG_ch0495|<FUNCTION>frs_pthread_remove()</FUNCTION> --><FUNCTION>frs_pthread_remove() </FUNCTION>or <FUNCTION>frs_premove() <INDEXTARGET ID="RPPG_ch0496"><!-- POSTPROCESSDATA: RPPG_ch0496|<FUNCTION>frs_premove()</FUNCTION> --></FUNCTION>(see <XREF IDREF="44733" TYPE="TITLE">&ldquo;Managing Activity Threads&rdquo;</XREF>). The scheduler can also send a signal to an activity thread when it is removed from the last or only minor frame to which it was queued (at which time a thread is returned to normal IRIX scheduling).</PARAGRAPH>
+<PARAGRAPH>In order to have these signals sent, the FRS controller must set nonzero signal numbers for them, as discussed in the following topic, <XREF IDREF="54102" TYPE="TITLE">&ldquo;Setting Frame Scheduler Signals.&rdquo;</XREF></PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="54102">Setting Frame Scheduler Signals</TITLE><PARAGRAPH>The Frame Scheduler sends signals to the FRS controller. <INDEXTARGET ID="RPPG_ch0497"><!-- POSTPROCESSDATA: RPPG_ch0497|Frame Scheduler:signals produced by --><INDEXTARGET ID="RPPG_ch0498"><!-- POSTPROCESSDATA: RPPG_ch0498|FRS controller:receives signals --></PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>In earlier versions of REACT/Pro, the Frame Scheduler sent these signals to <ITALICS>all</ITALICS> processes queued to that Frame Scheduler as well as the FRS controller. That is no longer the case. You can remove signal handlers for these signals from activity processes, if they exist.</NOTE>
+<PARAGRAPH>The signal numbers used for most events can be modified. signal numbers can be queried using <FUNCTION>frs_pthread_getattr</FUNCTION>(FRS_ATTR_SIGNALS) or <FUNCTION>frs_getattr</FUNCTION>(FRS_ATTR_SIGNALS) and changed using <FUNCTION>frs_pthread_setattr</FUNCTION>(FRS_ATTR_SIGNALS) or <FUNCTION>frs_setattr</FUNCTION>(FRS_ATTR_SIGNALS), in each case passing an frs_signal_info structure. This structure contains room for four signal numbers, as shown in <XREF IDREF="79604" TYPE="TABLE">Table&nbsp;4-3</XREF>. </PARAGRAPH>
+<TABLE COLUMNS="3"><CAPTION LBL="4-3"><PREFIX>Table 4-3 </PREFIX>&space;<EMPHASIS>(continued)        </EMPHASIS><XREFTARGET ID="79604">Signal Numbers Passed in frs_signal_info_t</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="81"><PARAGRAPH>Field Name</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="171"><PARAGRAPH>Signal Purpose</PARAGRAPH>
+</CELL>
+<CELL LEFT="270" WIDTH="108"><PARAGRAPH>Default Signal Number</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>sig_underrun</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="171"><PARAGRAPH>Notify FRS controller of Underrun.</PARAGRAPH>
+</CELL>
+<CELL LEFT="270" WIDTH="108"><PARAGRAPH>SIGUSR1 <INDEXTARGET ID="RPPG_ch0499"><!-- POSTPROCESSDATA: RPPG_ch0499|SIGUSR1:on underrun --><INDEXTARGET ID="RPPG_ch04100"><!-- POSTPROCESSDATA: RPPG_ch04100|signal:SIGUSR1 --></PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>sig_overrun</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="171"><PARAGRAPH>Notify FRS controller of Overrun.</PARAGRAPH>
+</CELL>
+<CELL LEFT="270" WIDTH="108"><PARAGRAPH>SIGUSR2 <INDEXTARGET ID="RPPG_ch04101"><!-- POSTPROCESSDATA: RPPG_ch04101|SIGUSR2:on overrun --><INDEXTARGET ID="RPPG_ch04102"><!-- POSTPROCESSDATA: RPPG_ch04102|signal:SIGUSR2 --></PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>sig_dequeue</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="171"><PARAGRAPH>Notify an activity thread that it has been 
+dequeued with <FUNCTION>frs_pthread_remove()</FUNCTION> or 
+<FUNCTION>frs_premove()</FUNCTION>. </PARAGRAPH>
+</CELL>
+<CELL LEFT="270" WIDTH="108"><PARAGRAPH>0 (do not send)</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>sig_unframesched</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="171"><PARAGRAPH>Notify an activity thread that it has been 
+removed from the last or only queue in 
+which it was queued.</PARAGRAPH>
+</CELL>
+<CELL LEFT="270" WIDTH="108"><PARAGRAPH>SIGRTMIN&space;<INDEXTARGET ID="RPPG_ch04103"><!-- POSTPROCESSDATA: RPPG_ch04103|SIGRTMIN on dequeue --></PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>Signal numbers must be changed before the Frame Scheduler is started. All the numbers must be specified to <FUNCTION>frs_pthread_setattr()</FUNCTION> or <FUNCTION>frs_setattr()</FUNCTION>, so the proper way to set any number is to first file the <VARIABLE>frs_signal_info_t</VARIABLE> using <FUNCTION>frs_pthread_getattr()</FUNCTION> or <FUNCTION>frs_getattr()</FUNCTION>. The function in <XREF IDREF="72819" TYPE="TEXT">Example&nbsp;4-6</XREF> sets the signal numbers for Overrun and Underrun from its arguments.</PARAGRAPH>
+
+<!-- WARNING: (47) Example captions should come at end of Example - detected on page 77 -->
+<!-- WARNINGLOCATION: PAGE = "77" SRC = "RPPG_ch04.mif" TAGTYPE = "PARA" TAG = "ExampleTitle" TAGCOUNT = "1" UID = "623625" TEXT = " sets the signal numbers "-->
+<EXAMPLE><CAPTION LBL="4-6"><PREFIX>Example 4-6 </PREFIX><XREFTARGET ID="72819">Function to Set Frame Scheduler Signals</CAPTION></EXAMPLE>
+<CODE>
+int
+setUnderOverSignals(frs_t *frs, int underSig, int overSig)
+{
+&nbsp;&nbsp;int error;
+&nbsp;&nbsp;frs_signal_info_t work;
+&nbsp;&nbsp;error = frs_pthread_getattr(frs,0,0,FRS_ATTR_SIGNALS,(void*)&amp;work);
+&nbsp;&nbsp;if (!error)
+&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;work.sig_underrun = underSig;
+&nbsp;&nbsp;&nbsp;&nbsp;work.sig_overrun = overSig;
+&nbsp;&nbsp;&nbsp;&nbsp;error = frs_pthread_setattr(frs,0,0,FRS_ATTR_SIGNALS,(void*)&amp;work);
+&nbsp;&nbsp;}
+&nbsp;&nbsp;return error;
+}
+</CODE>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="43574">Sequence Error</TITLE><PARAGRAPH>When <FUNCTION>frs_create_vmaster()</FUNCTION> is used to create a frame scheduler triggered by multiple interrupt sources, a sequence error signal is dispatched to the controller thread if the interrupts come in out of order. For example, if the first and second minor frame interrupt sources are different, and the second minor frame's interrupt source is triggered before the first minor frame's interrupt source, then a sequence error has occurred.</PARAGRAPH>
+<PARAGRAPH>This type of error condition is indicative of unrealistic time constraints defined by the interrupt information template.</PARAGRAPH>
+<PARAGRAPH>The signal code that represents the occurrence of a sequence error is SIGRTMIN+1. This signal cannot be reset or disabled using the <FUNCTION>frs_setattr()</FUNCTION> interface.</PARAGRAPH>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="55284">Using Timers with the Frame Scheduler</TITLE><PARAGRAPH>In general, interval timers and the Frame Scheduler do not mix. The expiration of an interval is marked by a signal. However, signal delivery to an activity thread can be delayed (see <INDEXTARGET ID="RPPG_ch04104"><!-- POSTPROCESSDATA: RPPG_ch04104|Frame Scheduler:interval timers not used with --><INDEXTARGET ID="RPPG_ch04105"><!-- POSTPROCESSDATA: RPPG_ch04105|interval timer:not used with Frame Scheduler --><XREF IDREF="54747" TYPE="TITLE">&ldquo;Signal Delivery and Latency&rdquo;</XREF>), so timer latency is unpredictable.</PARAGRAPH>
+<PARAGRAPH>The FRS controller, because it is scheduled by IRIX, not the Frame Scheduler, can use interval timers.</PARAGRAPH>
+
+<!-- WARNING: (47) Example captions should come at end of Example - detected on page 78 -->
+<!-- WARNINGLOCATION: PAGE = "78" SRC = "RPPG_ch04.mif" TAGTYPE = "PARA" TAG = "ExampleTitle" TAGCOUNT = "1" UID = "617805" TEXT = "The FRS controller, becau"-->
+<EXAMPLE><CAPTION LBL="4-7"><PREFIX>Example 4-7 </PREFIX><XREFTARGET ID="24592">Minimal Activity Process as a Timer</CAPTION></EXAMPLE>
+<CODE>
+frs_join(<VARIABLE>scheduler-handle</VARIABLE>)
+do {
+&nbsp;&nbsp;&nbsp;usvsema(<VARIABLE>frs-controller-wait-semaphore</VARIABLE>);
+&nbsp;&nbsp;&nbsp;frs_yield();
+} while(1);
+_exit();
+</CODE>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="38756">FRS Kernel-Level Device Driver Interface</TITLE><PARAGRAPH>The Frame Scheduler provides a device driver interface to allow any device with a kernel-level device driver to generate the time-base interrupt. As many as eight different device drivers can support the Frame Scheduler in any one system. The Frame Scheduler distinguishes device drivers by an ID number in the range 0 through 7 that is coded into each driver.<INDEXTARGET ID="RPPG_ch04106"><!-- POSTPROCESSDATA: RPPG_ch04106|device driver:as Frame Scheduler time base --><INDEXTARGET ID="RPPG_ch04107"><!-- POSTPROCESSDATA: RPPG_ch04107|Frame Scheduler:device driver interface --></PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>The structure of an IRIX kernel-level device driver is discussed in the IRIX Device Driver Programming Guide (see <XREF IDREF="96700" TYPE="TITLE">&ldquo;Other Useful Books&rdquo;</XREF>). The generation of time-base signals can be added as a minor enhancement to a existing device driver.</NOTE>
+<PARAGRAPH>In order to interact with the Frame Scheduler, a driver provides two routines, one for initialization and one for termination, which it exports during driver initialization. After a master Frame Scheduler has initialized a device driver, the driver calls a Frame Scheduler entry point to signal the occurrence of each interrupt.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>Device Driver Overview</TITLE><PARAGRAPH>The following sequence of actions occurs when a device driver is used as a source of time-base interrupts for the Frame Scheduler.<INDEXTARGET ID="RPPG_ch04108"><!-- POSTPROCESSDATA: RPPG_ch04108|Frame Scheduler:device driver use --></PARAGRAPH>
+<ORDEREDLIST><LIST><PARAGRAPH>During its initialization in the <VARIABLE>pfx</VARIABLE><FUNCTION>start()</FUNCTION> or <VARIABLE>pfx</VARIABLE><FUNCTION>init()</FUNCTION> entry point, the driver calls a kernel function to specify its unique driver identifier between 0 and 7, and to register its <VARIABLE>pfx</VARIABLE><FUNCTION>_frs_func_set()</FUNCTION> and <VARIABLE>pfx</VARIABLE><FUNCTION>_frs_func_clear()</FUNCTION> functions. After this has been done, the Frame Scheduler is aware of the existence of this driver and allows programs to request it as the source of interrupts. </PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Later, a real-time program creates a master Frame Scheduler and specifies this driver by its number as the source of interrupts (see <XREF IDREF="25121" TYPE="TITLE">&ldquo;Device Driver Interrupt&rdquo;</XREF>). The Frame Scheduler calls the <VARIABLE>pfx</VARIABLE><FUNCTION>_frs_func_set()</FUNCTION> registered by this particular driver. This tells the driver that time signals are needed.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>The device driver calls <FUNCTION>frs_handle_driverintr()</FUNCTION> each time its interrupt handling routine is entered. This informs the Frame Scheduler that an interrupt has been received.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>When the Frame Scheduler is being terminated, it invokes <VARIABLE>pfx</VARIABLE><FUNCTION>_frs_func_clear() </FUNCTION>for the driver it is using. This tells the driver that time signals are no longer needed, and to cease calling <FUNCTION>frs_handle_driverintr()</FUNCTION> until it is once again initialized by a Frame Scheduler.</PARAGRAPH>
+</LIST>
+</ORDEREDLIST>
+<PARAGRAPH>Device driver names, device driver structure, configuration files, and related topics are covered in the <DOCTITLE>IRIX Device Driver Programming Guide</DOCTITLE>.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="76652">Registering the Initialization and Termination Functions</TITLE><PARAGRAPH>A device driver must register two interface functions to make them known to the Frame Scheduler. This call, which occurs during the device driver's own initialization, also makes the driver known as a source of time-base interrupts:<INDEXTARGET ID="RPPG_ch04109"><!-- POSTPROCESSDATA: RPPG_ch04109|<FUNCTION>frs_driver_export()</FUNCTION> --></PARAGRAPH>
+<CODE>
+frs_driver_export(&nbsp;int frs_driver_id,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;void (*frs_func_set)(intrgroup_t*),
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;void (*frs_func_clear)(void));
+</CODE>
+<PARAGRAPH>The parameter <INDEXTARGET ID="RPPG_ch04110"><!-- POSTPROCESSDATA: RPPG_ch04110|<FUNCTION>frs_create_master()</FUNCTION> --><VARIABLE>frs_driver_id</VARIABLE> is the driver's identification number. A real-time program specifies the same number to <FUNCTION>frs_create_master()</FUNCTION> or <FUNCTION>frs_create()</FUNCTION> to select this driver as the source of interrupts. The identifier is an integer between 0 and 7. Different drivers in the same system must use different identifiers. A typical call resembles the code in <XREF IDREF="10167" TYPE="TEXT">Example&nbsp;4-8</XREF>.</PARAGRAPH>
+
+<!-- WARNING: (47) Example captions should come at end of Example - detected on page 80 -->
+<!-- WARNINGLOCATION: PAGE = "80" SRC = "RPPG_ch04.mif" TAGTYPE = "PARA" TAG = "ExampleTitle" TAGCOUNT = "1" UID = "623054" TEXT = "."-->
+<EXAMPLE><CAPTION LBL="4-8"><PREFIX>Example 4-8 </PREFIX><XREFTARGET ID="10167">Exporting Device Driver Entry Points</CAPTION></EXAMPLE>
+<CODE>
+/*
+** Function called by the example driver to export
+** its Frame Scheduler interface functions.
+*/
+frs_driver_export(3, example_frs_func_set, example_frs_func_clear);
+</CODE>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Frame Scheduler Initialization Function</TITLE><PARAGRAPH>The device driver must provide a function with the following prototype:<INDEXTARGET ID="RPPG_ch04111"><!-- POSTPROCESSDATA: RPPG_ch04111|Frame Scheduler:device driver initialization --></PARAGRAPH>
+<CODE>
+void <VARIABLE>pfx</VARIABLE>_frs_func_set&nbsp;(&nbsp;intrgroup_t* intrgroup&nbsp;)&nbsp;;
+</CODE>
+<PARAGRAPH>A skeleton of an initialization function for a CHALLENGE/Onyx system running under IRIX&nbsp;6.2 is shown in <XREF IDREF="23314" TYPE="TEXT">Example&nbsp;4-9</XREF>. The function is called by a new master Frame Scheduler&mdash;one that is created with an interrupt source parameter of FRS_INTRSOURCE_DRIVER and an interrupt qualifier specifying this device driver's number (see <XREF IDREF="25121" TYPE="TITLE">&ldquo;Device Driver Interrupt&rdquo;</XREF>). A device driver is used by only one Frame Scheduler at a time.</PARAGRAPH>
+<PARAGRAPH>The argument <INDEXTARGET ID="RPPG_ch04112"><!-- POSTPROCESSDATA: RPPG_ch04112|interrupt group:Frame Scheduler passes to device driver --><VARIABLE>intrgroup</VARIABLE> is passed by the Frame Scheduler to identify the interrupt group it has allocated. A VME device driver must set the hardware devices it manages so that interrupts are directed to this interrupt group. The actual group identifier may be obtained using the macro:</PARAGRAPH>
+<CODE>
+intrgroup_get_groupid(intrgroup)
+</CODE>
+<PARAGRAPH>The effective destination may be obtained using the following macro:</PARAGRAPH>
+<CODE>
+EVINTR_GROUPDEST(intrgroup_get_groupid(intrgroup))
+
+<!-- WARNING: (47) Example captions should come at end of Example - detected on page 81 -->
+<!-- WARNINGLOCATION: PAGE = "81" SRC = "RPPG_ch04.mif" TAGTYPE = "PARA" TAG = "ExampleTitle" TAGCOUNT = "1" UID = "617831" TEXT = "EVINTR_GROUPDEST(intrgrou"-->
+</CODE>
+<EXAMPLE><CAPTION LBL="4-9"><PREFIX>Example 4-9 </PREFIX><XREFTARGET ID="23314">Device Driver Initialization Function</CAPTION></EXAMPLE>
+<CODE>
+/*
+** Frame Scheduler initialization function
+** for the External Interrupts Driver
+*/
+int FRS_is_active = 0;
+int FRS_vme_install = 0;
+void
+example_frs_func_set(intrgroup_t* intrgroup)
+{
+&nbsp;&nbsp;&nbsp;int s;
+&nbsp;&nbsp;&nbsp;ASSERT(intrgroup != 0);
+&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;** Step 1 (VME only):
+&nbsp;&nbsp;&nbsp;** In a VME device driver, set up the hardware to send
+&nbsp;&nbsp;&nbsp;** the interrupt to the appropriate destination.
+&nbsp;&nbsp;&nbsp;** This is done with vme_frs_install() which takes:
+&nbsp;&nbsp;&nbsp;** * (int) the VME adapter number
+&nbsp;&nbsp;&nbsp;** * (int) the VME IPL level
+&nbsp;&nbsp;&nbsp;** * the intrgroup as passed to this function.
+&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;FRS_vme_install = vme_frs_install(
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;my_edt.e_adap, /* edt struct from example_edtinit */
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;((vme_intrs_t *)my_edt.e_bus_info)->v_brl,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;intrgroup);
+&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;** Step 2: any hardware initialization required.
+&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;** Step 3: note that we are now in use.
+&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;FRS_is_active = 1;
+}
+</CODE>
+<PARAGRAPH>Only VME device drivers on the CHALLENGE/Onyx need to call <FUNCTION>vme_frs_install()</FUNCTION> &mdash; do not call it on the Origin2000. As suggested by the code in <XREF IDREF="23314" TYPE="TEXT">Example&nbsp;4-9</XREF>, the arguments to <FUNCTION>vme_frs_install()</FUNCTION> can be taken from data supplied at boot time to the device driver's <VARIABLE>pfx</VARIABLE><FUNCTION>edtinit()</FUNCTION> function:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>the adapter number is in the <VARIABLE>edt.e_adap</VARIABLE> field</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>the configured interrupt priority level is in the <VARIABLE>vme_intrs.v_brl</VARIABLE> addressed by the <VARIABLE>edt.e_bus_info</VARIABLE> field</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>The <VARIABLE>pfx</VARIABLE><FUNCTION>edtinit()</FUNCTION> entry point is documented in the <DOCTITLE>IRIX Device Driver Programming Guide</DOCTITLE>.</PARAGRAPH>
+<TIP><PREFIX>Tip</PREFIX>The <FUNCTION>vme_frs_install()</FUNCTION> function is a dynamic version of the VECTOR configuration statement. You are not required to use the IPL value from the configuration file.</TIP>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Frame Scheduler Termination Function</TITLE><PARAGRAPH>The device driver must provide a function with the following prototype:<INDEXTARGET ID="RPPG_ch04113"><!-- POSTPROCESSDATA: RPPG_ch04113|Frame Scheduler:device driver termination --></PARAGRAPH>
+<CODE>
+void <VARIABLE>prfx</VARIABLE>_frs_func_clear&nbsp;(&nbsp;void&nbsp;)&nbsp;;
+</CODE>
+<PARAGRAPH>A skeleton for this function is shown in <XREF IDREF="69181" TYPE="TEXT">Example&nbsp;4-10</XREF>. The Frame Scheduler that initialized a device driver calls this function when the Frame Scheduler is terminating. The Frame Scheduler deallocates the interrupt group to which interrupts were directed.</PARAGRAPH>
+<PARAGRAPH>The device driver should clean up data structures and make sure that the device is in a safe state. A VME device driver must call <FUNCTION>vme_frs_uninstall()</FUNCTION>.</PARAGRAPH>
+
+<!-- WARNING: (47) Example captions should come at end of Example - detected on page 82 -->
+<!-- WARNINGLOCATION: PAGE = "82" SRC = "RPPG_ch04.mif" TAGTYPE = "PARA" TAG = "ExampleTitle" TAGCOUNT = "1" UID = "617874" TEXT = "."-->
+<EXAMPLE><CAPTION LBL="4-10"><PREFIX>Example 4-10 </PREFIX><XREFTARGET ID="69181">Device Driver Termination Function</CAPTION></EXAMPLE>
+<CODE>
+/*
+** Frame Scheduler termination function
+*/
+void
+example_frs_func_clear(void)
+{
+&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;** Step 1: any hardware steps to quiesce the device.
+&nbsp;&nbsp;&nbsp;*/
+
+&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;** Step 2 (VME only):
+&nbsp;&nbsp;&nbsp;** Break the link between interrupts and the interrupt
+&nbsp;&nbsp;&nbsp;** group by calling vme_frs_uninstall() passing:
+&nbsp;&nbsp;&nbsp;** * (int) the VME adapter number
+&nbsp;&nbsp;&nbsp;** * (int) the VME IPL level
+&nbsp;&nbsp;&nbsp;** * the value returned by vme_frs_install()
+&nbsp;&nbsp;&nbsp;*/	
+&nbsp;&nbsp;&nbsp;vme_frs_uninstall(
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;my_edt.e_adap, /* edt struct from example_edtinit */
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;((vme_intrs_t *)my_edt.e_bus_info)->v_brl,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;FRS_vme_install);
+&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;** Step 3: note we are no longer in use.
+&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;FRS_is_active = 0;
+}
+</CODE>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="38389">Generating Interrupts</TITLE><PARAGRAPH>A driver has to call the Frame Scheduler interrupt handler from within the driver's interrupt handler using code similar to that shown in <INDEXTARGET ID="RPPG_ch04114"><!-- POSTPROCESSDATA: RPPG_ch04114|<FUNCTION>frs_handle_driverintr()</FUNCTION> --><INDEXTARGET ID="RPPG_ch04115"><!-- POSTPROCESSDATA: RPPG_ch04115|Frame Scheduler:device driver interrupt --><XREF IDREF="68912" TYPE="TEXT">Example&nbsp;4-11</XREF>. It delivers the interrupt to the Frame Scheduler on that CPU. The function to be invoked is</PARAGRAPH>
+<CODE>
+void frs_handle_driverintr(void);
+
+<!-- WARNING: (47) Example captions should come at end of Example - detected on page 83 -->
+<!-- WARNINGLOCATION: PAGE = "83" SRC = "RPPG_ch04.mif" TAGTYPE = "PARA" TAG = "ExampleTitle" TAGCOUNT = "1" UID = "617921" TEXT = "void frs_handle_driverint"-->
+</CODE>
+<EXAMPLE><CAPTION LBL="4-11"><PREFIX>Example 4-11 </PREFIX><XREFTARGET ID="68912">Generating an Interrupt From a Device Driver</CAPTION></EXAMPLE>
+<CODE>
+void example_intr()
+{
+&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;** Step 1: anything required by the hardware
+&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;** Step 2: if connected to the Frame Scheduler, send
+&nbsp;&nbsp;&nbsp;** an interrupt to it. Flag FRS_is_active is set in
+&nbsp;&nbsp;&nbsp;** <XREF IDREF="23314" TYPE="TEXT">Example&nbsp;4-9</XREF> and cleared in <XREF IDREF="69181" TYPE="TEXT">Example&nbsp;4-10</XREF>.
+&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;if (FRS_is_active) frs_handle_driverintr();
+&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;** Step 3: any additional processing needed.
+&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;return;
+}
+</CODE>
+<PARAGRAPH>It is possible for an interrupt handler to be entered at a time when the Frame Scheduler for its processor is not active; that is, after <FUNCTION>frs_destroy()</FUNCTION> has been called and before the driver termination function has been entered. The <FUNCTION>frs_handle_driverintr()</FUNCTION> function checks for this and does nothing when nothing is required.</PARAGRAPH>
+<PARAGRAPH>The call to <FUNCTION>frs_handle_driverintr()</FUNCTION> must be executed on a CPU controlled by the FRS that is using the driver. The only way to ensure this is to ensure that the hardware interrupt used by this driver is directed to that CPU. In IRIX 6.4 and later, you direct a hardware interrupt to a particular CPU by placing a DEVICE_ADMIN directive in the file <FILENAME>/var/sysgen/system/irix.sm</FILENAME>. See comments in that file for the syntax.</PARAGRAPH>
+<PARAGRAPH></PARAGRAPH>
+</SECTION2>
+</SECTION1>
+</CHAPTER>

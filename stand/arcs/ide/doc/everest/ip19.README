@@ -1,0 +1,1599 @@
+IP19 IDE Guide
+-------------
+
+
+1. boot ide
+
+
+2. The default report level is 2. Set the report level by typing the 
+   following:
+	report=# where # is any number from 1 to 5.
+
+	level 5 : debugging messages displayed. Don't need this much detail.
+	level 4 : prints out memory locations as they are written. Will 
+		  slow down testing time.
+	level 3 : prints out 1-line functional descriptions within tests. This
+		  is probably the most useful level for general use.
+	level 2 : prints out only errors, titles and pass/fail.
+	level 1 : prints out only titles and pass/fail.
+
+	level n will print out all messages for level n and below.
+
+
+3. There are currently 4 classes of IP19 tests: TLB, FPU, CACHE and IP.
+
+	tlb(1 - 9)	Tests the TLB in R4K.
+	fpu(1 - 14)	Tests the FPU in R4K.
+	cache(1 - 48)	Tests the primary and secondary cache for R4K.
+	cache49		Short version of cache48.
+	cstate(0 - 21)	Individual cache state tests in cache48.
+	ip(1 - 9)	Tests IP19 components not covered by TLB, FPU 
+			and CACHE.
+
+	NOTE: These test command tokens can be used to invoke each test
+	individually on the master cpu slice. Please see below for
+	procedure to start execution of IP19 tests on multiple processors.
+
+
+4. For MP execution, the IDE defaults to run on all enabled cpu slices.
+   To edit this global set of cpus (called "runcpus"), the following scripts
+   are provided:
+
+	runadmin	displays all scripts that alters 'runcpus'
+	runmode		displays the current contents of 'runcpus'
+	runall		run on all enabled cpu slices
+	runon i		run on cpu slice i only
+	runexcp i	run on all enabled cpu slices except cpu slice i
+
+   In addition, the following scripts are provided to operate solely on
+   the cpu slices specified for the global set "runcpus".
+
+	ipall 		Invokes tests ip1 through ip9.
+	tlball 		Invokes tests tlb1 through tlb9.
+	fpuall 		Invokes tests fpu1 through fpu14.
+	cacheall 	Invokes tests cache1 through cache48.
+	ip19 		Invokes all IP, TLB, FPU and CACHE tests.
+
+	quickfpu	Invokes tests fpu1 through fpu13, skipping fpu14.
+	quickcache 	Invokes tests cache1 through cache44, then cache47
+			and cache49, skipping cache45, 46 and 48.
+	quickip19	Invokes ipall, tlball, quickfpu, quickcache and
+			some memory tests - mem3, mem6 and mem10.
+
+   Also, the following script is implemented to facilitate debug and repair 
+   process using individual IP19 tests:
+
+        mp "TEST" "SET" Invokes TEST on the cpu slices specified in SET.
+
+        Note: TEST must be a test command token recognized by IDE. It 
+	cannot be a built-in script command. For example, 'mp "tlball" 
+	"runcpus"' is illegal and will cause internal IDE errors.
+
+   In the 5.1 release, the following scripts are implemented:
+
+	mpstress	exercise the MP cache coherency protocol 
+
+   This script makes use of several test modules specifically
+   written to perform functions required for testing cache coherency
+   in a multiple processor environment of upto 8 CPUs. The following test 
+   modules are intended for use only by the 'mpstress' script:
+
+   mpinval	- invalides all caches
+   mpmem_wr 	- initialize cached/uncached memory
+   mpmem_rd	- verifies cache/uncached memory
+   mpchk_cstate	- verifies cache state
+
+   Any use of these test modules outside of the 'mpstress' scripts 
+   within IDE may produce unpredictable results.
+
+   	mpcachesz [1/4]	verifies the installation of 1 or 4 MB scache
+
+   This script is provided to check 4MB scache installations on IP19s.
+   It is useful for verification of the actual scache size against the
+   desired scache size which is assumed to have been correctly written 
+   to the EAROM for the boot master CPU. If the actual scache size does
+   not match the desired scache size, it is reported as an error and the
+   desired scache size will be automatically written to the EAROM for
+   the failed CPU. The contents of EAROMs for CPUs other than the boot 
+   master are not easily reversible so it is important to enter the 
+   correct value for the desired scache size when invoking 'mpcachesz'. 
+   Problems may also arise if a mixture of 1MB and 4MB scache are present
+   in the same system.
+
+
+5. To find out the results after running IP19 tests, use the following
+built-in commands:
+
+	dump_log	displays cumulative results for each test
+	clear_log	clears cumulative results for all tests
+	errlog [ON/OFF] displays, sets/resets cumulative error logging
+
+
+6. A brief description of each test and the possible errors are provided
+below for your reference. The number preceding each error message identifies
+each error uniquely and its format should be interpreted as follows:  
+
+	01ccnnn		01 - the board id for IP19
+			cc - the hint for failed component(s)
+				01 - A chip
+				02 - D chip
+				03 - CC chip
+				04 - Primary cache
+				05 - Secondary cache
+				06 - R4400
+				07 - Primary or secondary cache
+				08 - TLB
+				09 - FRU
+			nnn - the error id 
+
+-----------------------------------------------------------------------------
+ip1 (local_regtest) - Check CC local registers
+
+Basic write/read test for the local registers. The registers tested are
+limited to the following:
+
+	EV_WGDST	Write gatherer destination
+	EV_WGCNTRL	Write gatherer control
+	EV_IP0		Interrupts 63 - 0
+	EV_IP1		Interrupts 127 - 64
+	EV_CEL		Current execution level
+	EV_IGRMASK	Interrupt group mask
+	EV_ILE		Interrupt level enable
+	EV_ERTOIP	Error/timeout interrupt
+	EV_ECCSB_DIS	ECC single-bit error disable
+
+The read-only registers are read and their contents are reported. These
+registers are:
+
+	EV_SPNUM	Slot/Processor info
+	EV_SYSCONFIG	System configuration
+	EV_HPIL		Highest pending interrupt level
+	EV_RO_COMPARE	RTC compare
+	EV_RTC		Real time clock
+	EV_WGCOUNT	Write gatherer count
+
+Possible error:
+
+0103001: Local register %s R/W error : Wrote 0x%llx Read 0x%llx
+
+-----------------------------------------------------------------------------
+ip2 (cfig_regtest) - Check configuration registers
+
+Basic write/read test for the configuration registers. The registers tested
+are limited to the following:
+
+	EV_PGBRDEN		Write gatherer destination
+	EV_PROC_DATARATE	Write gatherer control
+	EV_WGRETRY_TOUT		Interrupts 63 - 0
+	EV_CACHE_SZ		Interrupts 127 - 64
+	EV_CMPREG0 - 3		Timer comparator registers
+
+Note that the timer comparator registers are checked via the read-only RTC
+compare register.
+
+Possible error:
+
+0103002: Configuration register %s R/W error : Wrote 0x%llx Read 0x%llx
+
+-----------------------------------------------------------------------------
+ip3 (bustags_reg) - Check bus tags
+
+This test calculates the size of bus tag space based on the size of the 
+secondary cache. Then it performs basic write/read test on the bus tags.
+
+Possible error:
+
+0103003: Bus tag addr 0x%x R/W error : Wrote 0x%x Read 0x%x
+
+-----------------------------------------------------------------------------
+ip4 (counter) - Check R4K count/compare test
+
+This test performs a basic write/read test on the R4K compare register first.
+Then it generates an interrupt using the R4K count and compare registers.
+
+Possible errors:
+
+0106001: Compare register data error : Expected 0x%x Got 0x%x
+0106002: Incorrect contents in count register : Expected 0x%x Got 0x%x
+0106003: Phantom count/compare interrupt received
+0106004: No count/compare interrupt received : Count 0x%x Compare 0x%x
+
+-----------------------------------------------------------------------------
+ip5 (intr_level0) - Check IP19 level 0 interrupt
+
+This test generates level 0 interrupts at different priority values and 
+execution levels. It also checks multiple level 0 interrupts occuring at the
+same time.
+
+Possible errors:
+
+0103004: Level 0 interrupt pending failure : Priority 0x%x IP0 0x%llx IP1 0x%llx
+0103005: Level 0 highest priority interrupt level failure : HPIL 0x%llx
+0103006: Level 0 interrupt not indicated in Cause register 0x%x
+0103007: Level 0 interrupt pending not cleared : IP0 0x%llx IP1 0x%llx
+0103008: Level 0 highest priority interrupt level not cleared : HPIL 0x%llx
+0103009: Level 0 interrupt pending not cleared in Cause register : Cause 0x%x
+010300a: Level 0 current exec level mismatch : Wrote 0x%llx Read 0x%llx
+010300b: Level 0 interrupt not detected when priority >= CEL : Cause 0x%
+010300c: Level 0 interrupt detected when priority < CEL : Cause 0x%x
+010300d: Level 0 interrupt pending not cleared : Cause 0x%x
+010300e: Level 0 highest priority interrupt level incorrect : Expected 0x7f Got 0x%llx
+010300f: Level 0 multiple interrupt pending incorrectly indicated : Expected 0x6000000000000009 Got 0x%llx
+0103010: Level 0 multiple interrupt pending incorrectly indicated : Expected 0x9000000000000006 Got 0x%llx
+0103011: Level 0 multiple interrupt pending not cleared : IP0 0x%llx
+0103012: Level 0 multiple interrupt pending not cleared : IP1 0x%llx
+0103013: Level 0 multiple interrupt HPIL not cleared : HPIL 0x%llx
+0103014: Level 0 multiple interrupt Cause not cleared : Cause 0x%x
+0103015: Level 0 interrupt did not occur : Priority 0x%x
+
+-----------------------------------------------------------------------------
+ip6 (intr_level3) - Check IP19 level 3 interrupt
+
+This test generates level 3 interrupts using the EV_ERTOIP register.
+
+Possible errors:
+
+0103016: Level 3 interrupt pending not detected in CAUSE
+0103017: Interrupting error not detected in ERTOIP
+0103018: Level 3 interrupt pending not cleared in Cause : Cause 0x%x
+0103019: ERTOIP not cleared via write to CERTOIP : ERTOIP 0xllx
+010301a: Level 3 interrupt did not occur : ERTOIP 0x%llx
+
+-----------------------------------------------------------------------------
+ip7 (intr_timer) - Check IP19 RTSC and interval timer
+
+This test generates level 1 interrupt by writing a value into the EV_CMPREG
+configuration registers so that the RTSC will reach this value and interrupts
+the processor.
+
+Possible errors:
+
+010301b: Invalid timer interrupt occurred
+010301c: Interval timer interrupt did not occur
+010301d: Timer interrupt pending not cleared in Cause register
+
+-----------------------------------------------------------------------------
+ip8 (intr_group) - Check IP19 processor group interrupt
+
+This test generated level 0 interrupts using different processor groups at
+different priority levels including broadcast interrupts.
+
+Possible errors:
+
+010301e: Group interrupt pending not set correctly in EV_IP0 : Expected 0x%llx Got 0x%llx
+010301f: Group highest priority interrupt level failure : HPIL 0x%llx
+0103020: Group interrupt not indicated in Cause register 0x%x
+0103021: Group interrupt pending not cleared : IP0 0x%llx IP1 0x%llx
+0103022: Group highest priority interrupt level not cleared : HPIL 0x%llx
+0103023: Group interrupt pending not cleared in Cause register : Cause 0x%x
+0103024: Group interrupt did not occur : group 0x%x priority 0x%x
+0103025: Group interrupt pending not cleared in Cause : Cause 0x%x
+
+-----------------------------------------------------------------------------
+ip9 (wr_gatherer) - Check IP19 write gatherer
+
+This test exercise the write gatherer on each IP19 by performing writes of
+command-only, mixed command/data and data-only streams to the 2 32-word
+buffers of the write gatherer. The data streams are each flushed either
+manually or automatically to memory for verification.
+
+Possible errors:
+
+0103026: Write gatherer command only write : addr 0x%x expected 0x%x got 0x%x
+0103027: write gatherer mixed write : addr 0x%x expected 0x%x got 0x%x
+0103028: Write gatherer data only write : addr 0x%x expected 0x%x got 0x%x
+
+-----------------------------------------------------------------------------
+tlb1 (tlb_ram) - Test R4K TLB as RAM
+
+Tests the TLB as a small memory array. Checks to see if all the read/write
+bits can be toggled and that all undefined bits read back zero.
+
+Possible errors:
+
+0108001: TLBHI      entry %d R/W error: Wrote 0x%x Read 0x%x
+0108002: TLBLO even entry %d R/W error: Wrote 0x%x Read 0x%x
+0108003: TLBLO odd  entry %d R/W error: Wrote 0x%x Read 0x%x
+
+-----------------------------------------------------------------------------
+tlb2 (tlb_probe) - Check TLB functionality
+
+Sets up all the TLB slots and then probes them with matching addresses. Checks
+to ensure that there is a response for each valid address.
+
+Possible error:
+
+0108018: TLB probe error : Expected entry %d Got entry %d vpnum %d addr 0x%x
+
+-----------------------------------------------------------------------------
+tlb3 (tlb_xlate) - Check TLB address translation
+
+Tests for correct virtual to physical translation via mapped TLB entries. Sets
+the virtual address to user segment and uncached.
+
+Possible errors:
+
+010801b: TLB entry %d unexpected exception for addr 0x%x
+010801c: TLB entry %d translation error at addr 0x%x : Wrote %d Read %d
+
+-----------------------------------------------------------------------------
+tlb4 (tlb_valid) - Check TLB valid exception
+
+Tests to see if TLB invalid accesses generate exceptions. Maps the TLB entries
+to invalid addresses in k2seg and attempts to access them.
+
+Possible errors:
+
+0108016: TLB entry %d invalid exception VADDR error : Expected 0x%x Got 0x%x
+0108017: TLB entry %d invalid exception didn't occur
+
+-----------------------------------------------------------------------------
+tlb5 (tlb_mod) - Check TLB modification exception
+
+This test sets up the TLB to map each page as non-writable, then attempts to
+write to each of the mapped pages. It verifies that an exception is generated
+for each write attempt.
+
+Possible errors:
+
+010800b: TLB %s entry %d mod exception VADDR error : Expected 0x%x Got 0x%x
+010800c: TLB %s entry %d mod exception didn't occur
+010800d: TLB %s entry %d unexpected exception during mod
+010800e: TLB %s entry %d mod error : Wrote 0x%x Read 0x%x
+
+-----------------------------------------------------------------------------
+tlb6 (tlb_pid) - Check TLB refill exception
+
+Tests each TLB slot by attempting access with both matching and non-matching
+process id. It verifies that matching pid accesses are allowed and non-matching
+pid accesses generate exceptions.
+
+Possible errors:
+
+0108015: TLB %s entry %d unexpected exception with matching pid 0x%x
+0108016: TLB %s entry %d refill exception VADDR error : Expected 0x%x Got 0x%x
+0108017: TLB %s entry %d refill exception didn't occur
+
+-----------------------------------------------------------------------------
+tlb7 (tlb_g) - Check global bit in TLB entry
+
+Sets up all the TLB slots to allow global access, then attempts access on all
+slots with a variety of different pid settings. This test passes only if no
+invalid access exceptions occur.
+
+Possible error:
+
+010801d: Unexpected exception occurred during global access
+
+-----------------------------------------------------------------------------
+tlb8 (tlb_c) - Check C bits in TLB entry
+
+Attempts to access TLB-mapped memory in both cached and uncached modes. Tests
+all slots by writing and reading back a pattern, first in cached mode, then
+in uncached mode. This test checks basic functionality, and does not attempt
+to detect cached/uncached interactions.
+
+Possible errors:
+
+010800f: Exception during cached write to 0x%x
+0108010: Cached write to 0x%x failed
+0108011: TLB %s entry %d cached mode exception
+0108012: TLB %s entry %d cached R/W error : Wrote 0x%x Read 0x%x
+0108013: TLB %s entry %d uncached mode exception
+0108014: TLB %s entry %d uncached R/W error : Wrote 0x%x Read 0x%x
+
+-----------------------------------------------------------------------------
+tlb9 (tlb_mapuc) - Check cached/uncached TLB access
+
+Checks that both cached and uncached mapped access work without interfering
+with each other. This test aims at detecting the R4000 mapped uncached
+writeback bug. The method used is to set up 2 TLB entries for the same page
+of physical memory, one using cached access and the other using uncached. A
+write is done via each of the TLB entries, followed by a read. If the R4000
+cache is working properly, the test will be able to read back the correct
+(different) pattern for each access mode, since the code avoids flushing the
+cache to main memory. If the bug is present, the same value will be read back
+via both cached and uncached access. The writes are done in both cached -
+uncached and uncached - cached orders.
+
+Possible errors:
+
+0108004: TLB %s entry %d cached/uncached W exception
+0108005: TLB %s entry %d cached/uncached W error : Wrote 0x%x Read 0x%x
+0108006: TLB %s entry %d uncached/cached W execption
+0108007: TLB %s entry %d uncached/cached W error : Wrote 0x%x Read 0x%x
+0108008: TLB %s entry %d uncached/cached RW execption
+0108009: TLB %s entry %d uncached/cached RW error : Wrote 0x%x Read 0x%x
+010800a: TLB %s entry %d uncached/cached RWR error : Wrote 0x%x Read 0x%x
+
+-----------------------------------------------------------------------------
+fpu1 (fpregs) - fpu register test
+
+This test simply writes and reads the FPU registers, reporting any readback
+errors.
+
+Possible errors:
+
+010901e: FP register %d data error : Expected 0x%x Got 0x%x
+010901f: FP register %d inverted data error : Expected 0x%x Got 0x%x
+
+-----------------------------------------------------------------------------
+fpu2 (fpmem) - fpu load/store mem test
+
+This test loads FPU from memory and stores memory from FPU.
+
+Possible errors:
+
+010901c: Load/store FP reg %d data error : Expected 0x%x Got 0x%x
+010901d: Load/store FP reg %d inverted data error : Expected 0x%x, Got 0x%x
+
+-----------------------------------------------------------------------------
+fpu3 (faddsubs) - fpu add/subtract(single precision)
+
+Tests addition and subtraction using simple single precision arithmetic.
+
+Possible errors:
+
+0109004: FP single add/sub result error : Expected 0x%x Got 0x%x
+0109005: FP single add/sub status error : Expected 0 Got 0x%x
+0109006: Fixed to single conversion failed : Before 0x%x After 0x%x
+
+-----------------------------------------------------------------------------
+fpu4 (faddsubd) - fpu add/subtract(double precision)
+
+Tests addition and subtraction using simple double precision arithmetic.
+
+Possible errors:
+
+0109001: FP double add/sub result error : Expected 0x%x Got 0x%x
+0109002: FP double add/sub status error : Expected 0 Got 0x%x
+0109003: Fixed to double conversion failed : Before 0x%x After 0x%x
+
+-----------------------------------------------------------------------------
+fpu5 (fmuldivs) - fpu multiply/divide (single precision)
+
+Tests multiplication and division using simple single precision arithmetic.
+
+Possible errors:
+
+0109011: FP single divide result error : Expected 0x%x Got 0x%x
+0109012: FP single multiply result error : Expected 0x%x Got 0x%x
+
+-----------------------------------------------------------------------------
+fpu6 (fmuldivd) - fpu multiply/divide (double precision)
+
+Tests multiplication and division using simple double precision arithmetic.
+
+Possible errors:
+
+010900f: FP double divide result error : Expected 0x%x Got 0x%x
+0109010: FP double multiply result error : Expected 0x%x Got 0x%x
+
+-----------------------------------------------------------------------------
+fpu7 (fmulsubs) - fpu multiply/subtract (single precision)
+
+Tests multiplication and subtraction using simple single precision arithmetic.
+
+Possible errors:
+
+0109016: FP single mul/div result error : Expected 0x%x Got 0x%x
+0109017: Fixed to single conversion failed : Before 0x%x After 0x%x
+0109018: FP single mul/div status error : 0x%x
+
+-----------------------------------------------------------------------------
+fpu8 (fmulsubd) - fpu multiply/subtract (double precision)
+
+Tests multiplication and subtraction using simple double precision arithmetic.
+
+Possible errors:
+
+0109013: FP double mul/sub result error : Expected 0x%x Got 0x%x
+0109014: Fixed to double conversion failed : Before 0x%x After 0x%x
+0109015: FP double mul/div status error : 0x%x
+
+-----------------------------------------------------------------------------
+fpu9 (finvalid) - fpu invalid test
+
+Simple test to see if an invalid operation exception can be generated. Divides
+0.0 by itself to generate the exception.
+
+Possible errors:
+
+010900b: Invalid exception didn't occur
+010900c: Invalid exception status error : 0x%x
+010900d: Invalid exception dividend error : Expected 0x%x Got 0x%x
+
+-----------------------------------------------------------------------------
+fpu10 (fdivzero) - fpu divided by zero test
+
+Divides a non-zero value by 0.0. Unlike the previous test, the floating point
+status register is checked after the exception to make sure the divide by zero
+flag is set.
+
+Possible errors:
+
+0109007: Divide by Zero exception status error : 0x%x
+0109008: Dividend conversion failed : Before 0x%x After 0x%x
+0109009: Divisor conversion failed : Before 0x%x After 0x%x
+
+-----------------------------------------------------------------------------
+fpu11 (foverflow) - fpu overflow test
+
+Generates a single precision overflow by adding 2 at-the-limit large values.
+After the exception, the floating point status register is checked to make
+sure the overflow flag was set.
+
+Possible error:
+
+0109019: Overflow exception status error : 0x%x
+
+-----------------------------------------------------------------------------
+fpu12 (funderflow) - fpu underflow test
+
+Generates a single precision overflow by dividing an at-the-limit small value
+by 2. After the exception, the floating point status register is checked to
+make sure the underflow flag was set.
+
+Possible errors:
+
+0109020: Exception other than Underflow in FCR31 : 0x%x
+0109021: Failed to generate Underflow Exception
+
+-----------------------------------------------------------------------------
+fpu13 (finexact) - fpu inexact test
+
+Generates a single precision inexact conversion error by attempting to convert
+an integer value too large for a single precision representation into a single
+precision value. After the error, the floating point status register is checked
+to make sure the inexact conversion flag was set.
+
+Possible error:
+
+010900a: Inexact exception status error : 0x%x
+
+-----------------------------------------------------------------------------
+fpu14 (fpcmput) - fpu computation test
+
+Given a list of "infinite" series, this test executes them a specified number
+of times and compares the result gotten at run-time with an expected result.
+Discrepancies are reported. This is a slow test.
+
+Possible errors:
+
+010900e: FP computation unexpected exception : 0x%x
+010901a: Single precision %s error : Expected 0x%x Got 0x%x
+010901b: Double precision %s error : Expected 0x%x 0x%x Got 0x%x 0x%x
+
+-----------------------------------------------------------------------------
+cache1 (Taghitst) - TAGHI Register Test
+
+This diag tests the data integrity of the taghi register. A sliding one and
+a sliding zero pattern are used.
+
+Possible errors:
+
+0104001: Taghi register failed walking one test
+	 Expected data: 0x%08x Actual data: 0x%08x
+0104002: Taghi register failed walking zero test
+	 Expected data: 0x%08x Actual data: 0x%08x
+
+-----------------------------------------------------------------------------
+cache2 (Taglotst) - TAGLO Register Test
+
+This diag tests the data integrity of the taglo register. A sliding one and
+a sliding zero pattern are used.
+
+Possible errors:
+
+0104003: Taglo register failed walking one test
+	 Expected data: 0x%08x Actual data: 0x%08x
+0104004: Taglo register failed walking zero test
+	 Expected data: 0x%08x Actual data: 0x%08x
+
+-----------------------------------------------------------------------------
+cache3 (pdtagwlk) - Primary data TAG RAM data line Test
+
+This diag checks the data integrity of the primary data TAG RAM path using
+walking ones and walking zeros patterns.
+
+Possible error:
+
+0104005: D-cache tag ram data line error
+	 Failed walking one (or zero) test at 0x%08x
+	 Expected: 0x%08x Actual 0x%08x
+
+-----------------------------------------------------------------------------
+cache4 (pdtagadr) - Primary data TAG RAM address line Test
+
+This diag tests the address lines to the primary data cache TAG RAM by
+sliding a one and then a zero on the address lines. This test assumes that
+the taglo register is in good working condition.
+
+Possible error:
+
+0104006: D-cache tag ram address line error
+	 Failed walking one (or zero) test at 0x%08x
+	 Expected: 0x%08x Actual 0x%08x
+
+-----------------------------------------------------------------------------
+cache5 (PdTagKh) - Primary data TAG Knaizuk Hartmann Test
+
+This diag tests the data integrity of the primary data cache TAG RAM with
+the Knaizuk Hartmann algorithm. It treats the TAG RAM array as a ordinary
+memory array. The parity bit is not checked in this test.
+
+A note about the Knaizuk Hartmann Memory Test
+
+This algorithm is used to perform a fast but non-ehaustive memory test.
+It will test a memory subsystem for stuck-at faults in both the address
+lines as well as the data locations. 
+
+The algorithm breaks up the memory to be tested into 3 partitions.  Partition
+0 consists of memory locations 0, 3, 6, ...; partition 1 consists of
+memory locations 1,4,7,...;  partition 2 consists oflocations 2,5,8...
+The partitions are filled with either an all ones pattern or an all
+zeroes pattern.  By varying the order in which the partitions are filled
+and then checked, this algorithm manages to check all combinations
+of possible stuck at faults.
+
+Possible errors:
+
+0104007: Partition 1 error after partition 0 set to 0xaaaaaaaa
+0104008: Partition 2 error after partition 1 set to 0xaaaaaaaa
+0104009: Partition 0 error after partition 1 set to 0xaaaaaaaa
+010400a: Partition 1 error after partition 1 set to 0xaaaaaaaa
+010400b: Partition 0 error after partition 0 set to 0x55555555
+010400c: Partition 2 error after partition 2 set to 0xaaaaaaaa
+
+For each of the above errors, the following additional information is also
+provided:
+
+	 Tag ram address: 0x%08x
+	 Expected: 0x%08x Actual: 0x%08x Xor: 0x%08x
+
+-----------------------------------------------------------------------------
+cache6 (pitagwlk) - Primary Instruction TAG RAM data line Test
+
+This diag checks the data integrity of the primary instruction cache TAG
+RAM path using a walking ones and zeros pattern.
+
+Possible error:
+
+010400d: I-cache tag ram data line error
+	 Failed sliding one (or zero) test at 0x%08x
+	 Expected: 0x%08x, Actual: 0x%08x
+
+-----------------------------------------------------------------------------
+cache7 (pitagadr) - Primary Instruction TAG RAM address line Test
+
+This diag tests the address lines to the primary instruction cache TAG RAM
+by sliding a one and then a zero one the address lines. This test assumes
+that the taglo register is in good working condition.
+
+Possible error:
+
+010400e: I-cache tag ram address line error
+	 Failed sliding one (or zero) test at 0x%08x
+	 Expected: 0x%08x Actual 0x%08x
+
+-----------------------------------------------------------------------------
+cache8 (PiTagKh) - Primary Instruction TAG RAM Knaizuk Hartmann Test
+
+This diag tests the data integrity of the primary instruction cache TAG RAM
+with the Knaizuk Hartmann algorithm. It treats the TAG RAM array as a
+ordinary memory array. The parity bit is not checked in this test.
+
+Possible errors:
+
+010400f: Partition 1 error after partition 0 set to 0xaaaaaaaa
+0104010: Partition 2 error after partition 1 set to 0xaaaaaaaa
+0104011: Partition 0 error after partition 1 set to 0xaaaaaaaa
+0104012: Partition 1 error after partition 1 set to 0xaaaaaaaa
+0104013: Partition 0 error after partition 0 set to 0x55555555
+0104014: Partition 2 error after partition 2 set to 0xaaaaaaaa
+
+For each of the above errors, the following additional information is
+provided:
+
+	 Tag ram index address: 0x%08x
+	 Expected: 0x%08x Actual: 0x%08x Xor: 0x%08x
+
+-----------------------------------------------------------------------------
+cache9 (sd_tagwlk) - Secondary TAG data path Test
+
+Checks the data integrity of the Secondary data TAG RAM path using a
+walking ones/zeros pattern.
+
+Possible error:
+
+0105015: Secondary Data TAG RAM Path Error
+	 on sliding one (or zero) pattern
+	 TAG RAM Location 0x%x
+	 Expected 0x%x  Actual= 0x%x  XOR= 0x%x
+
+-----------------------------------------------------------------------------
+cache10 (sd_tagaddr) - Secondary TAG address Test
+
+Checks the address integrity to the Primary Data TAG RAM by using
+a walking address.
+
+Possible error:
+
+0105016: Secondary Data TAG Address Error
+	 TAG RAM Location 0x%x
+	 Expected 0x%x  Actual= 0x%x  XOR= 0x%x
+
+-----------------------------------------------------------------------------
+cache11 (sd_tagkh) - Secondary TAG RAM Knaizuk Hartmann Test
+
+This diag tests the data integrity of the secondary data cache TAG RAM with
+the Knaizuk Hartmann algorithm. It treats the TAG RAM array as a ordinary
+memory array. The parity bit is not checked in this test.
+
+Possible error:
+
+0105017: Secondary Data TAG ram data Error
+	 Address %x, error code %d
+	 expected %x, actual %x, XOR %x
+
+-----------------------------------------------------------------------------
+cache12 (d_tagparity) - Primary Data TAG RAM parity Test
+
+This diag tests the functionality of the parity bit in the primary data
+cache tag. For each tag, a stream of one's and zero's are shifted into the
+tag to check if the parity bit change state accordingly.
+
+Possible error:
+
+0104018: D-cache tag ram parity bit error
+	 Tag ram address: 0x%08x expected content: 0x%08x
+	 Taglo: 0x%08x expected parity: 0x%x actual parity: 0x%x
+
+-----------------------------------------------------------------------------
+cache13 (d_tagcmp) - Primary Data TAG comparitor Test
+
+This diag tests the comparator at the D-cache tag for hit and miss detection.
+For each tag, set the ptag field with the values which will cause a cache hit
+for the Kseg0 address of 0x80002000 to 0x9fffffff. The values used are a
+walking one or a walking zero pattern. This will ensure only one bit
+location is tested at the comparator. The cache op Hit Invalidate is used to
+check for cache hit and miss situations.
+
+Possible errors:
+
+0104019: D-cache tag comparator did not detect a miss
+0104020: D-cache tag comparator did not detect a hit
+
+For each of the above errors, the following additional information are
+provided:
+	 Tag ram address: 0x%08x
+	 PTag field of tag: 0x%06x comparing with PFN: 0x%06x
+
+-----------------------------------------------------------------------------
+cache14 (d_tagfunct) - Primary Data TAG functionality Test
+
+This diag tests the functionality of the data cache tag. Kseg0 addresses
+are used to load the cache from memory. The ptag and the cache state field
+are checked to see if they are holding expected values. Virtual addresses
+0x80000000, 0x80002000, 0x80004000, 0x80008000, ...  0x90000000 are used as
+the baseaddress of an 8k page which is mapped to the cache. The ptag and
+state of each cache line are checked against the expected value.
+
+Possible errors:
+
+0104021: D-cache tag functional error in PTAG field
+	 PTag field does not contain correct tag bits
+	 Cache line address: 0x%08x
+	 Expected PTag: 0x%06x
+	 Actual PTag: 0x%06x
+	 TAGLO Register %x
+	 Re-read DTAG %x
+0104022: D-cache tag functional cache state error
+	 Cache line address: 0x%08x
+	 Expected cache state: 0x%08x
+	 Actual cache state: 0x%08x
+	 TAGLO Register %x
+	 Re-read DTAG %x
+
+-----------------------------------------------------------------------------
+cache15 (d_slide_data) - Primary Data RAM data line Test
+
+This diag tests the data lines to the primary data cache. A sliding one and
+a sliding zero data pattern is written into the first location of the
+D-cache to check if each data line can be toggled individually.
+
+Possible errors:
+
+0107023: D-cache data ram data lines failed walking one test
+	 Addr: 0x%08x Expected: 0x%08x Actual: 0x%08x Xor: 0x%08x
+0107024: D-cache data ram data lines failed walking zero test
+	 Addr: 0x%08x Expected: 0x%08x Actual: 0x%08x Xor: 0x%08x
+
+-----------------------------------------------------------------------------
+cache16 (d_slide_addr) - Primary Data RAM address line Test
+
+This diag tests the address lines to the primary data cache. Each address
+line to the data cache is toggled once individually by sliding a one and
+then a zero across the address lines.
+
+Possible errors:
+
+0107025: D-cache data ram address lines failed walking one tes
+	 Addr: 0x%08x Expected: 0x%08x Actual: 0x%08x Xor: 0x%08x
+0107026: D-cache data ram address lines failed walking zero test
+	 Addr: 0x%08x Expected: 0x%08x Actual: 0x%08x Xor: 0x%08x
+
+-----------------------------------------------------------------------------
+cache17 (d_kh) - Primary Data RAM Knaizuk Hartmann Test
+
+This diag tests the data integrity of the D-cache with the Knaizuk Hartmann
+algorithm. Data pattern 0x55555555 and 0xaaaaaaaa are used.
+
+Possible errors:
+
+0107027: Partition 1 error after partition 0 set to 0xaaaaaaaa
+0107028: Partition 2 error after partition 1 set to 0xaaaaaaaa
+0107029: Partition 0 error after partition 1 set to 0xaaaaaaaa
+010702a: Partition 1 error after partition 1 set to 0xaaaaaaaa
+010702b: Partition 0 error after partition 0 set to 0x55555555
+010702c: Partition 2 error after partition 2 set to 0xaaaaaaaa
+
+For each of the above errors, the following additional information is
+provided:
+	 Cache address: 0x%08x
+	 Expected: 0x%08x Actual: 0x%08x Xor: 0x%08x
+
+-----------------------------------------------------------------------------
+cache18 (dsd_wlk) - Primary/Secondary Data path Test
+
+Test the data path from memory through the secondary cache and to the
+Primary Data Cache.
+
+Possible errors:
+
+010702d: Data Path Error from Memory->Secondary->Primary Data
+	 Address %x, expected %x, actual %x, Xor %x
+010702e: Data Path Error from Primary ->Secondary->Memory Data
+	 Address %x, Expected %x, Actual %x, Xor %x
+
+-----------------------------------------------------------------------------
+cache19 (sd_aina) - Secondary Data RAM (address in address) Test
+
+Performs an address in address test on the secondary data cache.
+
+Possible errors:
+
+010502f: Secondary Memory Error on pattern 1
+	 Address %08x
+	 expected %08x, actual %08x, XOR %08x
+0105030: Secondary Memory Error on pattern 2
+	 Address %08x
+	 expected %08x, actual %08x, XOR %08x
+
+-----------------------------------------------------------------------------
+cache20 (d_function) - Primary Data functionality Test
+
+This diag tests the functionality of the entire data cache. It checks the
+block fill, write back on a dirty line replacement, and no write back on a
+clean line replacement function of the data cache lines.
+
+Possible errors:
+
+0104031: D-cache block fill error 1
+	 Cache contains incorrect data
+	 Cache Address: 0x%08x
+	 Expected: 0x%08x Actual: 0x%08x Xor: 0x%08x
+0104032: D-cache block fill error 2
+	 Cache contains incorrect data
+	 Cache Address: 0x%08x
+	 Expected: 0x%08x Actual: 0x%08x Xor: 0x%08x
+0104033: D-cache block write back error 1
+	 Memory contains incorrect data
+	 Cache Address: 0x%08x
+	 Expected: 0x%08x Actual: 0x%08x Xor: 0x%08x
+0104034: D-cache block fill error 3
+	 Cache contains incorrect data
+	 Cache Address: 0x%08x
+	 Expected: 0x%08x Actual: 0x%08x Xor: 0x%08x
+0104035: D-cache block write back error 2
+	 Memory content is altered
+	 Write back happened on a clean line
+	 Cache Address: 0x%08x
+	 Expected: 0x%08x Actual: 0x%08x Xor: 0x%08x
+
+-----------------------------------------------------------------------------
+cache21 (d_parity) - Primary Data parity generation Test
+
+This diag tests the parity bit generation of the D-cache data ram.
+
+Possible error:
+
+0104036: D-cache parity generation error
+	 error %x
+	 Cache byte address: 0x%08x data:0x%02x
+	 Parity bit position: 0x%02x
+	 Expected parity: 0x%02x Actual parity:0x%02x
+
+-----------------------------------------------------------------------------
+cache22 (i_tagparity) - Primary Instruction TAG RAM parity bit Test
+
+This diag tests the functionality of the parity bit in the primary I-cache
+tag. For each tag, the parity bit is tested to respond to each bit change
+in the tag.
+
+Possible error:
+
+0104037: I-cache tag ram parity bit error
+	 Tag ram address: 0x%08x expected content: 0x%08x
+	 Taglo: 0x%08x expected parity: 0x%x actual parity: 0x%x
+
+-----------------------------------------------------------------------------
+cache23 (i_tagcmp) - Primary Instruction TAG RAM comparitor Test
+
+This diag tests the comparator at the I-cache tag for hit and miss detection.
+
+Possible errors:
+
+0104038: I-cache tag comparator did not detect a miss (walking l)
+0104039: I-cache tag comparator did not detect a hit (walking 1)
+010403a: I-cache tag comparator did not detect a miss (walking zero)
+010403d: I-cache tag comparator did not detect a hit (walking zero)
+
+For each of the above errors, the following additional information is
+provided:
+	 Tag ram address: 0x%08x
+	 PTag field of tag: 0x%06x comparing with PFN: 0x%06x
+
+-----------------------------------------------------------------------------
+cache24 (i_tagfunct) - Primary Instruction TAG functionality Test
+
+This diag tests the functionality of the instruction cache tag. Kseg0
+addresses are used to load the cache from memory. This will test if the
+cache is functional on the cachable memory space. After each 8k segment of
+memory is loaded into the cache. The ptag and the cache state field are
+checked to see if they are holding expected values. Virtual addresses
+0x80000000, 0x80002000, 0x80004000, 0x80008000, ..., 0x90000000 are used
+as the base address of each 8k page which is mapped to the cache. The ptag
+and cache state of each cache line are checked against the expected value.
+
+Possible errors:
+
+010403b: I-cache tag functional error in PTAG field
+	 PTag field does not contain correct tag bits
+	 Cache line address: 0x%08x
+	 Expected PTag: 0x%06x
+	 Actual PTag: 0x%06x
+010403c: I-cache tag functional cache state error
+	 Cache state not correct
+	 Cache line address: 0x%08x
+	 Expected cache state: 0x%08x
+	 Actual cache state: 0x%08x
+
+-----------------------------------------------------------------------------
+cache25 (i_slide_data) - Primary Instruction data RAM data line Test
+
+This diag checks the data lines to the I-cache data ram by sliding a one
+and zero bit across the bus.
+
+Possible errors:
+
+010403f: I-cache data ram data lines failed walking one test
+	 Addr: 0x%08x Expected: 0x%08x Actual: 0x%08x Xor: 0x%08x
+	 PITAG  %x
+	 PDTAG  %x
+	 STAG  %x
+0104040: I-cache data ram data lines failed walking zero test
+	 Addr: 0x%08x Expected: 0x%08x Actual: 0x%08x Xor: 0x%08x
+	 PTAG  %x
+	 STAG  %x
+
+-----------------------------------------------------------------------------
+cache26 (i_aina) - Primary Instruction data RAM address in address Test
+
+Performs an address in address test on the primary instruction cache.
+
+Possible error:
+
+0107041: I-cache address in address error
+	 addr %x, exp %x, act %x, XOR %x
+
+-----------------------------------------------------------------------------
+cache27 (i_function) - Primary Instruction functionality Test
+
+This diag tests the functionality of the entire instruction cache. It checks
+the block fill and hit write back of the instruction cache lines.
+
+Possible error:
+
+0107042: I-cache block write back error
+	 Memory contains incorrect data
+	 Cache address: 0x%08x
+	 Expected: 0x%08x Actual: 0x%08x Xor: 0x%08x
+	 Icache TAG = %x
+	 Scache TAG = %x
+
+-----------------------------------------------------------------------------
+cache28 (i_parity) - Primary Instruction parity generation Test
+
+This diag tests the parity bit generation of the I-cache data ram.
+
+Possible error:
+
+0104043: I-cache parity generation error
+	 error %x
+	 Cache byte address: 0x%08x data:0x%02x
+	 Parity bit position: 0x%02
+	 Expected parity: 0x%02x Actual parity:0x%02x
+
+-----------------------------------------------------------------------------
+cache29 (i_hitinv) - Primary Instruction Hit Invalidate Test
+
+This diag tests the Hit Invalidate cache op on the Instruction cache.
+
+Possible errors:
+
+0104044: I-cache state error during initialization
+	 Cache state did not change to valid when filled from memory
+	 Cache line address: 0x%08x
+	 Expected cache state: 0x%08x Actual cache state: 0x%08x
+0104045: I-cache state error
+	 Hit Invalidate changed the line to invalid on a miss
+	 Cache line address: 0x%08x
+	 Miss address: 0x%08x
+	 Expected cache state: 0x%08x Actual cache state: 0x%08x
+0104046: I-cache state error on a Hit Invalidate Cache OP
+	 Hit Invalidate did not invalidate the line on a hit
+	 Cache line address: 0x%08x
+	 Expected cache state: 0x%08x Actual cache state: 0x%08x
+
+-----------------------------------------------------------------------------
+cache30 (i_hitwb) - Primary Instruction Hit Writeback Test
+
+This diag tests the Hit Writeback cache op on the instruction cache.
+
+Possible errors:
+
+0104047: I-cache state error during initialization
+	 Cache state did not change to valid when filled from memory
+	 Cache line address: 0x%08x
+	 Expected cache state: 0x%08x Actual cache state: 0x%08x
+0104048: I-cache state error Hit writeback happened on a cache miss
+	 Cache line address: 0x%08x
+	 Miss address: 0x%08x
+0104049: I-cache Hit writeback did not happen on a cache hit
+	 Cache line address: 0x%08x
+	 expected %x, actual %x, XOR %x
+
+-----------------------------------------------------------------------------
+cache31 (ECC_reg_tst) - ECC register Test
+
+This diag tests the data integrity of the ECC register. A sliding one and
+sliding zero pattern is used in this test.
+
+Possible errors:
+
+010404a: ECC register failed walking one test
+	 Expected data: 0x%08x Actual data: 0x%08x
+010404b: ECC register failed walking zero test
+	 Expected data: 0x%08x Actual data: 0x%08x
+
+-----------------------------------------------------------------------------
+cache32 (dd_hitinv) - Primary Data Hit Invalidate Test
+
+This diag tests the Hit Invalidate cache op on the data cache.
+
+Possible errors:
+
+010404c: D-cache state error during initialization
+	 Cache state did not change to valid when filled from memory
+	 Cache line address: 0x%08x
+	 Expected cache state: 0x%08x Actual cache state: 0x%08x
+010404d: D-cache state error
+	 Hit Invalidate changed the line to invalid on a miss
+	 Cache line address: 0x%08x
+	 Miss address: 0x%08x
+	 Expected cache state: 0x%08x Actual cache state: 0x%08x
+010404e: D-cache state error on a  Hit Invalidate Cache OP
+	 Hit Invalidate did not invalidate the line on a hit
+	 Cache line address: 0x%08x
+	 Expected cache state: 0x%08x Actual cache state: 0x%08x
+
+-----------------------------------------------------------------------------
+cache33 (d_hitwb) - Primary Data Hit Writeback Test
+
+This diag tests the Hit Writeback cache op on the data cache.
+
+Possible errors:
+
+010404f: D-cache state error during initialization
+	 Cache state did not change to valid when filled from memory
+	 Cache line address: 0x%08x
+	 Expected cache state: 0x%08x Actual cache state: 0x%08x
+	 TAGLO Reg %x
+	 Re-Read dtag %x
+	 Re-Read stag %x
+0104050: D-cache state error Hit writeback happened on a clean exclusive line
+	 Cache line address: 0x%08x
+	 PTAG %x
+	 Scache TAG %x
+0104051: D-cache Hit writeback happened on a cache miss
+	 Cache line address: 0x%08x
+	 Miss address: 0x%08x
+	 PTAG %x
+	 Scache TAG %x
+0104052: D-cache Hit writeback did not happen on a cache hit
+	 Cache line address: 0x%08x
+	 PTAG %x
+	 Scache TAG %x
+0104053: D-cache Hit Writeback clears the write back bi
+	 Cache line address: 0x%08x
+
+-----------------------------------------------------------------------------
+cache34 (d_dirtywbw) - Primary Data dirty writeback word Test
+
+This test verifies the block (4 words) write mode in data cache.
+It writes to K0 (0x80020000) cached space, causing the cache dirty.
+Then it replace the cache line by reading 0x80022000, different cache
+line with same offset.  This causes the data in 0x80020000 wrtie back
+to memory which now has the same data as in 0x80020000.  Multiple
+cache lines are tested back to back.
+
+Possible errors:
+
+0104054: Unexpected Cache write through to memory
+	 addr %x, expected %x, actual %x, XOR %x
+	 Seconday TAG %x
+0104055: Cache writeback did not occur on a word store to a dirty line
+	 addr %x
+	 expected %x, actual %x, XOR %x
+	 Seconday TAG %x
+
+-----------------------------------------------------------------------------
+cache35 (d_refill) - Primary Data refill from Secondary Cache Test
+
+This test verifies the block  write/read mode in data cache.
+It writes to K0 (0x80020000) cached space, causing the cache dirty.
+Then it replace the cache line by reading 0x80022000, different cache
+line with same offset.  This causes the data in primary data cache
+to be written back to the secondary. The address 0x80020000 is reread
+and compared. Should be a cache hit in the secondary.
+
+Possible errors:
+
+0104056: Unexpected Cache write through to memory
+	 addr = %x
+	 expected = %x, actual = %x, XOR %x
+	 Seconday TAG %x
+0104057: Secondary Cache miss, expected a cache hit
+	 addr = %x
+	 xpected = %x, actual = %x, XOR = %x
+	 Data in memory = 0xdeadbeef
+	 Seconday TAG %x
+
+-----------------------------------------------------------------------------
+cache36 (sd_dirtywbw) - Secondary Dirty Writeback (word) Test
+
+This test verifies the block (4 words) write mode in data cache.
+It writes to K0 (0x80020000) cached space, causing the cache dirty.
+Then it replace the cache line by reading 0x80022000, different cache
+line with same offset.  This causes the data in 0x80020000 wrtie back
+to secondary which now has the same data as in 0x80020000.  A write
+to address 0x80060000 will replace the secondary lines, thus forcing
+a writeback from the Secondary Cache. Note, there is another flavor
+of this test d_dirtywbw.c which forces the writeback from the primary
+when the secondary line is replaced.
+
+Possible errors:
+
+0105058: Unexpected Cache write through to memory
+	 addr = %x
+	 expected = %x, actual = %x, XOR %x
+	 Seconday TAG %x
+0105059: Data read replaced a dirty line in Secondary
+	 Dirty line not written back to memory
+	 addr = %x
+	 expected = %x, actual = %x, XOR %x
+	 Seconday TAG %x
+
+-----------------------------------------------------------------------------
+cache37 (sd_dirtywbh) - Secondary Dirty Writeback (halfword) Test
+
+This test verifies the block (4 words) write mode in data cache.
+It writes to K0 (0x80020000) cached space, causing the cache dirty.
+Then it replace the cache line by reading 0x80022000, different cache
+line with same offset.  This causes the data in 0x80020000 wrtie back
+to memory which now has the same data as in 0x80020000.  Multiple
+cache lines are tested back to back.  Half word transactions are tested.
+
+Possible errors:
+
+010505a: Unexpected Cache write through to memory on store halfword
+	 addr = %x
+	 expected = %4x, actual = %4x, XOR %4x
+	 Seconday TAG %
+010505b: Halfword read replaced a dirty line in Secondary, dirty line not written back to memory
+	 addr = %x
+	 expected = %4x, actual = %4x, XOR %4x
+	 Seconday TAG %x
+
+-----------------------------------------------------------------------------
+cache38 (sd_dirtywbb) - Secondary Dirty Writeback (byte) Test
+
+This test verifies the block (4 words) write mode in data cache.
+It writes to K0 (0x80020000) cached space, causing the cache dirty.
+Then it replace the cache line by reading 0x80022000, different cache
+line with same offset.  This causes the data in 0x80020000 wrtie back
+to memory which now has the same data as in 0x80020000.  Multiple
+cache lines are tested back to back.  Byte transactions are tested.
+
+Possible errors:
+
+010505c: Unexpected Cache write through to memory on store byte
+	 addr = %x
+	 expected = %2x, actual = %2x, XOR %2x
+	 Seconday TAG %x
+010505d: Byte read replaced a dirty line in Secondary, dirty line not written back to memory
+	 Dirty line not written back to memory
+	 addr = %x
+	 expected = %2x, actual = %2x, XOR %2x
+	 Seconday TAG %x
+
+-----------------------------------------------------------------------------
+cache39 (sd_tagecc) - Secondary TAG ECC Test
+
+Checks the data integrity of the Secondary data tag ram path using a
+walking ones/zeros pattern.
+
+Possible errors:
+
+010505e: Secondary Data TAG RAM ECC Path error (walking one as data)
+	 TAG RAM Location 0x%x
+	 Expected 0x%x  Actual= 0x%x  XOR= 0x%x
+010505f: Secondary Data TAG RAM ECC Path error (walking zero as data)
+	 TAG RAM Location 0x%x
+	 Expected 0x%x  Actual= 0x%x  XOR= 0x%x
+
+-----------------------------------------------------------------------------
+cache40 (sdd_hitinv) - Secondary Hit Invalidate Test
+
+This test verifies the Hit Invalidate Cache operation.
+
+Possible errors:
+
+0105060: S-cache state error during initialization
+	 addr = %x
+	 expected = %x, actual = %x, XOR %x
+	 Seconday TAG %x
+0105061: S-Cache error during Primary Cache dirty line writeback to Scache
+0105062: S-Cache state error on a  Hit Invalidate Cache OP
+0105063: Data written back to memory after a Hit Invalidate on the Secondary
+	 addr = %x
+	 expected = %x, actual = %x, XOR %x
+	 Seconday TAG %x
+0105064: S-Cache state error on a  Hit Invalidate Cache OP
+0105065: Primary Cache TAG not invalid after a Hit Invalidate on the Scache
+	 addr %x
+	 Seconday TAG %x
+	 Primary TAG %x
+0105066: Data written back to memory after a Hit Invalidate on the Secondary
+	 addr = %x
+	 expected = %x, actual = %x, XOR %x
+	 Seconday TAG %x
+	 Primary TAG %x
+
+For errors 0105061, 0105062 and 0105064, the following additional information
+are provided:
+	 Error in Secondary Cache TAG State field
+      OR Error in Secondary Cache TAG physical tag field
+      OR Error in Secondary Cache TAG Virtual Address field
+	 Address 0x%08x\nSecondary TAG Data 0x%08x
+	 Expected Cache State:  0x%x = [STATE]
+
+STATE is one of the decoded cache states: Invalid, Clean Exclusive,
+Dirty Exclusive, Shared, and Dirty Shared.
+
+-----------------------------------------------------------------------------
+cache41 (sd_hitwb) - Secondary Hit Writeback Test
+
+This test verifies the Hit Writeback Cache operation.
+It verifies that the data can be written back from the Secondary
+or in the case where the primary data is more current that the
+data is written from the Primary to memory. Also checked is the
+fact that the cache lines are not invalidated as with the Hit
+Writeback Invalidate Cache Op. Instead in checks that the lines
+is set to the clean exclusive state.
+
+Possible errors:
+
+0105067: Initialization error, unexpected Cache write through to memory
+	 addr = %x
+	 expected = %x, actual = %x, XOR %x
+	 Seconday TAG %x
+0105068: SCache error during Primary Cache dirty line writeback to Scache
+0105069: Data not written back from Scache to Memory on Hit Writeback Cache OP
+	 addr = %x
+	 expected = %x, actual = %x, XOR %x
+	 Seconday TAG %x
+010506a: Initialization error, unexpected Cache write through to memory
+	 addr = %x
+	 expected = %x, actual = %x, XOR %x
+	 Seconday TAG %x
+010506b: SCache state error during Hit Writeback on S-Cache dirty line
+010506c: Error in Primary Cache TAG after a Hit Writeback cache Op on the SCache
+	 addr %x
+	 Expected cache state: Dirty Exclusive
+	 Primary Data TAG %x
+010506d: Data not written back from D-Cache to Memory on a Hit Writeback on the S-Cache
+	 addr = %x
+	 expected = %x, actual = %x, XOR %x
+	 Seconday TAG %x
+	 Primary Data TAG %x
+
+For errors 0105068 and 010506b, the following additional information
+are provided:
+	 Error in Secondary Cache TAG State field
+      OR Error in Secondary Cache TAG physical tag field
+      OR Error in Secondary Cache TAG Virtual Address field
+	 Address 0x%08x\nSecondary TAG Data 0x%08x
+	 Expected Cache State:  0x%x = [STATE]
+
+STATE is one of the decoded cache states: Invalid, Clean Exclusive,
+Dirty Exclusive, Shared, and Dirty Shared.
+
+-----------------------------------------------------------------------------
+cache42 (sd_hitwbinv) - Secondary Hit Writeback Invalidate Test
+
+This test verifies the Hit Writeback Invalidate Cache operation.
+It verifies that the data can be written back from the Secondary
+or in the case where the primary data is more current that the
+data is written from the Primary to memory. Also checked is the
+fact that the cache lines are invalidated.
+
+Possible errors:
+
+010506e: Initialization error, unexpected Cache write through to memory
+	 addr = %x
+	 expected = %x, actual = %x, XOR %x
+	 Seconday TAG %x
+010506f: S-Cache TAG error after Hit Writeback Invalidate cacheo
+0105070: Data not written back from Scache to Memory after Hit Writeback Invalidate Cacheop
+	 addr = %x
+	 expected = %x, actual = %x, XOR %x
+	 Seconday TAG %x
+0105071: Initialization error, unexpected Cache write through to memory
+	 addr = %x
+	 expected = %x, actual = %x, XOR %x
+	 Seconday TAG %x
+0105072: S-Cache TAG error after Hit Writeback Invalidate cacheop, test case 2
+0105073: Error in Primary Cache TAG after a Hit Writeback Invalidate cacheop on the SCache
+	 addr %x
+	 Expected cache state: Invalid
+	 Primary Data TAG %x
+0105074: Data not written back from D-Cache to Memory on a Hit Writeback Invalidate on the S-Cache
+	 addr = %x
+	 expected = %x, actual = %x, XOR %x
+	 Seconday TAG %x
+	 Primary Data TAG %x
+
+For errors 010506f and 0105072, the following additional information
+are provided:
+	 Error in Secondary Cache TAG State field
+      OR Error in Secondary Cache TAG physical tag field
+      OR Error in Secondary Cache TAG Virtual Address field
+	 Address 0x%08x\nSecondary TAG Data 0x%08x
+	 Expected Cache State:  0x%x = [STATE]
+
+STATE is one of the decoded cache states: Invalid, Clean Exclusive,
+Dirty Exclusive, Shared, and Dirty Shared.
+
+-----------------------------------------------------------------------------
+cache43 (cluster) - Secondary Cluster Test
+
+
+Possible errors:
+
+0105075: SCache data incorrectly written to memory during a dirty writeback operation
+	 1st mem block
+	 Mem Address 0x%08x
+	 Expected 0x%08x, Actual 0x%08x, XOR 0x%08x
+0105076: SCache data incorrectly written to memory during a dirty writeback operation
+	 2nd mem block
+	 Mem Address 0x%08x
+	 Expected 0x%08x, Actual 0x%08x, XOR 0x%08x
+
+-----------------------------------------------------------------------------
+cache44 (clusterwb) - Secondary Cluster Writeback Test
+
+
+Possible errors:
+
+0105077: SCache data incorrectly written to memory during a dirty writeback operation on 1st block
+	 Mem Address 0x%08x
+	 Expected 0x%08x, Actual 0x%08x, XOR 0x%08x
+0105078: SCache data incorrectly written to memory during a dirty writeback operation on 2nd block
+	 Mem Address 0x%08x
+	 Expected 0x%08x, Actual 0x%08x, XOR 0x%08x
+0105079: SCache data incorrectly written to memory during a dirty writeback operatio on 3rd block
+	 Mem Address 0x%08x
+	 Expected 0x%08x, Actual 0x%08x, XOR 0x%08x
+
+-----------------------------------------------------------------------------
+cache45 (hammer_pdcache) - stress primary D-cache--runs icached
+
+
+Possible error:
+
+010407b: Primary cache stress error at addr : 0x%x Expected 0x%x Got 0x%x
+
+-----------------------------------------------------------------------------
+cache46 (hammer_scache) - stress secondary cache--runs icached
+
+
+Possible error:
+
+010507c: Secondary cache stress error at addr : 0x%x Expected 0x%x Got 0x%x
+
+-----------------------------------------------------------------------------
+cache47 (cache_stress) - cache stress test
+
+Write/read to one word in every page through 0x80000000 space.
+
+Possible error:
+
+010507a: Secondary cache stress error at addr : 0x%x Expected 0x%x Got 0x%x
+
+-----------------------------------------------------------------------------
+cache48 (cache_states) - complete cache-state transitions test
+
+The abbreviation of the following cache states are to be used in the
+description of each cache state transition test:
+
+	CE	clean exclusive
+	DE	dirty exclusive
+	I	invalid
+
+cstate0 (RHH_CE_CE)
+-------------------
+Read hit primary (CE) and 2nd (CE). Check that the value is
+correct (the physmem addr) and that both tags are still CE.
+
+cstate1 (RHH_DE_DE)
+-------------------
+Read hit primary (DE) and 2nd (DE). Check value and that both are
+still DE.
+
+cstate2 (WHH_CE_CE)
+-------------------
+Write hit primary (CE) and 2nd (CE). Check that 2nd and memory
+still have old value and that both cache lines are now DE.
+
+cstate3 (WHH_DE_DE)
+-------------------
+Write hit primary (DE) and 2nd (DE). Check that 2nd and memory
+still have old value and that both lines are still DE.
+
+cstate4 (RMH_I_CE)
+------------------
+Read miss primary (I) and hit 2nd (CE). Check that 2nd and memory
+still have old value and that both lines are CE.
+
+cstate5 (RMH_I_DE)
+------------------
+Read miss primary (I) and hit 2nd (DE). Check that 2nd and memory
+still have old value and that both lines are DE.
+
+cstate6 (RMH_CE_CE)
+-------------------
+Read miss primary (CE) and hit 2nd (CE). Check that 2nd and memory
+still have old value and that both lines are still CE.
+
+cstate7 (RMH_DE_DE)
+-------------------
+Read miss primary (DE) and hit 2nd (DE). Check that 2nd and memory
+still have old value and that both lines are still CE.
+
+cstate8 (WMH_I_CE)
+------------------
+Write miss primary (I) and hit 2nd (CE). Check that 2nd and memory
+still have old value and that both lines are DE.
+
+cstate9 (WMH_I_DE)
+------------------
+Write miss primary (I) and hit 2nd (DE). Check that 2nd and memory
+still have old value and that both lines are DE.
+
+cstate10 (WMH_CE_CE)
+--------------------
+Write miss primary (CE) and hit 2nd (CE).
+
+cstate11 (WMH_DE_DE)
+--------------------
+Write miss primary (DE) and hit 2nd (DE).
+
+cstate12 (RMM_I_I)
+------------------
+Read miss primary (I) and 2nd (I). Check that value is correct,
+that 2nd and memory still have old value and that both lines are CE.
+
+cstate13 (RMM_I_CE)
+-------------------
+Read miss primary (I) and miss 2nd (CE). Check that value is
+correct, that 2nd and memory still have old value and that both lines are CE.
+
+cstate14 (RMM_I_DE)
+-------------------
+Read miss primary (I) and miss 2nd (DE). Check that 2ndary line
+matches memory, that both tags are CE, that the addr tags on both lines
+are correct, and that the dirty altaddr secondary line was flushed to memory.
+
+cstate15 (RMM_CE_CE)
+--------------------
+Read miss primary (CE) and miss 2nd (CE). Fill cache lines with
+a word from physaddr+2ndcachesize; do a read, then check that the tags for
+both lines are CE and have the correct phys addrs, and that the alternate
+memory word hasn't changed ###.
+
+cstate16 (RMM_DE_DE)
+--------------------
+Read miss primary (DE) and miss 2nd (DE). Fill cache lines with
+a word from physaddr+2ndcachesize; do a read, then check that the tags for
+both lines are now CE and have the correct phys addrs, and that the alternate
+memory word was written when the altaddr line was flushed.
+
+cstate17 (WMM_I_I)
+------------------
+Write miss primary (I) and 2nd (I). Check that 2ndary line matches
+memory, that both tags are DE, and that the addr tags on both lines are
+correct.
+
+cstate18 (WMM_I_CE)
+-------------------
+Write miss primary (I) and miss 2nd (CE). Check that 2ndary line
+matches memory, that both tags are DE, and that the addr tags on both lines
+are correct.
+
+cstate19 (WMM_I_DE)
+-------------------
+Write miss primary (I) and miss 2nd (DE). Check that 2ndary line
+matches memory, that both tags are DE, that the addr tags on both lines are
+correct, and that the dirty altaddr secondary line was flushed to memory.
+
+cstate20 (WMM_CE_CE)
+--------------------
+Write miss primary (CE) and miss 2nd (CE). Fill cache lines with
+a word from physaddr+2ndcachesize; do a store, then check that the tags for
+both lines are DE and have the correct phys addrs, and that the alternate
+memory word hasn't changed.
+
+cstate21 (WMM_DE_DE)
+--------------------
+Write miss primary (DE) and miss 2nd (DE). Check that 2ndary line
+matches memory, that both tags are DE, that the addr tags on both lines are
+correct, and that the dirty altaddr primary and secondary lines were flushed
+to memory.
+
+
+Possible errors:
+
+010707d: RHH_CE_CE : physaddr 0x%x contents incorrect (0x%x)
+010707e: RHH_DE_DE : physaddr 0x%x contents incorrect (0x%x)
+010707f: RMH_I_CE : physaddr 0x%x contents incorrect (0x%x)
+0107080: RMH_I_DE : physaddr 0x%x contents incorrect (0x%x)
+0107081: RMH_CE_CE : physaddr 0x%x contents incorrect (0x%x)
+0107082: RMH_DE_DE : physaddr 0x%x contents incorrect (0x%x)
+0107083: RMM_I_I : physaddr 0x%x contents incorrect (0x%x)
+0107084: RMM_I_CE : physaddr 0x%x contents incorrect (0x%x)
+0107085: RMM_I_DE : physaddr 0x%x contents incorrect (0x%x)
+0107086: PRIMARYD cache state error at addr 0x%x : Expected 0x%x Got 0x%x
+     OR  PRIMARYI cache state error at addr 0x%x : Expected 0x%x Got 0x%x
+     OR  SECONDAR cache state error at addr 0x%x : Expected 0x%x Got 0x%x
+0107087: PRIMARYD addr error at slot 0x%x : Expected 0x%x Got 0x%x
+     OR  PRIMARYI addr error at slot 0x%x : Expected 0x%x Got 0x%x
+     OR  SECONDARY addr error at slot 0x%x : Expected 0x%x Got 0x%x
+0107088: Mem value error at addr 0x%x : Expected 0x%x Got 0x%
+0107089: Writeback missed 2ndary level cache at addr 0x%x
+010708a: 2ndary cache value error at addr 0x%x : Expected 0x%x Got 0x%x
+
+-----------------------------------------------------------------------------
+
+

@@ -1,0 +1,489 @@
+<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML//EN">
+<html version="2.0">
+  <head>
+    <title>Assigning IP Addresses to FFSCs</title>
+  </head>
+
+  <body
+    alink="#cc3232"
+    vlink="#93db70"
+    link="#ffff00"
+    bgcolor="#42426f"
+    text="#ffffff">
+
+      <h1 align="center">Assigning IP Addresses to FFSC's</h1>
+
+      <h3 align="center">
+	Rob Bradshaw<br>
+	Version 1.4
+      </h3>
+
+      <h3>Problem</h3>
+
+      <p>
+	The FFSC's in a multi-rack lego system are connected to each
+	other by a private ethernet.
+
+	VxWorks, the real time OS that runs on the FFSC, has support
+	for networking, but mainly at the IP level.
+
+	This implies that unique IP addresses need to be assigned to
+	each FFSC before the FFSC's can talk to each other.
+
+	While an SE or system administrator could in theory plug a
+	console into each FFSC and assign an IP address manually, this
+	is cumbersome and prone to errors.
+
+	Furthermore, because this private ethernet isn't really an
+	externally visible feature of the machine, it is likely to
+	cause a fair amount of confusion and resistance.
+
+	Therefore, the FFSC's in a lego system need to negotiate and
+	assign addresses among themselves, without intervention from
+	users.
+      </p>
+
+      <h3>Assumptions</h3>
+
+      <ul>
+	<li>
+	  All FFSC's in a complex are connected to each other on a
+	  <em>private</em> ethernet.
+
+	  This implies that an arbitrary network address can be used.
+	</li>
+
+      <p>
+
+	<li>
+	  The FFSC has easy access to some sort of world-unique
+	  identifier, such as a MAC address, serial number, etc.
+	</li>
+
+      <p>
+
+	<li>
+	  It is possible to send and receive raw ethernet packets
+	  across an FFSC network interface before an IP address has
+	  been assigned to it.
+	</li>
+
+      <p>
+
+	<li>
+	  Messages sent across the ethernet are received
+	  &quot;simultaneously&quot; by all FFSC's, within some
+	  reasonable tolerance.
+
+	  This implies no WAN repeaters, SLIP connections, or other
+	  slow links in the private ethernet.
+	</li>
+
+      <p>
+
+	<li>
+	  The FFSC has no way of determining if a display is attached
+	  to it, so there is <I>no</I> trivial mechanism for
+	  identifying a &quot;master&quot; FFSC.
+
+	  It is therefore necessary to elect a master FFSC.
+	</li>
+
+      </ul>
+
+
+      <h3>Proposal</h3>
+
+      <p>
+	During initialization, each FFSC will start an &quot;address
+	daemon&quot; task that sends and receives several types of
+	messages:
+      </p>
+
+      <dl>
+
+	<dt>IDENTITY</dt>
+	<dd>
+	  Sent by an individual FFSC to describe the various
+	  identifiers associated with it.
+
+	  These identifiers include:
+
+	  <p>
+
+	  <ul>
+	    <li>
+	      A world-unique ID (serial number/MAC address/etc.)
+	    </li>
+
+	    <li>
+	      A rack ID (a small, user-friendly number to identify an
+	      individual rack in the system - it's origin is TBD)
+	    </li>
+
+	    <li>
+	      IP address (initially generated as a function of the
+	      unique ID)
+	    </li>
+	  </ul>
+	</dd>
+
+      <p>
+
+	<dt>QUERY</dt>
+	<dd>
+	  This message is identical to an IDENTITY message, except
+	  that it also asks the receiver to identify itself, typically
+	  by broadcasting an IDENTITY message.
+	  </dd>
+
+      <p>
+
+	<dt>ASSIGN</dt>
+	<dd>
+	  Assigns a new set of identifiers to an FFSC.
+
+<BIG>
+	  This is generally done by the &quot;master FFSC&quot; (see
+	  below) when it has detected two or more FFSC's that are
+	  using the same identifier.  In this case, it will
+	  arbitrarily reassign addresses to avoid conflicts.
+</BIG>
+	</dd>
+
+      <p>
+
+<BIG>
+	<dt>REQUEST_RACKID</dt>
+	<dd>
+	  This message is used when an FFSC is requesting a specific
+	  rack ID, presumably to satisfy a user request.
+
+	  It is treated the same as an IDENTITY message except that
+	  the master FFSC will always resolve rack ID conflicts in
+	  favor of the sender.
+	</dd>
+</BIG>
+
+      </dl>
+
+      <p>
+	All of these messages are sent as raw ethernet packets with a
+	fixed, non-standard protocol type, in order to distinguish
+	them from normal IP packets.
+
+	VxWorks has a mechanism for filtering incoming raw ethernet
+	packets.
+
+	When an ethernet packet with the special address negotiation
+	protocol is detected, it will be sent to the address daemon
+	rather than the normal networking code via a named pipe.
+
+	(Note that VxWorks does indeed allow writing to named pipes
+	from interrupt services routines.)
+      </p>
+
+      <hr>
+
+      <p>
+	The general operation of the address daemon is as follows:
+      </p>
+
+      <ol>
+
+	<li>
+	  Set up initial addresses for the FFSC.
+
+	  If the FFSC has NVRAM available to it, then the initial
+	  addresses could be obtained from there.
+
+	  Otherwise, generate addresses as follows:
+
+	  <p>
+
+	  <dl>
+
+	    <dt>Unique ID</dt>
+	    <dd>
+	      Always taken from the MAC address of the ethernet
+	      device.
+
+	      This address is never subject to change.
+	    </dd>
+
+	  <p>
+
+	    <dt>IP Address</dt>
+	    <dd>
+	      Use some fixed class-A network address for the network
+	      portion, and some 24-bit value hashed from the unique ID
+	      for the host portion.
+	    </dd>
+
+	  <p>
+
+	    <dt>Rack ID</dt>
+	    <dd>
+	      &quot;Unassigned&quot;
+	    </dd>
+
+	  </dl>
+
+	  <p>
+	    Note that as long as no new modules are added to the
+	    system, each module should end up with the same addresses
+	    upon power-on that it had after successfully completing
+	    address negotiation the first time it was added to the
+	    system.
+
+	    This should be helpful during debugging.
+
+	    However, addresses are subject to change at the address
+	    daemon's whim and so should not be relied upon in general.
+	  </p>
+	</li>
+
+      <p>
+
+	<li>
+	  Send out a &quot;QUERY&quot; message containing the current
+	  proposed addresses.
+
+	  Any other FFSC's should then respond with their own IDENTITY
+	  messages.
+	</li>
+
+      <p>
+
+	<li>
+	  Process any incoming &quot;FFSC Address Daemon&quot;
+	  messages:
+
+	  <p>
+
+	  <dl>
+
+	    <dt>IDENTITY</dt>
+	    <dd>
+	      Save the information in the message for future
+	      reference.
+
+	      Note that the message may supersede a previous IDENTITY
+	      message for the same unique ID.
+
+	      If an IDENTITY message is received by an address daemon
+	      that contains its own unique ID, then something is
+	      terribly wrong; print appropriate error messages.
+
+	      The &quot;master FFSC&quot; (see below) may do
+	      additional work.
+	    </dd>
+
+	  <p>
+
+	    <dt>QUERY</dt>
+	    <dd>
+	      Same processing as for IDENTITY messages, then send out an
+	      IDENTITY message for the local FFSC.
+
+	      Set a timer for some fixed period of time; when the
+	      timer goes off, examine the list of known FFSC's and do
+	      the following:
+
+	      <p>
+
+	      <ul>
+		<li>
+		  If an FFSC has not responded with an IDENTITY
+		  message since the last QUERY message was received,
+		  remove it from the list.
+		</li>
+
+	      <p>
+
+		<li>
+		  The FFSC with the lowest unique ID in the list is
+		  designated the &quot;master FFSC&quot;.
+		</li>
+	      </ul>
+
+	    </dd>
+
+	  <p>
+
+	    <dt>ASSIGN</dt>
+	    <dd>
+	      If the message specifies a different unique ID than the
+	      one belonging to the local FFSC, the message is ignored.
+
+	      Otherwise, reset the identifiers associated with the
+	      local FFSC to the values specified in the message.
+
+	      If NVRAM is available, the new identifiers should be
+	      stored there as well.
+
+	      Once everything has been changed, send out an IDENTITY
+	      message with the updated identifiers.
+	    </dd>
+	  </dl>
+
+	</li>
+
+      </ol>
+
+      <hr>
+
+      <h4>The Master FFSC</h4>
+
+      <p>
+	One FFSC in a configuration is designated the &quot;master
+	FFSC&quot;.
+
+	In addition to the usual responsibilities, the master FFSC is
+	responsible for resolving conflicting identifiers.
+
+	If it sees two IDENTITY messages that have different unique
+	IDs but match on some other identifier (e.g. IP address, rack
+	ID) it arbitrarily selects one of the two unique IDs and
+	updates the conflicting identifier(s) as follows:
+      </p>
+
+      <dl>
+
+	<dt>IP address</dt>
+	<dd>
+	  Select some other random IP address that is not currently in
+	  use by another FFSC.
+	</dd>
+
+      <p>
+
+	<dt>Rack ID</dt>
+	<dd>
+	  Print an appropriate error message, then reset the rack ID
+	  to &quot;UNASSIGNED&quot;.
+
+	  (The general issue of dealing with FFSC's that have
+	  unassigned rack ID's is TBD.)
+	</dd>
+
+      </dl>
+
+      <p>
+	It then sends out an ASSIGN message with the updated information.
+      </p>
+
+      <p>
+	The selection of a master FFSC is done shortly after a QUERY message
+	has been sent by any address daemon.
+
+	The following steps are performed on receipt of a QUERY message:
+      </p>
+
+      <ul>
+
+	<li>
+	  A timestamp is obtained, which will be used later for
+	  determining stale identity table entries.
+	</li>
+
+      <p>
+
+	<li>
+	  The address daemon sets a timer for some fairly short period
+	  of time (a second or two).
+	</li>
+
+      <p>
+
+	<li>
+	  If a QUERY or IDENTITY message is received before the timer
+	  has gone off, the timer is restarted with the original
+	  value.
+
+	  As a result, the timer should not go off until no QUERY
+	  <I>or</I> IDENTITY messages have been received for the
+	  selected period of time.
+	</li>
+
+      <p>
+
+	<li>
+	  When the timer finally goes off, the table of identity
+	  information is examined.
+
+	  Any entries that were received prior to the timestamp that
+	  was taken when the last QUERY message was encountered are
+	  discarded.
+
+	  The remaining entry with the lowest unique ID is deemed the
+	  master FFSC.
+	</li>
+
+      </ul>
+
+      <p>
+	It is assumed that all FFSC's will successfully receive all
+	QUERY and IDENTITY messages that are broadcast, so each FFSC
+	will reach the same conclusion as to the identity of the
+	master FFSC.
+
+	It may be necessary to revisit this problem if that turns out
+	to be a bad assumption.
+      </p>
+
+      <hr>
+
+      <p>
+	It is possible or even likely that an FFSC may not be powered
+	up or initialized when other FFSC's broadcast their initial
+	QUERY or IDENTITY messages, and so may miss some of them.
+
+	Any FFSC can cause all of the other FFSC's to rebroadcast
+	IDENTITY messages by simply broadcasting a QUERY message.
+
+	This should probably be done routinely by the master FFSC once
+	all of the FFSC's are likely to be powered up.
+
+	Since the FFSC's are powered separately from the rest of the
+	system, and presumably must all be powered on before the rest
+	of the system can be powered on, a user &quot;system power
+	up&quot; command might be a good time to do this.
+
+	It probably wouldn't hurt for the master FFSC to send out a
+	QUERY message every minute or so even during normal operation
+	in order to drop any FFSC's that have been powered off or
+	otherwise removed from service.
+      </p>
+
+      <p>
+	A user &quot;query addresses&quot; command might be useful as
+	well.
+
+	It should cause the broadcast of a QUERY message, then wait
+	until no IDENTITY messages have been received for some fixed
+	period of time.
+
+	At that point, it should be safe for it to dump out the
+	contents of the local identity table.
+      </p>
+
+      <hr>
+
+      <p>
+	<a href="index.html">up a level</a>
+      </p>
+
+      <p>
+      <address>
+	Send questions and comments to:
+	<a href="mailto:rdb@uniscan.engr.sgi.com">Rob Bradshaw</a>
+      </address>
+      </p>
+
+<!-- hhmts start -->
+Last modified: Sat Sep  7 14:40:47 PDT 
+<!-- hhmts end -->
+
+  </body>
+</html>

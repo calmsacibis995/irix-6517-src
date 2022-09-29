@@ -1,0 +1,389 @@
+# Tests of DL_DISCONNECT_REQ, DL_DISCONNECT_IND
+# Tested:
+#  DL_DISCONNECT_REQ:
+#	1) Disconnect a stream in state DL_DATAXFER
+#	2) Error conditions:
+#	    DL_OUTSTATE
+#	    DL_BADCORR (non-zero correlation value passed when trying to
+#	      disconnect a stream in state DL_DATAXFER)
+#	3) Reject an incoming DL_CONNECT_IND (in state DL_INCON_PENDING)
+#		end state should be DL_IDLE
+#	4) Error condition:  When trying to reject an incoming DL_CONNECT_IND,
+#	    pass a bad correlation value
+#	5) Reject a DL_CONNECT_IND when there are multiple connect ind's
+#	    outstanding (state DL_INCON_PENDING, outcount > 1)
+#	    end state should still be DL_INCON_PENDING
+#	6) Cancel a previous DL_CONNECT_REQ (in state DL_OUTCON_PENDING)
+#	7) Receive a DL_DISCONNECT_IND when there are multiple connect ind's
+#	    outstanding (state DL_INCON_PENDING, outcount > 1)
+#	    end state should still be DL_INCON_PENDING
+#	8) Send a CONNECT_REQ to a non-existent SAP.  After ACK timer expires
+#	    N2 times, should receive a DL_DISCONNECT_IND.
+#	9) Two streams in DL_DATAXFER mode.  Close one of the streams,
+#	    then try to send data on the second stream.  The second stream
+#	    should see a DL_DISCONNECT_IND after the reset sequence fails.
+
+
+###### Test case #1 ######
+# Open listen stream
+open 1
+attach $1 43
+bind $1 48 2 2 0 1
+
+# Open connecting stream
+open 2
+attach $2 43
+bind $2 40 2 0 0 1
+
+connect $2 0:0:0:0:0:0,48 0
+
+# Should see an event on the listen stream (3)
+poll $1 $2 $1
+
+# Receive the incoming call
+connect_ind $1 1 -
+
+# Should see an event on the connecting stream (4)
+poll $1 $2 $2
+
+# Receive the connect confirmation
+connect_con $2
+
+poll $1 $2 0
+
+# Send data from fd $1 to fd $2
+send_data $1 '1 2 3 4 5'
+
+# Should see an event on the receiving stream
+poll $1 $2 $2
+recv_data $2 '1 2 3 4 5'
+
+# Now disconnect the stream
+disconnect $1 0
+
+poll $1 $2 $2
+
+disconnect_ind $2 0
+
+# Both streams should be in state DL_IDLE after the disconnect.
+check_state $1 dl_idle
+check_state $2 dl_idle
+
+close $1
+close $2
+
+
+###### Test case #2 ######
+open 1
+# Try to disconnect when in state DL_UNATTACHED
+disconnect $1 0			dl_error_ack dl_outstate
+
+attach $1 43
+# Try to disconnect when in state DL_UNBOUND
+disconnect $1 0			dl_error_ack dl_outstate
+
+bind $1 48 2 2 0 1
+
+# Open connecting stream
+open 2
+attach $2 43
+bind $2 40 2 0 0 1
+
+connect $2 0:0:0:0:0:0,48 0
+
+# Should see an event on the listen stream (3)
+poll $1 $2 $1
+
+# Receive the incoming call
+connect_ind $1 1 -
+
+# Should see an event on the connecting stream (4)
+poll $1 $2 $2
+
+# Receive the connect confirmation
+connect_con $2
+
+check_state $2 dl_dataxfer
+
+# Now try to pass a non-zero correlation value in the DL_DISCONNECT_REQ
+disconnect $2 $2		dl_error_ack dl_badcorr
+
+close $1
+close $2
+
+
+###### Test case #3 ######
+# Open listen stream
+open 1
+attach $1 43
+bind $1 48 2 2 0 1
+
+# Open connecting stream
+open 2
+attach $2 43
+bind $2 40 2 0 0 1
+
+connect $2 0:0:0:0:0:0,48 0
+
+# Should see an event on the listen stream (3)
+poll $1 $2 $1
+
+# Receive the incoming call
+connect_ind $1 0 corr3
+
+check_state $1 dl_incon_pending
+
+# Reply to the incoming call with disconnect
+disconnect $1 $corr3
+
+# Stream should be back in state DL_IDLE after the disconnect
+check_state $1 dl_idle
+
+poll $1 $2 $2
+
+disconnect_ind $2 0
+
+close $1
+close $2
+
+
+###### Test case #4 ######
+# Open listen stream
+open 1
+attach $1 43
+bind $1 48 2 2 0 1
+
+# Open connecting stream
+open 2
+attach $2 43
+bind $2 40 2 0 0 1
+
+connect $2 0:0:0:0:0:0,48 0
+
+# Should see an event on the listen stream (3)
+poll $1 $2 $1
+
+# Receive the incoming call
+connect_ind $1 0 corr3
+
+# Reply to the incoming call with disconnect, but with a bad correlation value
+disconnect $1 0			dl_error_ack dl_badcorr
+
+check_state $1 dl_incon_pending
+
+# Do the disconnect correctly this time
+disconnect $1 $corr3
+
+poll $1 $2 $2
+
+disconnect_ind $2 0
+
+close $1
+close $2
+
+
+###### Test case #5 ######
+# Open listen stream
+open 1
+attach $1 43
+bind $1 48 2 2 0 1
+
+# Open connecting stream #1
+open 2
+attach $2 43
+bind $2 40 2 0 0 1
+connect $2 0:0:0:0:0:0,48 0
+
+# Open connecting stream #2
+open 3
+attach $3 43
+bind $3 42 2 0 0 1
+connect $3 0:0:0:0:0:0,48 0
+
+# Should see an event on the listen stream (3)
+poll $1 $3 $1
+
+# Receive incoming call #1
+connect_ind $1 0 corr1
+
+check_state $1 dl_incon_pending
+
+poll $1 $3 $1
+
+# Receive incoming call #2
+connect_ind $1 0 corr2
+
+# Reply to incoming call #1 with disconnect
+disconnect $1 $corr1
+
+# Listen stream should still be in state DL_INCON_PENDING after the disconnect
+check_state $1 dl_incon_pending
+
+poll $1 $3 $2
+
+# Receive the DL_DISCONNECT_IND on connecting stream #1
+disconnect_ind $2 0
+
+check_state $2 dl_idle
+
+# Accept call #2
+connect_res $1 $corr2 0
+
+poll $1 $3 $3
+
+connect_con $3
+
+check_state $1 dl_dataxfer
+check_state $3 dl_dataxfer
+
+close $1
+close $2
+close $3
+
+
+###### Test case #6 ######
+# Open listen stream
+open 1
+attach $1 43
+bind $1 48 2 2 0 1
+
+# Open connecting stream
+open 2
+attach $2 43
+bind $2 40 2 0 0 1
+
+connect $2 0:0:0:0:0:0,48 0
+
+# Should see an event on the listen stream (3)
+poll $1 $2 $1
+
+# Receive the incoming call
+connect_ind $1 0 corr3
+
+# Now cancel the call
+disconnect $2 0
+
+poll $1 $2 $1
+
+# Remote end should see a DL_DISCONNECT_IND, w/ the same correlation #
+# as was in the earlier DL_CONNECT_IND
+disconnect_ind $1 $corr3
+
+close $1
+close $2
+
+
+###### Test case #7 ######
+# Open listen stream
+open 1
+attach $1 43
+bind $1 48 2 2 0 1
+
+# Open connecting stream #1
+open 2
+attach $2 43
+bind $2 40 2 0 0 1
+connect $2 0:0:0:0:0:0,48 0
+
+# Open connecting stream #2
+open 3
+attach $3 43
+bind $3 42 2 0 0 1
+connect $3 0:0:0:0:0:0,48 0
+
+# Should see an event on the listen stream (3)
+poll $1 $3 $1
+
+# Receive incoming call #1
+connect_ind $1 0 corr1
+
+check_state $1 dl_incon_pending
+
+poll $1 $3 $1
+
+# Receive incoming call #2
+connect_ind $1 0 corr2
+
+check_state $1 dl_incon_pending
+
+# Now cancel incoming call #1
+disconnect $2 0
+
+poll $1 $3 $1
+
+disconnect_ind $1 $corr1
+
+# After one of the incoming calls has been cancelled, the listen stream
+# should still be in state DL_INCON_PENDING
+check_state $1 dl_incon_pending
+
+# Now cancel incoming call #2
+disconnect $3 0
+
+poll $1 $3 $1
+
+disconnect_ind $1 $corr2
+
+# Now the listen stream should be back in state DL_IDLE
+check_state $1 dl_idle
+
+check_state $2 dl_idle
+check_state $3 dl_idle
+
+close $1
+close $2
+close $3
+
+
+###### Test case #8 ######
+open 1
+attach $1 43
+bind $1 40 2 0 0 1
+
+# Attempt to connect to an unbound SAP.
+connect $1 0:0:0:0:0:0,48 0
+
+# When the ACK timer expires, a DL_DISCONNECT_IND message should be
+# sent upstream.
+disconnect_ind $1 0
+
+close $1
+
+
+###### Test case #9 ######
+# Open listen stream
+open 1
+attach $1 43
+bind $1 48 2 2 0 1
+
+# Open connecting stream
+open 2
+attach $2 43
+bind $2 40 2 0 0 1
+
+connect $2 0:0:0:0:0:0,48 0
+
+# Should see an event on the listen stream (3)
+poll $1 $2 $1
+
+# Receive the incoming call
+connect_ind $1 1 -
+
+# Should see an event on the connecting stream (4)
+poll $1 $2 $2
+
+# Receive the connect confirmation
+connect_con $2
+
+poll $1 $2 0
+
+close $2
+
+send_data $1 '1 2 3 4 5 6 7 8'
+
+# Now that the remote end is disconnected, a reset sequence will be initiated
+# for stream #3.  After the remote end does not respond after N2 tries,
+# should see a DL_DISCONNECT_IND
+disconnect_ind $1 0
+
+close $1

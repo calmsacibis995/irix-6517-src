@@ -1,0 +1,209 @@
+<html>
+<head>
+<title>notes on oview_layout</title>
+</head>
+<body>
+<h1>notes on oview_layout</h1>
+
+<h2>algorithms</h2>
+
+<p> the basic strategy is:
+<br>while (unbound routers) 
+ <ul>
+<li> pick the most-connected router (top_router())
+<li> put it in the best place (top/new/choose_vertex())
+</ul>
+ ie, oview_layout currently makes two kinds of decisions
+ <ul>
+<li> which router to place next
+<li> where to place the router
+</ul>
+ both of these stages need some work.
+
+<p> the choice of the next router to place (top_router) may need a
+little tweaking, but the main problem lies in the area of placement.
+
+<h3>large number of routers</h3>
+
+<p> oview_layout doesn't cope well with large numbers of routers.
+ there seem to be two interrelated factors here:
+<ul>
+<li> the topology is no longer homogeneous (meta-routers vs routers)
+<li> decisions need to take into account non-local topology
+</ul>
+
+<h3>most connected router</h3>
+
+<p>the most-connected router is currently chosen on the basis of
+<ul>
+<li>number of direct links to bound routers
+<li>number of 1-distant links to bound routers
+<li>total number of links to this router
+<li>whether or not it has nodes
+</ul>
+
+<h3>best point</h3>
+
+<h4>old vert</h4>
+
+<p> OLD_VERT has a fixed set of verticies, and tries seeding the
+algorithm with the top_router() bound to each vertex in turn.  the
+least-cost solution is then used.  OLD_VERT maintains information
+about its fixed set of verticies and their relationships with each
+other, which is used in deciding which vertex to bind to next
+(top_vertex()). 
+
+<p>OLD_VERT is ok for small numbers of routers, but:
+<ul>
+ <li>it is easy to be forced into bad corners, which is why we need to
+cycle at least the first router through all possible starting
+positions, and even this is not enough in some situations.
+ <li>larger configurations with more variable and complex
+possibilities just don't lend themselves to this set-position approach
+</ul>
+
+<h4>new vert</h4>
+
+<p> the NEW_VERT algorithm (new_vertex()) creates a vertex whenever it
+is needed.  it looks at all verticies 1-distant from those already
+used, evaluates the cost of placing the top_router there (eval_pos()),
+and chooses the cheapest.  a free vertex 1-distant from more than one
+router will be evaluated more than once (BUG).
+
+<p>NEW_VERT is ok for small numbers of routers, but:
+<ul>
+ <li>equal-cost vertex placements may force us into bad corners, and
+it is hard to determine a heuristic which will allow us to
+discriminate between these currently equal-cost decisions
+ </ul>
+
+<h4>backtrack</h4>
+
+<p> there are points in NEW_VERT at which one of a number of
+equal-cost solutions is chosen essentially at random.  this may happen
+in top_router() and in new_vertex().  in top_router(), the equal-cost
+choices are essentially equal-cost, however in new_vertex(),
+equal-cost placements will have different cost ramifications for
+subsequent placements -- our cost function isn't good enough.
+
+<p> the BACKTRACK algorithm (descend() / choose_vertex()) is based on
+NEW_VERT, but branches at each vertex placement where there is more
+than one equal-cost solution.  it backs out as soon as the cost is
+greater than the best-cost so far.  the assumption here (valid?) is
+that a better-cost choice at any stage will lead to a better-cost
+solution.  if this ain't true, we have to exhaustively search the
+solution space.  it does badly enough already: it is O(x^N), where N
+is (about) the number of routers, and speed rapidly declines after
+about N==10.
+
+<p> BACKTRACK ignores the CLING_COC hint.
+
+<p>BACKTRACK is ok for small numbers of routers, but:
+<ul>
+ <li>its exponential behaviour probably make it untenable,
+ even with far more efficient evaluations, for large numbers of routers
+ </ul>
+
+<h4>cost function</h4>
+
+<p> different cost functions (penalise()) can be chosen for
+NEW_VERT/BACKTRACK using the -V option, making the addition of
+different kinds of links more or less costly.
+
+<p> OLD_VERT uses the config_cost() function, a sum of squares of
+distances (ie we don't sqrt() things).
+
+<h4>secondary cost</h4>
+
+<p> a secondary cost function (CLING_COC) invoked in eval_pos() for
+NEW_VERT makes the penalty slightly greater for verticies further away
+from the "centre of connectedness" -- the average position of all the
+bound routers that <em>the unbound routers the router is connected
+to</em> are connected to.  this seems to improve choices, but it is
+unclear whether it is a uniformly benificial heuristic.  for want of
+something better, we use it.
+
+<h3>suggested approach</h3>
+
+<p> the current approach works well for small numbers of routers.  the
+suggested approach is to alternate between the placement of routers,
+and the placement of meta-routers, and to proceed on a
+subset-by-subset basis.  the routers are broken up into local
+'networks' interconnected by meta-routers.  each collection of routers
+or metarouters tends to be a cube.
+ <ul>
+
+<li> we start by placing (non-meta) routers as per NEW_VERT
+
+<li> when there are no more routers connected to those already bound,
+we use the placement of the routers to force the placement of the
+(cube of) meta-routers. this requires new placement heuristics
+
+<li> once no more meta-routers can be connected, we return to the
+placement of routers, however we continue to use the new placement
+heuristics, attacking one 'cube' subset of the routers at a time
+</ul>
+
+this algorithm essentially partitions our placement problem, making it
+tractable.  the issue of missing/inactive (meta/normal) routers may
+complicate things, but shouldn't detract from the basic approach.
+
+<h2>representation</h2>
+
+<h3>desirable layout / representation</h3>
+
+<h4>moderately large</h4>
+
+<p>we consider here the 6-metarouter case (with say 128 cpus) (try
+oview -c 128ortho2.topology, and oview -c 192ortho2.topology).  the
+128 cpu topology seems to be the limit of the current approach -- the
+192 cpu layout works spatially (we can do it), but is simply
+appallingly cluttered.
+
+<p> given the need for many extended links which will lead to
+increased clutter, some minor representational changes should be made,
+even if this is only to turn the link tubes into lines... this will
+also improve rendering speed.  the intersection of these extended
+links should still be avoided, although the 192 cpu layout may force
+us to use some.
+
+<p>we are assuming that the basic heuristic currently being used for
+layout is still valid for configurations of this size... ie we assume
+that the most closely packed layout is the best one.
+
+<h4>truly large</h4>
+
+<p>for truly large numbers of routers (in systems with >6
+metarouters), a different representation and layout is almost
+certainly needed, possibly allowing drill-down to the current model
+
+<p>some possibilities
+ <ul>
+
+<li> sprout the links: (this assumes we're able to draw these
+topologies with sensible links in the first place).  unsprouted, we
+could use simple lines, or show nothing at all.  showing nothing is
+probably not helpful, as we are then left with a mass of points
+(routers) in space, with nothing more.
+
+<li>draw each block of 8 routers as a 'cube'
+
+ <ul>
+<li> how to arrange these?
+
+<li> how to swap btwn this rep and our lower-level one?
+<li> can we use/select subsets? how?
+
+<li> what to modulate in this rep?
+<li> how to assign routers to cubes?
+<li> if (nrouters%8 != 0) ? how to arrange/represent partial cubes?
+</ul>
+
+<li> give up on representing the topology (flat plane a-la pmview)
+<li> show only subsets of topology:
+ <br> how to select subsets? can we change the subset once within
+oview? navigating a 'window' on the topology by selecting 'external'
+links, 'edge' routers, the centre router, a radius of connection, ...
+</ul>
+
+</body> </html>

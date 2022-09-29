@@ -1,0 +1,64 @@
+#!/bin/sh
+#
+# This script changes the nsswitch.conf file to have the same resolve
+# order as was previously in resolv.conf.
+#
+
+RESFILE="/etc/resolv.conf"
+if [ ! -r $RESFILE ] ; then
+	RESFILE="/usr/etc/resolv.conf"
+	if [ ! -r $RESFILE ] ; then
+		exit 0
+	fi
+fi
+
+ORDER=`sed -n '/^hostresorder/{
+	s/bind/dns/
+	s/local/files/
+	s/yp/nis/
+	s/\// /g
+	s/^hostresorder/hosts: /
+	p
+}' $RESFILE`
+
+if [ "#${ORDER}" != "#" ] ; then
+	sed 's/^hostresorder/#hostresorder/' $RESFILE > ${RESFILE}.$$
+	mv $RESFILE ${RESFILE}.O
+	mv ${RESFILE}.$$ $RESFILE
+
+	sed "/^hosts:/{
+		s/^hosts/#hosts/
+		a\\
+${ORDER}
+	}" /etc/nsswitch.conf > /tmp/nsswitch.conf.$$
+	cp /etc/nsswitch.conf /etc/nsswitch.conf.O
+	mv /tmp/nsswitch.conf.$$ /etc/nsswitch.conf
+fi
+
+#
+# This will set a default nis server from the old 
+# /etc/config/ypbind.options file
+#
+
+if [ -f "/etc/config/ypbind.options" -a -f "/var/yp/ypdomain" ]; then
+	NISdomain=`cat /var/yp/ypdomain`;
+	
+	set -- `cat /etc/config/ypbind.options`;
+	while [ "$1" != "" ]; do
+	    case $1 in
+		-[svy]*) 
+		    shift;;
+		-T) 
+		    shift; 
+		    shift;;
+		*) 
+		    NISserver=$1 
+		    shift;;
+	    esac
+	done
+
+	if [ "$NISdomain" != "" -a "$NISserver" != "" -a ! -f "/var/yp/binding/$NISdomain/ypservers" ] ; then
+	    mkdir -p /var/yp/binding/$NISdomain 2>/dev/null
+	    echo "$NISserver" > /var/yp/binding/$NISdomain/ypservers 2>/dev/null
+	fi 
+fi

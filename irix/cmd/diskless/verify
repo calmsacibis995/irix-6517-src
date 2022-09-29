@@ -1,0 +1,351 @@
+#!/usr/bin/perl 
+#
+#
+# This will verify a *.dat script used in diskless installs
+#
+#	$Revision: 1.4 $
+#
+#
+
+require 5.003;			#Needs perl 5.003 or recent
+use Sys::Hostname;
+local (*in);
+local (*data);
+$done=1;
+
+sub atexit()
+{
+	print STDERR "\a\nFix $filename and rerun verify\n";
+	exit 1;
+}
+	
+sub usage()
+{
+	$option=$ARGV[0];
+	$filename=$ARGV[1];
+	if ((!$filename)||(scalar@ARGV != 2))
+	{
+		print STDERR "Usage: verify -[cs] filename\n";
+		exit 1;
+	}
+	if (($option ne "-c") && ($option ne "-s"))
+	{
+		print STDERR "Unknown option: $option\n";
+		print STDERR "Usage: verify -[cs] filename\n";
+		print STDERR "\t-c to check a client file\n";
+		print STDERR "\t-s to check a share file\n";
+		exit 1;
+	}
+	return;
+}
+
+# Assert usage!
+
+usage();
+
+# Get variables and check sanity.  Defined variables depend on the option
+# (-c for client -s for share)  The variables are stored in the associative 
+# array $in
+
+open (INFILE, $filename) || die "verify: Can't open $filename - $!\n";
+line:
+while (<INFILE>)
+{
+	chomp;
+	next line if /^#/;
+	next line if (!$_);
+	($key,$value)=split(/=/,$_,2);
+	
+	# Anything that is undefined should be equal to "" if not, die
+	
+	die "verify $option $filename: $key has no value " if (! $value);
+	$in{$key}=$value;
+	$in{$key}=~s/\"//g;
+	$in{$key}=~s/\s+//g;
+}
+close INFILE;
+
+if ($option eq "-s")
+{
+
+	# This means we are checking a share file!
+	
+	#check hostname
+	$host=hostname();
+	if ($in{HOSTNAME} ne $host)
+	{
+		print STDERR "HOSTNAME is not valid.  Should be $host not $in{HOSTNAME}\n";
+		atexit();
+	}
+	if ($in{SHAREHOST} ne "\$HOSTNAME")
+	{
+		print STDERR "SHAREHOST should always be \"\$HOSTNAME\"\n";
+		atexit();
+	}
+	if (($in{SERVER_NIS} ne "yes") && ($in{SERVER_NIS} ne "no"))
+	{
+		print STDERR "SERVER_NIS should either be \"yes\" or \"no\"\n";
+		atexit();
+	}
+	if ((!(-e $in{DISKLESS}))||(!(-d $in{DISKLESS})))
+	{
+		print STDERR "$in{DISKLESS} is not a directory or doesn't already exist\n";
+		atexit();
+	}
+	
+	if ((!defined $in{CPUBOARD}) && (!defined $in{GFXBOARD}) &&
+	   (!defined $in{CPUARCH}) && (!defined $in{VIDEO}))
+	{
+		#This means that we are installing for all platforms 
+		#but mode must be defined as 32bit or 64bit
+		
+		if (($in{MODE} ne "32bit") && ($in{MODE} ne "64bit"))
+		{
+			print STDERR "If you are trying to install for every\n";
+			print STDERR "platform you must specify mode to be 32bit\n";
+			print STDERR "or 64bit.  Otherwise, CPUBOARD, CPUARCH,\n";
+			print STDERR "GFXBOARD, VIDEO, and MODE must be specified.\n";
+			atexit();
+		}
+		exit 0;
+	}
+	
+	#Now here comes the hard part.  From now on things can be multiple.
+	#Lets grab all of the cpu options first and concentrate on the rest 
+	#later
+	
+	($key,$value)=split(/-m/,$in{CPUBOARD},2);
+	if ($key eq "")
+	{
+		print STDERR "There is no value for CPUBOARD\n";
+		atexit();
+	}	
+	$i=0;
+	while ($key)
+	{
+		open (IN, ".dl_classes") || die "Can't open .dl_classes: $!\n";
+		line1:while (<IN>)
+		{
+			chomp;
+			next line1 if /^#/;
+			next line1 if (!$_);
+			if (index($_,$key)>=0)
+			{
+				$_=~s/\s+/:/g;
+				($data[$i]{CPUBOARD}, $data[$i]{CPUARCH},					 	 $data[$i]{GFXBOARD}, $data[$i]{SUBGR},
+				 $data[$i]{VIDEO},
+				 $data[$i]{MODE}) = split(/:/,$_,6);
+				if ($data[$i]{VIDEO} eq "NULL")
+				{
+					$data[$i]{VIDEO} = "";
+				}
+				$i++;
+				$done=0;
+			}
+		}
+		close IN;
+		if ($done==1)
+		{
+			print STDERR "verify $filename: $key not supported";
+			print STDERR " in diskless environment\n";
+			atexit();
+		}
+		($key,$key1)=split(/=/,$value,2);
+		if ($key ne "CPUBOARD")
+		{
+			if ($key ne "")
+			{
+				print "There is an improper entry for CPUBOARD\n";
+				open (INFILE,$filename) || die "verify: Can't open $filename - $!\n";
+				grepline:while (<INFILE>)
+				{
+					chomp;
+					next grepline if (! (/$key/));
+					print ">>>$_\n";
+				}
+				close INFILE;
+				atexit();
+			}
+		}
+		($key,$value)=split(/-m/,$key1,2);
+	}	
+	
+	#  Now that the CPUBOARD is ok, lets get everything else
+	
+	foreach $item ("CPUARCH", "GFXBOARD", "VIDEO", "MODE")
+	{
+		$done=1;
+	
+		#Split the variable like you split everything else!!!
+		#But remember,GFXBOARD and SUBGR are on the same line
+		
+		($key,$value)=split(/-m/,$in{$item},2);
+		if ($key eq "")
+		{
+			print STDERR "There is no value for $item\n";
+			atexit();
+		}
+		if ($item eq "GFXBOARD")
+		{
+			#Then we need to get subgr too
+			
+			($key2,$x)=split(/=/,$value,2);
+			if ($key2 ne "SUBGR")
+			{
+				$key=$key2;
+				goto errorlabel;
+			}
+			($key2,$value)=split(/-m/,$x,2);
+		}
+		$i=0;
+		while ($key)
+		{
+			var:while ($i<scalar@data)
+        		{
+        	        	if ($key ne $data[$i]{$item})
+				{
+					$i++;
+					next var;
+				}
+				if ($item eq "GFXBOARD")
+				{
+					if ($key2 ne $data[$i]{SUBGR})
+					{
+						$i++;
+						next var;
+					}
+				}
+	                	$done=0;
+				last var;
+        		}
+	        	if ($done==1)
+        		{
+				if ($item ne "GFXBOARD")
+				{
+                			print STDERR "verify $filename: $item = $key not";
+					print STDERR " supported for the specified CPU(s)\n";
+				}
+				else
+				{
+					print STDERR "verify $filename: $item = $key , SUBGR = $key2 not";
+					print STDERR " supported for the specified CPU(s)\n";
+				}
+	                	atexit();
+        		}
+			($key,$key1)=split(/=/,$value,2);
+			if ($key ne $item)
+			{
+				if ($key ne "")
+				{
+					errorlabel:
+					print "$key!\n";
+					print STDERR "There is an improper entry for the specified CPU(s)\n";
+					open (INFILE,$filename) || die "verify: Can't open $filename - $!\n";
+					$i=0;
+					grepline2:while (<INFILE>)
+					{
+						chomp;
+						$i++;
+						next grepline2 if (! (/$key/));
+						print STDERR "$i:$_\n";
+					}
+					close INFILE;
+					atexit();
+				}
+			}
+			($key,$value)=split(/-m/,$key1,2);
+			$i=0;
+			$done=1;
+			if ($item eq "GFXBOARD" && $key) #Then we need to get subgr too
+			{
+				($key2,$x)=split(/=/,$value,2);
+				if ($key2 ne "SUBGR")
+				{
+					$key=$key2;
+					goto errorlabel;
+				}
+				($key2,$value)=split(/-m/,$x,2);
+			}
+		}
+	}	
+}
+
+# Now handle the -c option!
+
+if ($option eq "-c")
+{
+	# This means we are checking a client file!
+	
+	if ($in{CLROOT} ne "\$DISKLESS\/client\/\$HOST")
+	{
+		print STDERR "\$CLROOT should always be \"\$DISKLESS\/client\/\$HOST\"\n";
+		atexit();
+	}
+	if ($in{SWAP} ne "\$DISKLESS\/swap\/\$HOST")
+	{
+		print STDERR "\$SWAP should always be \$DISKLESS\/swap\/\$HOST\n";
+		atexit();
+	}
+	($key,$value)=split(/\d+m/,$in{SWAPSIZE},2);
+	if ($key ne "" || $value ne "")
+	{
+		print STDERR "Incorrect value for \$SWAPSIZE\n";
+		atexit();
+	}
+	open (IN, ".dl_classes") || die "Can't open .dl_classes: $!\n";
+	$i=0;
+	line2:while (<IN>)
+	{
+        	chomp;
+        	next line2 if /^#/;
+        	next line2 if (!$_);
+        	if (index($_,$in{CPUBOARD})>=0)
+        	{
+        	        $_=~s/\s+/:/g;
+                	($data[$i]{CPUBOARD}, $data[$i]{CPUARCH},
+			 $data[$i]{GFXBOARD}, $data[$i]{SUBGR},
+			 $data[$i]{VIDEO}, $data[$i]{MODE})=split(/:/,$_,6);
+                	if ($data[$i]{VIDEO} eq "NULL")
+                	{
+                        	$data[$i]{VIDEO}="";
+                	}
+                	$i++;
+                	$done=0;
+      	  	}
+	}
+	close IN;
+	$i=0;
+	if ($done==1)
+	{
+        	print STDERR "verify $filename: $in{CPUBOARD} not supported in diskless environment\n";
+        	atexit();
+	}
+	$done=1;
+	
+	# We know the CPUBOARD is fine.  Now let's check everything else....
+
+	($key,$value)=split(/-m/,$in{GFXBOARD},2);
+	$in{GFXBOARD}=$key;
+	($x,$in{SUBGR})=split(/=/,$value,2);
+	foreach $item ("CPUARCH", "GFXBOARD", "SUBGR", "VIDEO", "MODE")
+	{
+        	var:while ($i<scalar@data)
+        	{
+        	        if ($in{$item} ne $data[$i]{$item})
+               		{
+                        	splice(@data,$i,1);
+	                        next var;
+        	        }
+                	$i++;
+	                $done=0;
+        	}
+	        if ($done==1)
+        	{
+                	print STDERR "verify $filename: $item = $in{$item} not";
+			print STDERR " supported for $in{CPUBOARD}\n";
+	                atexit();
+        	}
+	        $i=0;
+        	$done=1;
+	}
+}

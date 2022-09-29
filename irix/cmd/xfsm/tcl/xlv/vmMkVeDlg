@@ -1,0 +1,421 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	vmMkVeDlg
+# Version:	$Revision: 1.8 $
+# Synopsis:	Encapsulates the dialog that allows the user to create a
+#		a stand-alone ve.
+# Functions:	vmMkVe:realize
+#		vmMkVe:manage
+#		vmMkVe:clear
+#		vmMkVe:setData
+#		vmMkVe:setHost
+#		vmMkVe:getData
+#		vmMkVe:chkData
+#		vmMkVe:_create
+#		vmMkVe:_dialogCb
+#		vmMkVe:_popdownCb
+#		vmMkVe:_accept
+#		vmMkVe:_doAccept
+#		vmMkVe:_cancel
+#		vmMkVe:_save
+#		vmMkVe:_partChangeAction
+#		vmMkVe:_startDrop
+#		vmMkVe:_doTransfer
+#%COMMENT_END
+
+
+global	G_data
+if {! [info exists G_data(source,vmPtPnl)]} {
+	source $G_data(sourcedir)/vmPtPnl
+	set G_data(source,vmPtPnl) true
+}
+if {! [info exists G_data(source,vmMkVePnl)]} {
+	source $G_data(sourcedir)/vmMkVePnl
+	set G_data(source,vmMkVePnl) true
+}
+
+#########################################
+#		Public			#
+#########################################
+proc vmMkVe:realize { handle parent } \
+{
+	global		_GW_mkve _GD_mkve
+
+	if {! [info exists _GW_mkve($handle,dialog)]} {
+		set _GD_mkve(buttons)	{accept apply save cancel help}
+
+		####	Per instance initialization
+		set _GD_mkve($handle,confirm)	false
+		trace variable _GD_mkve($handle,confirm) w vmMkVe:_doAccept
+
+		set _GW_mkve($handle,dialog) [vmMkVe:_create $handle $parent]
+
+		####    This must happen after the dialog is realized
+		$_GW_mkve($handle,dialog) realizeWidget
+		$_GW_mkve($handle,dialog) getValues -height height -width width
+		.$_GW_mkve($handle,dialog) setValues \
+				-minWidth $width \
+				-minHeight $height
+
+		$_GW_mkve($handle,buttons) getValues -height height
+		$_GW_mkve($handle,buttons) setValues \
+				-paneMinimum $height \
+				-paneMaximum $height
+
+		####    Register for Drag and Drop
+		$_GW_mkve($handle,dialog) dropSiteRegister -dropProc \
+				"vmMkVe:_startDrop $handle %dragContext \
+						$_GW_mkve($handle,dialog)" \
+				-numImportTargets 1 \
+				-importTargets "COMPOUND_TEXT"
+
+		####	Make Next/Prev buttons invisible
+		ptPnl:validNextPrev $handle false false false
+	}
+}
+
+proc vmMkVe:manage { handle } \
+{
+	global	_GW_mkve _GD_mkve
+
+	if {[info exists _GW_mkve($handle,dialog)]} {
+		$_GW_mkve($handle,dialog) manageChild
+		set _GD_mkve($handle,accept) false
+	}
+}
+
+#########################################
+#	Public: Data In Routines	#
+#########################################
+proc vmMkVe:clear { handle } \
+{
+	mkVePnl:clear $handle
+}
+
+proc vmMkVe:setData { handle data } \
+{
+	ptSrch:markPartsAvail $handle [ptPnl:getItems $handle]
+	ptPnl:setChosenListParts $handle ""
+	mkVePnl:setData $handle $data
+	mkVePnl:setVeParts $handle "" ""
+}
+
+proc vmMkVe:setHost { handle host } \
+{
+	global	_GW_mkve
+
+	$_GW_mkve($handle,dialog) defineCursor watch
+	mkVePnl:setHost $handle $host
+	$_GW_mkve($handle,dialog) defineCursor ""
+}
+
+#########################################
+#	Public: Data Out Routines	#
+#########################################
+proc vmMkVe:getData { handle dat } \
+{
+	upvar $dat	data
+
+	mkVePnl:getData $handle data
+
+	set items [ptPnl:getItems $handle]
+	set parts {}
+	if {$items != ""} {
+		foreach item $items {
+			lassign $item nm size
+			lappend parts $nm
+		}
+	}
+	set data [list [join [concat "$data [join $parts]"]]]
+	lappend data end
+	lappend data exit
+
+	return 1
+}
+
+proc vmMkVe:chkData { handle } \
+{
+	set rval        1
+
+	if {! [mkVePnl:chkData $handle]} {
+		set rval 0
+	}
+
+	if {[ptPnl:getItemCount $handle] == 0} {
+		em:storeMsg $handle error \
+			"You must specify at least one partition."
+		set rval 0
+	}
+
+	if {! $rval} {
+		em:setMessageString $handle "Unable to create VE."
+	}
+
+	return $rval
+}
+
+#########################################
+#		Private			#
+#########################################
+proc vmMkVe:_create { handle parent } \
+{
+	global		_GW_mkve _GD_mkve
+	set name	vmMkVe
+
+	set dialog [xmFormDialog $parent.$handle]
+	.$dialog popdownCallback "vmMkVe:_popdownCb $handle"
+	set pane [xmPanedWindow $dialog.$name \
+			-sashWidth 1 \
+			-sashHeight 1 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form]
+
+	set form [xmForm $pane.form managed]
+	set _GW_mkve($handle,pp) [ptPnl:realize $handle $form]
+	ptPnl:registerPartChangeAction $handle vmMkVe:_partChangeAction
+	set _GW_mkve($handle,vp) [mkVePnl:realize $handle $form]
+
+	$_GW_mkve($handle,vp) setValues \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_none \
+			-bottomAttachment attach_none
+
+	$_GW_mkve($handle,pp) setValues \
+			-topAttachment attach_form \
+			-leftAttachment attach_widget \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form \
+			-leftWidget $_GW_mkve($handle,vp) \
+			-leftOffset 20
+
+	set _GW_mkve($handle,buttons) \
+		[xfs:createDialogButtons $pane $_GD_mkve(buttons)]
+	foreach i $_GD_mkve(buttons) {
+		$_GW_mkve($handle,buttons).$i \
+				activateCallback "vmMkVe:_dialogCb $handle $i"
+	}
+
+	$_GW_mkve($handle,pp) manageChild
+	$_GW_mkve($handle,vp) manageChild
+	$_GW_mkve($handle,buttons) manageChild
+	$pane manageChild
+
+	return $dialog
+}
+
+#########################################
+#	Dialog Callbacks		#
+#########################################
+proc vmMkVe:_dialogCb { handle op } \
+{
+	global		_GW_mkve _GD_mkve
+
+	switch $op {
+		accept {set _GD_mkve($handle,unmanage) true
+			vmMkVe:_accept $handle }
+		apply  {set _GD_mkve($handle,unmanage) false
+			vmMkVe:_accept $handle }
+		save   {
+			svTmpl:realize vm ""
+			svTmpl:fill vm VOL vmMkVe:_save $handle
+			svTmpl:manage vm
+		}
+		cancel { vmMkVe:_cancel $handle }
+		help   { sgiHelpMsg $_GW_mkve($handle,dialog) }
+	}
+}
+
+proc vmMkVe:_popdownCb { handle } \
+{
+	global	_GD_mkve
+
+	ptSrch:unmanage $handle
+
+	if {$_GD_mkve($handle,accept) == "false"} {
+		####	Mark partitions as available
+		ptSrch:markPartsAvail $handle [ptPnl:getItems $handle]
+	}
+}
+
+#########################################
+#	Callback Utilities		#
+#########################################
+proc vmMkVe:_accept { handle } \
+{
+	global		_GW_mkve _GD_mkve _GD_vmmCfrm
+
+	if {! [vmMkVe:chkData $handle]} {
+		return
+	}
+	set data ""
+	if {! [vmMkVe:getData $handle data]} {
+		return
+	}
+	set nm [mkVePnl:getName $handle]
+	set host [mkVePnl:getHost $handle]
+
+	set _GD_mkve(confirm,handle) $handle
+	set _GD_mkve(confirm,data) $data
+	set _GD_mkve(confirm,obj) "$host VOL $nm VE"
+
+	if {! [info exists _GW_mkve($handle,confirm)]} {
+		set _GW_mkve($handle,confirm) [xmQuestionDialog \
+				$_GW_mkve($handle,dialog).confirm \
+				-messageAlignment alignment_center \
+				-okLabelString Yes \
+				-cancelLabelString No \
+				-dialogStyle dialog_full_application_modal \
+				-noResize true]
+		$_GW_mkve($handle,confirm) okCallback \
+			"set _GD_mkve($handle,confirm) true"
+		$_GW_mkve($handle,confirm) cancelCallback \
+			"set _GD_mkve($handle,confirm) false"
+	}
+	
+	set msg [format $_GD_vmmCfrm(vmMkVe,msg) $host]
+	$_GW_mkve($handle,confirm) setValues -messageString $msg
+
+	$_GW_mkve($handle,confirm) manageChild
+}
+
+proc vmMkVe:_doAccept { vname element op} \
+{
+	global          _GW_mkve _GD_mkve
+
+	if {$element != ""} {
+		set vname ${vname}($element)
+	}
+	upvar $vname x
+
+	if {$x} {
+	    set handle	$_GD_mkve(confirm,handle)
+	    set data	$_GD_mkve(confirm,data)
+	    set obj	$_GD_mkve(confirm,obj)
+
+	    $_GW_mkve($handle,dialog) defineCursor watch
+	    $_GW_mkve($handle,confirm) defineCursor watch
+
+	    if {[catch {set ec [xlvCmd create $obj [join $data "\n"]]} error]} {
+		regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		em:storeMsg $handle error \
+		"Unable to create stand-alone ve [obj:getName $obj].\n\t$nerror"
+	    } else {
+		####	Signal success
+		set _GD_mkve($handle,accept) true
+
+		####	Mark partitions as used
+		ptSrch:markPartsInUse $handle [ptPnl:getItems $handle] used
+
+		####	Reload the list of available partitions
+		mkVePnl:setHost $handle [mkVePnl:getHost $handle]
+
+		####	Get ready for the next one to create
+		mkVePnl:clear $handle
+
+		####	Set the name to the next one in the series
+		mkVePnl:setName $handle [xfs:nextName [obj:getName $obj]]
+
+		####	Add the object to the icon panel
+		vmSrch:addObjects vm [list $obj]
+
+		if {$_GD_mkve($handle,unmanage)} {
+			####	Unmanage the dialog
+			$_GW_mkve($handle,dialog) unmanageChild
+		}
+	    }
+
+	    $_GW_mkve($handle,confirm) defineCursor ""
+	    $_GW_mkve($handle,dialog) defineCursor ""
+	}
+}
+
+proc vmMkVe:_cancel { handle } \
+{
+	global	_GW_mkve
+	$_GW_mkve($handle,dialog) unmanageChild
+}
+
+proc vmMkVe:_save { handle nm unique } \
+{
+	set rval	1
+
+	set data ""
+	vmMkVe:getData $handle data
+	if {$data != ""} {
+		set obj [list [list _TEMPLATE_ VOL $nm VE]]
+
+		if {[tu:write VOL $nm $obj [join $data "\n"]]} {
+			if {$unique} {
+				ip:fillPanel vm $obj
+			}
+		} else {
+			set rval 0
+		}
+	}
+
+	return $rval
+}
+
+#########################################
+#	Partition Panel Actions		#
+#########################################
+proc vmMkVe:_partChangeAction { handle names sizes } \
+{
+	mkVePnl:setVeParts $handle $names $sizes
+}
+
+
+#########################################
+#	Drag and Drop			#
+#########################################
+proc vmMkVe:_startDrop { handle dragContext w } \
+{
+	$dragContext dropTransferStart \
+		-dropTransfers {{COMPOUND_TEXT .vmMkVe}} \
+		-numDropTransfers 1 \
+		-transferProc "vmMkVe:_doTransfer $handle %closure {%value}"
+}
+
+proc vmMkVe:_doTransfer { handle destination value } \
+{
+	set rval 1
+
+	if {! [ip:uniqueToObject [lindex $value 0] obj] || $obj == ""} {
+	    set errmsg "An Illegal icon was dropped on this dialog."
+	} elseif {[llength $value] == 1} {
+	    if {! [obj:isXfsmTemplate [lindex $obj 0] VOL VE]} {
+		set errmsg "An Illegal icon was dropped on this dialog."
+	    } else {
+		obj:parse [lindex $obj 0] o_class o_host o_nm o_type
+		if {[tu:read $o_class $o_nm data]} {
+			set no_msg 1
+			vmMkVe:setData $handle [split $data \n]
+		}
+	    }
+	}
+
+	if {! [info exists no_msg]} {
+	    set rval 0
+	    set msg "Only one ve template icon may be dropped on this dialog."
+	    if {[info exists errmsg]} {
+		set msg "$errmsg @n @n $msg"
+	    }
+	    em:simpleMsg $handle error $msg
+	}
+
+	return $rval
+}

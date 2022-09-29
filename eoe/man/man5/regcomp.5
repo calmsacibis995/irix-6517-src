@@ -1,0 +1,1079 @@
+'\"! tbl | mmdoc
+'\"macro stdmacro
+.TH REGCOMP 5
+.SH NAME
+regcomp \- X/Open regular expressions definition and interface
+.SH DESCRIPTION
+\f4Note:\fP  Two versions of regular expressions are supported:
+.in+.5i
+.TP .5i
+\f4o\fP
+the historical \f4Simple Regular Expressions\fP,
+which provide backward compatibility, but which will be withdrawn from a 
+future issue of this document set
+.TP .5i
+\f4o\fP
+the improved internationalised version that complies with the 
+ISO/IEC 9945-2: 1993 standard.
+.in-.5i
+.sp
+The first (historical) version is described as part of the 
+\f2regexp\fP function in the \f4regexp(5)\fP man page. The second (improved) 
+version is described in this man page.
+.PP
+.I "Regular Expressions"
+(REs) provide a mechanism to select specific strings from a set of character 
+strings.
+.PP
+Regular expressions are a context-independent syntax that can represent a 
+wide variety of character sets and character set orderings, where these 
+character sets are interpreted according to the current locale. While many 
+regular expressions can be interpreted differently depending on the current 
+locale, many features, such as character class expressions, provide for 
+contextual invariance across locales.
+.PP
+The Basic Regular Expression (BRE) notation and construction rules in 
+\f4bre\fP apply to most utilities supporting regular expressions.  Some 
+utilities, instead, support the Extended Regular Expressions (ERE) described 
+in \f4ere\fP; any exceptions for both cases are noted in the descriptions of 
+the specific utilities using regular expressions. Both BREs and EREs are 
+supported by the Regular Expression Matching interface in the \f4regcmp()\fP, 
+\f4regexec()\fP and related functions.
+.SH "Regular Expression Definitions"
+.PP
+For the purposes of this section, the following definitions apply:
+.sp
+\f4entire regular expression\fP
+.PP
+The concatenated set of one or more BREs or EREs that make up the pattern 
+specified for string selection.
+.sp
+\f4matched\fP
+.PP
+.in+0.5i
+A sequence of zero or more characters is said to be matched by a BRE or ERE 
+when the characters in the sequence correspond to a sequence of characters 
+defined by the pattern.
+.sp
+Matching is based on the bit pattern used for encoding the character, not on 
+the graphic representation of the character. This means that if a character 
+set contains two or more encodings for a graphic symbol, or if the strings 
+searched contain text encoded in more than one codeset, no attempt is made 
+to search for any other representation of the encoded symbol. If that is 
+required, the user can specify equivalence classes containing all variations 
+of the desired graphic symbol.
+.sp
+The search for a matching sequence starts at the beginning of a string and 
+stops when the first sequence matching the expression is found, where 
+\f2first\fP is defined to mean ``begins earliest in the string''. If the 
+pattern permits a variable number of matching characters and thus there is 
+more than one such sequence starting at that point, the longest such 
+sequence will be matched. For example: the BRE bb* matches the second to 
+fourth characters of abbbc, and the ERE (wee|week)(knights|night) matches 
+all ten characters of weeknights.
+.sp
+Consistent with the whole match being the longest of the leftmost matches, 
+each subpattern, from left to right, matches the longest possible string. 
+For this purpose, a null string is considered to be longer than no match 
+at all. For example, matching the BRE \\(.*\\).* against abcdef, the 
+subexpression (\\1) is abcdef, and matching the BRE \\(a*\\)* against bc, the 
+subexpression (\\1) is the null string.
+.sp
+It is possible to determine what strings correspond to subexpressions by 
+recursively applying the leftmost longest rule to each subexpression, but 
+only with the proviso that the overall match is leftmost longest. For 
+example, matching \\(ac*\\)c*d[ac]*\\1 against acdacaaa matches acdacaaa 
+(with \\1=a); simply matching the longest match for \\(ac*\\) would yield 
+\\1=ac, but the overall match would be smaller (acdac). Conceptually, the 
+implementation must examine every possible match and among those that yield 
+the leftmost longest total matches, pick the one that does the longest match 
+for the leftmost subexpression and so on. Note that this means that matching 
+by subexpressions is context-dependent: a subexpression within a larger RE 
+may match a different string from the one it would match as an independent RE,
+and two instances of the same subexpression within the same larger RE may 
+match different lengths even in similar sequences of characters. For example, 
+in the ERE (a.*b)(a.*b), the two identical subexpressions would match four 
+and six characters, respectively, of accbaccccb.
+.sp
+When a multi-character collating element in a bracket expression 
+is involved, the longest sequence will be measured in 
+characters consumed from the string to be matched; that is, the collating 
+element counts not as one element, but as the number of characters it matches.
+.in-0.5i
+.PP
+\f4BRE (ERE) matching a single character\fP
+.PP
+.in+0.5i
+A BRE or ERE that matches either a single character or a single collating 
+element.
+.in-0.5i
+.PP
+.in+0.5i
+Only a BRE or ERE of this type that includes a bracket expression 
+can match a collating element.
+.in-0.5i
+.PP
+.in+0.5i
+The definition of \f2single\fP character has been expanded to include also 
+collating elements consisting of two or more characters; this expansion is 
+applicable only when a bracket expression is included in the BRE or ERE.  An 
+example of such a collating element may be the Dutch ij, which collates as a 
+y.  In some encodings, a ligature ``i with j'' exists as a character and 
+would represent a single-character collating element. In another encoding, 
+no such ligature exists, and the two-character sequence ij is defined as a 
+multi-character collating element. Outside brackets, the ij is treated as a 
+two-character RE and matches the same characters in a string. Historically, 
+a bracket expression only matched a single character. If, however, the 
+bracket expression defines, for example, a range that includes ij, then 
+this particular bracket expression will also match a sequence of the two 
+characters i and j in the string.
+.in-0.5i
+.PP
+\f4BRE (ERE) matching multiple characters\fP
+.PP
+.in+0.5i
+A BRE or ERE that matches a concatenation of single characters or collating 
+elements.
+.in-0.5i
+.PP
+\f4invalid\fP
+.PP
+.in+0.5i
+This section uses the term \f2invalid\fP for certain constructs or conditions.
+Invalid REs will cause the utility or function using the RE to generate an 
+error condition. When \f2invalid\fP is not used, violations of the specified 
+syntax or semantics for REs produce undefined results: this may entail an 
+error, enabling an extended syntax for that RE, or using the construct in 
+error as literal characters to be matched. For example, the BRE construct 
+\\{1,2,3\\} does not comply with the grammar. A portable application 
+cannot rely on it producing an error nor matching the literal characters 
+\\{1,2,3\\}.
+.in-0.5i
+.SH "Regular Expression General Requirements"
+.sp
+The requirements in this section apply to both basic and extended regular 
+expressions.
+.sp
+The use of regular expressions is generally associated with text processing.
+REs (BREs and EREs) operate on text strings; that is, zero or more characters 
+followed by an end-of-string delimiter (typically NUL).  Some utilities 
+employing regular expressions limit the processing to lines; that is, zero 
+or more characters followed by a newline character.  In the regular 
+expression processing described in this document, the newline character is 
+regarded as an ordinary character and both a period and a non-matching list 
+can match one. The individual man pages specify within the individual 
+descriptions of those standard utilities employing regular expressions 
+whether they permit matching of newline characters; if not stated otherwise, 
+the use of literal newline characters or any escape sequence equivalent 
+produces undefined results. Those utilities (like \f2grep\fP) that do not 
+allow newline characters to match are responsible for eliminating any newline 
+character from strings before matching against the RE. The \f2regcomp()\fP 
+function (see \f4regcomp(3G)\fP), however, can provide support for such 
+processing without violating the rules of this section.
+.PP
+The interfaces specified in this document set do not permit the inclusion of 
+a NUL character in an RE or in the string to be matched.  If during the 
+operation of a standard utility a NUL is included in the text designated to 
+be matched, that NUL may designate the end of the text string for the purposes
+of matching.
+.PP
+When a standard utility or function that uses regular expressions specifies 
+that pattern matching will be performed without regard to the case 
+(upper- or lower-) of either data or patterns, then when each character in 
+the string is matched against the pattern, not only the character, but also 
+its case counterpart (if any), will be matched. This definition of 
+case-insensitive processing is intended to allow matching of multi-character 
+collating elements as well as characters. For instance, as each character in 
+the string is matched using both its cases, the RE [[.Ch.]] when matched 
+against the string char, is in reality matched against ch, Ch, cH and CH.
+.PP
+The implementation will support any regular expression that does not exceed 
+256 bytes in length.
+.SH "Basic Regular Expressions"
+.sp
+.PP
+\f4BREs Matching a Single Character or Collating Element\fP
+.PP
+.in+0.5i
+A BRE ordinary character, a special character preceded by a backslash or a 
+period matches a single character. A bracket expression matches a single 
+character or a single collating element.
+.in-0.5i
+.PP
+\f4BRE Ordinary Characters\fP
+.PP
+.in+0.5i
+An ordinary character is a BRE that matches itself: any character in the 
+supported character set, except for the BRE special characters listed in 
+\f4brespec\fP.
+.sp
+The interpretation of an ordinary character preceded by a backslash (\\) is 
+undefined, except for:
+.sp
+1.  the characters ), (, { and }
+.sp
+2.  the digits 1 to 9 inclusive
+.sp
+3.  a character inside a bracket expression.
+.in-0.5i
+.PP
+\f4BRE Special Characters\fP
+.PP
+.in+0.5i
+A \f2BRE special character\fP has special properties in certain contexts.  
+Outside those contexts, or when preceded by a backslash, such a character 
+will be a BRE that matches the special character itself.  The BRE special 
+characters and the contexts in which they have their special meaning are:
+.TP .5i
+.B .[\e\\
+The period, left-bracket and backslash is special except when used in a 
+bracket expression. An expression containing a \f4[\fP 
+that is not preceded by a backslash and is not part of a bracket expression 
+produces undefined results.
+.TP
+.B *
+The asterisk is special except when used:
+.sp
+o   in a bracket expression
+.sp
+o   as the first character of an entire BRE (after an initial ^, 
+.in+0.4i
+if any)
+.in-0.4i
+.sp
+o   as the first character of a subexpression (after an initial ^, 
+.in+0.4i
+if any).
+.in-0.4i
+.TP .5i
+.B "^"
+The circumflex is special when used:
+.sp
+o   as an anchor
+.sp
+o   as the first character of a bracket expression.
+.TP .5i
+.B "$"
+The dollar sign is special when used as an anchor.
+.PP
+.sp
+\f4Periods in BREs\fP
+.sp
+.in+0.5i
+A period (\f4.\fP), when used outside a bracket expression, is a BRE that 
+matches any character in the supported character set except NUL.
+.in-0.5i
+.sp
+.PP
+\f4RE Bracket Expression\fP
+.sp
+A bracket expression (an expression enclosed in square brackets, [ ]) is an 
+RE that matches a single collating element contained in the non-empty set of 
+collating elements represented by the bracket expression.
+.sp
+The following rules and definitions apply to bracket expressions:
+.sp
+.TP .5i
+1.
+A \f2bracket expression\fP is either a matching list expression or a 
+non-matching list expression. It consists of one or more expressions: 
+collating elements, collating symbols, equivalence classes, character classes 
+or range expressions. Portable applications must not use range expressions, 
+even though all implementations support them. The right-bracket (]) loses its 
+special meaning and represents itself in a bracket expression if it occurs 
+first in the list (after an initial circumflex (^), if any). Otherwise, 
+it terminates the bracket expression, unless it appears in a collating 
+symbol (such as [.].]) or is the ending right-bracket for a collating symbol, 
+equivalence class or character class. The special characters:
+.sp
+.B ". * [ \e\\"
+.sp
+(period, asterisk, left-bracket and backslash, respectively) lose their 
+special meaning within a bracket expression.
+.sp
+The character sequences:
+.sp
+.B "[. [= [:"
+.sp
+(left-bracket followed by a period, equals-sign or colon) are special inside 
+a bracket expression and are used to delimit collating symbols, equivalence 
+class expressions and character class expressions. These symbols must be 
+followed by a valid expression and the matching terminating sequence .], =] 
+or :], as described in the following items.
+.TP
+2.
+A \f2matching list\fP expression specifies a list that matches any one of 
+the expressions represented in the list. The first character in the list 
+must not be the circumflex. For example, [abc] is an RE that matches any 
+of the characters a, b or c.
+.TP
+3.
+A \f2non-matching list\fP expression begins with a circumflex (^), and 
+specifies a list that matches any character or collating element except for 
+the expressions represented in the list after the leading circumflex. For 
+example, [^abc] is an RE that matches any character or collating element 
+except the characters a, b or c. The circumflex will have this special 
+meaning only when it occurs first in the list, immediately following the 
+left-bracket.
+.TP
+4.
+A \f2collating symbol\fP is a collating element enclosed within 
+bracket-period ([. .]) delimiters. Collating elements are defined as 
+described in \f4colltbl(1M)\fP. Multi-character collating elements must be 
+represented as collating symbols when it is necessary to distinguish them 
+from a list of the individual characters that make up the multi-character 
+collating element.  For example, if the string ch is a collating element in 
+the current collation sequence with the associated collating symbol <ch>, 
+the expression [[.ch.]] will be treated as an RE matching the character 
+sequence ch, while [ch] will be treated as an RE matching c or h.  Collating 
+symbols will be recognised only inside bracket expressions. This implies that 
+the RE [[.ch.]]*c matches the first to fifth character in the string chchch. 
+If the string is not a collating element in the current collating sequence 
+definition, or if the collating element has no characters associated with it 
+(for example, see the symbol <HIGH> in the example collation definition 
+shown in \f4colltbl(1M)\fP), the symbol will be treated as an invalid 
+expression.
+.TP
+5.
+An \f2equivalence class expression\fP represents the set of collating elements 
+belonging to an equivalence class, as described in \f4colltbl(1M)\fP.
+Only primary equivalence classes will be recognised. The class is expressed 
+by enclosing any one of the collating elements in the equivalence class 
+within bracket-equal ([= =]) delimiters.  For example, if a, agrave and
+acircumflex belong to the same equivalence class, then [=a=]b], 
+[[=agrave=]b] and [[=acircumflex=]b] will each be equivalent to 
+[aagraveacircumflexb].  If the collating element does not belong to an 
+equivalence class, the equivalence class expression will be treated as a
+\f2collating symbol\fP.
+.TP
+6.
+A \f2character class expression\fP represents the set of characters belonging 
+to a character class, as defined in the LC_CTYPE category in the current 
+locale. All character classes specified in the current locale will be 
+recognised. A character class expression is expressed as a character class 
+name enclosed within bracket-colon ([: :]) delimiters.
+.sp
+The following character class expressions are supported in all locales:
+.sp
+
+.sp
+The following character class expressions are supported in all locales:
+.sp
+.nf
+.na
+     [:alnum:]     [:cntrl:]     [:lower:]     [:space:]
+     [:alpha:]     [:digit:]     [:print:]     [:upper:]
+     [:blank:]     [:graph:]     [:punct:]     [:xdigit:]
+.fi
+.sp
+In addition, character class expressions of the form:
+.sp
+.in+0.5i
+[:name:]
+.in-0.5i
+.sp
+are recognised in those locales where the \f2name\fP keyword has been given a
+\f4charclass\fP  definition in the LC_CTYPE category.
+.TP
+7.
+A \f2range expression\fP represents the set of collating elements that fall 
+between two elements in the current collation sequence, inclusively. It is 
+expressed as the starting point and the ending  point separated by a 
+hyphen (\f4-\fP).
+.sp
+Range expressions must not be used in portable applications because their 
+behaviour is dependent on the collating sequence. Ranges will be treated 
+according to the current collating sequence, and include such characters that 
+fall within the range based on that collating sequence, regardless of 
+character values. This, however, means that the interpretation will differ 
+depending on collating sequence. If, for instance, one collating sequence 
+defines \f2aumlat\fP as a variant of a, while another defines it as a letter 
+following z, then the expression [\f2aumlat\fP-z]  is valid in the first 
+language and invalid in the second.
+.sp
+In the following, all examples assume the collation sequence specified for 
+the POSIX locale, unless another collation sequence is specifically defined.
+.sp
+The starting range point and the ending range point must be a collating 
+element or collating symbol. An equivalence class expression used as a 
+starting or ending point of a range expression produces unspecified results. 
+An equivalence class can be used portably within a bracket expression, but 
+only outside the range. For example, the unspecified expression [[=e=]-f] 
+should be given as [[=e=]e-f]. The ending range point must collate equal to 
+or higher than the starting range point; otherwise, the expression will be 
+treated as invalid. The order used is the order in which the collating 
+elements are specified in the current collation definition. One-to-many 
+mappings (see the description of \f2LC_COLLATE\fP in \f4locale(1)\fP) will not
+be performed. For example, assuming that the character \f2eszet\fP is 
+is placed in the collation sequence after r and s, but before t and that it 
+maps to the sequence ss for collation purposes, then the expression [r-s] 
+matches only r and s, but the expression [s-t] matches s, \f2eszet\fP ot t.
+.sp
+The interpretation of range expressions where the ending range point is also 
+the starting range point of a subsequent range expression (for instance 
+[a-m-o]) is undefined.
+.sp
+The hyphen character will be treated as itself if it occurs first 
+(after an initial ^, if any) or last in the list, or as an ending range 	point in a range expression. As examples, the expressions [-ac] and [ac-] 
+are equivalent and match any of the characters a, c or -; [^-ac] and [^ac-] 
+are equivalent and match any characters except a, c or -; the expression 
+[%- -] matches any of the characters between % and - inclusive; the 
+expression [- -@] matches any of the characters between - and @ inclusive; 
+and the expression [a- -@] is invalid, because the letter a follows the 
+symbol - in the POSIX locale. To use a hyphen as the starting range point, 
+it must either come first in the bracket expression or be specified as a 
+collating symbol, for example: [][.-.]-0], which matches either a right 
+bracket or any character or collating element that collates between hyphen 
+and 0, inclusive.
+.sp
+If a bracket expression must specify both - and ], the ] must be placed 
+first (after the ^, if any) and the - last within the bracket expression.
+.sp
+\f4BREs Matching Multiple Characters\fP
+.sp
+The following rules can be used to construct BREs matching multiple 
+characters from BREs matching a single character:
+.sp
+.TP .5i
+1.
+The concatenation of BREs matches the concatenation of the strings matched 
+by each component of the BRE.
+.TP
+2.
+A \f2subexpression\fP  can be defined within a BRE by enclosing it between 
+the character pairs \\( and \\) . Such a subexpression matches whatever it 
+would have matched without the \\( and \\), except that anchoring within 
+subexpressions is optional behaviour.  Subexpressions can 
+be arbitrarily nested.
+.TP
+3.
+The \f2back-reference\fP  expression \f2\\n\fP matches the same 
+(possibly empty) string of characters as was matched by a subexpression 
+enclosed between \\( and \\) preceding the \f2\\n\fP. The character \f2\fPn
+must be a digit from 1 to 9 inclusive, \f2n\fPth subexpression (the one 
+that begins with the \f2n\fPth \\( and ends with the corresponding paired 
+\\)).  The expression is invalid if less than \f2n\fP subexpressions precede 
+the \f2\\n\fP. For example, the expression ^\\(.*\\)\\1$ matches a line 
+consisting of two adjacent appearances of the same string, and the expression 
+\\(a\\)*\\1 fails to match \f2a\fP. The limit of nine back-references to 
+subexpressions in the RE is based on the use of a single digit identifier.
+This does not imply that only nine subexpressions are allowed in REs. The 
+following is a valid BRE with ten subexpressions:
+.in-0.5i
+.sp
+\\(\\(\\(ab\\)*c\\)*d\\)\\(ef\\)*\\(gh\\)\\{2\\}\\(ij\\)*\\(kl\\)*\\(mn\\)*\\(op\\)*\\(qr\\)*
+.sp
+.in+0.5i
+.TP
+4.
+When a BRE matching a single character, a subexpression or a back-reference 
+is followed by the special character asterisk (*), together with that 
+asterisk it matches what zero or more consecutive occurrences of the BRE 	would match. For example, [ab]* and [ab][ab] are equivalent when matching 
+the string ab.
+.TP
+5.
+When a BRE matching a single character, a subexpression or a back-reference 
+is followed by an \f2interval expression\fP of the format \\{\f2m\fP\\}, 
+\\{\f2m\fP,\\} or \\{\f2m\fP,\f2n\fP\\}, together with that interval expression 
+it matches what repeated consecutive occurrences of the BRE would match. The 
+values of \f2m\fP and \f2n\fP will be decimal integers in the range 
+0 <= \f2m\fP <= \f2n\fP <= \f2RE_DUP_MAX\fP, where \f2m\fP specifies the 
+exact or minimum number of occurrences and \f2n\fP specifies the maximum 
+number of occurrences. The expression \\{\f2m\fP\\} matches exactly \f2m\fP
+occurrences of the preceding BRE, \\{\f2m\fP,\\} matches at least \f2m\fP
+occurrences and \\{\f2m,n\fP\\} matches any number of occurrences between 
+\f2m\fP and \f2n\fP, inclusive.
+.sp
+For example, in the string abababccccccd the BRE c\\{3\\} is matched by 
+characters seven to nine, the BRE \\(ab\\)\\{4,\\} is not matched at all 
+and the BRE c\\{1,3\\}d is matched by characters ten to thirteen.
+.sp
+.in-0.5i
+The behaviour of multiple adjacent duplication symbols (\f4*\fP and intervals)
+produces undefined results.
+.sp
+\f4BRE Precedence\fP
+.sp
+.in+0.5i
+The order of precedence is as shown in the following table:
+.sp
+\f2BRE Precedence (from high to low)\fP
+.sp
+.nf
+.in+0.5i
+.I
+collation-related bracket symbols   [= =]  [: :]  [. .]
+.sp
+.I
+escaped characters                  \\<special character>
+.sp
+.I
+bracket expression                  []
+.sp
+.I
+subexpressions/back-references      \\(\\)\\n
+.sp
+.I
+single-character-BRE duplication    *\\{m,n\\}
+.sp
+.I
+concatenation
+.sp
+.I
+anchoring                           ^ $
+.in-0.5i
+.fi
+.in-0.5i
+.sp
+\f4BRE Expression Anchoring\fP
+.sp
+.in+0.5i
+A BRE can be limited to matching strings that begin or end a line; this is 
+called \f2anchoring\fP.  The circumflex and dollar sign special characters 
+will be considered BRE anchors in the following contexts:
+.sp
+.TP .5i
+1.
+A circumflex (\f4^\fP) is an anchor when used as the first character of an 
+entire BRE. The implementation may treat circumflex as an anchor when used as 
+the first character of a subexpression. The circumflex will anchor the 
+expression (or optionally subexpression) to the beginning of a string; only 
+sequences starting at the first character of a string will be matched by 
+the BRE. For example, the BRE ^ab matches ab in the string abcdef, but 
+fails to match in the string cdefab. The BRE \\(^ab\\) may match the former 
+string.  A portable BRE must escape a leading circumflex in a subexpression 
+to match a literal circumflex.
+.TP
+2.
+A dollar sign (\f4$\fP) is an anchor when used as the last character of an 
+entire BRE. The implementation may treat a dollar sign as an anchor when 
+used as the last character of a subexpression.  The dollar sign will anchor 
+the expression (or optionally subexpression) to the end of the string being 
+matched; the dollar sign can be said to match the end-of-string following 
+the last character.
+.TP
+3.
+A BRE anchored by both \f4^\fP and \f4$\fP matches only an entire string. 
+For example, the BRE ^abcdef$ matches strings consisting only of abcdef.
+.in-0.5i
+.sp
+\f4Extended Regular Expressions\fP
+.sp
+.in+0.5i
+The \f2extended regular expression\fP (ERE) notation and construction rules 
+will apply to utilities defined as using extended regular expressions; any 
+exceptions to the following rules are noted in the descriptions of the 
+specific utilities using EREs.
+.in-0.5i
+.sp
+\f4EREs Matching a Single Character or Collating Element\fP
+.sp
+.in+0.5i
+An ERE ordinary character, a special character preceded by a backslash or a 
+period matches a single character.  A bracket expression matches a single 
+character or a single collating element. An 
+\f2ERE matching a single character\fP enclosed in parentheses matches the 
+same as the ERE without parentheses would have matched.
+.in-0.5i
+.sp
+\f4ERE Ordinary Characters\fP
+.sp
+.in+0.5i
+An \f2ordinary character\fP  is an ERE that matches itself.  An ordinary 
+character is any character in the supported character set, except for the 
+ERE special characters listed in \f4erespec\fP.  The interpretation of an 
+ordinary character preceded by a backslash (\f4\\\fP) is undefined.
+.in-0.5i
+.sp
+\f4ERE Special Characters\fP
+.sp
+.in+0.5i
+An \f2ERE special character\fP has special properties in certain contexts. 
+Outside those contexts, or when preceded by a backslash, such a character is 
+an ERE that matches the special character itself.  The extended regular 
+expression special characters and the contexts in which they have their 
+special meaning are:
+.sp
+.TP .5i
+.B ". [ \e\\ ("
+The period, left-bracket, backslash and left-parenthesis are special except 
+when used in a bracket expression.  Outside a bracket 
+expression, a left-parenthesis immediately followed by a right-parenthesis 
+produces undefined results.
+.TP
+.B ")"
+The right-parenthesis is special when matched with a preceding 
+left-parenthesis, both outside a bracket expression.
+.TP
+.B "* + ? {"
+The asterisk, plus-sign, question-mark and left-brace are special except 
+when used in a bracket expression.  Any of the following 
+uses produce undefined results:
+.sp
+.in+0.5i
+if these characters appear first in an ERE, or immediately following a 
+vertical-line, circumflex or left-parenthesis
+.sp
+if a left-brace is not part of a valid interval expression.
+.in-0.5i
+.TP .5i
+.B "|"
+The vertical-line is special except when used in a bracket expression.
+A vertical-line appearing first or last in an ERE, or 
+immediately following a vertical-line or a left-parenthesis, or immediately 
+preceding a right-parenthesis, produces undefined results.
+.TP
+.B "^"
+The circumflex is special when used:
+.sp
+.in+0.5i
+as an anchor
+.sp
+as the first character of a bracket expression.
+.in-0.5i
+.TP
+.B "$"
+The dollar sign is special when used as an anchor.
+.sp
+.in-0.5i
+\f4Periods in EREs\fP
+.sp
+.in+0.5i
+A period (\f4.\fP), when used outside a bracket expression, is an ERE that 
+matches any character in the supported character set except NUL.
+.in-0.5i
+.sp
+\f4EREs Matching Multiple Characters\fP
+.sp
+.in+0.5i
+The following rules will be used to construct EREs matching multiple 
+characters from EREs matching a single character:
+.in-0.5i
+.TP .5i
+1.
+A \f2concatenation of EREs\fP matches the concatenation of the character 
+sequences matched by each component of the ERE. A concatenation of EREs 
+enclosed in parentheses matches whatever the concatenation without the 
+parentheses matches. For example, both the ERE cd and the ERE (cd) are 
+matched by the third and fourth character of the string abcdefabcdef.
+.TP
+2.
+When an ERE matching a single character or an ERE enclosed in parentheses 
+is followed by the special character plus-sign (+), together with that 
+plus-sign it matches what one or more consecutive occurrences of the ERE 
+would match. For example, the ERE b+(bc) matches the fourth to seventh 
+characters in the string acabbbcde. And, [ab]+ and [ab][ab]* are equivalent.
+.TP
+3.
+When an ERE matching a single character or an ERE enclosed in parentheses is 
+followed by the special character asterisk (\f4*\fP), together with that 
+asterisk it matches what zero or more consecutive occurrences of the ERE 
+would match.  For example, the ERE b*c matches the first character in the 
+string cabbbcde, and the ERE b*cd matches the third to seventh characters in 
+the string cabbbcdebbbbbbcdbc. And, [ab]* and [ab][ab] are equivalent when 
+matching the string ab.
+.TP
+4.
+When an ERE matching a single character or an ERE enclosed in parentheses 
+is followed by the special character question-mark (\f4?\fP), together with 
+that question-mark it matches what zero or one consecutive occurrences of 
+the ERE would match. For example, the ERE b?c matches the second character 
+in the string acabbbcde.
+.TP
+5.
+When an ERE matching a single character or an ERE enclosed in parentheses 
+is followed by an \f2interval expression\fP of the format {\f2m\fP}, 
+{\f2m\fP,} or {\f2m\fP,\f2n\fP}, together with that interval expression it 
+matches what repeated consecutive occurrences of the ERE would match.  The 
+values of \f2m\fP and  \f2n\fP will be decimal integers in the range 
+0 <= \f2m\fP <= \f2n\fP <= \f2RE_DUP_MAX\fP, where \f2m\fP specifies the 
+exact or minimum number of occurrences and \f2n\fP specifies the maximum 
+number of occurrences. The expression {\f2m\fP} matches exactly \f2m\fP
+occurrences of the preceding ERE, {\f2m\fP,} matches at least \f2m\fP 
+occurrences and {\f2m\fP,\f2n\fP} matches any number of occurrences between 
+\f2m\fP and \f2n\fP, inclusive.  For example, in the string abababccccccd the 
+ERE c{3} is matched by characters seven to nine and the ERE (ab){2,} is 
+matched by characters one to six.
+.sp
+.in-0.5i
+The behaviour of multiple adjacent duplication symbols (\f4+, *, ?\fP and 
+intervals) produces undefined results.
+.sp
+\f4ERE Alternation\fP
+.sp
+.in+0.5i
+Two EREs separated by the special character vertical-line (|) match a string 
+that is matched by either. For example, the ERE a((bc)|d) matches the string 
+abc and the string ad. Single characters, or expressions matching single 
+characters, separated by the vertical bar and enclosed in parentheses, will 
+be treated as an ERE matching a single character.
+.in-0.5i
+.sp
+\f4ERE Precedence\fP
+.sp
+.in+0.5i
+The order of precedence is as shown in the following table:
+.sp
+\f2BRE Precedence (from high to low)\fP
+.sp
+.nf
+.in+0.5i
+.I
+collation-related bracket symbols   [= =]  [: :]  [. .]
+.sp
+.I
+escaped characters                  \\<special character>
+.sp
+.I
+bracket expression                  []
+.sp
+.I
+grouping                            ()
+.sp
+.I
+single-character-ERE duplication    *+?{m,n}
+.sp
+.I
+concatenation
+.sp
+.I
+anchoring                           ^ $
+.sp
+.I
+alteration                          |
+.in-0.5i
+.fi
+.in-0.5i
+.sp
+For example, the ERE abba | cde matches either the string abba or the 
+string cde (rather than the string abbade or abbcde, because concatenation 
+has a higher order of precedence than alternation).
+.sp
+\f4ERE Expression Anchoring\fP
+.sp
+.in+0.5i
+An ERE can be limited to matching strings that begin or end a line; this is 
+called \f2anchoring\fP.  The circumflex and dollar sign special characters 
+are considered ERE anchors when used anywhere outside a bracket expression. 
+This has the following effects:
+.sp
+.TP .5i
+1.
+A circumflex (\f4^\fP) outside a bracket expression anchors the expression 
+or subexpression it begins to the beginning of a string; such an expression 
+or subexpression can match only a sequence starting at the first character 
+of a string. For example, the EREs ^ab and (^ab) match ab in the string 
+abcdef, but fail to match in the string cdefab, and the ERE a^b is valid, 
+but can never match because the \f2a\fP prevents the expression ^b from 
+matching starting at the first character.
+.TP
+2.
+A dollar sign (\f4$\fP) outside a bracket expression anchors the expression 
+or subexpression it ends to the end of a string; such an expression or 
+subexpression can match only a sequence ending at the last character of a 
+string. For example, the EREs ef$ and (ef$) match ef in the string abcdef, 
+but fail to match in the string cdefab, and the ERE e$f is valid, but can 
+never match because the \f2f\fP prevents the expression e$ from matching 
+ending at the last character.
+.in-0.5i
+.sp
+\f4Regular Expression Grammar\fP
+.sp
+.in+0.5i
+Grammars describing the syntax of both basic and extended regular 
+expressions are presented in this section. The grammar takes precedence 
+over the text.
+.in-0.5i
+.sp
+\f4BRE/ERE Grammar Lexical Conventions\fP
+.sp
+.in+0.5i
+The lexical conventions for regular expressions are as described in this 
+section.
+.sp
+Except as noted, the longest possible token or delimiter beginning at a 
+given point will be recognised.
+.sp
+The following tokens will be processed (in addition to those string constants 
+shown in the grammar):
+.sp
+.TP 1.5i
+.B COLL_ELEM
+Any single-character collating element, unless it is a META_CHAR.
+.TP
+.B BACKREF
+Applicable only to basic regular expressions. The character string 
+consisting of \f4\\\fP followed by a single-digit numeral, 1 to 9.
+.TP
+.B DUP_COUNT
+Represents a numeric constant. It is an integer in the range 0 <= 
+\f2DUP_COUNT\fP <= \f2RE_DUP_MAX\fP. This token will only be recognised 
+when the context of the grammar requires it.  At all other times, digits 
+not preceded by \f4\\\fP will be treated as ORD_CHAR.
+.TP
+.B META_CHAR
+One of the characters:
+.sp
+.in+0.5i
+\f4^\fP   when found first in a bracket expression
+.sp
+\f4\-\fP   when found anywhere but first (after an initial
+.in+0.4i
+\f4^\fP, if any) or last in a bracket expression, or as the ending 
+.br
+range point in a range expression
+.in-0.4i
+.sp
+\f4]\fP   when found anywhere but first (after an initial
+.in+0.4i
+\f4^\fP, if any) in a bracket expression.
+.in-0.4i
+.in-0.5i
+.TP
+.B L_ANCHOR
+Applicable only to basic regular expressions. The character \f4^\fP when it 
+appears as the first character of a basic regular expression and when not 
+QUOTED_CHAR. The \f4^\fP may be recognised as an anchor elsewhere.
+.TP
+.B ORD_CHAR
+A character, other than one of the special characters in SPEC_CHAR.
+.TP
+.B QUOTED_CHAR
+In a BRE, one of the character sequences:
+.sp
+\\^      \\.      \\*      \\[      \\$      \\\\
+.sp
+In an ERE, one of the character sequences:
+.sp
+\\^   \\.   \\[   \\$   \\(   \\)  \\|  \\*   \\+   \\?   \\{   \\\\
+.TP
+.B R_ANCHOR
+(Applicable only to basic regular expressions.) The character \f4$\fP when 
+it appears as the last character of a basic regular expression and when not 
+QUOTED_CHAR. The \f4$\fP may be recognised as an anchor elsewhere.
+.TP
+.B SPEC_CHAR
+For basic regular expressions, will be one of the following special 
+characters:
+.sp
+\f4.\fP   anywhere outside bracket expressions
+.sp
+\f4\\\f1  anywhere outside bracket expressions
+.sp
+\f4[\fP   anywhere outside bracket expressions
+.sp
+\f4^\fP   when used as an anchor or when 
+.in+0.4i
+first in a bracket expression
+.in-0.4i
+.sp
+\f4$\fP   when used as an anchor
+.sp
+\f4*\fP   anywhere except: first in an entire RE; 
+.in+0.4i
+anywhere in a bracket expression; directly 
+.br
+following \\(; directly following an 
+.br
+anchoring \f4^\fP.
+.in-0.4i
+.sp
+For extended regular expressions, will be one of the following special 
+characters found anywhere outside bracket expressions:
+.sp
+^    .    [    $    (    )    |    *    +    ?    {    \\
+.sp
+(The close-parenthesis is considered special in this context only if matched 
+with a preceding open-parenthesis.)
+.in-0.5i
+.sp
+.SH "RE and Bracket Expression Grammar"
+.sp
+This section presents the grammar for basic regular expressions, including 
+the bracket expression grammar that is common to both BREs and EREs.
+.sp
+.nf
+%token ORD_CHAR QUOTED_CHAR DUP_COUNT 
+%token BACKREF L_ANCHOR R_ANCHOR 
+%token Back_open_paren  Back_close_paren 
+/*    '\\('              '\\)'                     */ 
+%token Back_open_brace  Back_close_brace 
+/*    '\\{'              '\\}'                     */ 
+/* The following tokens are for the Bracket Expression  
+   grammar common to both REs and EREs.              */ 
+%token COLL_ELEM META_CHAR 
+%token Open_equal Equal_close Open_dot Dot_close Open_colon Colon_close 
+/*    '[='         '=]'      '[.'    '.]'       '[:'        ':]'  */ 
+%token class_name 
+/* class_name is a keyword to the LC_CTYPE locale category */ 
+/* (representing a character class) in the current locale  */ 
+/* and is only recognised between [: and :]                */ 
+%start basic_reg_exp 
+%%
+/*             --------------------------------------------   
+               Basic Regular Expression   
+               -------------------------------------------- 
+*/
+basic_reg_exp :          RE_expression  
+              | L_ANCHOR  
+              |                        R_ANCHOR  
+              | L_ANCHOR               R_ANCHOR  
+              | L_ANCHOR RE_expression  
+              |          RE_expression R_ANCHOR  
+              | L_ANCHOR RE_expression R_ANCHOR  
+              ; 
+
+RE_expression :               simple_RE  
+              | RE_expression simple_RE  
+              ; 
+
+simple_RE     : nondupl_RE  
+              | nondupl_RE RE_dupl_symbol  
+              ; 
+
+nondupl_RE    : one_character_RE  
+              | Back_open_paren RE_expression Back_close_paren  
+              | Back_open_paren Back_close_paren  
+              | BACKREF  
+              ; 
+
+one_character_RE : ORD_CHAR  
+                 | QUOTED_CHAR  
+                 | '.'  
+                 | bracket_expression  
+                 ; 
+
+RE_dupl_symbol : '*'  
+               | Back_open_brace DUP_COUNT               Back_close_brace  
+               | Back_open_brace DUP_COUNT ','           Back_close_brace  
+               | Back_open_brace DUP_COUNT ',' DUP_COUNT Back_close_brace
+               ; 
+
+/*                 --------------------------------------------   
+                   Bracket Expression   
+                   ------------------------------------------- 
+*/ 
+bracket_expression : '[' matching_list    ']'  
+                   | '[' nonmatching_list ']'  
+                   ; 
+
+matching_list      : bracket_list  
+                   ; 
+
+nonmatching_list   : '^' bracket_list  
+                   ; 
+
+bracket_list       : follow_list  
+                   | follow_list '-'  
+                   ; 
+
+follow_list        :             expression_term  
+                   | follow_list expression_term  
+                   ; 
+
+expression_term    : single_expression  
+                   | range_expression  
+                   ; 
+
+single_expression  : end_range  
+                   | character_class  
+                   | equivalence_class  
+                   ; 
+
+range_expression   : start_range end_range 
+                   | start_range '-'
+                   ; 
+
+start_range        : end_range '-' 
+                   ; 
+
+end_range          : COLL_ELEM 
+                   | collating_symbol 
+                   ; 
+
+collating_symbol   : Open_dot COLL_ELEM Dot_close 
+                   | Open_dot META_CHAR Dot_close  
+                   ; 
+
+equivalence_class  : Open_equal COLL_ELEM Equal_close 
+                   ; 
+
+character_class    : Open_colon class_name Colon_close 
+                   ;
+.fi
+.sp
+The BRE grammar does not permit L_ANCHOR or R_ANCHOR inside \\( and \\) 
+(which implies that ^ and $ are ordinary characters).
+.sp
+.SH "ERE Grammar"
+.sp
+This section presents the grammar for extended regular expressions, excluding 
+the bracket expression grammar.
+.sp
+\f4Note:\fP  The bracket expression grammar and the associated \f4%token\fP
+.in+0.7i
+lines are identical between BREs and EREs. It has been omitted 
+.br
+from the ERE section to avoid unnecessary editorial duplication.
+.in-0.7i
+.sp
+.nf
+%token ORD_CHAR QUOTED_CHAR DUP_COUNT 
+%start extended_reg_exp 
+%%
+/*               --------------------------------------------   
+                 Extended Regular Expression   
+                 -------------------------------------------- 
+*/ 
+
+extended_reg_exp :                      ERE_branch  
+                 | extended_reg_exp ' | ' ERE_branch  
+                 ; 
+
+ERE_branch       :            ERE_expression  
+                 | ERE_branch ERE_expression  
+                 ; 
+
+ERE_expression   : one_character_ERE  
+                 | '^'  
+                 | '$'  
+                 | '(' extended_reg_exp ')'  
+                 | ERE_expression ERE_dupl_symbol  
+                 ; 
+
+one_character_ERE : ORD_CHAR  
+                  | QUOTED_CHAR  
+                  | '.'  
+                  | bracket_expression  
+                  ; 
+
+ERE_dupl_symbol  : '*'  
+                 | '+'
+                 | '?'  
+                 | '{' DUP_COUNT               '}'  
+                 | '{' DUP_COUNT ','           '}'  
+                 | '{' DUP_COUNT ',' DUP_COUNT '}'  
+                 ;
+.fi
+.sp
+The ERE grammar does not permit several constructs that previous sections 
+specify as having undefined results:
+.sp
+o   ORD_CHAR preceded by \\
+.sp
+o   one or more ERE_dupl_symbols appearing first in an ERE, 
+.in+0.4i
+or immediately following \f4|\fP, \f4^\fP or \f4(\fP
+.in-0.4i
+.sp
+o   \f4{\fP not part of a valid ERE_dupl_symbol
+.sp
+o   \f4|\fP appearing first or last in an ERE, 
+.in+0.4i
+or immediately following \f4|\fP or 
+.br
+\f4(\fP, or immediately preceding \f4)\fP.
+.in-0.4i
+.sp
+Implementations are permitted to extend the language to allow these. Portable 
+applications cannot use such constructs.

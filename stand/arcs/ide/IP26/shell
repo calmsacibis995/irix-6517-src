@@ -1,0 +1,906 @@
+# This is an ide startup file.
+report=4 # set verbose, but not debug
+$stoponerr=1
+hinv -v
+
+echo ""
+echo "Ide included scripts are"
+echo "	memory		ip26		gr2_initsys"
+echo "	clear		gr2		gr2_all"
+echo "	gr2_fourquad	gr2_quad	gr2_vdma"
+echo "	kv		cc1		ab1"
+echo "	ab1_red		ab1_green	ab1_blue"
+
+# memory and cache test
+memory {
+$tmp=memtest;
+if ($tmp) {
+        wait;
+}
+$tmp=ldram;
+if ($tmp) {
+        wait;
+}
+$tmp=dram;
+if ($tmp) {
+        wait;
+}
+$tmp=dcache;
+if ($tmp) {
+        wait;
+}
+$tmp=scache;
+if ($tmp) {
+        wait;
+}
+
+}
+
+# END OF MEMORY SCRIPT
+
+# THE FOLLOWING IS THE STARTUP SCRIPT FOR THE CPU DIAGNOSTICS.
+#
+# IN ORDER FOR THE SCRIPT TO RUN PROPERLY, THE FOLLOWING MUST BE DONE:
+#       1. CONNECT THE TRANSMIT AND RECEIVE PINS ON CHANNEL A AND B OF DUART 0,
+#          CHANNEL B OF DUART 1 (FOR CHANNEL B OF DUART 1, THE REQUEST_TO_SEND
+#          AND CLEAR_TO_SEND PINS MUST ALSO BE CONNECTED).
+#       2. CONNECT A MICROPHONE AND A SPEAKER TO THE AUDIO CIRCUITRY.
+#       3. CONNECT A ETHERNET CABLE TO THE ONBOARD ETHERNET CONNECTOR, THE CABLE#          MUST BE CONNECTED TO A TRANSCEIVER.
+
+ip26 {
+# Interrupt mask registers data test.
+if ((int2) && $stoponerr)
+        wait;
+
+# Real time clock test. Verify the accuracy of the real time clock and the carry# circuitry by using the timer within the ctl1 gate array.
+if ((clock) && $stoponerr)
+        wait;
+
+# Interval timer test. Verify the accuracy of the interval timer by using the
+# real time clock.
+if ((timer) && $stoponerr)
+        wait;
+
+# fast iu test
+if ((fast_iu) && $stoponerr)
+        wait;
+
+$tmp = duart -i1;
+if ($tmp) {
+    resetcons 1;
+    if ($stoponerr)
+        wait;
+}
+
+# HPC3 peripheral controller register data test.
+if ((hpc3) && $stoponerr)
+        wait;
+
+# Test floating point unit
+if ((fpu) && $stoponerr)
+	wait;
+
+# Test TCC FIFO
+if ((tccfifo) && $stoponerr)
+	wait;
+
+# Test TCC Prefetch
+if ((tccpref) && $stoponerr)
+	wait;
+
+# Test ECC
+if ((ecc) && $stoponerr)
+	wait;
+
+# Test Dcache
+$tmp = dcache
+if ($tmp && $stoponerr)
+	wait;
+
+# Test Secondary cache
+if ((scache) && $stoponerr)
+	wait;
+
+# Test local memory ( < 16MB )
+if ((lkh_aa) && $stoponerr)
+	wait;
+
+# Test local memory (16MB and up)
+# Kh test
+$tmp = memtest2 3
+if ($tmp && $stoponerr)
+	wait;
+
+# Address Uniqueness test
+$tmp = memtest2 0
+if ($tmp && $stoponerr)
+	wait;
+
+# Butterfly test
+$tmp = memtest2 7
+if ($tmp && $stoponerr)
+	wait;
+
+# March Y test
+$tmp = memtest2 5
+if ($tmp && $stoponerr)
+	wait;
+
+# EISA register test.
+if ((eisa) && $stoponerr)
+	wait;
+
+# Test SCSI devices
+$scsi_status=scsi;
+if (($scsi_status) && $stoponerr) {
+        echo "SCSI failure";
+        wait;
+}
+
+if (($scsi_status & 98175) && $stoponerr) {
+# 0x10000 (cabling) or any scsi device failure (not 1 or 0x100, which
+# means chip failure, since for now, chip is always ID 0)
+# scsi() puts the failure in a global for emfail.
+        wait;
+}
+
+# END OF IP26 SCRIPT
+}
+
+# Start of GR2 diagnostics 
+$mon=0;
+gr2_vhwinit {
+gr2_videoclk 0x47
+if ($mon ==1 ) gr2_initclock 0x132;
+else gr2_initclock 0x107;
+fi
+gr2_wrconfig 0x0
+gr2_delay 3
+gr2_wrconfig 0x1
+gr2_vinitdac
+}
+gr2_initre {
+	$a = gr2_getGR2ver;
+	if ($a < 4) gr2_wrfifo 0 0;
+	else if ($a == 4) gr2_wrfifo 0 1;
+	else gr2_wrfifo 0 2;
+}
+gr2_initsys {
+gr2_reset
+gr2_vhwinit
+$mon = gr2_getMonType;
+if ($mon == 1) gr2_initvc1 4;
+else gr2_initvc1 20;
+fi
+gr2_xcol
+gr2_inithq
+gr2_load_ucode ge
+gr2_load_ucode hq
+gr2_unstall
+gr2_initre
+}
+clear {
+gr2_wrfifo 35 0
+gr2_wrfifo 6 0
+}
+gr2_quad {
+gr2_wrfifo 33 0
+}
+gr2_fourquad {
+gr2_wrfifo 34 0
+}
+
+$tmp = 0;
+$gr2_failed = 0;
+  
+test_xmap{
+	gr2_initsys;
+	$a=gr2_txmap;
+	return $a;
+	}
+
+test_xmap_clut{
+	gr2_initsys;
+	$a=gr2_txmap_clut;
+	return $a;
+	}
+
+gr2_vdma{
+	gr2_initsys;
+	$b=gr2_cachefdma 32 1;
+	$b=$b+gr2_cachefdma 256 1;
+	$b=$b+gr2_cachefdma 512 1;
+	$b=$b+gr2_cachefdma 128 1;
+	$b=$b+gr2_yzoomdma ;
+	$b=$b+gr2_yzoomdma 32 32;
+	$b=$b+gr2_yzoomdma 128 128;
+	$b=$b+gr2_yzoomdma 256 256;
+	$b=$b+gr2_stridedma;
+	$b=$b+gr2_stridedma 32 32;
+	$b=$b+gr2_stridedma 256 1;
+	$b=$b+gr2_stridedma 512 0;
+	return $b;
+	}
+
+gr2 {
+	$vc1_sram_failed=0;
+	$tram0_failed=0;
+	$tram1_failed=0;
+	$tram2_failed=0;
+	$tram3_failed=0;
+	$tram4_failed=0;
+	$tram5_failed=0;
+	$tram6_failed=0;
+	$tram7_failed=0;
+	$tram8_failed=0;
+	$tram9_failed=0;
+	$tram10_failed=0;
+	$hq2test_failed=0;
+	$shram_failed=0;
+	$ram12_failed=0;
+	$seedrom_failed=0;
+	$sqrom_failed=0;
+	$gebus_failed=0;
+	$gefloat_failed=0;
+	$chkbt457_failed=0;
+	$shramre3_failed=0;
+	$cpushram_failed=0;
+	$cpure3_failed=0;
+	$vdma_failed=0;
+	$ctxsw_failed=0;
+	$bp_failed=0;
+	$stride_failed=0 ;
+	$zb_failed=0;
+	$test_xmap_failed=0;
+	$test_xmap_clut_failed=0;
+	$quad_failed=0;
+	$fourquad_failed=0;
+
+	$gr2_failed=0;
+	gr2_reset;
+	buffon
+
+
+# HQ2 internal register 19  must read 0xdeadbeef
+	gr2_rdhqint 19;
+
+# Test VC1 SRAM 
+	gr2_vhwinit
+	if (gr2_vc1_sram) {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $vc1_sram_failed = 1;
+	}
+# Test ram 0 at Ge7 at 0
+	$tmp = gr2_tram 0;
+	if ($tmp) {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $tram0_failed = 1;
+	  }
+# Test ram 0 at Ge7 at 1
+	$tmp = gr2_tram 1;
+	if ($tmp){
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $tram1_failed = $tmp;
+	}
+# Test ram 0 at Ge7 at 2
+       $tmp = gr2_tram 2;
+       if ($tmp){
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $tram2_failed = 1;
+	}
+# Test ram 0 at Ge7 at 3
+	$tmp = gr2_tram 3 ;
+	if ($tmp) {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $tram3_failed = 1;
+	}
+# Test ram 0 at Ge7 at 4
+	$tmp = gr2_tram 4 ;
+	if ($tmp) {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $tram4_failed = 1;
+	}
+# Test ram 0 at Ge7 at 5
+	$tmp = gr2_tram 5 ;
+	if ($tmp) {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $tram5_failed = 1;
+	}
+# Test ram 0 at Ge7 at 6
+	$tmp = gr2_tram 6 ;
+	if ($tmp) {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $tram6_failed = 1;
+	}
+# Test ram 0 at Ge7 at 7
+	$tmp = gr2_tram 7 ;
+	if ($tmp) {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $tram7_failed = 1;
+	}
+# Test shram  
+	$tmp = gr2_tram 8 ;
+	if ($tmp) {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $tram8_failed = 1;
+	}
+# Test Hq2uram
+	$tmp = gr2_tram 9 ;
+	if ($tmp) {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $tram9_failed = $tmp;
+	}
+# Test ge7uram
+	$tmp = gr2_tram 10;
+	if ($tmp) {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $tram10_failed = $tmp;
+	 }
+	gr2_initsys;
+	clear;
+
+# Test HQ2
+	if(gr2_hq2test) {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $hq2test_failed = 1;
+	}
+# Test shareram using Ucode
+	if (gr2_shram) {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $shram_failed = 1;
+	}
+# Test internal GE7 ram
+	if (gr2_ram12) {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $ram12_failed =1;
+	}
+# Test seedrom 
+	if (gr2_seedrom) {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $seedrom_failed =1;
+	}
+# Test the squaroot rom
+	if (gr2_sqrom) { 
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $sqrom_failed =1;
+	}
+	gr2_initsys ;
+
+# Test Ge 7 bus
+	if (gr2_gebus) {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $gebus_failed =1;
+	}
+
+# Test ge floating point unit
+	if (gr2_gefloat) {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $gefloat_failed = 1;
+	}
+	gr2_initsys;
+	clear;
+resetcons
+buffoff
+$err = 0;
+if ($vc1_sram_failed)
+{
+	echo "VC1 SRAM  test failed"; 
+	$err = 1
+} 
+if ($tram0_failed)
+{ 
+	echo "Ram 0 at GE7 - 0 failed "; 
+	$err = 1
+} 
+if ($tram1_failed)
+{ 
+	echo "Ram 0 at GE7 - 1 failed "; 
+	$err = 1
+} 
+if ($tram2_failed)
+{ 
+	echo "Ram 0 at GE7 - 2 failed "; 
+	$err = 1
+} 
+if ($tram3_failed)
+{ 
+	echo "Ram 0 at GE7 - 3 failed "; 
+	$err = 1
+} 
+if ($tram4_failed)
+{ 
+	echo "Ram 0 at GE7 - 4 failed "; 
+	$err = 1
+} 
+if ($tram5_failed)
+{ 
+	echo "Ram 0 at GE7 - 5 failed "; 
+	$err = 1
+} 
+if ($tram6_failed)
+{ 
+	echo "Ram 0 at GE7 - 6 failed "; 
+	$err = 1
+} 
+if ($tram7_failed)
+{ 
+	echo "Ram 0 at GE7 - 7 failed "; 
+	$err = 1
+} 
+if ($tram8_failed)
+{ 
+	echo "Share ram test failed "; 
+	$err = 1
+}
+if ($tram9_failed)
+{ 
+	echo "Hq2uram  ram failed "; 
+	$err = 1
+}
+if ($tram10_failed)  
+{ 
+	echo "ge7uram failed " ;
+	$err = 1
+}
+if ($hq2test_failed)
+{ 
+	echo "HQ2 Test failed ";
+	$err = 1
+}
+if ($shram_failed)
+{ 
+	echo "shram test failed";
+	$err = 1
+}
+if ($ram12_failed)
+{
+	echo "GE7 ram 1/2 test failed "; 
+	$err = 1
+}
+if ($seedrom_failed) 
+{ 
+	echo "seedrom test failed ";
+	$err = 1
+}
+if ($sqrom_failed)
+{
+	echo "squaroot teste failed";
+	$err = 1
+}
+if ($gebus_failed) 
+{ 
+	echo "gebus test failed";
+	$err = 1
+}
+if ($gefloat_failed)  
+{ 
+	echo "gefloat test failed";
+	$err = 1
+}
+
+if ( $err )
+{
+    if (!$report) {
+       	emfail 2;
+       	wait;
+       	exit;
+    }	
+echo "HQ & GE Tests failed\n";
+wait
+$err=0
+$gr2_failed=1
+}
+else echo "HQ & GE Tests passed\n"
+buffon
+
+# Test bt457 
+	if (gr2_chkbt457) {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $chkbt457_failed = 1;
+	    $err=1;
+	}
+# Test Shared ram and Re
+	gr2_initsys
+	$tmp = gr2_shramre3
+	if ($tmp) {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $shramre3_failed =1;
+	    $err=1;
+	}
+# Test DMA between host and GE7 shared ram
+	gr2_initsys
+	clear
+	$tmp = gr2_cpushram
+	if ($tmp)  {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $cpushram_failed =1;
+	    $err=1;
+	}
+# Test DMA between host and and RE3
+	resetcons
+	buffon
+	gr2_initsys
+	$tmp = gr2_cpure3
+	if ($tmp) {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $cpure3_failed =1;
+	    $err=1;
+	}
+buffoff
+echo "testing vdma"
+buffon
+# Test VDMA controller
+	if(gr2_vdma) {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }
+	    $vdma_failed =1;
+	    $err=1;
+	}
+buffoff
+echo "testing ctxsw"
+buffon
+# Test GE7 context switching
+	if(gr2_ctxsw) {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $ctxsw_failed =1;
+	    $err=1;
+	}
+	clear;
+# Test quad drawing
+	$tmp = gr2_quad
+	if ($tmp) {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $quad_failed =1;
+	    $err=1;
+	}
+	$tmp = gr2_fourquad
+	if ($tmp){
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $fourquad_failed = 1;
+	    $err=1;
+	}
+	clear;
+resetcons
+buffoff
+if ($chkbt457_failed) echo "Bt457 test failed";
+if ($shramre3_failed) echo "shramre3 test failed"
+if ($cpushram_failed) echo "CPU shram test failed";
+if ($cpure3_failed) echo "cpure3 test failed ";
+if ($ctxsw_failed) echo "context switching test failed ";
+if ($vdma_failed) echo "vdma controller test failed ";
+if ($quad_failed) echo "quad test failed";
+if ($fourquad_failed) echo "fourquad test failed";
+
+if ($err)
+{
+    if (!$report) {
+       	emfail 2;
+       	wait;
+       	exit;
+    }	
+echo "******  PRESS RETURN TO CONTINUE OR ^C TO EXIT ************"
+wait
+$err=0
+$gr2_failed=1
+}
+else echo "BT457, DMA and QUADs Tests Passed.\n"
+buffon
+
+# Test bitplane VM2
+	gr2_initsys
+	if (gr2_bp) {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $bp_failed = 1;
+	    $err=1;
+	}
+# Test stridedma between shram and re3
+	resetcons
+	buffon
+	gr2_initsys
+	$tmp = gr2_stride
+	if ($tmp)  {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $stride_failed =1 ;
+	    $err=1;
+	}
+# Test Zbuffer
+	gr2_initsys
+	$tmp=gr2_zb
+	if($tmp)  {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $zb_failed =1;
+	    $err=1;
+	}
+# Test Xmap 
+buffoff
+echo "testing XMAP"
+buffon
+	if (test_xmap) {
+	    if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+    	   $test_xmap_failed =1;
+	   $err=1;
+	}
+#Test Xmap CLUT 
+	if (test_xmap_clut) {
+	   if (!$report) {
+        	emfail 2;
+        	wait;
+        	exit;
+    	    }	
+	    $test_xmap_clut_failed =1;
+	    $err=1;
+}
+resetcons
+buffoff
+echo "************************* RESULTS ********************************"
+if ($bp_failed) {
+  echo "bitplane test failed";
+  $gr2_failed = 1;
+}
+if ($stride_failed)  {
+   echo "stride test failed";
+   $gr2_failed = 1;
+}
+if ($zb_failed) { 
+   echo "Zbuffer test failed";
+  $gr2_failed = 1;
+}
+if ($test_xmap_failed) {
+   echo "test_xmap test failed";
+  $gr2_failed = 1;
+}
+if ($test_xmap_clut_failed) {
+   echo "test_xmap_clut test failed";
+  $gr2_failed = 1;
+}
+if (!$err) echo "Frame Buffer, Bit-Plane, and XMAPs Test Passed.\n"
+resetcons 
+buffoff
+if ($gr2_failed) echo "ERROR: Failure detected on graphics board."
+else echo "graphics board tests passed"
+fi
+echo " *****************END OF THE TEST *****************"
+}
+gr2_all {
+        $tmp = gr2_setboard 0;
+        if ($tmp) {
+		echo "Testing gfx in slot 0."
+                gr2;
+        	if ($gr2_failed) 
+			echo "ERROR: Failure detected on gfx in slot 0."
+        }
+
+        $tmp = gr2_setboard 1;
+        if ($tmp) {
+		echo "Testing gfx in slot 1."
+                gr2;
+	        if ($gr2_failed) 
+			echo "ERROR: Failure detected on gfx in slot 1."
+        }
+}
+# END OF GR2 SUPPORT
+
+# Start of Galileo video diagnostics
+CheckSlot {
+        $tmp = gr2_setboard 0;
+        if ($tmp) {
+		echo "GR2 Board Found in slot 0."
+		return 0
+        }
+
+        $tmp = gr2_setboard 1;
+        if ($tmp) {
+		echo "GR2 Board Found in slot 1."
+		return 0
+        }
+}
+
+cc1 {
+	CheckSlot;
+	echo "CC1 Frame Buffer Test";
+	$status =ev1_init ;
+	if ($status)  {
+		echo " Galileo Board Initialization FAILED"
+		return ($status);
+	}
+	echo "Galileo Board Initialized Properly"
+	echo "CC1 Memory Test";
+	$status = cc1_mem;
+	if ($status) 
+		wait;
+	echo "CC1 (DMA MODE)Memory Test";
+	$status = cc1_dma;
+	if ($status) 
+		wait;
+}
+
+ab1_red {
+	CheckSlot;
+	$status =ev1_init ;
+	if ($status)  {
+		echo " Galileo Board Initialization FAILED"
+		return ($status);
+	}
+	echo "Galileo Board Initialized Properly"
+	echo "AB1 Red Channel Memory Test ";
+	ab1_rmem;
+}
+
+ab1_blue {
+	CheckSlot;
+	$status =ev1_init ;
+	if ($status)  {
+		echo " Galileo Board Initialization FAILED"
+		return ($status);
+	}
+	echo "Galileo Board Initialized Properly"
+	echo "AB1 Blue Channel Memory Test ";
+	ab1_bmem;
+}
+
+ab1_green {
+	CheckSlot;
+	$status =ev1_init ;
+	if ($status)  {
+		echo " Galileo Board Initialization FAILED"
+		return ($status);
+	}
+	echo "Galileo Board Initialized Properly"
+	echo "AB1 Green Channel Memory Test ";
+	ab1_gmem;
+}
+
+ab1 {
+	CheckSlot;
+	$status =ev1_init ;
+	if ($status)  {
+		echo " Galileo Board Initialization FAILED"
+		return ($status);
+	}
+	echo "Galileo Board Initialized Properly"
+	echo "AB1 Memory Test (Red, Green, Blue)";
+	status = ab1_mem;
+	if ($status) 
+		wait;
+}
+
+kv {
+	CheckSlot;
+	$status =ev1_init ;
+	if ($status)  {
+		echo " Galileo Board Initialization FAILED"
+		return ($status);
+	}
+	echo "Galileo Board Initialized Properly"
+	echo "Test Display Control Bus";
+	$status = ev1_dcb;
+	if ($status)
+		wait;
+	echo "CC1 Memory Test";
+	cc1;
+	echo "AB1 Memory Test (Red, Green, Blue)";
+	ab1;
+}

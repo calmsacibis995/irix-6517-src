@@ -1,0 +1,495 @@
+#! /usr/sbin/perl
+
+## massage data into the appropriate format for graphing, etc.
+
+# %work contains workloads
+# %work_to_usec contains map from workload to microseconds
+# $nprocs contains number of processors
+#
+# ASSUMPTIONS:
+# - There is a data file for every combination of processors and
+#   workload.
+
+require "getopts.pl";
+
+%field_number = (
+	"proc",		0,
+	"wall",		1,
+	"user",		2,
+	"sys",		3,
+	"nops",		4,
+	"fops",		5,
+	"wall_op",	6,
+	"user_op",	7,
+	"sys_op",	8,
+	"pgrec",	9,
+	"pgflt",	10,
+	"vcsw",		11,
+	"ivcsw",	12,
+	"work",		13,
+
+	## synthetic fields
+	"totalops",	14,
+	"user_totalop",	15,
+	"wall_totalop",	16,
+);
+
+%field_english = (
+	"proc",		"processor number",
+	"wall",		"wall clock time (sec)",
+	"user",		"user time (sec)",
+	"sys",		"system time (sec)",
+	"nops",		"successful operations",
+	"fops",		"failed operations",
+	"wall_op",	"wall clock per operation (usec)",
+	"user_op",	"user time per operation (usec)",
+	"sys_op",	"system time per operation (usec)",
+	"pgrec",	"page reclaims",
+	"pgflt",	"page faults",
+	"vcsw",		"voluntary context switches",
+	"ivcsw",	"involuntary context switches",
+	"work",		"parallel workload (usec)",
+
+	## synthetic fields
+	"totalops",	"successful and failed operations",
+	"user_totalop",	"user time per partial operation (usec)",
+	"wall_totalop", "wall clock time per partial operation (usec)",
+);
+
+%type_english = (
+	"min",		"Minimum",
+	"max",		"Maximum",
+	"avg",		"Average",
+	"sum",		"Total",
+	"sumsq",	"Total squared",
+	"stddev",	"Standard deviation of",
+	"var",		"Variance of",
+	"max_vs_min",	"Difference between max and min of",
+);
+
+$nprocs = 0;
+@shownprocs = "1-";  # default to all numbers of processors
+
+if (!&Getopts("d:nh:gwat:p:M:") || @ARGV < 1) {
+print <<EOM;
+
+usage: procs_vs_workload [options] <field> [type]
+
+       where options can be:
+
+          -d <dir>    -- directory containing data files
+          -n          -- normalize vs. 1 proc at same workload
+	  -h <host>   -- hostname for output
+          -g          -- gnuplot output
+	  -w          -- wingz output (default)
+	  -a          -- don't subtract parallel work times
+			 (only affects <field> = wall_op|user_op|sys_op)
+          -t          -- graph title
+          -p <cpus>   -- only show data for a certain number of processors
+          -M <max>    -- clamp values to an upper limit
+
+       where <type> is one of:
+
+          min, max, avg, sum, sumsq, stddev, var, max_vs_min
+
+       and <field> is one of:
+
+EOM
+
+	for (keys %field_english) {
+		print " " x 10, sprintf("%10s", $_),
+			"\t - $field_english{$_}\n";
+	}
+
+	exit(1);
+}
+
+if ($opt_w && $opt_g) {
+	print "Only one of -w or -g may be specified.\n";
+}
+
+## ARGUMENTS
+$hostname = $opt_h;
+$field = $ARGV[0];
+$min_max_avg = $ARGV[1] || "avg";
+$normalizep = $opt_n;
+$dir = $opt_d || ".";
+$wingz = $opt_w || !$opt_g;
+$gnuplot = !$wingz;
+$no_sub_workload = $opt_a;
+$title = $opt_t;
+@shownprocs = split(/,/, $opt_p) if defined($opt_p);
+$clamp_max = $opt_M if defined($opt_M);
+
+if (!defined($field_number{$field}) && $field !~ /^:/) {
+	print "<field> must be one of:\n";
+	for (keys %field_english) {
+		print " " x 10, sprintf("%10s", $_),
+			"\t - $field_english{$_}\n";
+	}
+	exit(1);
+}
+
+if ($field =~ /^:/) {
+	local($rest) = $field;
+	local(@notfound);
+
+	while ($rest =~ s/[^a-z]*([a-z]+)//) {
+		if (!defined($field_number{$1})) {
+			push(@notfound, $1);
+		}
+	}
+
+	if (@notfound) {
+		print join(", ", @notfound), " not valid field name",
+			(@notfound > 1 ? "s" : ""), ".\n";
+		print "Must be one of:\n\n";
+		for (keys %field_english) {
+			print " " x 10, sprintf("%10s", $_),
+				"\t - $field_english{$_}\n";
+		}
+		exit(1);
+	}
+}
+
+@files = &process_directory($dir);
+
+if (@files == 0) {
+	print "No files to work with!\n";
+	exit(1);
+}
+
+&process_filenames(@files);
+%work_to_usec = &load_workload_times($hostname);
+
+&print_procs_vs_workload($field, $min_max_avg, $normalizep);
+
+#--------------------------------------------------------------
+
+## print_procs_vs_workload
+## 
+##   field -- field to observe
+##   min_max_avg - min, max, or avg of per-processor values
+##   normalizep -- normalize value wrt. 1 processor case
+
+sub print_procs_vs_workload {
+	local($field, $min_max_avg, $normalizep) = @_;
+
+	local(%uniproc_val);
+	local(@vals);
+	local($val);
+	local($first_proc) = 1;
+
+	for $work (keys %work) {
+		@vals = &get_eval(1, $work, $min_max_avg);
+		$uniproc_val{$work} = &get_val($field, @vals);
+	}
+
+	## chart info
+	print "# " if $gnuplot;
+	$val = 0;
+	for (1..$nprocs) {
+		++$val if &number_in_list($_, @shownprocs);
+	}
+	print $val;
+	print "\t";
+	@foo = &sorted_work;
+	print scalar(@foo);
+	print "\t\"Number of processors" if $wingz;
+	print "\t\"Parallel work (usec)" if $wingz;
+	if ($wingz) {
+		local($filename) = $title;
+		if ($filename eq "") {
+			$filename = $hostname . "_" . $field .
+				$min_max_avg;
+		}
+		$filename =~ s/\s+/_/g;
+		print "\t\"$filename.gif";
+	}
+	print "\n\n";
+
+	## chart title
+	print "# " if $gnuplot;
+	print "\"" if $wingz;
+	print "$title - " if defined($title);
+	print "$hostname - " if !defined($title);
+	print "Normalized " if $normalizep;
+	print $type_english{$min_max_avg}, " ", $field_english{$field};
+	print "\n" if $gnuplot;
+
+	## column titles
+	for $work (&sorted_work) {
+		print "\t";
+		print "\"" if $wingz;
+		print $work_to_usec{$work};
+	}
+	print "\n";
+
+	## rows contain a fixed number of processors
+	## columns contain a fixed workload
+	for ($pp = $first_proc; $pp <= $nprocs; $pp++) {
+		next if !&number_in_list($pp, @shownprocs);
+
+		print "\"" if $wingz;
+		print "$pp";
+
+		for $work (&sorted_work) {
+			@vals = &get_eval($pp, $work, $min_max_avg);
+
+			$val = &get_val($field, @vals);
+
+			if ($normalizep) {
+				if ($uniproc_val{$work} != 0) {
+					$val /= $uniproc_val{$work};
+				}
+			}
+
+			if (defined($clamp_max) && $val > $clamp_max) {
+				$val = $clamp_max
+			}
+
+			print("\t", sprintf("%.5f", $val));
+		}
+
+		print "\n";
+	}
+
+	print "\n";
+
+	for ("row\t", "Number of processors\n", "col\t", "Workload (us)\n") {
+		print "# " if $gnuplot;
+		print "\"" if $wingz;
+		print;
+	}
+}
+
+#--------------------------------------------------------------
+
+sub get_val {
+	local($field, @vals) = @_;
+	local($val);
+
+	if ($field =~ /^:/) {
+		$field =~ s/^://;
+		$field =~ s/[a-z]+/&get_val($&, @vals)/ge;
+		$val = eval($field);
+	}
+	else {
+		$val = $vals[$field_number{$field}];
+	}
+
+	if ($field eq "user_op" || $field eq "wall_op"
+		|| $field eq "sys_op") {
+		if (!$no_sub_workload) {
+			$val -= $vals[$field_number{"work"}];
+			$val = 0.0 if $val < 0.0;
+		}
+	}
+
+	# kludge to prevent zeros in the data, s.t. log scale graphs
+	# will work.  The non-zero value here should be less than the
+	# estimated error in the data, but more than the precision of the
+	# output.
+	$val = 0.00001 if $val == 0.0;
+
+	return $val;
+}
+
+sub load_workload_times {
+	local($hostname) = @_;
+	local(%work_to_usec);
+	local($work, $usec);
+
+	if (open(FILE, "$dir/times-$hostname")) {
+		while (<FILE>) {
+			next if /^#/;
+			($work, $usec) = split;
+			$work_to_usec{$work} = $usec;
+		}
+		close(FILE);
+	}
+	else {
+		for (keys %work) {
+			$work_to_usec{$_} = $_;
+		}
+	}
+
+	return %work_to_usec;
+}
+
+sub process_directory {
+	local($dir) = @_;
+	local(@files, @files_raw, @hosts);
+
+	opendir(DIR, $dir) || die "unable to opendir $dir: $!\n";
+	@files_raw = readdir(DIR);
+	closedir(DIR);
+
+	@hosts = grep(/^hinv\-.*/, @files_raw);
+	for (@hosts) {
+		s/^hinv\-//;
+	}
+
+	if (!defined($hostname)) {
+		if (@hosts == 1) {
+			$hostname = $hosts[0];
+		}
+		else {
+			print "Must specify hostname!\n";
+			exit(1);
+		}
+	}
+
+	if (!grep($hostname, @hosts)) {
+		print "Data for $hostname doesn't exist in directory $dir!\n";
+		exit(1);
+	}
+
+	@files = grep(/^data\-$hostname\-/, @files_raw);
+
+	return @files;
+}
+
+sub sorted_work {
+	return sort {$a <=> $b} keys %work;
+}
+
+sub get_eval {
+	local($nprocs, $work, $type) = @_;
+	local($file) = "data-$hostname-w$work-t$nprocs";
+	local(@line, $nlines);
+	local(@sumsq, @sum, @max, @min);
+	local(@avgs, @var);
+	local($ii);
+
+	if ($type eq "stddev" || $type eq "var") {
+		## yuck, has to be two-pass
+		@avgs = &get_eval($nprocs, $work, "avg");
+	}
+
+	$nlines = 0;
+
+	open(FILE, $dir . "/" . $file)
+		|| die "unable to open $dir/$file: $!\n";
+
+	while (<FILE>) {
+		next if /^\#/;		# skip comments
+		s/^\s+//;		# remove leading whitespace
+		s/\s+$//;		# remove trailing whitespace
+
+		@line = split;
+		$nlines++;
+
+		## XXX kludge to deal with infinity
+		## this will really only happen with user_op and wall_op
+		for (@line) {
+			if ($_ eq "inf") {
+				$_ = 1.0e10;
+			}
+		}
+
+		# fill in synthetic fields
+		$line[$field_number{"totalops"}] =
+			$line[$field_number{"nops"}] +
+			$line[$field_number{"fops"}];
+		die if $line[$field_number{"totalops"}] == 0;
+		$line[$field_number{"user_totalop"}] =
+			$line[$field_number{"user"}] * 1.0e6 /
+			$line[$field_number{"totalops"}];
+		$line[$field_number{"wall_totalop"}] =
+			$line[$field_number{"wall"}] * 1.0e6 /
+			$line[$field_number{"totalops"}];
+
+		# set initial values
+		if ($nlines == 1) {
+			@sum = @max = @min = @line;
+			for ($ii = 0; $ii < @line; $ii++) {
+				$sumsq[$ii] = $line[$ii] ** 2;
+				if ($type eq "var" || $type eq "stddev") {
+					$var[$ii] = ($line[$ii] -
+						$avgs[$ii]) ** 2;
+				}
+			}
+			next;
+		}
+
+		for ($ii = 0; $ii < @line; $ii++) {
+			$max[$ii] = $line[$ii] if $max[$ii] < $line[$ii];
+			$min[$ii] = $line[$ii] if $min[$ii] > $line[$ii];
+			$sum[$ii] += $line[$ii];
+			$sumsq[$ii] += $line[$ii] ** 2;
+
+			if ($type eq "var" || $type eq "stddev") {
+				$var[$ii] += ($line[$ii] - $avgs[$ii]) ** 2;
+			}
+		}
+	}
+
+	close(FILE);
+
+	if ($type eq "var" || $type eq "stddev") {
+		for ($ii = 0; $ii < @var; $ii++) {
+			if ($nlines != 1) {
+				$var[$ii] /= ($nlines - 1.0);
+			}
+			else {
+				$var[$ii] = 0;
+			}
+		}
+	}
+
+	if ($type eq "min") { return @min; }
+	elsif ($type eq "max") { return @max; }
+	elsif ($type eq "sum") { return @sum; }
+	elsif ($type eq "sumsq") { return @sumsq; }
+	elsif ($type eq "var") { return @var; }
+	elsif ($type eq "avg") {
+		for ($ii = 0; $ii < @sum; $ii++) {
+			$sum[$ii] /= ($nlines * 1.0); # floating pt. division
+		}
+		return @sum;
+	}
+	elsif ($type eq "stddev") {
+		for ($ii = 0; $ii < @var; $ii++) {
+			$var[$ii] = sqrt($var[$ii]);
+		}
+		return @var;
+	}
+	elsif ($type eq "max_vs_min") {
+		for ($ii = 0; $ii < @max; $ii++) {
+			$max[$ii] -= $min[$ii];
+		}
+		return @max;
+	}
+	else {
+		die;
+	}
+}
+
+sub process_filenames {
+	local(@files) = @_;
+	local($this_work, $this_nprocs);
+
+	for $file (@files) {
+		($this_work, $this_nprocs) = ($file =~ /\-w(\d+)\-t(\d+)/);
+		$nprocs = $this_nprocs if $this_nprocs > $nprocs;
+		$work{$this_work} = 1;
+	}
+}
+
+sub number_in_list {
+	local($n, @list) = @_;
+
+	for (@list) {
+		if (/^(\d+)?\-(\d+)?$/) {
+			next if defined($1) && $n < $1;
+			next if defined($2) && $n > $2;
+			return 1;
+		}
+		else {
+			return 1 if $n == $_;
+		}
+	}
+
+	return 0;
+}

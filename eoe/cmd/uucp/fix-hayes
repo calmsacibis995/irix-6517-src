@@ -1,0 +1,245 @@
+#! /bin/sh -e
+# $Revision: 1.10 $
+
+# 'Fix' a Hayes "Smartmodem" or "ACCURA"
+
+#    This script writes a configuration suitable for operation with IRIX
+#    into the non-volatile memory in the modem.
+
+#	-i	for inbound use only
+#	-o	for outbound use only
+#	-io	for both
+#	-m model to specify the model number, as in "-m 9624"
+#	-v	for verbose debugging
+#	-c cmd	to add the string of Hayes-like commands, "cmd",
+#		    to the end of string of initializations.
+#	-s bps	to specify the DTE speed, either "19200" or "38400"
+
+# This script must be run by "root".
+
+# When this script is run, it sends the responses of the modem to
+#	standard out.  If you do not see the right results, first check
+#	the cable to the modem.
+
+# This script uses 'ttyd*' device names, so that it is not stopped by a
+#	need for DCD.  Since there is often a getty(1M) running on
+#	a 'ttyf*', and since you cannot simultaneously open 'ttyf' and
+#	'ttyd', it is necessary to stop the getty in /etc/inittab
+#	before using this script.  If a uugetty(1M) is running on the
+#	port, it need not be turned off, because this script will
+#	temporarily disable it.
+
+
+# With many old Hayes compatible modems
+# use a line in /etc/inittab that runs /usr/lib/uucp/uugetty with arguments
+# such as the following:
+#	-Nt60 -ihayes24in,conn ttyf2 du_2400
+# Hayes v.32 modems should use args something like:
+#	-Nt60 -ihayes14in,conn ttyf2 dx_38400
+# See `man uugetty` and `man inittab`.
+
+
+# Additional local commands should be added to this file in the following
+#	line or provided with the -c option
+loc=""
+
+USAGE="usage: `basename $0`: -i|-o|-io [-m model] [-v] [-c cmd] [-s 1200|2400|19200|38400] portno"
+
+
+if test $# -le 1 ; then
+    echo "$USAGE"
+    exit 1
+fi
+while getopts "viom:c:s:" c; do
+    case $c in
+    i) in=1;;
+    o) out=1;;
+    v) if test ! -z "$verbose"; then
+	    set -v
+	fi
+	set -x
+	verbose="-v"
+	;;
+    m) model=`echo "$OPTARG" | tr '[a-z]' '[A-Z]'`;;
+    c) loc="$loc $OPTARG";;
+    s) speed="$OPTARG";;
+    \?) echo "$USAGE"; exit 1;;
+    esac
+done
+shift `expr $OPTIND - 1`
+if test $# != 1 ; then
+    echo "$USAGE"
+    exit 1
+fi
+
+case $1 in
+    [dmf]*) port=`expr $1 : '.\(.*\)'`;;
+    *) port=$1;;
+esac
+dev=/dev/ttyd$port
+odevs="/dev/ttym$port /dev/ttyf$port"
+if test ! -c "$dev"; then
+    echo "bad port number: $1"
+    exit 1
+fi
+if test ! -d /var/spool/locks -a -d /usr/spool/locks; then
+    LOCKDIR=/usr/spool/locks
+else
+    LOCKDIR=/var/spool/locks
+fi
+LOCKD=$LOCKDIR/LCK..ttyd$port
+LOCKM=$LOCKDIR/LCK..ttym$port
+LOCKF=$LOCKDIR/LCK..ttyf$port
+# uucp wants a 10 byte string
+LOCKSTR=`expr "         $$" : '.*\(..........\)'`
+
+LOGFILE=/tmp/fix-modem$$
+
+# use factory defaults, except (or including):
+#   2400 bit/sec modems
+#	&R1=keep CTS on
+#	S2=128 to disable '+++' escapes for "security"
+#		'+++' can be used to compromise a system.  It should
+#		be turned off if untrusted users can log into the system.
+#	S18=5 to prevent remote tests sending the modem into space forever
+#	S25=0 hang up as soon as DTR goes says so
+
+#   ACCURA modems
+#	&Y0=use profile number 0
+#	&S0=DSR always on
+#	&K3=hardware flow control
+#	&D3=reset on DTR false
+#	&C1=DCD indicates carrier
+#	X4=lots of messages
+#	W1=more messages
+#	Q0=messages all of the time (good for `uugetty -i`)
+#	S38=2 hang up within 2 seconds of DTR false
+#	S95=62 more messages
+#	S36=3 no NMP
+#	S37=11 try to use 14.kbps
+
+
+case "${model:=SMART}" in
+    SMART)
+	speed=${speed:=2400}
+	minspeed=1200
+	maxspeed=2400
+	rstcmd='&F'
+	var1cmd='Q &R1 S2=128 S18=5 S25=0'
+	var2cmd=''
+	wcmd='&W'
+	infocmd=''
+	;;
+    ACCURA)
+	speed=${speed:=38400}
+	minspeed=19200
+	maxspeed=38400
+	rstcmd='&F'
+	var1cmd='&Y0 &S0 &K3 &D3 &C1 X4 W1 Q0'
+	var2cmd='S38=2 S95=62 S36=3 S37=11'
+	wcmd='&W0'
+	infocmd='I1 &V'
+	;;
+
+    *) echo "unknown model: $model"; exit 1;;
+esac
+
+
+case "$speed" in
+    1200|2400) STIME=3 ;;
+    19200) STIME=1 ;;
+    38400) STIME=1 ;;
+    *) echo "unknown speed: $speed"; exit 1;;
+esac
+
+if test "$speed" -gt "$maxspeed"; then
+    echo
+    echo "The maximum DTE rate of the \"$model\" is $maxspeed"
+    speed=$maxspeed
+fi
+
+if test "$speed" -lt "$minspeed"; then
+    echo
+    echo "The minimum DTE rate of the \"$model\" is $minspeed"
+    speed=$maxspeed
+fi
+
+# Set S0=1 to answer the phone for pure input.
+# Set S0=1 to answer the phone for pure input.
+#	Do not answer the phone (S0=0) for pure output.
+#	Do not answer the phone by default (S0=0) for combined
+#		input & output, because uugetty will answer it.
+if test "$out" = 1; then
+    modecmd='S0=0'
+elif test "$in" = 1; then
+    modecmd='S0=1'
+else
+    echo "$USAGE"		# complain if neither in nor out is set
+    exit 1
+fi
+
+
+if test ! -w /dev; then
+    echo "This does not work very well except for the superuser."
+    exit 1
+fi
+
+# fight the UUCP daemons and others for the port
+/etc/renice -20 $$ > /dev/null
+
+
+echo
+echo "  If this effort to program the \"$model\" connected to port $port works,"
+echo "  you should see a series AT commands and responses.  The response"
+echo "  to each command should end with 'OK'."
+echo
+
+# lock the device by all of its names
+rm -f $LOCKD $LOCKM $LOCKF
+echo "$LOCKSTR" > $LOCKD; ln $LOCKD $LOCKM; ln $LOCKD $LOCKF
+
+# zap any gettys or other users
+pids=`/etc/fuser -q $dev $odevs 2>/dev/null`
+if test ! -z "$pids"; then
+    echo "    Stopping processes currently using port $port\n"
+    if test ! -z "$verbose"; then
+	ps -lfp $pids
+    fi
+    kill -1 $pids
+    sleep 2
+fi
+pids="$pids `/etc/fuser -qk $dev $odevs 2>/dev/null`"
+# re-lock in case the other guy removed our rude lock files
+rm -f $LOCKD $LOCKM $LOCKF
+echo "$LOCKSTR" > $LOCKD; ln $LOCKD $LOCKM; ln $LOCKD $LOCKF
+
+trap "rm -f $LOCKD $LOCKM $LOCKF $LOGFILE; /etc/fuser -qk $dev $odevs 2>/dev/null; exit 1" 0 1 2 15
+
+# start listening to the modem, after waiting for previous users to
+# disappear and allow us to open the ttyd* device.
+# Also keep DTR low in the hope of resetting the modem.
+while test ! -z "$pids"; do
+    pids=`/etc/fuser -qk $dev $odevs 2>/dev/null`
+    sleep 2
+done
+
+rm -f $LOGFILE
+tee $LOGFILE <$dev &
+
+stty $speed -echo -icrnl -ixon -ixoff -isig clocal < $dev
+
+# Reset things.
+echo "AT $rstcmd\r\c" > $dev; sleep $STIME
+
+echo "AT $var1cmd\r\c" > $dev; sleep $STIME
+
+echo "AT $var2cmd $modecmd $loc\r\c" > $dev; sleep $STIME
+
+echo "AT $wcmd\r\c" > $dev; sleep 4
+
+if test "$infocmd"; then
+    echo "AT $infocmd\r\c" > $dev; sleep 3
+fi
+
+#prevent message about the death of the listener
+exec >/dev/null 2>&1

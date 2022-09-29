@@ -1,0 +1,433 @@
+.TH ckpt_create 3
+.SH NAME
+ckpt_setup, ckpt_create, ckpt_restart, ckpt_stat, ckpt_remove \- checkpoint and restart (CPR) library interfaces
+.SH SYNOPSIS
+#include <ckpt.h>
+.sp
+int
+ckpt_setup(struct ckpt_args \fI*args\fP[], size_t \fInargs\fP);
+.sp
+int
+ckpt_create(const char \fI*path\fP, ckpt_id_t \fIid\fP, u_long \fItype\fP,
+ 	struct ckpt_args \fI*args\fP[], size_t \fInargs\fP);
+.sp
+ckpt_id_t
+ckpt_restart(const char \fI*path\fP, struct ckpt_args \fI*args\fP[],
+ 	size_t \fInargs\fP);
+.sp
+int
+ckpt_stat(const char \fI*path\fP, struct ckpt_stat \fI**sp\fP);
+.sp
+int ckpt_remove(const char \fI*path\fP);
+.SH DESCRIPTION
+The functions provided here are used to issue checkpoint and restart (CPR)
+requests to a process or group of processes.
+The
+.IR ckpt_setup ,
+.IR ckpt_create , 
+.IR ckpt_restart ,
+and
+.IR ckpt_remove
+routines are implemented according to the IEEE standard POSIX 1003.1m Draft 1,
+with minor modifications (described below).
+The
+.IR ckpt_stat
+function is an IRIX extension.
+Silicon Graphics intends to follow the future development
+of POSIX 1003.1m draft standards and endeavor to be compliant.
+.SS ckpt_setup
+This routine currently does not perform any operation on IRIX systems.
+The interface is reserved for future addition of features.
+The POSIX
+.I ckpt_args
+structure defined in <ckpt.h> includes the following members:
+.P
+.nf
+	unsigned long   ckpt_type;      /* data type */
+	void            *ckpt_data;     /* data */
+.fi
+.P
+None of the POSIX
+.I ckpt_type
+definitions (CKPT_ID, CKPT_LOCK, CKPT_SIGNAL,
+CKPT_POSTRESTART, CKPT_PRERESTART, and CKPT_POSTCREATE)
+is implemented in IRIX because
+CPR handles these functions directly and transparently.
+.SS ckpt_create
+This routine performs a checkpoint operation against a process
+or group of processes.
+It creates a set of checkpoint statefiles in the directory
+.IR path ,
+based on the user-specified checkpoint ID
+.IR id ,
+which has a
+.I type
+as defined in <ckpt.h>:
+.P
+.ta 8n
+.nf
+P_PID	for Unix process ID
+P_PGID	for Unix process group ID
+P_SID	for Unix process session ID; see \fItermio\fP(7)
+P_ASH	for IRIX Array Session ID; see \fIarray_services\fP(5)
+P_HID	for process hierarchy (tree) rooted at that PID
+P_SGP	for IRIX sproc shared group; see \fIsproc\fP(2)
+.fi
+.P
+Note that
+.I ckpt_id_t
+is defined as an
+.I int64_t
+type in <ckpt.h>.
+The original POSIX standard requires
+.I id
+to be a
+.I pid_t
+which is not long enough to support the SGI 64-bit Array ID (ASH) number.
+However, any application binary using regular POSIX
+.I ckpt_create
+should work fine since type casting from 32-bit
+.I pid_t
+to 64-bit
+.I ckpt_id_t
+is transparent.
+.P
+The
+.I *args[]
+and
+.I nargs
+arguments from the POSIX draft standard,
+similar to the definitions in
+.IR ckpt_setup ,
+are ignored in IRIX.
+.P
+See
+.IR cpr (1)
+for more information about the CPR attribute file
+.IR $HOME/.cpr ,
+checkpointable objects and limitations,
+the SIGCKPT and SIGRESTART signals,
+event handling using \fIatcheckpoint\fP(3C) and \fIatrestart\fP(3C),
+CPR security, and other issues.
+.P
+In addition to the CPR attribute file, a global variable
+.I cpr_flags
+defined in <ckpt.h> may specify checkpoint-related options.
+The option available is:
+.TP
+CKPT_OPENFILE_DISTRIBUTE
+This flag alters the default location,
+which is the centralized directory given by
+.IR path ,
+for saving open files.
+Instead, open files are saved in the same directory
+where the original open files resided,
+with a new and unique name identifying them.
+For example, if a process has the
+.I /etc/passwd
+file open when a checkpoint is issued,
+with the CKPT_OPENFILE_DISTRIBUTE bit set, the
+.I /etc/passwd
+file is saved distributively in
+.IR /etc/passwd.ckpt.pidXXX .
+Distribute mode is useful when disk space is a concern.
+However, the centralized mode (the default)
+is far more secure and self-contained.
+Users should be cautious when this bit is set.
+.TP
+CKPT_CHECKPOINT_CONT
+This flag makes checkpoint target processes continue running
+after this checkpoint is finished.
+It overrides the default WILL policy,
+and the WILL policy specified in a user's CPR attribute file.
+.TP
+CKPT_CHECKPOINT_KILL
+This flag kills checkpoint target processes
+after this checkpoint is finished.
+This is the default WILL policy,
+but overrides a CONT setting in the user's CPR attribute file.
+.TP
+CKPT_CHECKPOINT_UPGRADE
+Use this flag only when issuing a checkpoint
+immediately before an operating system upgrade.
+This forces a save of all executable files and DSO libraries
+used by the current processes, so that target processes
+can be restarted in an upgraded environment.
+This flag must be used again if restarted processes
+must be recursively checkpointed in the new environment.
+.SS ckpt_restart
+This routine restarts a set of processes from the statefile created at
+checkpoint time and identified by
+.IR path .
+If a restart involves more than one process,
+the restart on all processes has to succeed
+before any process is enabled to run.
+If one restart in a group fails, all fail.
+.P
+In addition to the CPR attribute file, a global variable
+.I cpr_flags
+defined in <ckpt.h> may specify checkpoint-related options.
+The option available is:
+.TP
+CKPT_RESTART_INTERACTIVE
+This flag makes a process or group of processes interactive
+(that is, subject to UNIX job-control),
+if the original processes were interactive.
+The calling process or the calling process' group leader
+becomes the group leader of restarted processes,
+but the original process group ID cannot be restored.
+Without this flag, the default is to restart target processes
+as an independent process group with the original group ID restored.
+.SS ckpt_remove
+This routine deletes a statefile identified by
+.IR path .
+The
+.I ckpt_remove
+routine removes all statefiles,
+including all the saved open files, mapped files, pipe data, and so forth.
+.P
+Only the superuser and the checkpoint owner can remove checkpoint files.
+.SS ckpt_stat
+This routine is issued to existing statefiles in
+.I path
+to get basic information about the checkpointed processes saved there.
+The information is returned through a single-link list of
+.I ckpt_stat_t
+structures pointed by
+.IR *sp ,
+defined in <ckpt.h>.
+Each structure represents one process with the following members:
+.P
+.nf
+	struct ckpt_stat  *cs_next;            /* next process */
+	long              cs_revision;         /* CPR revision # */
+	pid_t             cs_pid;              /* proc pid */
+	pid_t             cs_ppid;             /* proc parent pid */
+	pid_t             cs_pgrp;             /* proc group leader */
+	pid_t             cs_sid;              /* session id */
+	struct stat       cs_stat;             /* see stat(2) */
+	char              cs_nfiles;           /* # of open files */
+	char              cs_comm[PSCOMSIZ];   /* process name */
+	char              cs_psargs[PSARGSZ];  /* and arguments */
+	char              cs_cdir[MAXPATHLEN]; /* current directory */
+	int               cs_board;            /* board (sys/invent.h) */
+        int               cs_cpu;              /* cpu (sys/invent.h) */
+        int               cs_abi;              /* abi (sys/kabi.h) */
+.fi
+.P
+Applications can traverse through the next pointer
+.I cs_next
+to reach all processes associated with the statefile.
+.P
+It is important to note that although applications are not required
+to allocate the memory buffers needed for the
+.I sp
+linked list, it is an application's responsibility
+to release these memory buffers after examining the data.
+Applications should follow the
+.I cs_next
+link to free all of the
+.I ckpt_stat_t
+buffers.
+The following example shows how to use this function:
+.P
+.nf
+	ckpt_stat_t *sp, *sp_next;
+.P
+	if (ckpt_stat(path, &sp)) < 0)
+	    return (-1);
+	while (sp) {
+	    /* examine the data sp */
+	    ...
+	    sp_next = sp->cs_next;
+	    free(sp);
+	    sp = sp_next;
+	}
+.fi
+.SH NOTES
+All the CPR interfaces are found in the
+.I libcpr.so
+DSO, and are loaded at runtime if the
+.B -lcpr
+option is passed to
+.IR cc (1)
+or
+.IR ld (1).
+.P
+The contents of ckpt_stat_t are likely to change between releases.
+.P
+The ckpt_stat() interface is not supported for 32 bit abis running
+on 64 bit kernels.
+.SH SEE ALSO
+.IR cpr (1),
+.IR cview (1),
+.IR atcheckpoint (3C),
+.IR atrestart (3C)
+.P
+IEEE standard POSIX 1003.1m Draft 1, October 1995.
+This draft standard is still being discussed and modified.
+No assurances can be given as to when P1003.1m will be approved
+or what it will contain.
+.SH DIAGNOSTICS
+.P
+.I ckpt_setup
+is a no-op interface and currently always returns 0.
+.P
+.I ckpt_create
+returns 0 upon success.
+Upon failure it returns \-1 and sets
+.I errno
+to indicate one of the following:
+.TP
+[ECKPT]
+An unrecoverable resource, such as a socket connection,
+is associated with the target process.
+.TP
+[EEXIST]
+The file named by
+.I path
+already exists.
+.TP
+[ENOMEM]
+Checkpointing requires more memory than
+allowed by the hardware or available swap space.
+.TP
+[ENOSPC]
+Space remaining on the device is insufficient for the checkpoint file.
+.TP
+[EACCES]
+Search permission is denied on a component of the path prefix
+or write permission is denied on the parent directory
+of the checkpoint file to be created.
+.TP
+[EPERM]
+The calling process does not have appropriate privileges to checkpoint
+one or more of the target processes.
+.TP
+[EBUSY]
+A resource associated with the target process is in use by the system.
+.TP
+[ELOOP]
+Too many symbolic links were encountered during resolution of the
+.I path
+argument; a loop probably exists.
+.TP
+[ENOENT]
+The
+.I path
+argument names a nonexistent directory
+or points to an empty string.
+.TP
+[ENOTDIR]
+A component of the path prefix is not a directory.
+.TP
+[EROFS]
+The checkpoint file being created would reside on a read-only file system.
+.TP
+[EINVAL]
+An invalid argument was passed to the function call.
+[ESRCH]
+The process or process group specified by
+.I id
+cannot be found.
+.P
+.I ckpt_restart
+returns the ID (\fIckpt_id_t\fP) of the restarted process,
+process group leader, session leader, tree root of processes in an array,
+tree root of a process hierarchy, or \fIsproc\fP group leader.
+Note that the 64-bit return value
+.I ckpt_id_t
+is different from the 32-bit value POSIX specifies;
+however, the difference doesn't affect API compatibility.
+On failure,
+.I ckpt_restart
+returns \-1 and sets
+.I errno
+to indicate one of the following:
+.TP
+[ECKPT]
+Restart operation can not be completed or
+an unrecoverable resource is associated with the target process.
+.TP
+[EBUSY]
+The system resource required to restart the processes requested
+is already taken at this moment.
+For example, a process ID is currently being used by another process
+and if the action ORIGINAL is set for the FORK function in the
+.I $HOME/.cpr
+attribute file.
+.TP
+[EAGAIN]
+A system-imposed limit on the total number of processes
+belonging to a single user (CHILD_MAX) would be exceeded
+by restarting the target process set.
+.TP
+[ENOMEM]
+Restarting the target process set requires more memory than
+allowed by the hardware or available swap space.
+.TP
+[EACCES]
+Search permission is denied on a component of the path prefix.
+.TP
+[EPERM]
+The real user ID of the calling process
+does not match the real user ID
+of one or more processes defined by the checkpoint file,
+or the calling process does not have appropriate privileges
+to restart one or more of the target processes.
+.TP
+[ELOOP]
+Too many symbolic links were encountered during resolution of the
+.I path
+argument; a loop probably exists.
+.TP
+[ENOENT]
+The
+.I path
+argument names a nonexistent directory
+or points to an empty string.
+.TP
+[ENOTDIR]
+A component of the path prefix is not a directory.
+.TP
+[EROFS]
+Restarted files would be created in a read-only file system.
+.TP
+[EINVAL]
+An invalid argument was passed to the function call.
+.P
+.I ckpt_remove
+and
+.I ckpt_stat
+return 0 on success.
+On failure, they return \-1 and set
+.I errno
+to indicate one of the following:
+.TP
+[EACCES]
+Search permission is denied on a component of the path prefix,
+or write permission is denied on the parent directory of the
+checkpoint file to be removed.
+.TP
+[EPERM]
+The calling process does not have appropriate privileges
+to remove or stat the target statefiles.
+.TP
+[ELOOP]
+Too many symbolic links were encountered during resolution of the
+.I path
+argument; a loop probably exists.
+.TP
+[ENOENT]
+The
+.I path
+argument names a nonexistent directory or points to an empty string.
+.TP
+[ENOTDIR]
+A component of the path prefix is not a directory.
+.TP
+[EROFS]
+The checkpoint file to be removed resides on a read-only file system.
+.TP
+[EINVAL]
+The file to be removed is not a checkpoint file.

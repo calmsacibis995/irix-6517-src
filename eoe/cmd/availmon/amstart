@@ -1,0 +1,729 @@
+#! /sbin/sh
+#
+#ident "$Revision: 1.2 $"
+#
+# This script should not be executed after boot because it
+# may report system reboot and cause confusion.
+#
+
+#
+# availmon/amstart uses /var/adm/avail directory,
+# and /var/adm/avail/availlog for logging info
+#
+
+CMD=$0
+AMRVERSIONNUM=2.1
+AVAILDIR=/var/adm/avail
+SAVEDIR=$AVAILDIR/.save
+CONFIGDIR=$AVAILDIR/config
+USRETCDIR=/usr/etc
+OPTIONS=`cat /etc/config/savecore.options 2> /dev/null`
+CRASHDIR=""
+if [ "$OPTIONS" != "" ] ; then
+    for DIR in $OPTIONS ; do
+	if [ -d "$DIR" ] ; then
+	    CRASHDIR=$DIR
+	fi
+    done
+    if [ "$CRASHDIR" = "" ] ; then
+	CRASHDIR=/var/adm/crash
+    fi
+else
+    CRASHDIR=/var/adm/crash
+fi
+
+AMREGISTER=$USRETCDIR/amregister
+AMCONFIG=$USRETCDIR/amconfig
+AMSYSINFO=$USRETCDIR/amsysinfo
+AMNOTIFY=$USRETCDIR/amnotify
+AMSYSLOG=$USRETCDIR/amsyslog
+AMTIME1970=$USRETCDIR/amtime1970
+AMTICKERD=$USRETCDIR/amtickerd
+
+TICKFILE=$AVAILDIR/lasttick
+TICKDURATION=300
+
+AMSYSLOGFILE=$CRASHDIR/syslog
+SYSLOGDCONF=/etc/syslog.conf
+
+if [ -f "$SYSLOGDCONF" ] ; then
+    SYSLOGFILE=`cat $SYSLOGDCONF | grep -v "^#" | grep amfilter | tail -1 | awk '{print $NF}' 2>/dev/null`
+    if [ "z$SYSLOGFILE" = "z" -o ! -f "$SYSLOGFILE" ] ; then
+	SYSLOGFILE=/var/adm/SYSLOG
+    fi
+else
+    SYSLOGFILE=/var/adm/SYSLOG
+fi
+
+# Use SYSLOGFILE to generate OSYSLOGFILE
+OSYSLOGFILE=`dirname $SYSLOGFILE`\/o`basename $SYSLOGFILE`
+LASTSYSLOG=$SAVEDIR/lastsyslog
+
+LOGFILE=$AVAILDIR/availlog
+PREVSTARTFILE=$SAVEDIR/prevstart
+EVENTFILE=$SAVEDIR/event
+SUEVENTFILE=$SAVEDIR/suevent
+SCRATCHFILE=$AVAILDIR/init.scratch
+CRASHLOGFILE=$CRASHDIR/crashlog
+
+SINCE1970=`$AMTIME1970`
+SINCE1970DATE=`$AMTIME1970 -d $SINCE1970`
+BOUND=-1
+
+AUTOEMAIL=$CONFIGDIR/autoemail
+TICKERDFILE=$CONFIGDIR/tickerd
+AUTOEMAILLIST=$CONFIGDIR/autoemail.list
+
+AVAILREPFILE=$CRASHDIR/availreport
+DIAGREPFILE=$CRASHDIR/diagreport
+PAGERREPFILE=$CRASHDIR/pagerreport
+
+TMPFILE=$CRASHDIR/tmpfile
+DIFFFILE=$CRASHDIR/difffile
+TMPSORTFILE=$CRASHDIR/tmpsortfile
+
+PLATFORM=`uname -m`
+SERIALNUM=""
+if $AMCONFIG hinvupdate ; then
+    HINVUPDATE=1
+else
+    HINVUPDATE=0
+fi
+
+comparefile() {
+# arg: $1 = saved configuration file
+#      $2 = configuration file to be compared
+# ret: 0 = files are different
+#      1 = $1 missing or files are the same
+
+    if [ ! -f $SAVEDIR/$1 ] ; then
+	return 1
+    fi
+
+    if [ ! -f $2 ] ; then
+	echo "System configuration file $2 is missing!!"
+	echo "Please try re-installing it"
+	logger -t availmon -p err -i availmon config file $2 is missing
+	return 1
+    fi
+
+    diff $SAVEDIR/$1 $2 > /dev/null
+    if  [ $? -ne 0 ] ; then
+	return 0
+    else
+	return 1
+    fi
+}
+
+compareandsavefile() {
+# arg: $1 = saved configuration file
+#      $2 = configuration file to be compared
+# ret: 0 = files are different
+#      1 = files are the same
+
+    diff $SAVEDIR/$1 $2 > $DIFFFILE
+    if [ $? -ne 0 ] ; then
+	cp $2 $SAVEDIR/$1
+	return 0
+    else
+	return 1
+    fi
+}
+
+checkandappend() {
+# due to hinv's bug that cannot generate hinv output in a special
+# order, availmon needs to sort hinv's output and then compare with
+# saved sorted data
+
+    if [ "$1" = "hinv" ] ; then
+	if [ -x $3 ] ; then
+	    if [ ! -f $SAVEDIR/$1 ] ; then
+		touch $SAVEDIR/$1
+	    fi
+	    if [ ! -f $SAVEDIR/$1.sort ] ; then
+		touch $SAVEDIR/$1.sort
+	    fi
+	    $3 $4 $5 $6 $7 > $TMPFILE
+	    sort $TMPFILE > $TMPSORTFILE
+	    if compareandsavefile $1.sort $TMPSORTFILE ; then
+		NOINSTE=0
+		diff $SAVEDIR/$1 $TMPFILE > $DIFFFILE
+		cp $TMPFILE $SAVEDIR/$1
+		echo "$2|Begin" >> $DIAGREPFILE
+		cat $TMPFILE  >> $DIAGREPFILE
+		echo "$2|End" >> $DIAGREPFILE
+		echo "$2|Begin" >> $LOGFILE
+		cat $DIFFFILE  >> $LOGFILE
+		echo "$2|End" >> $LOGFILE
+	    fi
+	fi
+    elif [ -x $3 ] ; then
+	if [ ! -f $SAVEDIR/$1 ] ; then
+	    touch $SAVEDIR/$1
+	fi
+	$3 $4 $5 $6 $7 > $TMPFILE
+	if compareandsavefile $1 $TMPFILE ; then
+	    NOINSTE=0
+	    echo "$2|Begin" >> $DIAGREPFILE
+	    cat $TMPFILE  >> $DIAGREPFILE
+	    echo "$2|End" >> $DIAGREPFILE
+	    echo "$2|Begin" >> $LOGFILE
+	    cat $DIFFFILE  >> $LOGFILE
+	    echo "$2|End" >> $LOGFILE
+	fi
+    fi
+}
+
+#
+# generate diag report
+#
+gendiagrep() {
+    NOINSTE=1
+    if [ $BOUND -ge 0 ] ; then
+	NOINSTE=0
+	if [ -f $CRASHDIR/analysis.$BOUND ] ; then
+	    echo "ICRASH|Begin" >> $DIAGREPFILE
+	    cat $CRASHDIR/analysis.$BOUND >> $DIAGREPFILE
+	    echo "ICRASH|End" >> $DIAGREPFILE
+	fi
+	echo "SYSLOG|Begin" >> $DIAGREPFILE
+	if [ -f $AMSYSLOGFILE ] ; then
+	    tail -700 $AMSYSLOGFILE >> $DIAGREPFILE
+	else
+	    $AMSYSLOG -S $SYSLOGFILE -O $OSYSLOGFILE >> $AMSYSLOGFILE
+	    tail -700 $AMSYSLOGFILE >> $DIAGREPFILE
+	fi
+	echo "SYSLOG|End" >> $DIAGREPFILE
+    elif [ $EVENTCODE -eq -5 -o $EVENTCODE -eq -6 -o $EVENTCODE -eq -14 ] ; then
+	NOINSTE=0
+	echo "SYSLOG|Begin" >> $DIAGREPFILE
+	if [ -f $AMSYSLOGFILE ] ; then
+	    tail -1000 $AMSYSLOGFILE >> $DIAGREPFILE
+	else
+	    $AMSYSLOG -S $SYSLOGFILE -O $OSYSLOGFILE >> $AMSYSLOGFILE
+	    tail -1000 $AMSYSLOGFILE >> $DIAGREPFILE
+	fi
+	echo "SYSLOG|End" >> $DIAGREPFILE
+    fi
+
+    set `/sbin/stat -mq /var/inst/hist $SAVEDIR/versions 2>/dev/null` >/dev/null
+    if [ ! -r $SAVEDIR/versions -o \( "$2" -a "$1" -gt "$2" \) ] ; then
+	checkandappend versions VERSIONS /usr/sbin/versions -n eoe.sw.base support.sw.fru "patchSG*"
+	touch $SAVEDIR/versions
+    fi
+    if [ $HINVUPDATE -eq 1 ] ; then
+	checkandappend hinv HINV /usr/bin/hinv -mvv
+	checkandappend gfxinfo GFXINFO /usr/gfx/gfxinfo -vv
+    else
+	echo "HINV|Begin\nunknown\nHINV|End" >> $DIAGREPFILE
+	echo "GFXINFO|Begin\nunknown\nGFXINFO|End" >> $DIAGREPFILE
+    fi
+    return $NOINSTE
+}
+
+getid() {
+    OLDID=""
+    HOSTNAME=`$AMSYSINFO -n`
+    if [ "$HOSTNAME" = "unknown" ] ; then
+	logger -t availmon -p err -i cannot get hostname
+	if [ -f $SAVEDIR/hostname ] ; then
+	    HOSTNAME=`cat $SAVEDIR/hostname`
+	fi
+    else
+	if [ -f $SAVEDIR/hostname ] ; then
+	    HOSTNAME1=`cat $SAVEDIR/hostname`
+	    if [ "$HOSTNAME" != "$HOSTNAME1" ] ; then
+		echo "$HOSTNAME" > $SAVEDIR/hostname
+		if [ "$HOSTNAME1" != "unknown" ] ; then
+		    OLDID="OLDHOSTNAME|$HOSTNAME1"
+		fi
+	    fi
+	else
+	    echo "$HOSTNAME" > $SAVEDIR/hostname
+	fi
+    fi
+
+    SERIALNUM=`$AMSYSINFO -s`
+    if [ "$SERIALNUM" = "unknown" ] ; then
+	case $PLATFORM in
+	IP19 | IP21 | IP22 | IP25 | IP26 | IP27 | IP28 | IP30 | IP32)
+	    echo -n "$CMD: Warning: the machine-readable serial number,"
+	    echo "$SERIALNUM, is invalid."
+	    echo "Please contact SGI support to correct it."
+	    logger -t availmon -p err -i the machine-readable serial number is invalid
+	    ;;
+	esac
+	if [ -f $SAVEDIR/serialnum ] ; then
+	    SERIALNUM=`cat $SAVEDIR/serialnum`
+	    $AMSYSINFO -s $SERIALNUM > /dev/null
+	    if [ $? -ne 0 ] ; then
+		echo "$CMD: Warning: the saved serial number, $SERIALNUM,"
+		echo " is invalid."
+		logger -t availmon -p warning -i the saved serial number is invalid
+	    fi
+	fi
+    else
+	if [ $HINVUPDATE -eq 1 ] ; then
+	    if [ -f $SAVEDIR/serialnum ] ; then
+		SERIALNUM1=`cat $SAVEDIR/serialnum`
+		if [ "$SERIALNUM" != "$SERIALNUM1" ] ; then
+		    if $AMSYSINFO -s $SERIALNUM1 > /dev/null ; then
+			echo -n "$CMD: Warning: the saved serial number,"
+			echo "$SERIALNUM1, is different from"
+			echo " the machine-readable serial number, $SERIALNUM."
+			echo "Use the machine-readable one."
+			logger -t availmon -p warning -i the saved serial number is different from the machine-readable one
+		    else
+		        echo -n "$CMD: Warning: the saved serial number,"
+			echo "$SERIALNUM1, is invalid."
+			echo "Use the machine-readable serial number, $SERIALNUM."
+			echo "$SERIALNUM" > $SAVEDIR/serialnum
+			logger -t availmon -p warning -i the saved serial number is invalid
+		    fi
+		    echo "$SERIALNUM" > $SAVEDIR/serialnum
+		    if [ "$SERIALNUM1" != "unknown" ] ; then
+		        if [ "$OLDID" != "" ] ; then
+			    OLDID="OLDSERIALNUM|$SERIALNUM1\n$OLDID"
+		        else
+			    OLDID="OLDSERIALNUM|$SERIALNUM1"
+		        fi
+		    fi
+		fi
+	    else
+		echo "$SERIALNUM" > $SAVEDIR/serialnum
+	    fi
+	fi
+    fi
+
+    if [ "$OLDID" != "" ] ; then
+	echo "SERIALNUM|$SERIALNUM" > $AVAILREPFILE
+	echo "HOSTNAME|$HOSTNAME" >> $AVAILREPFILE
+	echo "AMRVERSION|$AMRVERSIONNUM" >> $AVAILREPFILE
+	echo "UNAME|`uname -Ra`" >> $AVAILREPFILE
+	echo "EVENT|-18|$SINCE1970|$SINCE1970DATE" >> $AVAILREPFILE
+	echo "EVENT|-18|$SINCE1970|$SINCE1970DATE" >> $LOGFILE
+	echo "$OLDID" >> $AVAILREPFILE
+	echo "$OLDID" >> $LOGFILE
+	MSG="SUMMARY|Begin\n$OLDID\nSUMMARY|End"
+	echo "$MSG" >> $AVAILREPFILE
+	echo "$MSG" >> $LOGFILE
+	if $AMCONFIG autoemail -s ; then
+	    $AMNOTIFY -c $AUTOEMAILLIST -a $AVAILREPFILE -i $AVAILREPFILE -r
+	fi
+    fi
+}
+
+geteventname() {
+# arg: $1: event code
+#      $2: pager report file
+
+    case $1 in
+    -3)
+	MSG="Panic"
+	;;
+    -4)
+	MSG="Panic (H/W)"
+	;;
+    -5)
+	MSG="Interrupt"
+	;;
+    -6)
+	MSG="System off"
+	;;
+    -7)
+	MSG="Power failure"
+	;;
+    -8)
+	MSG="Deregistration"
+	;;
+    -9)
+	MSG="Registration"
+	;;
+    -10)
+	MSG="No error"
+	;;
+    -11)
+	MSG="Hardware error"
+	;;
+    -12)
+	MSG="Software error"
+	;;
+    -13)
+	MSG="Status report"
+	;;
+    -14)
+	MSG="Panic (S/W)"
+	;;
+    -15)
+	MSG="NMI"
+	;;
+    -16)
+	MSG="System reset"
+	;;
+    -17)
+	MSG="Power cycle"
+	;;
+    -18)
+	MSG="System ID change"
+	;;
+    *)
+	MSG="Controlled shutdown"
+	;;
+    esac
+    echo "$MSG" >> $2
+}
+
+
+#
+# check for improper installation and corruption
+#
+
+if [ ! -d $AVAILDIR ] ; then
+    echo "\n$CMD: ERROR: cannot find directory $AVAILDIR"
+    echo "Please try re-installing availmon\n"
+    logger -t availmon -p err -i cannot find directory $AVAILDIR
+    exit
+elif [ ! -x $AMREGISTER -o ! -x $AMNOTIFY -o ! -x $AMSYSLOG -o ! -x $AMTICKERD \
+	-o ! -x $AMTIME1970 -o ! -x $AMSYSINFO -o ! -x $AMCONFIG ] ; then
+    echo "\n$CMD: ERROR: executable files corrupted"
+    echo "Please try re-installing availmon\n"
+    logger -t availmon -p err -i executable files corrupted
+    exit
+elif [ ! -d $SAVEDIR ] ; then
+
+    #
+    # create .save directory at the first time reboot
+    # of the first installation of availmon
+    #
+    mkdir $SAVEDIR
+    if [ -f $CRASHDIR/bounds ] ; then
+	cp $CRASHDIR/bounds $SAVEDIR/bounds
+    else
+	echo "0" > $SAVEDIR/bounds
+    fi
+    $AMSYSINFO -s > $SAVEDIR/serialnum
+    $AMSYSINFO -n > $SAVEDIR/hostname
+    MSG=`$AMTIME1970 -i`
+    echo "PREV$MSG" > $PREVSTARTFILE
+    if [ ! -f $LOGFILE ] ; then
+	echo "$MSG" > $LOGFILE
+    fi
+    if [ -f $SYSLOGFILE ] ; then
+	tail -1 $SYSLOGFILE > $LASTSYSLOG
+    fi
+    if [ -x /usr/bin/hinv ] ; then
+	/usr/bin/hinv -mvv > $SAVEDIR/hinv
+	sort $SAVEDIR/hinv > $SAVEDIR/hinv.sort
+    fi
+    if [ -x /usr/sbin/versions ] ; then
+	/usr/sbin/versions -n eoe.sw.base support.sw.fru "patchSG*" > $SAVEDIR/versions
+    fi
+    if [ -x /usr/gfx/gfxinfo ] ; then
+	/usr/gfx/gfxinfo -vv > $SAVEDIR/gfxinfo
+    fi
+    cp $CONFIGDIR/autoemail $SAVEDIR
+    cp $CONFIGDIR/autoemail.list $SAVEDIR
+
+    # if tickerd is on, use user-level daemon
+    if $AMCONFIG tickerd ; then
+	$AMTICKERD $TICKFILE $TICKDURATION &
+    else
+	rm -f $TICKFILE
+    fi
+    rm -f $AVAILDIR/install.sh /etc/init.d/avail /etc/rc0.d/K05avail
+    rm -f /etc/rc2.d/S95avail /etc/config/avail /etc/config/availmon
+    exit
+fi
+
+#
+# Start processing
+#
+
+if [ -f $AVAILDIR/install.sh ] ; then
+	$AVAILDIR/install.sh
+	rm -f $AVAILDIR/install.sh
+fi
+
+getid
+LASTTICK=`cat $TICKFILE 2> /dev/null`
+LASTTICK=${LASTTICK:=-1}
+if [ $LASTTICK -ge 0 ] ; then
+	LASTTICKDATE=`$AMTIME1970 -d $LASTTICK`
+else
+	LASTTICKDATE="unknown"
+fi
+
+# if tickerd is on, use user-level daemon
+if $AMCONFIG tickerd ; then
+	$AMTICKERD $TICKFILE $TICKDURATION &
+else
+	rm -f $TICKFILE
+fi
+
+if [ -f $SAVEDIR/autoemail ] ; then
+	if comparefile autoemail $CONFIGDIR/autoemail ; then
+	if $AMCONFIG autoemail -s ; then
+		$AMREGISTER -d -c $SAVEDIR/autoemail.list
+		cp $CONFIGDIR/autoemail $SAVEDIR/autoemail
+		cp $CONFIGDIR/autoemail.list $SAVEDIR/autoemail.list
+	else
+		$AMREGISTER -r -c $CONFIGDIR/autoemail.list
+		cp $CONFIGDIR/autoemail $SAVEDIR/autoemail
+		cp $CONFIGDIR/autoemail.list $SAVEDIR/autoemail.list
+	fi
+	else
+	if comparefile autoemail.list $CONFIGDIR/autoemail.list ; then
+		$AMCONFIG -k
+	fi
+	fi
+else
+	cp $CONFIGDIR/autoemail $SAVEDIR/autoemail
+	cp $CONFIGDIR/autoemail.list $SAVEDIR/autoemail.list
+	if $AMCONFIG autoemail ; then
+	$AMREGISTER -r
+	fi
+fi
+
+if [ -f $CRASHDIR/bounds ] ; then
+	if [ -f $SAVEDIR/bounds ] ; then
+	diff $SAVEDIR/bounds $CRASHDIR/bounds > /dev/null
+	if [ $? -ne 0 ] ; then
+		BOUND=`cat $SAVEDIR/bounds`
+		cp $CRASHDIR/bounds $SAVEDIR/bounds
+		SUMMARYFILE=$CRASHDIR/summary.$BOUND
+		FRUFILE=$CRASHDIR/fru.$BOUND
+		AMSYSLOGFILE=$CRASHDIR/syslog.$BOUND
+	fi
+	else
+	cp $CRASHDIR/bounds $SAVEDIR/bounds
+	fi
+else
+	echo "0" > $SAVEDIR/bounds
+fi
+
+HEADER="SERIALNUM|$SERIALNUM\nHOSTNAME|$HOSTNAME\nAMRVERSION|$AMRVERSIONNUM\nUNAME|`uname -Ra`"
+echo "$HEADER" > $AVAILREPFILE
+echo "$HEADER" > $DIAGREPFILE
+PHEADER="$HOSTNAME|"
+echo "$PHEADER" > $PAGERREPFILE
+if [ -f $PREVSTARTFILE ] ; then
+	PSMSG=`cat $PREVSTARTFILE`
+elif [ -f $LOGFILE ] ; then
+	PSMSG=`grep '^START|' $LOGFILE | tail -1`
+else
+	echo "\nERROR: $CMD: availlog and saved data were corrupted!!"
+	echo "Please check file system\n"
+	MSG="START|$SINCE1970|$SINCE1970DATE"
+	echo "$MSG" > $LOGFILE
+	PSMSG="PREV$MSG"
+fi
+
+EXTRASUEVENT=0
+if [ -f $SUEVENTFILE ] ; then
+	#
+	# check if system boot time is later than single-user shutdown
+	# if yes, there is another shutdown/crash event
+	#
+	BOOTTIME=`$AMTIME1970 -i | cut -f2 -d'|'`
+	EVENTLINE=`cat $SUEVENTFILE`
+	EVENTTIME=`echo $EVENTLINE | cut -f3 -d'|'`
+	if [ $BOOTTIME -ge $EVENTTIME ] ; then
+	EXTRASUEVENT=1
+	cp -f $AVAILREPFILE $AVAILREPFILE.su
+	cp -f $DIAGREPFILE $DIAGREPFILE.su
+	cp -f $PAGERREPFILE $PAGERREPFILE.su
+	echo "$PSMSG" >> $AVAILREPFILE.su
+	echo "$PSMSG" >> $DIAGREPFILE.su
+	echo "$EVENTLINE" >> $LOGFILE
+	echo "$EVENTLINE" >> $AVAILREPFILE.su
+	echo "$EVENTLINE" >> $DIAGREPFILE.su
+	EVENTCODE=`echo $EVENTLINE | cut -f2 -d'|'`
+	geteventname $EVENTCODE $PAGERREPFILE.su
+	MSG="LASTTICK|$LASTTICK|$LASTTICKDATE"
+	echo "$MSG" >> $LOGFILE
+	echo "$MSG" >> $AVAILREPFILE.su
+	echo "$MSG" >> $DIAGREPFILE.su
+	LASTTICK=-1
+	LASTTICKDATE="unknown"
+	STATUSINTERVAL=`cat $CONFIGDIR/statusinterval 2> /dev/null`
+	echo "STATUSINTERVAL|$STATUSINTERVAL" >> $AVAILREPFILE.su
+	echo "STATUSINTERVAL|$STATUSINTERVAL" >> $DIAGREPFILE.su
+	else
+	echo "$PSMSG" >> $AVAILREPFILE
+	echo "$PSMSG" >> $DIAGREPFILE
+	mv $SUEVENTFILE $EVENTFILE
+	fi
+else
+	echo "$PSMSG" >> $AVAILREPFILE
+	echo "$PSMSG" >> $DIAGREPFILE
+fi
+
+#
+# check coredump first - report crash if system crashes after
+# controlled shutdown
+#
+if [ $BOUND -ge 0 ] ; then
+	if [ -f $SUMMARYFILE ] ; then
+	if grep 'PANIC STRING' $SUMMARYFILE | grep NMI > /dev/null ; then
+		EVENTCODE=-15
+	elif [ -f $FRUFILE ] ; then
+		cat $FRUFILE >> $SUMMARYFILE
+		if grep -i 'FRU ANALY' $FRUFILE > /dev/null ; then
+		if grep 'FRU ANALYZER' $FRUFILE | grep -i 'No error' > /dev/null ; then
+			EVENTCODE=-14
+		elif grep -i 'SOFTWARE' $FRUFILE > /dev/null ; then
+			EVENTCODE=-14
+		elif grep 'Inconclusive hardware error state' $FRUFILE > /dev/null ; then
+			EVENTCODE=-3
+		else
+			EVENTCODE=-4
+		fi
+		else
+		EVENTCODE=-3
+		fi
+	else
+		EVENTCODE=-3
+	fi
+	EVENTTIME=`awk '/CRASH TIME/ {print $3}' $SUMMARYFILE`
+	EVENTDATE=`awk '/CRASH TIME/ {print $4, $5, $6, $7, $8}' $SUMMARYFILE`
+	elif [ -f $CRASHLOGFILE.$BOUND ] ; then
+	EVENTDATE=`awk '/crash time/ {print $3, $4, $5, $6, $7}' $CRASHLOGFILE.$BOUND`
+	EVENTTIME=`$AMTIME1970 -t $EVENTDATE`
+	EVENTCODE=-3
+	else
+	EVENTTIME=`expr $SINCE1970 - 60`
+	EVENTDATE=`$AMTIME1970 -d $EVENTTIME`
+	EVENTCODE=-3
+	fi
+	EVENTLINE="EVENT|$EVENTCODE|$EVENTTIME|$EVENTDATE"
+elif [ -f $EVENTFILE ] ; then
+	EVENTLINE=`cat $EVENTFILE`
+	EVENTCODE=`echo $EVENTLINE | cut -f2 -d'|'`
+	EVENTTIME=`echo $EVENTLINE | cut -f3 -d'|'`
+	EVENTDATE=`$AMTIME1970 -d $EVENTTIME`
+else
+	$AMSYSLOG -S $SYSLOGFILE -O $OSYSLOGFILE > $AMSYSLOGFILE
+	case $PLATFORM in
+	IP19 | IP21 | IP25)
+	if grep "NMI" $AMSYSLOGFILE > /dev/null ; then
+		EVENTCODE=-15
+	elif grep "SYSTEM RESET" $AMSYSLOGFILE > /dev/null ; then
+		EVENTCODE=-16
+	elif grep "POWER CYCLE" $AMSYSLOGFILE > /dev/null ; then
+		EVENTCODE=-17
+	elif grep "SYSTEM OFF" $AMSYSLOGFILE > /dev/null ; then
+		EVENTCODE=-6
+	elif grep "POWER FAIL" $AMSYSLOGFILE > /dev/null ; then
+		EVENTCODE=-7
+	else
+		EVENTCODE=-5
+	fi
+	;;
+	IP27)
+	if grep "NMI pending" $AMSYSLOGFILE > /dev/null ; then
+		EVENTCODE=-15
+	elif grep "System reset pending" $AMSYSLOGFILE > /dev/null ; then
+		EVENTCODE=-16
+	elif grep "Remote power-cycle command" $AMSYSLOGFILE > /dev/null ; then
+		EVENTCODE=-17
+	elif grep "Module keyswitch turned OFF" $AMSYSLOGFILE > /dev/null ; then
+		EVENTCODE=-6
+	elif grep "AC power lost" $AMSYSLOGFILE > /dev/null ; then
+		EVENTCODE=-7
+	else
+		EVENTCODE=-5
+	fi
+	;;
+	*)
+	EVENTCODE=-5
+	;;
+	esac
+	EVENTLINE="EVENT|$EVENTCODE|-1|unknown"
+	EVENTTIME=-1
+	EVENTDATE="unknown"
+fi
+
+if [ $EXTRASUEVENT -eq 1 ] ; then
+	if [ $EVENTTIME -eq -1 ] ; then
+	SUSTARTTIME=`expr $SINCE1970 - 60`
+	SUSTARTDATE=`$AMTIME1970 -d $SUSTARTTIME`
+	MSG="START|$SUSTARTTIME|$SUSTARTDATE|NOTMULTIUSER"
+	else
+	MSG="START|$EVENTTIME|$EVENTDATE|NOTMULTIUSER"
+	fi
+	echo "$MSG" >> $AVAILREPFILE.su
+	echo "$MSG" >> $DIAGREPFILE.su
+	echo "PREV$MSG" >> $AVAILREPFILE
+	echo "PREV$MSG" >> $DIAGREPFILE
+
+	if $AMCONFIG autoemail ; then
+	if [ "$SERIALNUM" != "unknown" ] ; then
+		$AMNOTIFY -c $AUTOEMAILLIST -a $AVAILREPFILE.su -d $DIAGREPFILE.su -p $PAGERREPFILE.su &
+	fi
+	fi
+fi
+
+echo $EVENTLINE >> $LOGFILE
+echo $EVENTLINE >> $AVAILREPFILE
+echo $EVENTLINE >> $DIAGREPFILE
+geteventname $EVENTCODE $PAGERREPFILE
+MSG="LASTTICK|$LASTTICK|$LASTTICKDATE"
+echo "$MSG" >> $LOGFILE
+echo "$MSG" >> $AVAILREPFILE
+echo "$MSG" >> $DIAGREPFILE
+STATUSINTERVAL=`cat $CONFIGDIR/statusinterval 2> /dev/null`
+echo "STATUSINTERVAL|$STATUSINTERVAL" >> $AVAILREPFILE
+echo "STATUSINTERVAL|$STATUSINTERVAL" >> $DIAGREPFILE
+SMSG="START|$SINCE1970|$SINCE1970DATE"
+echo "$SMSG" >> $AVAILREPFILE
+echo "$SMSG" >> $DIAGREPFILE
+if [ $BOUND -ge 0 ] ; then
+	MSG="BOUND|$BOUND"
+	echo "$MSG" >> $LOGFILE
+	if [ -f $SUMMARYFILE ] ; then
+	echo "SUMMARY|Begin" >> $LOGFILE
+	echo "SUMMARY|Begin" >> $AVAILREPFILE
+	echo "SUMMARY|Begin" >> $DIAGREPFILE
+	echo "SUMMARY|" >> $PAGERREPFILE
+	MSG=`grep 'PANIC STRING' $SUMMARYFILE`
+	echo "$MSG" >> $LOGFILE
+	echo "$MSG" >> $AVAILREPFILE
+	echo "$MSG" >> $DIAGREPFILE
+	echo "$MSG" >> $PAGERREPFILE
+	if [ $EVENTCODE -eq -4 ] ; then
+		tail +3 $SUMMARYFILE >> $LOGFILE
+		tail +3 $SUMMARYFILE >> $AVAILREPFILE
+		tail +3 $SUMMARYFILE >> $DIAGREPFILE
+		tail +3 $SUMMARYFILE >> $PAGERREPFILE
+	fi
+	echo "SUMMARY|End" >> $LOGFILE
+	echo "SUMMARY|End" >> $AVAILREPFILE
+	echo "SUMMARY|End" >> $DIAGREPFILE
+	fi
+fi
+
+SIZE=`/sbin/stat -sq $LOGFILE`
+if [ $SIZE -ge 100000 ] ; then
+	mv $LOGFILE $AVAILDIR/oavaillog
+	echo "$SMSG" > $LOGFILE
+else
+	echo "$SMSG" >> $LOGFILE
+fi
+echo "PREV$SMSG" > $PREVSTARTFILE
+
+NOTIFYOPTIONS=" -c $AUTOEMAILLIST -a $AVAILREPFILE -p $PAGERREPFILE"
+
+if gendiagrep ; then
+	NOTIFYOPTIONS="$NOTIFYOPTIONS -i $DIAGREPFILE"
+else
+	NOTIFYOPTIONS="$NOTIFYOPTIONS -d $DIAGREPFILE"
+fi
+
+if [ "$SERIALNUM" != "unknown" ] ; then
+	if $AMCONFIG autoemail ; then
+	$AMNOTIFY $NOTIFYOPTIONS &
+	fi
+fi
+
+tail -1 $SYSLOGFILE > $LASTSYSLOG
+rm -f $SCRATCHFILE $TMPFILE $TMPSORTFILE $DIFFFILE $SUEVENTFILE $EVENTFILE $SUMMARYFILE

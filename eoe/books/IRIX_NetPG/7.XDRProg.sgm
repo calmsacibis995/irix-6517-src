@@ -1,0 +1,679 @@
+<!-- Produced by version 3.14 (11/22/96) of SGI Frame/SGML translator -->
+<CHAPTER LBL="7"><TITLE><XREFTARGET ID="41930">XDR Programming Notes</TITLE><PARAGRAPH>XDR is the backbone of Sun's RPC package&mdash;the data for remote procedure calls is transmitted using the XDR standard. This chapter is based on Sun's technical notes about the implementation of the XDR standard. (For a complete specification of the XDR protocol, see <XREF IDREF="94683" TYPE="TITLE">Appendix&nbsp;B, &ldquo;XDR Protocol Specification.&rdquo;</XREF>)</PARAGRAPH>
+<PARAGRAPH>Most programmers (especially RPC programmers) will only need the information in three sections of this chapter: <XREF IDREF="19161" TYPE="TITLE">&ldquo;Number Filters&rdquo;</XREF>, <XREF IDREF="73155" TYPE="TITLE">&ldquo;Floating-point Filters&rdquo;</XREF>, and <XREF IDREF="67287" TYPE="TITLE">&ldquo;Enumeration Filters&rdquo;</XREF>. Topics in this chapter include: </PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>overview of XDR programming</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>XDR library routines and primitives</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>XDR operation directions</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>XDR stream access</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>defining new streams and data types</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>advanced topics</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<SECTION1 LBL="" HELPID = ""><TITLE>Overview of XDR Programming</TITLE><PARAGRAPH>XDR's approach to standardizing data representations is <ITALICS>canonical</ITALICS>. That is, XDR defines a single byte order (big-endian), a single floating-point representation (IEEE), and so on. Any program running on any machine can use XDR to create portable data by translating its local data representations to the equivalent XDR standard representations; similarly, any program running on any machine can read portable data by translating the XDR standard representations to its local equivalents. The single standard completely decouples programs that create or send portable data from those that use or receive portable data. </PARAGRAPH>
+<PARAGRAPH>The advent of a new machine or a new language has no effect on the community of existing portable data creators and users. A new machine joins this community by being taught how to convert the standard representations and its local representations; the local representations of other machines are irrelevant. </PARAGRAPH>
+<PARAGRAPH>Conversely, the local representations of the new machine are also irrelevant to existing programs running on other machines; such programs can immediately read portable data produced by the new machine, because such data conforms to the canonical standard that it already understands.</PARAGRAPH>
+<PARAGRAPH>There are strong precedents for XDR's canonical approach. For example, TCP/IP, UDP/IP, Ethernet, and indeed all protocols below layer five of the ISO model are canonical protocols. The advantage of any canonical approach is simplicity; in the case of XDR, a single set of conversion routines is written once and is never touched again. The canonical approach has a disadvantage, but this disadvantage is unimportant in real-world data transfer applications. </PARAGRAPH>
+<PARAGRAPH>Suppose two little-endian machines are transferring integers according to the XDR standard. The sending machine converts the integers from little-endian byte order to XDR (big-endian) byte order; the receiving machine performs the reverse conversion. Because both machines observe the same byte order, their conversions are unnecessary. The point, however, is not necessity but cost, when compared to the alternative.</PARAGRAPH>
+<PARAGRAPH>The time spent converting to and from a canonical representation is insignificant, especially in networking applications. Most of the time required to prepare a data structure for transfer is not spent in conversion but in traversing the elements of the data structure. To transmit an image of a tree, for example, each leaf must be visited and each element in a leaf record must be copied to a buffer and aligned there; storage for the leaf may have to be deallocated as well. Similarly, to receive a tree image, storage must be allocated for each leaf; data must be moved from the buffer to the leaf and properly aligned; and pointers must be constructed to link the leaves. Every machine pays the cost of traversing and copying data structures, regardless of whether conversion is required. </PARAGRAPH>
+<PARAGRAPH>In networking applications, communication overhead&mdash;the time required to move the data down through the sender's protocol layers, across the network, and up through the receiver's protocol layers&mdash;dwarfs conversion overhead.</PARAGRAPH>
+<PARAGRAPH>Consider the <FILENAME>writer</FILENAME> and <FILENAME>reader</FILENAME> programs.</PARAGRAPH>
+<PARAGRAPH>The <FILENAME>writer</FILENAME> program looks like this:</PARAGRAPH>
+<CODE>
+#include &lt;stdio.h>
+
+main()        /* writer.c */
+{
+&space;   long i;
+
+&space;   for (i = 0; i &lt; 8; i++) {
+&space;       if (fwrite((char *)&amp;i, sizeof(i), 1, stdout) != 1) {
+&space;           fprintf(stderr, "failed!\n");
+&space;           exit(1);
+&space;       }
+&space;   }
+&space;   exit(0);
+}
+</CODE>
+<PARAGRAPH>The <FILENAME>reader</FILENAME> program looks like this: </PARAGRAPH>
+<CODE>
+#include &lt;stdio.h> 
+
+main()        /* reader.c */ 
+{
+&space;   long i, j;
+
+&space;   for (j = 0; j &lt; 8; j++) {
+&space;       if (fread((char *)&amp;i, sizeof (i), 1, stdin) != 1) {
+&space;           fprintf(stderr, "failed!\n");
+&space;           exit(1);
+&space;       }
+&space;       printf("%ld ", i);
+&space;   }
+&space;   printf("\n");
+&space;   exit(0); 
+}
+</CODE>
+<PARAGRAPH>The <FILENAME>writer</FILENAME> and <FILENAME>reader</FILENAME> programs appear to be portable, because they pass <COMMAND>lint</COMMAND> checking, and they exhibit the same behavior when executed on different hardware architectures&mdash;an IRIS-4D and a VAX. </PARAGRAPH>
+<PARAGRAPH>Piping the output of the <FILENAME>writer</FILENAME> program to the <FILENAME>reader</FILENAME> program produces identical results on both machines:</PARAGRAPH>
+<CODE>
+IRIS% <USERINPUT>writer | reader</USERINPUT>&space;
+<USERINPUT>0 1 2 3 4 5 6 7</USERINPUT>&space;
+VAX% <USERINPUT>writer | reader</USERINPUT>&space;
+<USERINPUT>0 1 2 3 4 5 6 7</USERINPUT>&space;
+</CODE>
+<PARAGRAPH>With the advent of local area networks and Berkeley's 4.2BSD UNIX came the concept of &ldquo;network pipes&rdquo;&mdash;a process produces data on one machine, and a second process consumes data on another machine. You can construct a network pipe with <FILENAME>writer</FILENAME> and <FILENAME>reader</FILENAME>. The next example shows the results if <FILENAME>writer</FILENAME> produces data on an IRIS, and <FILENAME>reader</FILENAME> consumes data on a VAX:</PARAGRAPH>
+<CODE>
+IRIS% <USERINPUT>writer | rsh vax reader</USERINPUT>&space;
+0 16777216 33554432 50331648 67108864 83886080 100663296 117440512
+IRIS%
+</CODE>
+<PARAGRAPH>You can obtain identical results by executing <FILENAME>writer</FILENAME> on the VAX and <FILENAME>reader</FILENAME> on the IRIS. These results occur because the byte ordering of long integers differs between the VAX and the IRIS, even though word size is the same. </PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>The 16777216 is 224&mdash;when the order of 4 bytes is reversed, the 1 that started in the zeroth bit winds up in the 24th bit.</NOTE>
+<PARAGRAPH>Whenever data is shared by two or more machine types, there is a need for portable data. Programs can be made data-portable by replacing the <FUNCTION>read()</FUNCTION> and <FUNCTION>write()</FUNCTION> system calls with calls to the XDR routine <FUNCTION>xdr_long()</FUNCTION>, a filter that knows the standard representation of a long integer in its external form. </PARAGRAPH>
+<PARAGRAPH>This is the revised version of the <FILENAME>writer</FILENAME> program:</PARAGRAPH>
+<CODE>
+#include &lt;stdio.h>
+#include &lt;rpc/rpc.h>    /* xdr is a sub-library of rpc */ 
+
+main()            /* writer.c */ 
+{
+&space;   XDR xdrs;
+&space;   long i;
+
+&space;   xdrstdio_create(&amp;xdrs, stdout, XDR_ENCODE);
+&space;   for (i = 0; i &lt; 8; i++) {
+&space;       if (! xdr_long(&amp;xdrs, &amp;i)) {
+&space;           fprintf(stderr, "failed!\n");
+&space;           exit(1);
+&space;       }
+&space;   }
+&space;   exit(0);
+}
+</CODE>
+<PARAGRAPH>This is a revised version of the <FILENAME>reader</FILENAME> program:</PARAGRAPH>
+<CODE>
+#include &lt;stdio.h>
+#include &lt;rpc/rpc.h>    /* xdr is a sub-library of rpc */ 
+
+main()            /* reader.c */
+{
+&space;   XDR xdrs;
+&space;   long i, j;
+
+&space;   xdrstdio_create(&amp;xdrs, stdin, XDR_DECODE);
+&space;   for (j = 0; j &lt; 8; j++) {
+&space;       if (! xdr_long(&amp;xdrs, &amp;i)) {
+&space;           fprintf(stderr, "failed!\n");
+&space;           exit(1);
+&space;       }
+&space;       printf("%ld ", i);
+&space;   }
+&space;   printf("\n");
+&space;   exit(0);
+}
+</CODE>
+<PARAGRAPH>When the revised programs are executed on an IRIS, on a VAX, and from an IRIS to a VAX, the results are:</PARAGRAPH>
+<CODE>
+IRIS% <USERINPUT>writer | reader</USERINPUT>&space;
+<USERINPUT>0 1 2 3 4 5 6 7</USERINPUT>&space;
+
+VAX% <USERINPUT>writer | reader</USERINPUT>&space;
+<USERINPUT>0 1 2 3 4 5 6 7</USERINPUT>&space;
+
+IRIS% <USERINPUT>writer | rsh vax reader</USERINPUT>&space;
+<USERINPUT>0 1 2 3 4 5 6 7</USERINPUT>&space;
+</CODE>
+<PARAGRAPH>Dealing with integers is just the tip of the portable-data iceberg. Arbitrary data structures present portability problems, particularly with respect to alignment and pointers. Alignment on word boundaries may cause the size of a structure to vary from machine to machine. Pointers are convenient to use, but they have no meaning outside the machine where they are defined. </PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>On IRIX systems, C programs that want access to XDR routines should include the &lt;<FILENAME>rpc/rpc.h</FILENAME>> header file, which contains all necessary interfaces to the XDR system. Since the default C DSO contains all the XDR routines, you don't need to indicate any special libraries on the compilation line in order to use XDR. See <XREF IDREF="24434" TYPE="TITLE">&ldquo;Compiling BSD and RPC Programs&rdquo; in Chapter&nbsp;1</XREF> for additional compiling hints. </NOTE>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="13126">The XDR Library</TITLE><PARAGRAPH>The XDR library not only solves data portability problems, it also lets you write and read arbitrary C constructs in a consistent, specified, well&ndash;documented manner. Thus, it makes sense to use the XDR library, even when data is not shared among machines on a network.<INDEXTARGET ID="7.XDRProg1"><!-- POSTPROCESSDATA: 7.XDRProg1|XDR:librarylibrary, XDR --></PARAGRAPH>
+<PARAGRAPH>The XDR library has filter routines for strings (null-terminated arrays of bytes), structures, unions, and arrays, to name a few. Using more primitive routines, you can write your own specific XDR routines to describe arbitrary data structures, including elements of arrays, arms of unions, or objects pointed at from other structures. The structures themselves may contain arrays of arbitrary elements or pointers to other structures.</PARAGRAPH>
+<PARAGRAPH>Examine the <FILENAME>reader</FILENAME> and <FILENAME>writer</FILENAME> programs more closely. There is a family of XDR stream creation routines in which each member treats the stream of bits differently. In the example, data is manipulated using standard I/O routines; therefore, use <FUNCTION>xdrstdio_create()</FUNCTION>. The parameters to XDR stream creation routines vary according to their function. In our example, <FUNCTION>xdrstdio_create()</FUNCTION> takes a pointer to an XDR structure that it initializes, a pointer to a FILE that the input or output is performed on, and the operation. The operation may be XDR_ENCODE for serializing in the <FILENAME>writer</FILENAME> program or XDR_DECODE for deserializing in the <FILENAME>reader</FILENAME> program.</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>RPC users never need to create XDR streams; the RPC system itself creates the streams, which are then passed to the users.</NOTE>
+<PARAGRAPH>The <FUNCTION>xdr_long()</FUNCTION> primitive is characteristic of most XDR library primitives and all client XDR routines. First, the routine returns FALSE (that is, 0) if it fails and TRUE (1) if it succeeds. Second, for each data type <VARIABLE>xxx</VARIABLE> there is an associated XDR routine of the form shown in this example:</PARAGRAPH>
+<CODE>
+xdr_xxx(XDR *xdrs, xxx *xp)
+{
+}
+</CODE>
+<PARAGRAPH>In this case, <VARIABLE>xxx</VARIABLE> is long, and the corresponding XDR routine is a primitive, <FUNCTION>xdr_long()</FUNCTION>. The client could also define an arbitrary structure <VARIABLE>xxx</VARIABLE>, in which case the client would also supply the <FUNCTION>xdr_xxx()</FUNCTION> routine, describing each field by calling XDR routines of the appropriate type. In all cases, the first parameter, <VARIABLE>xdrs</VARIABLE>, can be treated as an opaque handle and passed to the primitive routines.</PARAGRAPH>
+<PARAGRAPH>XDR routines are direction-independent; that is, the same routines are called to serialize or deserialize data. This feature is critical to the software engineering of portable data. The idea is to call the same routine for either operation&mdash;which almost guarantees that serialized data can also be deserialized. One routine is used by both producer and consumer of networked data. This direction independence is implemented by always passing the address of an object rather than the object itself&mdash;only in the case of deserialization is the object modified. This feature is not shown in our trivial example, but its value becomes obvious when nontrivial data structures are passed among machines. If needed, the user can obtain the direction of the XDR operation. (See <XREF IDREF="52187" TYPE="TITLE">&ldquo;XDR Operation Directions&rdquo;</XREF> for details.)</PARAGRAPH>
+<PARAGRAPH>For a slightly more complicated example, assume that a person's gross assets and liabilities are to be exchanged among processes, and assume that these values are important enough to warrant their own data type:</PARAGRAPH>
+<CODE>
+struct gnumbers {
+&space;   long g_assets;
+&space;   long g_liabilities;
+};
+</CODE>
+<PARAGRAPH>A corresponding XDR routine describing this structure is:</PARAGRAPH>
+<CODE>
+bool_t             /* TRUE is success, FALSE is failure */ xdr_gnumbers(xdrs, gp)
+XDR *xdrs;
+struct gnumbers *gp;
+{
+&space;   if (xdr_long(xdrs, &amp;gp->g_assets) &amp;&amp;
+&space;       xdr_long(xdrs, &amp;gp->g_liabilities))
+&space;       return(TRUE);
+&space;   return(FALSE);
+}
+</CODE>
+<PARAGRAPH>Note that the parameter <VARIABLE>xdrs</VARIABLE> is never inspected or modified; it is only passed on to the subcomponent routines. It is imperative to inspect the return value of each XDR routine call and to give up immediately and return FALSE if the subroutine fails. </PARAGRAPH>
+<PARAGRAPH>This example also shows that the type <VARIABLE>bool_t</VARIABLE> is declared as an integer whose only values are TRUE (1) and FALSE (0). This chapter uses the following definitions:</PARAGRAPH>
+<CODE>
+#define bool_t   int
+#define TRUE     1
+#define FALSE    0
+</CODE>
+<PARAGRAPH>Keeping these conventions in mind, <FUNCTION>xdr_gnumbers()</FUNCTION> can be rewritten like this: </PARAGRAPH>
+<CODE>
+xdr_gnumbers(XDR *xdrs, struct gnumbers *gp)
+{
+&space;   return (xdr_long(xdrs, &amp;gp->g_assets) &amp;&amp;
+&space;       xdr_long(xdrs, &amp;gp->g_liabilities));
+}
+</CODE>
+<PARAGRAPH>This chapter uses both coding styles.</PARAGRAPH>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE>XDR Library Primitives</TITLE><PARAGRAPH>This section gives a synopsis of each XDR primitive, including basic data types, constructed data types, and XDR utilities. The interface to these primitives and utilities is defined in the include file &lt;<INDEXTARGET ID="7.XDRProg2"><!-- POSTPROCESSDATA: 7.XDRProg2|XDR:library primitivesprimitives, XDR library --><FILENAME>rpc/xdr.h</FILENAME>>, automatically included by &lt;<FILENAME>rpc/rpc.h</FILENAME>>.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="19161">Number Filters</TITLE><PARAGRAPH>The XDR library provides primitives to translate between numbers and their corresponding external representations. Primitives cover the set of numbers in:<INDEXTARGET ID="7.XDRProg3"><!-- POSTPROCESSDATA: 7.XDRProg3|number filters, XDRXDR:number filtersfilters, number --></PARAGRAPH>
+<EXAMPLE>
+[signed, unsigned] [short, int, long]
+</EXAMPLE>
+<PARAGRAPH>The eight primitives are:</PARAGRAPH>
+<CODE>
+bool_t xdr_char(XDR *xdrs, char *cp);
+bool_t xdr_u_char(XDR *xdrs, unsigned char *ucp);
+bool_t xdr_int(XDR *xdrs, int *ip);
+bool_t xdr_u_int(XDR *xdrs, unsigned *up);
+bool_t xdr_long(XDR *xdrs, long *lip);
+bool_t xdr_u_long(XDR *xdrs, u_long *lup);
+bool_t xdr_short(XDR *xdrs, short *sip);
+bool_t xdr_u_short(XDR *xdrs, u_short *sup);
+</CODE>
+<PARAGRAPH>The first parameter, <VARIABLE>xdrs</VARIABLE>, is an XDR stream handle. The second parameter is the address of the number that provides data to the stream or receives data from it. All routines return TRUE if they complete successfully, and FALSE otherwise. </PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="73155">Floating-point Filters</TITLE><PARAGRAPH>The XDR library also provides primitive routines for C's floating-point types:<INDEXTARGET ID="7.XDRProg4"><!-- POSTPROCESSDATA: 7.XDRProg4|XDR:floating point filtersfloating point, XDR --></PARAGRAPH>
+<CODE>
+bool_t xdr_float(XDR *xdrs, float *fp);
+bool_t xdr_double(XDR *xdrs, double *dp);
+</CODE>
+<PARAGRAPH>The first parameter, <VARIABLE>xdrs</VARIABLE>, is an XDR stream handle. The second parameter is the address of the floating-point number that provides data to the stream or receives data from it. Both routines return TRUE if they complete successfully, and FALSE otherwise.</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>Since the numbers are represented in IEEE floating point, routines may fail when decoding a valid IEEE representation into a machine-specific representation, or vice versa.</NOTE>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="67287">Enumeration Filters</TITLE><PARAGRAPH>The XDR library provides a primitive for generic enumerations. The primitive assumes that a C enumeration has the same representation inside the machine as a C integer. The boolean type is an important instance of the <INDEXTARGET ID="7.XDRProg5"><!-- POSTPROCESSDATA: 7.XDRProg5|XDR:enumeration filtersenumeration filters, XDR --><VARIABLE>enum</VARIABLE>. The external representation of a boolean is always one (TRUE) or zero (FALSE).</PARAGRAPH>
+<CODE>
+#define bool_t   int
+#define FALSE    0
+#define TRUE     1
+#define enum_t   int
+bool_t xdr_enum(XDR *xdrs, enum_t *ep);
+bool_t xdr_bool(XDR *xdrs, bool_t *bp);
+</CODE>
+<PARAGRAPH>The second parameters <VARIABLE>ep</VARIABLE> and <VARIABLE>bp</VARIABLE> are addresses of the associated type that provides data to, or receives data from, the stream <VARIABLE>xdrs</VARIABLE>. The routines return TRUE if they complete successfully, and FALSE otherwise.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>No Data</TITLE><PARAGRAPH>Occasionally, an XDR routine must be supplied to the RPC system, even when no data is passed or required. The XDR library provides this routine:<INDEXTARGET ID="7.XDRProg6"><!-- POSTPROCESSDATA: 7.XDRProg6|no data --></PARAGRAPH>
+<EXAMPLE>
+bool_t xdr_void(XDR *xdrs, void *vp); /*always returns TRUE*/ 
+</EXAMPLE>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Constructed Data Type Filters</TITLE><PARAGRAPH>Constructed or compound data type primitives require more parameters and perform more complicated functions than the primitives already discussed. This section includes primitives for strings, arrays, unions, and pointers to structures.<INDEXTARGET ID="7.XDRProg7"><!-- POSTPROCESSDATA: 7.XDRProg7|constructed data type filtersdata-type filters --></PARAGRAPH>
+<PARAGRAPH>Constructed data type primitives may use memory management. In many cases, memory is allocated when deserializing data with XDR_DECODE. Therefore, the XDR package must provide means to deallocate memory. The XDR operation XDR_FREE is used for this purpose.</PARAGRAPH>
+<PARAGRAPH>To review, the three XDR directional operations are:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>XDR_ENCODE</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>XDR_DECODE</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>XDR_FREE</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<SECTION3 LBL="" HELPID = ""><TITLE>Strings</TITLE><PARAGRAPH>In C language, a <INDEXTARGET ID="7.XDRProg8"><!-- POSTPROCESSDATA: 7.XDRProg8|strings, XDRXDR:strings --><VARIABLE>string</VARIABLE> is defined as a sequence of bytes terminated by a null byte, which is not considered when calculating string length. However, when a string is passed or manipulated, a pointer to the string is employed. Therefore, the XDR library defines a string to be a <VARIABLE>char *</VARIABLE> and not a sequence of characters.</PARAGRAPH>
+<PARAGRAPH>The external representation of a string is drastically different from its internal representation. Externally, strings are represented as sequences of ASCII characters, while internally they are represented with character pointers. Conversion between the two representations is accomplished with the <FUNCTION>xdr_string()</FUNCTION> routine:</PARAGRAPH>
+<CODE>
+bool_t xdr_string(XDR *xdrs, char **sp, u_int maxlength);
+</CODE>
+<PARAGRAPH>The first parameter, <VARIABLE>xdrs</VARIABLE>, is the XDR stream handle. The second parameter, <VARIABLE>sp</VARIABLE>, is a pointer to a string (type <VARIABLE>char *</VARIABLE>). The third parameter, <VARIABLE>maxlength</VARIABLE>, specifies the maximum number of bytes allowed during encoding or decoding. Its value is usually specified by a protocol. (For example, a protocol specification may say that a filename may be no longer than 255 characters.)</PARAGRAPH>
+<PARAGRAPH>The routine returns FALSE if the number of characters exceeds <VARIABLE>maxlength</VARIABLE>, and TRUE if it doesn't. </PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>Keep <VARIABLE>maxlength</VARIABLE> small. If it is too big, you can overrun the heap, since <FUNCTION>xdr_string()</FUNCTION> will call <FUNCTION>malloc()</FUNCTION> for space.</NOTE>
+<PARAGRAPH>The behavior of <FUNCTION>xdr_string()</FUNCTION> is similar to the behavior of other routines discussed in this chapter. The XDR_ENCODE operation is easiest to understand. The parameter <VARIABLE>sp</VARIABLE> points to a string of a certain length; if the string does not exceed <VARIABLE>maxlength</VARIABLE>, the bytes are serialized.</PARAGRAPH>
+<PARAGRAPH>The effect of deserializing a string is subtle. First, the length of the incoming string is determined; it must not exceed <VARIABLE>maxlength</VARIABLE>. Next, <VARIABLE>sp</VARIABLE> is dereferenced; if the value is NULL, a string of the appropriate length is allocated, and <VARIABLE>*sp</VARIABLE> is set to this string. If the original value of <VARIABLE>*sp</VARIABLE> is non-NULL, the XDR package assumes that a target area has been allocated that can hold strings no longer than <VARIABLE>maxlength</VARIABLE>. In either case, the string is decoded into the target area. The routine then appends a null character to the string.</PARAGRAPH>
+<PARAGRAPH>In the XDR_FREE operation, the string is obtained by dereferencing <VARIABLE>sp</VARIABLE>. If the string is not NULL, it is freed and <VARIABLE>*sp</VARIABLE> is set to NULL. In this operation, <FUNCTION>xdr_string()</FUNCTION> ignores the <VARIABLE>maxlength</VARIABLE> parameter. </PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Byte Arrays</TITLE><PARAGRAPH>Variable-length byte arrays are often preferable to strings. Byte arrays differ from strings in several ways: <INDEXTARGET ID="7.XDRProg9"><!-- POSTPROCESSDATA: 7.XDRProg9|XDR:byte arraysbyte, arrays, XDRarray, XDR --></PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>The length of the array (the byte count) is explicitly located in an unsigned integer.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The byte sequence is not terminated by a null character.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The external representation of the bytes in the array is the same as their internal representation. </PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>The <FUNCTION>xdr_bytes()</FUNCTION> primitive converts byte arrays between their internal and external representations: </PARAGRAPH>
+<CODE>
+bool_t xdr_bytes(XDR *xdrs, char **bpp, u_int *lp,
+&space;                u_int maxlength);
+</CODE>
+<PARAGRAPH>The usage of the <VARIABLE>xdrs</VARIABLE>, <VARIABLE>bpp</VARIABLE>, and <VARIABLE>maxlength</VARIABLE> parameters is identical to their usage in <FUNCTION>xdr_string()</FUNCTION>. The length of the byte area is obtained by dereferencing <VARIABLE>lp</VARIABLE> when serializing; <VARIABLE>*lp</VARIABLE> is set to the byte length when deserializing. </PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Arrays</TITLE><PARAGRAPH>The XDR library provides a primitive for handling arrays of arbitrary elements. <FUNCTION>xdr_bytes()</FUNCTION> treats a subset of generic arrays, in which the size of array elements is known to be 1, and the external description of each element is built-in. The generic array primitive, <FUNCTION>xdr_array()</FUNCTION>, requires parameters identical to those of <FUNCTION>xdr_bytes()</FUNCTION> plus two more: the size of array elements and an XDR routine to handle each of the elements. This routine is called to encode or decode each element of the array:</PARAGRAPH>
+<CODE>
+bool_t xdr_array(XDR *xdrs, char **ap, u_int *lp,
+&space;                u_int maxlength, u_int elementsize,
+&space;                xdrproc_t *xdr_element);
+</CODE>
+<PARAGRAPH>The parameter <VARIABLE>ap</VARIABLE> is the address of the pointer to the array. If <VARIABLE>*ap</VARIABLE> is NULL when the array is being deserialized, XDR allocates an array of the appropriate size and sets <VARIABLE>*ap</VARIABLE> to that array. The element count of the array is obtained from <VARIABLE>*lp</VARIABLE> when the array is serialized; <VARIABLE>*lp</VARIABLE> is set to the array length when the array is deserialized. The parameter <VARIABLE>maxlength</VARIABLE> is the maximum number of elements that the array is allowed to have; <VARIABLE>elementsize</VARIABLE> is the byte size of each element of the array; the C function <FUNCTION>sizeof()</FUNCTION> can be used to obtain this value. The <FUNCTION>xdr_element()</FUNCTION> routine is called to serialize, deserialize, or free each element of the array. </PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Examples of Constructed Data Types</TITLE><PARAGRAPH>Before defining more constructed data types, consider the examples in this section. <INDEXTARGET ID="7.XDRProg10"><!-- POSTPROCESSDATA: 7.XDRProg10|examples, XDRXDR:examples --></PARAGRAPH>
+<PARAGRAPH><BOLD>Example A</BOLD></PARAGRAPH>
+<PARAGRAPH>A user on a networked machine can be identified by:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>the machine name, such as <VARIABLE>krypton</VARIABLE>; see <REFPAGE>gethostname(2)</REFPAGE>&space;</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>the user's user ID; see <REFPAGE>geteuid(2)</REFPAGE></PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>the group numbers to which the user belongs; see <REFPAGE>getgroups(2)</REFPAGE></PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>A structure with this information and its associated XDR routine could be coded like this:</PARAGRAPH>
+<CODE>
+struct netuser {
+&space;   char    *nu_machinename;
+&space;   int     nu_uid;
+&space;   u_int   nu_glen;
+&space;   int     *nu_gids;
+};
+
+#define NLEN 255     /* machine names must &lt; 256 chars */
+#define NGRPS 20     /* user can't belong to > 20 groups */
+
+bool_t
+xdr_netuser(XDR *xdrs, struct netuser *nup)
+{
+&space;   return (xdr_string(xdrs, &amp;nup->nu_machinename, NLEN) &amp;&amp;
+&space;           xdr_int(xdrs, &amp;nup->nu_uid) &amp;&amp;
+&space;           xdr_array(xdrs, &amp;nup->nu_gids, &amp;nup->nu_glen,
+&space;                     NGRPS, sizeof (int), xdr_int));
+}
+</CODE>
+<PARAGRAPH><BOLD>Example B</BOLD></PARAGRAPH>
+<PARAGRAPH>A party of network users could be implemented as an array of <VARIABLE>netuser</VARIABLE> structure. This is the declaration and its associated XDR routines:</PARAGRAPH>
+<CODE>
+struct party {
+&space;   u_int p_len;
+&space;   struct netuser *p_nusers;
+};
+#define PLEN 500     /* max number of users in a party */
+
+bool_t
+xdr_party(XDR *xdrs, struct party *pp)
+{
+&space;   return (xdr_array(xdrs, &amp;pp->p_nusers, &amp;pp->p_len, PLEN,
+&space;                     sizeof (struct netuser), xdr_netuser));
+}
+</CODE>
+<PARAGRAPH><BOLD>Example C</BOLD></PARAGRAPH>
+<PARAGRAPH>The well-known parameters to <FUNCTION>main()</FUNCTION>, <VARIABLE>argc</VARIABLE> and <VARIABLE>argv</VARIABLE>, can be combined into a structure, and an array of instances of this structure can make up a history of commands. The declarations and XDR routines might look like this:</PARAGRAPH>
+<CODE>
+struct cmd {
+&space;   u_int c_argc;
+&space;   char **c_argv;
+};
+
+struct history {
+&space;   u_int h_len;
+&space;   struct cmd *h_cmds;
+};
+#define NCMDS  75   /* history is no more than 75 commands */
+#define ALEN 1000   /* args cannot be > 1000 chars */
+#define NARGC 100   /* command  cannot have > 100 args */
+
+bool_t
+xdr_wrap_string(XDR *xdrs, char **sp)
+{
+&space;   return (xdr_string(xdrs, sp, ALEN));
+}
+
+bool_t
+xdr_cmd(XDR *xdrs, struct cmd *cp)
+{
+&space;   return (xdr_array(xdrs, &amp;cp->c_argv, &amp;cp->c_argc, NARGC,
+&space;                     sizeof (char *), xdr_wrap_string));
+}
+
+bool_t
+xdr_history(XDR *xdrs, struct history *hp)
+{
+&space;   return (xdr_array(xdrs, &amp;hp->h_cmds, &amp;hp->h_len, NCMDS,
+&space;                     sizeof (struct cmd), xdr_cmd));
+}
+</CODE>
+<PARAGRAPH>The most confusing part of this example is that the <FUNCTION>xdr_wrap_string()</FUNCTION> routine is needed to package the <FUNCTION>xdr_string()</FUNCTION> routine, because the implementation of <FUNCTION>xdr_array()</FUNCTION> only passes two parameters to the array element description routine; <FUNCTION>xdr_wrap_string()</FUNCTION> supplies the third parameter to <FUNCTION>xdr_string()</FUNCTION>.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Opaque Data</TITLE><PARAGRAPH>In some protocols, handles are passed from a server to a client; the client passes the handle back to the server at some later time. Handles are never inspected by clients; they are obtained and submitted. In other words, handles are opaque. The <INDEXTARGET ID="7.XDRProg11"><!-- POSTPROCESSDATA: 7.XDRProg11|opaque data, XDRXDR:opaque data --><FUNCTION>xdr_opaque()</FUNCTION> primitive is used to describe fixed-size opaque bytes. </PARAGRAPH>
+<CODE>
+bool_t xdr_opaque(XDR *xdrs, char *p, u_int len);
+</CODE>
+<PARAGRAPH>The parameter <VARIABLE>p</VARIABLE> is the location of the bytes; <VARIABLE>len</VARIABLE> is the number of bytes in the opaque object. By definition, the actual data contained in the opaque object is not machine portable. </PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Fixed-length Size Arrays</TITLE><PARAGRAPH>The XDR library does not provide a primitive for fixed-length arrays; the primitive <INDEXTARGET ID="7.XDRProg12"><!-- POSTPROCESSDATA: 7.XDRProg12|XDR:fixed-size arrayfixed-size arrayarray, fixed-size --><FUNCTION>xdr_array()</FUNCTION> is for variable-length arrays.</PARAGRAPH>
+<PARAGRAPH>Example A could be rewritten to use fixed-size arrays, as shown in this code:</PARAGRAPH>
+<CODE>
+#define NLEN 255
+/* machine names must be shorter than 256 chars */
+#define NGRPS 20
+/* user cannot be a member of more than 20 groups */ 
+struct netuser {
+&space;   char *nu_machinename;
+&space;   int nu_uid;
+&space;   int nu_gids[NGRPS];
+};
+
+bool_t
+xdr_netuser(XDR *xdrs, struct netuser *nup)
+{
+&space;   int i;
+&space;   if (! xdr_string(xdrs, &amp;nup->nu_machinename, NLEN))
+&space;       return (FALSE);
+&space;   if (! xdr_int(xdrs, &amp;nup->nu_uid))
+&space;       return (FALSE);
+&space;   if (!xdr_vector(xdrs, nup->nu_gi , NGRPS, sizeof(int),
+&space;                   xdr_int)) {
+&space;       return (FALSE);
+&space;   }
+&space;   return (TRUE);
+}
+</CODE>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Discriminated Unions</TITLE><PARAGRAPH>The XDR library supports discriminated unions, C unions, and an <INDEXTARGET ID="7.XDRProg13"><!-- POSTPROCESSDATA: 7.XDRProg13|XDR:discriminated uniondiscriminated unionsunions, discriminated --><VARIABLE>enum_t</VARIABLE> value that selects an &ldquo;arm&rdquo; of the union:</PARAGRAPH>
+<CODE>
+struct xdr_discrim {
+&space;   enum_t value;
+&space;   bool_t (*proc)();
+};
+
+bool_t xdr_union(XDR *xdrs, enum_t *dscmp, char *unp,
+&space;                struct xdr_discrim *arms,
+&space;                xdrproc_t defaultarm);
+</CODE>
+<PARAGRAPH>First, the routine translates the discriminant of the union located at <VARIABLE>*dscmp</VARIABLE>. The discriminant is always an <VARIABLE>enum_t</VARIABLE>. Next, the union located at <VARIABLE>*unp</VARIABLE> is translated. The parameter <VARIABLE>arms</VARIABLE> is a pointer to an array of <VARIABLE>xdr_discrim</VARIABLE> structures. Each structure contains an ordered pair of [<VARIABLE>value</VARIABLE>, <VARIABLE>proc</VARIABLE>].</PARAGRAPH>
+<PARAGRAPH>If the union's discriminant is equal to the associated <VARIABLE>value</VARIABLE>, the <VARIABLE>proc</VARIABLE> is called to translate the union. The end of the <VARIABLE>xdr_discrim</VARIABLE> structure array is denoted by a routine of value NULL (0). If the discriminant is not found in the <VARIABLE>arms</VARIABLE> array, the <VARIABLE>defaultarm</VARIABLE> procedure is called if it is non-NULL; otherwise, the routine returns FALSE.</PARAGRAPH>
+<PARAGRAPH><BOLD>Example D</BOLD></PARAGRAPH>
+<PARAGRAPH>Suppose the type of a union is integer, character pointer (a string), or a <VARIABLE>gnumbers</VARIABLE> structure. Also, assume the union and its current type are declared in a structure.</PARAGRAPH>
+<PARAGRAPH>The declaration is:</PARAGRAPH>
+<CODE>
+enum utype { INTEGER=1, STRING=2, GNUMBERS=3 };
+
+struct u_tag {
+&space;   enum utype utype;    /* the union's discriminant */
+&space;   union {
+&space;       int ival;
+&space;       char *pval;
+&space;       struct gnumbers gn;
+&space;   } uval;
+};
+</CODE>
+<PARAGRAPH>The following constructs and XDR procedure (de)serialize the discriminated union:</PARAGRAPH>
+<CODE>
+struct xdr_discrim u_tag_arms[4] = {
+&space;   { INTEGER, xdr_int },
+&space;   { GNUMBERS, xdr_gnumbers }
+&space;   { STRING, xdr_wrap_string },
+&space;   { __dontcare__, NULL }
+&space;   /* always terminate arms with a NULL xdr_proc */ 
+} 
+
+bool_t
+xdr_u_tag(XDR *xdrs, struct u_tag *utp)
+{
+&space;   return (xdr_union(xdrs, &amp;utp->utype, &amp;utp->uval,
+&space;                     u_tag_arms, NULL)); 
+}
+</CODE>
+<PARAGRAPH>The routine <FUNCTION>xdr_gnumbers()</FUNCTION> was described in <XREF IDREF="13126" TYPE="TITLE">&ldquo;The XDR Library&rdquo;</XREF>. The routine <FUNCTION>xdr_wrap_string()</FUNCTION> was described in Example C. The <VARIABLE>defaultarm</VARIABLE> parameter to <FUNCTION>xdr_union()</FUNCTION> (the last parameter) is NULL in this example. Therefore, the value of the union's discriminant may legally take on only values listed in the <VARIABLE>u_tag_arms</VARIABLE> array. This example also demonstrates that the elements of the arm's array need not be sorted.</PARAGRAPH>
+<PARAGRAPH>It is worth pointing out that the values of the discriminant may be sparse, although in this example they are not. It is always good practice to assign explicit integer values to each element of the discriminant's type. This practice both documents the external representation of the discriminant and guarantees that different C compilers emit identical discriminant values.</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="13625">Pointers</TITLE><PARAGRAPH>In C language it is often convenient to put pointers to a structure within another structure. The <INDEXTARGET ID="7.XDRProg14"><!-- POSTPROCESSDATA: 7.XDRProg14|XDR:pointerspointers, XDR --><FUNCTION>xdr_reference()</FUNCTION> primitive makes it easy to serialize, deserialize, and free these referenced structures:</PARAGRAPH>
+<CODE>
+bool_t xdr_reference(XDR *xdrs, char **pp, u_int ssize,
+&space;                    xdrproc_t proc);
+</CODE>
+<PARAGRAPH>Parameter <VARIABLE>pp</VARIABLE> is the address of the pointer to the structure; parameter <VARIABLE>ssize</VARIABLE> is the size in bytes of the structure (use the C function <FUNCTION>sizeof()</FUNCTION> to obtain this value); and <VARIABLE>proc</VARIABLE> is the XDR routine that describes the structure. When you are decoding data, storage is allocated if <VARIABLE>*pp</VARIABLE> is NULL.</PARAGRAPH>
+<PARAGRAPH>There is no need for a primitive <FUNCTION>xdr_struct()</FUNCTION> to describe structures within structures, because pointers are always sufficient.</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX><FUNCTION>xdr_reference()</FUNCTION> and <FUNCTION>xdr_array()</FUNCTION> are not interchangeable external representations of data. </NOTE>
+<PARAGRAPH><BOLD>Example E</BOLD></PARAGRAPH>
+<PARAGRAPH>Suppose there's a structure containing a person's name and a pointer to a <VARIABLE>gnumbers</VARIABLE> structure containing the person's gross assets and liabilities. This example demonstrates this construct:</PARAGRAPH>
+<CODE>
+struct pgn {
+&space;   char *name;
+&space;   struct gnumbers *gnp;
+};
+</CODE>
+<PARAGRAPH>The corresponding XDR routine for this structure is:</PARAGRAPH>
+<CODE>
+bool_t
+xdr_pgn(XDR *xdrs, struct pgn *pp)
+{
+&space;   if (xdr_string(xdrs, &amp;pp->name, NLEN) &amp;&amp;
+&space;       xdr_reference(xdrs, &amp;pp->gnp,
+&space;                     sizeof(struct gnumbers), xdr_gnumbers))
+&space;       return(TRUE);
+&space;   return(FALSE);
+}
+</CODE>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Pointer Semantics and XDR</TITLE><PARAGRAPH>In many applications, C programmers attach double meaning to the values of a pointer. Typically, the value NULL (or zero) means data is not needed, yet some application-specific interpretation applies. In essence, the C programmer is encoding a discriminated union efficiently by overloading the interpretation of the value of a pointer.</PARAGRAPH>
+<PARAGRAPH>For instance, in Example E, a NULL pointer value for <VARIABLE>gnp</VARIABLE> could indicate that the person's assets and liabilities are unknown. That is, the pointer value encodes two things: whether or not the data is known; and if it is known, where it is located in memory. Linked lists are an extreme example of the use of application-specific pointer interpretation.</PARAGRAPH>
+<PARAGRAPH>The primitive <FUNCTION>xdr_reference()</FUNCTION> cannot and does not attach any special meaning to a NULL-value pointer during serialization. That is, passing an address of a pointer whose value is NULL to <FUNCTION>xdr_reference()</FUNCTION> when you are serializing data will most likely cause a memory fault and, on the UNIX system, a core dump.</PARAGRAPH>
+<PARAGRAPH><FUNCTION>xdr_pointer()</FUNCTION> correctly handles NULL pointers. For more information about its use, see <XREF IDREF="80850" TYPE="TITLE">&ldquo;Linked Lists&rdquo;</XREF>.</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Non-filter Primitives</TITLE><PARAGRAPH>XDR streams can be manipulated with the primitives discussed in this section.<INDEXTARGET ID="7.XDRProg15"><!-- POSTPROCESSDATA: 7.XDRProg15|XDR:non-filter primitivesnon-filter primitivesprimitives, non-filter --></PARAGRAPH>
+<CODE>
+u_int xdr_getpos(XDR *xdrs);
+bool_t xdr_setpos(XDR *xdrs, u_int pos);
+xdr_destroy(XDR *xdrs);
+</CODE>
+<PARAGRAPH>The routine <FUNCTION>xdr_getpos()</FUNCTION> returns an unsigned integer that describes the current position in the data stream.</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>In some XDR streams, the returned value of <FUNCTION>xdr_getpos()</FUNCTION> is meaningless; the routine returns &ndash;1 in this case (though &ndash;1 should be a legitimate value).</NOTE>
+<PARAGRAPH>The <FUNCTION>xdr_setpos()</FUNCTION> routine sets a stream position to <VARIABLE>pos</VARIABLE>.</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>In some XDR streams, setting a position is impossible; in such cases, <FUNCTION>xdr_setpos()</FUNCTION> will return FALSE. This routine will also fail if the requested position is out-of-bounds. The definition of bounds varies from stream to stream.</NOTE>
+<PARAGRAPH>The <FUNCTION>xdr_destroy()</FUNCTION> primitive destroys the XDR stream. Usage of the stream after calling this routine is undefined.</PARAGRAPH>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="52187">XDR Operation Directions</TITLE><PARAGRAPH>You can optimize XDR routines by taking advantage of the direction of the operation (XDR_ENCODE, XDR_DECODE, or XDR_FREE). The value <INDEXTARGET ID="7.XDRProg16"><!-- POSTPROCESSDATA: 7.XDRProg16|XDR:operation directionsoperation directions, XDR --><VARIABLE>xdrs&ndash;>x_op</VARIABLE> always contains the direction of the XDR operation. Programmers are not encouraged to take advantage of this information. Therefore, no example is presented here. However, an example in <XREF IDREF="80850" TYPE="TITLE">&ldquo;Linked Lists&rdquo;</XREF> demonstrates the usefulness of the <VARIABLE>xdrs->x_op</VARIABLE> field.</PARAGRAPH>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE>XDR Stream Access</TITLE><PARAGRAPH>An XDR stream is obtained by calling the appropriate creation routine. These creation routines take arguments that are tailored to the specific properties of the stream.<INDEXTARGET ID="7.XDRProg17"><!-- POSTPROCESSDATA: 7.XDRProg17|XDR:stream accessstream access, XDR --></PARAGRAPH>
+<PARAGRAPH>Streams currently exist for (de)serialization of data to or from standard I/O FILE streams, TCP/IP connections and UNIX files, and memory. <XREF IDREF="17573" TYPE="TITLE">&ldquo;XDR Stream Implementation&rdquo;</XREF> documents the XDR object and how to make new XDR streams when they are required.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>Standard I/O Streams</TITLE><PARAGRAPH>XDR streams can be interfaced to standard I/O using the <INDEXTARGET ID="7.XDRProg18"><!-- POSTPROCESSDATA: 7.XDRProg18|XDR:I/O streamsI/O streams, XDR --><FUNCTION>xdrstdio_create()</FUNCTION> routine:</PARAGRAPH>
+<CODE>
+#include &lt;stdio.h>
+#include &lt;rpc/rpc.h>    /* xdr streams part of rpc */
+
+void
+xdrstdio_create(XDR *xdrs, FILE *fp, enum xdr_op x_op);
+</CODE>
+<PARAGRAPH>The <FUNCTION>xdrstdio_create()</FUNCTION> routine initializes an XDR stream pointed to by <VARIABLE>xdrs</VARIABLE>. The XDR stream interfaces to the standard I/O library. Parameter <VARIABLE>fp</VARIABLE> is an open file, and <VARIABLE>x_op</VARIABLE> is an XDR direction.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Memory Streams</TITLE><PARAGRAPH>Memory streams allow the streaming of data into or out of a specified area of memory:<INDEXTARGET ID="7.XDRProg19"><!-- POSTPROCESSDATA: 7.XDRProg19|XDR:memory streamsmemory, streams, XDR --></PARAGRAPH>
+<CODE>
+#include &lt;rpc/rpc.h>
+
+void
+xdrmem_create(XDR *xdrs, char *addr, u_int len,
+&space;             enum xdr_op x_op);
+</CODE>
+<PARAGRAPH>The <FUNCTION>xdrmem_create()</FUNCTION> routine initializes an XDR stream in local memory. The memory is pointed to by parameter <VARIABLE>addr</VARIABLE>; <VARIABLE>len</VARIABLE> is the length in bytes of the memory. The parameters <VARIABLE>xdrs</VARIABLE> and <VARIABLE>x_op</VARIABLE> are identical to the corresponding parameters of <FUNCTION>xdrstdio_create()</FUNCTION>. Currently, the UDP/IP implementation of RPC uses <FUNCTION>xdrmem_create()</FUNCTION>. Complete call or result messages are built in memory before calling the <FUNCTION>sendto()</FUNCTION> system call.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Record (TCP/IP) Streams</TITLE><PARAGRAPH>A record stream is an XDR stream built on top of a record-marking standard that is built on top of the UNIX file or 4.3BSD connection interface.<INDEXTARGET ID="7.XDRProg20"><!-- POSTPROCESSDATA: 7.XDRProg20|XDR:record streamsTCP/IP:record streamsrecord streamsstreams, record --></PARAGRAPH>
+<CODE>
+#include &lt;rpc/rpc.h>   /* xdr streams are part of the
+&space;                       * rpc library */
+
+xdrrec_create(XDR *xdrs, u_int sendsize, u_int recvsize,
+&space;             void *iohandle,
+&space;             int (*readproc) (void *, void *, u_int),
+&space;             int (*writeproc) (void *, void *, u_int));
+</CODE>
+<PARAGRAPH>The routine <FUNCTION>xdrrec_create()</FUNCTION> provides an XDR stream interface that allows for bidirectional, arbitrarily long sequences of records. The contents of the records are meant to be data in XDR form. The stream's primary use is for interfacing RPC to TCP connections. However, it can be used to stream data into or out of normal UNIX files.</PARAGRAPH>
+<PARAGRAPH>The parameter <VARIABLE>xdrs</VARIABLE> is similar to the corresponding parameter described above. The stream does its own data buffering similar to that of standard I/O. The parameters <VARIABLE>sendsize</VARIABLE> and <VARIABLE>recvsize</VARIABLE> determine the size in bytes of the output and input buffers, respectively; if their values are zero (0), predetermined defaults are used. When a buffer needs to be filled or flushed, the routine <FUNCTION>readproc()</FUNCTION> or <FUNCTION>writeproc()</FUNCTION> is called, respectively.</PARAGRAPH>
+<PARAGRAPH>These routines are much like the <FUNCTION>read()</FUNCTION> and <FUNCTION>write()</FUNCTION> system calls. However, the first parameter to each routine is the opaque parameter <VARIABLE>iohandle</VARIABLE>. The other two parameters (<VARIABLE>buf</VARIABLE> and <VARIABLE>nbytes</VARIABLE>) and the results (byte count) are identical to the system routines.</PARAGRAPH>
+<PARAGRAPH>If <VARIABLE>xxx</VARIABLE> is <FUNCTION>readproc()</FUNCTION> or <FUNCTION>writeproc()</FUNCTION>, it has this form:</PARAGRAPH>
+<CODE>
+/*
+&space;* Returns the actual number of bytes transferred.
+&space;* -1 is an error.
+&space;*/
+int xxx(char *iohandle, char *buf, int len, int nbytes);
+</CODE>
+<PARAGRAPH>The XDR stream provides a means for delimiting records in the byte stream. The primitives specific to record streams are:</PARAGRAPH>
+<CODE>
+bool_t
+xdrrec_endofrecord(XDR *xdrs, bool_t flushnow);
+
+bool_t
+xdrrec_skiprecord(XDR *xdrs);
+
+bool_t
+xdrrec_eof(XDR *xdrs);
+</CODE>
+<PARAGRAPH>(See <XREF IDREF="51937" TYPE="TITLE">&ldquo;Advanced Topics&rdquo;</XREF> for the implementation details of delimiting records in a stream.)</PARAGRAPH>
+<PARAGRAPH>The <FUNCTION>xdrrec_endofrecord()</FUNCTION> routine causes the current outgoing data to be marked as a record. If the parameter <VARIABLE>flushnow</VARIABLE> is TRUE, the stream's <FUNCTION>writeproc()</FUNCTION> will be called; otherwise, <FUNCTION>writeproc()</FUNCTION> will be called when the output buffer has been filled.</PARAGRAPH>
+<PARAGRAPH>The <FUNCTION>xdrrec_skiprecord()</FUNCTION> routine causes an input stream's position to be moved past the current record boundary and onto the beginning of the next record in the stream.</PARAGRAPH>
+<PARAGRAPH>If no data remains in the stream's input buffer, the <FUNCTION>xdrrec_eof()</FUNCTION> routine returns TRUE; that is, there is no more data in the underlying file descriptor.</PARAGRAPH>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="17573">XDR Stream Implementation</TITLE><PARAGRAPH>This section provides the abstract data types needed to implement new instances of XDR streams.<INDEXTARGET ID="7.XDRProg21"><!-- POSTPROCESSDATA: 7.XDRProg21|XDR:stream implementation --></PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>The XDR Object</TITLE><PARAGRAPH>This structure defines the interface to an XDR stream:<INDEXTARGET ID="7.XDRProg22"><!-- POSTPROCESSDATA: 7.XDRProg22|XDR:objectobject, XDR --></PARAGRAPH>
+<CODE>
+enum xdr_op { XDR_ENCODE = 0, XDR_DECODE = 1, XDR_FREE = 2 };
+
+typedef struct {
+&space;   enum xdr_op x_op;       /* operation; fast added param */
+&space;   struct xdr_ops {
+&space;       bool_t  (*x_getlong)();  /* get long from stream */
+&space;       bool_t  (*x_putlong)();  /* put long to stream */
+&space;       bool_t  (*x_getbytes)();  /* get bytes from stream */
+&space;       bool_t  (*x_putbytes)(); /* put bytes to stream */
+&space;       u_int   (*x_getpostn)(); /* return stream offset */
+&space;       bool_t  (*x_setpostn)(); /* reposition offset */
+&space;       caddr_t (*x_inline)();   /* ptr to buffered data */
+&space;       VOID    (*x_destroy)();  /* free private area */
+&space;   } *x_ops;
+&space;   caddr_t x_public;        /* users' data */
+&space;   caddr_t x_private;       /* pointer to private data */
+&space;   caddr_t x_base;          /* private for position info */
+&space;   int     x_handy;         /* extra private word */
+} XDR;
+</CODE>
+<PARAGRAPH>The <VARIABLE>x_op</VARIABLE> field is the current operation being performed on the stream. This field is important to the XDR primitives but should not affect a stream's implementation. That is, a stream's implementation should not depend on this value.</PARAGRAPH>
+<PARAGRAPH>The fields <VARIABLE>x_private</VARIABLE>, <VARIABLE>x_base</VARIABLE>, and <VARIABLE>x_handy</VARIABLE> are private to the particular stream's implementation. The field <VARIABLE>x_public</VARIABLE> is for the XDR client and should never be used by the XDR stream implementations or the XDR primitives.</PARAGRAPH>
+<PARAGRAPH><FUNCTION>x_getpostn()</FUNCTION>, <FUNCTION>x_setpostn()</FUNCTION>, and <FUNCTION>x_destroy()</FUNCTION> are macros for accessing operations. The operation <FUNCTION>x_inline()</FUNCTION> takes two parameters: an XDR * and an unsigned integer, which is a byte count. The routine returns a pointer to a piece of the stream's internal buffer. The caller can then use the buffer segment for any purpose. From the stream's point of view, the bytes in the buffer segment have been consumed. The routine may return NULL if it cannot return a buffer segment of the requested size.</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>The <FUNCTION>x_inline()</FUNCTION> routine is for cycle squeezers. Use of the resulting buffer is not data portable. Programmers should avoid using this feature.</NOTE>
+<PARAGRAPH>The operations <FUNCTION>x_getbytes()</FUNCTION> and <FUNCTION>x_putbytes()</FUNCTION> blindly get and put sequences of bytes from or to the underlying stream; they return TRUE if they are successful, and FALSE otherwise. The routines have identical parameters (replace <VARIABLE>xxx</VARIABLE>):</PARAGRAPH>
+<CODE>
+bool_t xxxbytes(XDR *xdrs, char *buf, u_int bytecount);
+</CODE>
+<PARAGRAPH>The operations <FUNCTION>x_getlong()</FUNCTION> and <FUNCTION>x_putlong()</FUNCTION> receive and put long numbers from and to the data stream. It is the responsibility of these routines to translate the numbers between the machine representation and the (standard) external representation. The IRIX routines <FUNCTION>htonl()</FUNCTION> and <FUNCTION>ntohl()</FUNCTION> can be helpful in accomplishing this task. <XREF IDREF="94683" TYPE="TITLE">Appendix&nbsp;B, &ldquo;XDR Protocol Specification,&rdquo;</XREF> defines the standard representation of numbers.</PARAGRAPH>
+<PARAGRAPH>The higher-level XDR implementation assumes that signed and unsigned long integers contain the same number of bits and that nonnegative integers have the same bit representations as unsigned integers.</PARAGRAPH>
+<PARAGRAPH>These routines return TRUE if they succeed, and FALSE otherwise. They have identical parameters:</PARAGRAPH>
+<CODE>
+bool_t xxxlong(XDR *xdrs, long *lp);
+</CODE>
+<PARAGRAPH>Implementors of new XDR streams must make an XDR structure (with new operation routines) available to clients, using some kind of creation routine.</PARAGRAPH>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="51937">Advanced Topics</TITLE><PARAGRAPH>This section describes additional techniques for passing data structures; for example, linked lists (of arbitrary lengths). Unlike the simpler examples already presented in this chapter, the examples in this section are written using both the XDR C library routines and the XDR data description language.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="80850">Linked Lists</TITLE><PARAGRAPH>Example E (see <INDEXTARGET ID="7.XDRProg23"><!-- POSTPROCESSDATA: 7.XDRProg23|linked lists, XDRXDR:linked lists --><XREF IDREF="13625" TYPE="TITLE">&ldquo;Pointers&rdquo;</XREF>) presented a C data structure and its associated XDR routines for an individual's gross assets and liabilities. The example is duplicated here:</PARAGRAPH>
+<CODE>
+struct gnumbers {
+&space;   long g_assets;
+&space;   long g_liabilities; 
+};
+
+bool_t
+xdr_gnumbers(XDR *xdrs, struct gnumbers *gp)
+{
+&space;   if (xdr_long(xdrs, &amp;(gp->g_assets)))
+&space;       return (xdr_long(xdrs, &amp;(gp->g_liabilities)));
+&space;   return (FALSE);
+}
+</CODE>
+<PARAGRAPH>Now assume that you want to implement a linked list of such information. A data structure could be constructed as follows:</PARAGRAPH>
+<CODE>
+struct gnumbers_node {
+&space;   struct gnumbers gn_numbers;
+&space;   struct gnumbers_node *gn_next;
+};
+
+typedef struct gnumbers_node *gnumbers_list;
+</CODE>
+<PARAGRAPH>The head of the linked list can be thought of as the data object; that is, the head is not merely a convenient shorthand for a structure. Similarly, the <VARIABLE>gn_next</VARIABLE> field is used to indicate whether or not the object has terminated. Unfortunately, if the object continues, the <VARIABLE>gn_next</VARIABLE> field is also the address of where it continues. The link addresses do not carry any useful information when the object is serialized.</PARAGRAPH>
+<PARAGRAPH>The XDR data description of this linked list is described by the recursive type declaration of <VARIABLE>gnumbers_list</VARIABLE>:</PARAGRAPH>
+<CODE>
+typedef union switch (boolean) {
+&space;   case TRUE: struct {
+&space;       struct gnumbers current_element;
+&space;       gnumbers_list rest_of_list;
+&space;   };
+&space;   case FALSE: struct {};
+} gnumbers_list;
+</CODE>
+<PARAGRAPH>In this description, the boolean indicates whether there is more data following it. If the boolean is FALSE, then it is the last data field of the structure. If TRUE, it is followed by a <VARIABLE>gnumbers</VARIABLE> structure and (recursively) by a <VARIABLE>gnumbers_list</VARIABLE> (the rest of the object). Note that the C declaration has no boolean explicitly declared (although the <VARIABLE>gn_next</VARIABLE> field implicitly carries the information), while the XDR data description has no pointer explicitly declared.</PARAGRAPH>
+<PARAGRAPH>Hints for writing the XDR routines for a <VARIABLE>gnumbers_list</VARIABLE> follow easily from the XDR description above. Note how the primitive <FUNCTION>xdr_pointer()</FUNCTION> is used to implement the above XDR union:</PARAGRAPH>
+<CODE>
+bool_t
+xdr_gnumbers_node(XDR *xdrs, gnumbers_node *gn)
+{
+&space;   return(xdr_gnumbers(xdrs, &amp;gn->gn_numbers) &amp;&amp;
+&space;          xdr_gnumbers_list(xdrs, &amp;gp->gn_next));
+}
+
+bool_t
+xdr_gnumbers_list(XDR *xdrs, gnumbers_list *gnp)
+{
+&space;   return(xdr_pointer(xdrs, gnp,
+&space;                      sizeof(struct gnumbers_node),
+&space;                      xdr_gnumbers_node));
+}
+</CODE>
+<PARAGRAPH>The unfortunate side effect of XDRing a list with these routines is that the C stack grows linearly with respect to the number of nodes in the list due to the recursion. The following routine collapses the above two mutually recursive routines into a single, nonrecursive routine:</PARAGRAPH>
+<CODE>
+bool_t
+xdr_gnumbers_list(XDR *xdrs, gnumbers_list *gnp)
+{
+&space;   bool_t more_data;
+&space;   gnumbers_list *nextp;
+&space;   for (;;) {
+&space;       more_data = (*gnp != NULL);
+&space;       if (!xdr_bool(xdrs, &amp;more_data)) {
+&space;           return(FALSE);
+&space;       }
+&space;       if (! more_data) {
+&space;           break;
+&space;       }
+&space;       if (xdrs->x_op == XDR_FREE) {
+&space;           nextp = &amp;(*gnp)->gn_next;
+&space;       }
+&space;       if (!xdr_reference(xdrs, gnp,
+&space;                          sizeof(struct gnumbers_node),
+&space;                          xdr_gnumbers)) {
+&space;           return(FALSE);
+&space;       }
+&space;       gnp = (xdrs->x_op == XDR_FREE) ?
+&space;              nextp : &amp;(*gnp)->gn_next;
+&space;   }
+&space;   *gnp = NULL;
+&space;   return(TRUE);
+}
+</CODE>
+<PARAGRAPH>The first task is to find out whether there is more data so that the boolean information can be serialized. Notice that this statement is unnecessary in the XDR_DECODE case, since the value of <VARIABLE>more_data</VARIABLE> is not known until you deserialize it in the next statement.</PARAGRAPH>
+<PARAGRAPH>The next statement XDR's the <VARIABLE>more_data</VARIABLE> field of the XDR union. If there isn't any more data, set this last pointer to NULL to indicate the end of the list, and return TRUE, because you are done. Note that setting the pointer to NULL is only important in the XDR_DECODE case, since it is already NULL in the XDR_ENCODE and XDR_FREE cases.</PARAGRAPH>
+<PARAGRAPH>Next, if the direction is XDR_FREE, the value of <VARIABLE>nextp</VARIABLE> is set to indicate the location of the next pointer in the list. You set this value now because you need to dereference <VARIABLE>gnp</VARIABLE> to find the location of the next item in the list, and after the next statement, the storage pointed to by <VARIABLE>gnp</VARIABLE> will be freed up and no longer valid. You can't free <VARIABLE>gnp</VARIABLE> in this way for all directions, though, because in the XDR_DECODE direction the value of <VARIABLE>gnp</VARIABLE> won't be set until the next statement.</PARAGRAPH>
+<PARAGRAPH>Next, XDR the data in the node using the <FUNCTION>xdr_reference()</FUNCTION> primitive. <FUNCTION>xdr_reference()</FUNCTION> is like <FUNCTION>xdr_pointer()</FUNCTION> (used earlier), but it does not send over the boolean indicating whether there is more data. Use it instead of <FUNCTION>xdr_pointer()</FUNCTION>, because you have already XDR'd this information.</PARAGRAPH>
+<PARAGRAPH>Notice that the XDR routine passed is not the same type as an element in the list. The routine passed is <FUNCTION>xdr_gnumbers()</FUNCTION>, for XDR'ing <VARIABLE>gnumbers</VARIABLE>, but each element in the list is actually of type <VARIABLE>gnumbers_node</VARIABLE>. You don't pass <FUNCTION>xdr_gnumbers_node()</FUNCTION>, because it is recursive, but instead use <FUNCTION>xdr_gnumbers()</FUNCTION>, which XDR's all of the nonrecursive part. Note that this trick will work only if the <VARIABLE>gn_numbers</VARIABLE> field is the first item in each element, so that their addresses are identical when passed to <FUNCTION>xdr_reference()</FUNCTION>.</PARAGRAPH>
+<PARAGRAPH>Finally, update <VARIABLE>gnp</VARIABLE> to point to the next item in the list. If the direction is XDR_FREE, set it to the previously saved value; otherwise you can dereference <VARIABLE>gnp</VARIABLE> to get the proper value. Though harder to understand than the recursive version, this nonrecursive routine is less likely to blow the C stack. It will also run more efficiently, since a lot of the procedure call overhead has been removed. Most lists are small, though (in the hundreds of items or less), and the recursive version should be sufficient for them.</PARAGRAPH>
+</SECTION2>
+</SECTION1>
+</CHAPTER>

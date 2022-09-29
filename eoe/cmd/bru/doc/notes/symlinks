@@ -1,0 +1,50 @@
+Berkeley added a new kind of special file to the Unix file system
+with 4.2 BSD, called a "symbolic link".  A symbolic link is a file
+whose contents is the pathname of another file (which may in turn be
+another symbolic link). Symbolic links can point to directories
+(which is fun for shells with 'pwd' in them).  References to (i.e.
+system calls on) a symbolic link go through the link to the named file.
+The only system call that I can tell that does NOT go through the link
+is chown, and the new calls specifically designed for dealing with
+symbolic links.
+
+To create a symbolic link, one says   symlink ("real file", "symlink")
+and to read the contents of a symbolic link, readlink (file, buf, sizeof buf).
+To get information about a link, one says lstat(file, &statbuf).  If a file
+is not a symlink, lstat just does a regular stat, while plain stat goes
+through the link to the pointed to file.
+
+In general symbolic links are nice, but Berkeley messed up, in that it
+is impossible to reset the access and modification times of a symbolic
+link, or to chmod it. It turns out that chmod-ing doesn't matter, since
+a symbolic link of mode 000 can still be read by readlink(), even if the
+owner is not the current user! However, for a backup program to not
+be able to restore the access and modification times is a mess!
+
+If that's not enough, Pyramid Corporation's OSx is 4.2 BSD with System V
+added into it.  A user can be in one universe or the other, and switch back
+and forth between them.  To facilitate this, they created the concept of
+a "conditional symbolic link".  Depending on one's universe (something
+maintained by the kernel for each process, just like the current directory),
+a reference to a conditional symbolic link will get different files.
+One still does a readlink and lstat on them, but to create them, one says
+
+csymlink (" 1:old_att_file 2:old_ucb_file", "symfile");
+
+which points to old_att_file if the universe is att, but points to old_ucb_file
+if the universe is ucb. This provides for even more fun, when trying to
+restore one of these things on a plain BSD system, or worse, an ATT
+System V machine.
+
+The strategy I adopted is to treat a symbolic link as another kind of special
+file, which only gets a file header written to the archive.  The header
+already has a field for the name of the file that the current file is
+linked to; I used that.  The routine mksymlink() in utils.c and the routines
+in symlinks.c isolate the handling of Pyramid conditional symbolic links.
+
+Then I added some special casing code in extract.c to extract the symbolic
+links, and only do a chown on them, since trying to reset the file mode
+and access and modification times won't work.
+
+Numerous other things had to change for symbolic links and 4.2 BSD; the
+details are given in the implementation guide.

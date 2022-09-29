@@ -1,0 +1,221 @@
+#! /bin/sh
+# $Revision: 1.7 $
+
+# 'Fix' a ZyXEL U-1496E.
+#    This script writes a configuration suitable for operation with IRIX
+#    into the non-volatile memory in the modem.
+
+#	-i	for inbound use only
+#	-o	for outbound use only
+#	-io	for both
+#	-m model to specify the model number, as in "-m 9624"
+#	-v	for verbose debugging
+#	-c cmd	to add the string of Hayes-like commands, "cmd",
+#		    to the end of string of initializations.
+#	-s bps	to specify the DTE speed, either "19200" or "38400"
+
+# This script must be run by "root".
+
+# When this script is run, it sends the responses of the modem to
+#	standard out.  It ends by telling the modem to display all
+#	of its parameters.  If you do not see the right results,
+#	first check the cable to the modem.
+
+# This script uses 'ttyd*' device names, so that it is not stopped by a
+#	need for DCD.  Since there is often a getty(1M) running on
+#	a 'ttyf*', and since you cannot simultaneously open 'ttyf' and
+#	'ttyd', it is necessary to stop the getty in /etc/inittab
+#	before using this script.  If a uugetty(1M) is running on the
+#	port, it need not be turned off, because this script will
+#	temporarily disable it.
+
+
+# Additional local commands should be added to this file in the following
+#	line or provided with the -c option
+loc=""
+
+
+# With a ZyXEL U-1496E
+# use a line in /etc/inittab that runs /usr/lib/uucp/uugetty with arguments
+# such as the following:
+#	-Nt60 -izyin,conn ttyf2 dx_38400
+# See `man uugetty` and `man inittab`.
+
+
+USAGE="usage: `basename $0`: -i|-o|-io [-m model] [-v] [-c cmd] [-s 19200|38400] portno"
+
+
+if test $# -le 1 ; then
+    echo "$USAGE"
+    exit 1
+fi
+while getopts "viom:c:s:" c; do
+    case $c in
+    i) in=1;;
+    o) out=1;;
+    v) if test ! -z "$verbose"; then
+	    set -v
+	fi
+	set -x
+	verbose="-v"
+	;;
+    m) model=`echo "$OPTARG" | tr '[a-z]' '[A-Z]'`;;
+    c) loc="$loc $OPTARG";;
+    s) speed="$OPTARG";;
+    \?) echo "$USAGE"; exit 1;;
+    esac
+done
+shift `expr $OPTIND - 1`
+if test $# != 1 ; then
+    echo "$USAGE"
+    exit 1
+fi
+
+case $1 in
+    [dmf]*) port=`expr $1 : '.\(.*\)'`;;
+    *) port=$1;;
+esac
+dev=/dev/ttyd$port
+odevs="/dev/ttym$port /dev/ttyf$port"
+if test ! -c "$dev"; then
+    echo "bad port number: $1"
+    exit 1
+fi
+if test ! -d /var/spool/locks -a -d /usr/spool/locks; then
+    LOCKDIR=/usr/spool/locks
+else
+    LOCKDIR=/var/spool/locks
+fi
+LOCKD=$LOCKDIR/LCK..ttyd$port
+LOCKM=$LOCKDIR/LCK..ttym$port
+LOCKF=$LOCKDIR/LCK..ttyf$port
+# uucp wants a 10 byte string
+LOCKSTR=`expr "         $$" : '.*\(..........\)'`
+
+LOGFILE=/tmp/fix-modem$$
+
+# use factory defaults, except or including:
+#	X5=extended result codes
+#	&B1=fixed DTE rate
+#	&C1=DCD normal
+#	&D3=reset on DTR false
+#	&H3=RTS/CTS flow control
+#	&K4=v.42 + v.42bis + MNP[45]
+#	M1=speaker on at first
+#		M0=speaker off
+#	N1=quiet ring
+#	*F0=deny remote configuration
+#	*Q2=fall back on bad line
+#	S0=1 answer the phone on 1st ring, =0 do not answer the phone
+#	S2=128 to disable +++ escape for "security", but this cannot be
+#		saved in NVRAM.
+#	S40=1 to send input as soon as it is available
+
+#	$, &$, *$ produce help
+
+
+case "${model:=1496}" in
+    1496)
+	rstcmd='*L0 &F'
+	varcmd='X5 &B1 &C1 &D3 &H3 &K4 M1 N1 S2=128 *F0 *Q2'
+	infocmd='&Z? I2 &V'
+	model="U-1496E"
+	;;
+
+    *) echo "unknown model: $model"; exit 1;;
+esac
+
+case "${speed:=38400}" in
+    38400|19200) ;;
+    *) echo "unknown speed: $speed"; exit 1;;
+esac
+
+# Set S0=1 to answer the phone for pure input.
+#	Do not answer the phone (S0=0) for pure output.
+#	Do not answer the phone by default (S0=0) for combined
+#		input & output, because uugetty will answer it.
+if test "$out" = 1; then
+    modecmd='S0=0'
+elif test "$in" = 1; then
+    modecmd='S0=1'
+else
+    echo "$USAGE"		# complain if neither in nor out is set
+    exit 1
+fi
+
+
+if test ! -w /dev; then
+    echo "This does not work very well except for the superuser."
+    exit 1
+fi
+
+# fight the UUCP daemons and others for the port
+/etc/renice -20 $$ > /dev/null
+
+
+echo
+echo "  If this effort to program the ZyXEL \"$model\"" connected to port $port
+echo "  works, you should see a series AT commands and responses."
+echo "  The response to each command should end with 'OK'."
+echo "  The last command should be followed by a list of all of the settings."
+echo
+
+# lock the device by all of its names
+rm -f $LOCKD $LOCKM $LOCKF
+echo "$LOCKSTR" > $LOCKD; ln $LOCKD $LOCKM; ln $LOCKD $LOCKF
+
+# zap any gettys or other users
+pids=`/etc/fuser -q $dev $odevs 2>/dev/null`
+if test ! -z "$pids"; then
+    echo "    Stopping processes currently using port $port\n"
+    if test ! -z "$verbose"; then
+	ps -lfp $pids
+    fi
+    kill -1 $pids
+    sleep 2
+fi
+pids="$pids `/etc/fuser -qk $dev $odevs 2>/dev/null`"
+# re-lock in case the other guy removed our rude lock files
+rm -f $LOCKD $LOCKM $LOCKF
+echo "$LOCKSTR" > $LOCKD; ln $LOCKD $LOCKM; ln $LOCKD $LOCKF
+
+trap "rm -f $LOCKD $LOCKM $LOCKF $LOGFILE; /etc/fuser -qk $dev $odevs 2>/dev/null; exit 1" 0 1 2 15
+
+# start listening to the modem, after waiting for previous users to
+# disappear and allow us to open the ttyd* device.
+# Also keep DTR low in the hope of resetting the modem.
+while test ! -z "$pids"; do
+    pids=`/etc/fuser -qk $dev $odevs 2>/dev/null`
+    sleep 2
+done
+
+rm -f $LOGFILE
+tee $LOGFILE <$dev &
+
+stty $speed -echo -icrnl -ixon -ixoff -isig clocal < $dev
+
+# Reset things.
+echo "\rAT $rstcmd\r\c" > $dev; sleep 1
+
+# Determine firmware model, and turn off inter-character delays if the
+# the system is quick.  IP12s and 6-port boards with new firmware are
+# quick.
+echo "AT Q0 I0\r\c" > $dev; sleep 1
+if test `grep -c 'V 4.0[4-9]' $LOGFILE` -gt 0; then
+    if test $port -ge 5 -a $port -le 37 \
+	    -a `hinv -c serial | grep -c 'cdsio.* 2[0-9]*$'` -gt 0; then
+	varcmd="$varcmd S40=1"
+    fi
+    if test `hinv -c processor | egrep -c 'IP12|IP20'` -gt 0; then
+	varcmd="$varcmd S40=1"
+    fi
+fi
+
+echo "AT $varcmd $modecmd $loc\r\c" > $dev; sleep 1
+
+echo "AT &W\r\c" > $dev; sleep 1
+
+echo "AT $infocmd\r\c" > $dev; sleep 1
+
+#prevent message about the death of the listener
+exec >/dev/null 2>&1

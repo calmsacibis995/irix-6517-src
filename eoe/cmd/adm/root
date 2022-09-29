@@ -1,0 +1,78 @@
+# $Revision: 1.49 $
+#
+# The root crontab can be used to perform accounting data collection
+#	and cleanup.
+#
+# Format of lines:
+#min	hour	daymo	month	daywk	cmd
+#
+#
+# General SGI practice
+#
+# Remove old trash
+0	5	*	*	*	find / -local -type f '(' -name core -o -name dead.letter ')' -atime +7 -mtime +7 -exec rm -f '{}' ';'
+#
+# Remove old sendmail mail files
+2	5	*	*	*	find /var/spool/mqueue -local -type f -mtime +30 -exec rm -f '{}' ';'
+#
+# Remove old rwhod files
+2	5	*	*	*	find /var/spool/rwho -local -type f -mtime +7 -exec rm -f '{}' ';'
+#
+# Remove old vi/ex 'preserved' files
+3	5	*	*	*	find /var/preserve -local -type f -atime +30 -mtime +30 -exec rm -f '{}' ';'
+#
+# Rotate the logs
+1	1	*	*	0	umask 033;cd /var/cron;if test -s log && test "`/sbin/stat -qs log`" -ge 10240; then mv -f log OLDlog;touch log; killall 1 cron; fi
+1	1	*	*	0	umask 077;cd /var/adm;if test -s sulog && test "`/sbin/stat -qs sulog`" -ge 10240; then mv -f sulog OLDsulog;touch sulog; fi
+# In order to accept other system loggings at the 'crit' level, 
+# use only the first 'crit' entry found for log file rotation.
+# This works only if system default log file is found first and 
+# additional 'crit' level logging are added later.
+1	1	*	*	0	umask 033;SYSLOGFILE=`grep "\*.crit" /etc/syslog.conf | awk '$1 != "#" && done == 0 {done =1; print $NF}'`; if test -f $SYSLOGFILE ; then :; else SYSLOGFILE=/var/adm/SYSLOG; fi;OSYSLOGFILE=`dirname $SYSLOGFILE`\/o`basename $SYSLOGFILE`;if test -s $SYSLOGFILE && test "`/sbin/stat -qs $SYSLOGFILE`" -ge 10240; then mv -f $SYSLOGFILE $OSYSLOGFILE;touch $SYSLOGFILE; killall 1 syslogd; fi
+#
+# If accounting is on it will handle wtmp rotating.
+# wtmp and wtmpx are always kept in sync by libc/getut so we should
+# always do things to them together
+#
+2	1	*	*	0	if /etc/chkconfig acct; then :; else umask 033;cd /var/adm; if test -s wtmp && test "`/sbin/stat -qs wtmp`" -ge 10240; then mv -f wtmp OLDwtmp; mv -f wtmpx OLDwtmpx; touch wtmp wtmpx; chown adm.adm wtmp wtmpx; fi; fi
+#
+#12	4	*	*	*	sh /var/spool/lp/etc/lib/log.rotate
+#
+#
+#
+# If this machine is running NIS and it's a slave server, the following 
+# commands keep the NIS databases up-to-date.
+#
+8	*	*	*	*	if test -x /var/yp/ypxfr_1ph; then /var/yp/ypxfr_1ph; fi
+9	9,15	*	*	*	if test -x /var/yp/ypxfr_2pd; then /var/yp/ypxfr_2pd; fi
+10	9	*	*	*	if test -x /var/yp/ypxfr_1pd; then /var/yp/ypxfr_1pd; fi
+#
+#
+# If this machine is a NIS master, ypmake will rotate the log file 
+# and ensure that the databases are pushed out with some regularity.
+# It is best to not build and push the databases at the same time the
+# commands above on slave servers are pulling the databases.
+#
+0,17,30,45 *	*	*	*	if /etc/chkconfig ypmaster && test -x /var/yp/ypmake; then /var/yp/ypmake; fi
+#
+#
+# dodisk does the disk accounting 
+0	2	* 	*	4	if /etc/chkconfig acct; then /usr/lib/acct/dodisk > /var/adm/acct/nite/disklog; fi
+#
+# Reorganize file systems
+#
+0	3	*	*	0	if test -x /usr/etc/fsr; then (cd /usr/tmp; /usr/etc/fsr) fi
+#
+# Repair mangled utmp/wtmp entries
+#
+1	0	*	*	*	/usr/sbin/chkutent
+# Run disk cleaning cycle for affected IBM Ultrstar drives twice weekly
+45 2 * * 0,4 /sbin/diskpatch -FH30 -S11
+#
+# If we are running smap, attempt to send queued mail
+#
+0,15,30,45    *       *       *       *       /sbin/chkconfig sendmail || ( /sbin/chkconfig smap && /usr/lib/sendmail -q > /dev/null 2>&1 )
+#
+# fsdump updates the local rfind database
+#
+3 0-3,5-23 * * * /etc/chkconfig rfindd && cd /var/rfindd && exec ./runfsdump

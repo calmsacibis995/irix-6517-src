@@ -1,0 +1,495 @@
+<!-- Produced by version 3.14 (11/22/96) of SGI Frame/SGML translator -->
+<CHAPTER LBL="8"><TITLE><XREFTARGET ID="11012">Monitoring Changes to Files and Directories</TITLE><PARAGRAPH>The File Alteration Monitor (FAM) monitors changes to files and directories in the filesystem and notifies interested applications of these changes. Your application can use FAM to get an up-to-date view of the filesystem rather than having to poll the filesystem. This chapter describes the required libraries and provides a basic list of steps for using FAM. For more detailed information, refer to the <INDEXTARGET ID="08.FAM1"><!-- POSTPROCESSDATA: 08.FAM1|File Alteration MonitorFAMfiles:monitoring changesdirectories:monitoring changesmonitor file changes. <ITALICS>See</ITALICS> File Alteration Monitor --><INDEXTARGET ID="08.FAM2"><!-- POSTPROCESSDATA: 08.FAM2|FAM:<ITALICS>See also</ITALICS> File Alteration Monitor --><REFPAGE>fam(1M)</REFPAGE> and <REFPAGE>FAM(3X)</REFPAGE> reference pages.</PARAGRAPH>
+<PARAGRAPH>This chapter contains these sections:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH><XREF IDREF="54801" TYPE="TITLE">&ldquo;FAM Overview&rdquo;</XREF> provides an overview to FAM including the libraries and header files needed to use FAM in your application.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="29093" TYPE="TITLE">&ldquo;The FAM Interface&rdquo;</XREF> describes the FAM API.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="85266" TYPE="TITLE">&ldquo;Using FAM&rdquo;</XREF> provides a simple example demonstrating FAM.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="54801">FAM Overview</TITLE><PARAGRAPH>Typically, if applications need to monitor the status of a file or directory, they must periodically poll the filesystem. FAM provides a more efficient and convenient method.</PARAGRAPH>
+<PARAGRAPH>FAM consists of the FAM daemon, <INDEXTARGET ID="08.FAM3"><!-- POSTPROCESSDATA: 08.FAM3|File Alteration Monitor:<ITALICS>fam</ITALICS> daemon --><COMMAND>fam</COMMAND>, and a library for interacting with this daemon. An application can request <COMMAND>fam</COMMAND> to monitor any files or directories in the filesystem. When <COMMAND>fam</COMMAND> detects changes to these files, it notifies the application.</PARAGRAPH>
+<PARAGRAPH>This section provides an overview of FAM and describes:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH><XREF IDREF="52432" TYPE="TITLE">&ldquo;Theory of Operation&rdquo;</XREF>&space;</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="15849" TYPE="TITLE">&ldquo;FAM Libraries and Include Files&rdquo;</XREF>&space;</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="52432">Theory of Operation</TITLE><PARAGRAPH>FAM uses <INDEXTARGET ID="08.FAM4"><!-- POSTPROCESSDATA: 08.FAM4|File Alteration Monitor:theory of operation --><FILENAME>imon</FILENAME>, a pseudo device, to monitor filesystem activity on your system on a file-by-file basis. You can refer to the <REFPAGE>imon(7)</REFPAGE> reference page for more information on its operation, but you should not attempt to access <FILENAME>imon</FILENAME> directly.</PARAGRAPH>
+<PARAGRAPH>When you provide FAM with the name of a file or directory to monitor, FAM passes the request to <FILENAME>imon</FILENAME>, which begins monitoring the inode corresponding to the pathname. When <FILENAME>imon</FILENAME> detects a change to an inode that it is monitoring, it notifies FAM, which matches the inode to a corresponding filename. FAM then generates a FAM event on a socket. Your application can either monitor the socket or periodically poll FAM to detect FAM events.</PARAGRAPH>
+<PARAGRAPH>This difference between FAM and <FILENAME>imon</FILENAME> can produce some unexpected results. For example, if a user moves a file, FAM reports that the file is deleted. The reason is that FAM monitors files by name and not inode, so it doesn't know that the file still exists.</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>Unlike local files and directories, FAM monitors NFS-mounted files and directories by name rather than by inode.</NOTE>
+<PARAGRAPH>As another example, consider the case where FAM is monitoring a file. If the user deletes the file, FAM correctly reports that fact. Then FAM polls the directory every few seconds to see if the file has been created. If you need to detect the creation of a given file by name, you may want to monitor the directory in which it will be created and watch for FAM events notifying the creation of a file by that name in the directory.</PARAGRAPH>
+<PARAGRAPH>Whenever FAM is asked to monitor a file/directory that resides on a remote (NFS) filesystem, FAM tries to make a connection to the FAM on the NFS server. If it succeeds, it asks the server fam to monitor the file. The server FAM sends FAM events, and the original FAM translates those events to a form its client can use. If FAM can't connect to FAM on the server, it monitors the file itself by polling every few seconds. Polling over NFS has a high overhead.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="15849">FAM Libraries and Include Files</TITLE><PARAGRAPH>The FAM interface routines are in the <INDEXTARGET ID="08.FAM5"><!-- POSTPROCESSDATA: 08.FAM5|File Alteration Monitor:librariesFile Alteration Monitor:include files --><FILENAME>libfam</FILENAME> library. <FILENAME>libfam</FILENAME> depends on the <FILENAME>libC</FILENAME> library. Be sure to specify <CMDLINEOPT>-lfam</CMDLINEOPT> before <CMDLINEOPT>-lC</CMDLINEOPT> in the compilation or linking command. If you are using fam from a C++ program, <FILENAME>libC</FILENAME> is included automatically. You must include <FILENAME>libC</FILENAME> if you are using fam from a C program.</PARAGRAPH>
+<PARAGRAPH>You must include <FILENAME>&lt;fam.h></FILENAME> in any source file that uses FAM. You must also include <FILENAME>&lt;sys/select.h></FILENAME> if you use the <COMMAND>select(2)</COMMAND> system call.</PARAGRAPH>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="29093">The FAM Interface</TITLE><PARAGRAPH>This section describes the functions you use to access FAM from your application:<INDEXTARGET ID="08.FAM6"><!-- POSTPROCESSDATA: 08.FAM6|File Alteration Monitor:interface --></PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH><XREF IDREF="33054" TYPE="TITLE">&ldquo;Opening and Closing a FAM Connection&rdquo;</XREF>&space;</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="28298" TYPE="TITLE">&ldquo;Monitoring a File or Directory&rdquo;</XREF>&space;</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="62804" TYPE="TITLE">&ldquo;Suspending, Resuming, and Canceling Monitoring&rdquo;</XREF>&space;</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="33384" TYPE="TITLE">&ldquo;Detecting Changes to Files and Directories&rdquo;</XREF>&space;</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="25612" TYPE="TITLE">&ldquo;FAM Examples&rdquo;</XREF>&space;</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="33054">Opening and Closing a FAM Connection</TITLE><PARAGRAPH>The function <INDEXTARGET ID="08.FAM7"><!-- POSTPROCESSDATA: 08.FAM7|File Alteration Monitor:opening a connectionFile Alteration Monitor:closing a connection --><FUNCTION>FAMOpen()</FUNCTION> opens a connection to <COMMAND>fam</COMMAND>:</PARAGRAPH>
+<EXAMPLE>
+int FAMOpen(FAMConnection* <VARIABLE>fc</VARIABLE>)
+</EXAMPLE>
+<PARAGRAPH><FUNCTION>FAMOpen()</FUNCTION> returns 0 if successful and -1 if unsuccessful. <FUNCTION>FAMOpen()</FUNCTION> initializes the FAMConnection structure passed to it, which you must use in all subsequent FAM procedure calls in your application.</PARAGRAPH>
+<PARAGRAPH>An element of the FAMConnection structure is the file descriptor associated with the socket that FAM uses to communicate with your application. You need this file descriptor to perform <FUNCTION>select()</FUNCTION> operations on the socket. You can obtain the file descriptor using the <FUNCTION>FAMCONNECTION_GETFD()</FUNCTION> macro:</PARAGRAPH>
+<EXAMPLE>
+FAMCONNECTION_GETFD(<VARIABLE>fc</VARIABLE>)
+</EXAMPLE>
+<PARAGRAPH>The function <FUNCTION>FAMOpen2</FUNCTION> tells FAM the application's name:</PARAGRAPH>
+<EXAMPLE>
+int FAMOpen2(FAMConnection* <VARIABLE>fc</VARIABLE>, const char* appName)
+</EXAMPLE>
+<PARAGRAPH>FAM uses <ITALICS>appName</ITALICS> when it prints debugging messages.</PARAGRAPH>
+<PARAGRAPH>The function <FUNCTION>FAMClose()</FUNCTION> closes a connection to <COMMAND>fam</COMMAND>:</PARAGRAPH>
+<EXAMPLE>
+int FAMClose(FAMConnection* <VARIABLE>fc</VARIABLE>)
+</EXAMPLE>
+<PARAGRAPH><FUNCTION>FAMClose()</FUNCTION> returns 0 if successful and -1 if unsuccessful.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="28298">Monitoring a File or Directory</TITLE><PARAGRAPH><FUNCTION>FAMMonitorDirectory()</FUNCTION> and <FUNCTION>FAMMonitorFile()</FUNCTION> tell FAM to start monitoring a directory or file respectively:<INDEXTARGET ID="08.FAM8"><!-- POSTPROCESSDATA: 08.FAM8|File Alteration Monitor:monitoring a file --></PARAGRAPH>
+<CODE>
+int FAMMonitorDirectory(FAMConnection *<VARIABLE>fc</VARIABLE>,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;char *<VARIABLE>filename</VARIABLE>,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;FAMRequest* <VARIABLE>fr</VARIABLE>,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;void* <VARIABLE>userData</VARIABLE>)
+
+int FAMMonitorFile(FAMConnection *<VARIABLE>fc</VARIABLE>,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;char *<VARIABLE>filename</VARIABLE>,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;FAMRequest* <VARIABLE>fr</VARIABLE>,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;void* <VARIABLE>userData</VARIABLE>)
+</CODE>
+<PARAGRAPH><FUNCTION>FAMMonitorDirectory()</FUNCTION> monitors not only changes that happens to the contents of the specified directory file, but also to the files in the directory. If the directory contains subdirectories, <FUNCTION>FAMMonitorDirectory()</FUNCTION> monitors changes to the subdirectory files, but not the contents of those subdirectories. <FUNCTION>FAMMonitorFile()</FUNCTION> monitors only what happens to the specified file. Both functions return 0 if successful and -1 otherwise.</PARAGRAPH>
+<PARAGRAPH>The first argument to these functions is the FAMConnection structure initialized by <FUNCTION>FAMOpen()</FUNCTION>. The second argument is the full pathname of the directory or file to monitor. Note that you can't use relative pathnames.</PARAGRAPH>
+<PARAGRAPH>The third argument is a FAMRequest structure that these functions initialize. You can pass this structure to <FUNCTION>FAMSuspendMonitor()</FUNCTION>, <FUNCTION>FAMResumeMonitor()</FUNCTION>, or <FUNCTION>FAMCancelMonitor()</FUNCTION> to respectively suspend, resume, or cancel the monitoring of the file or directory. <XREF IDREF="62804" TYPE="TITLE">&ldquo;Suspending, Resuming, and Canceling Monitoring&rdquo;</XREF> further describes these functions.</PARAGRAPH>
+<PARAGRAPH>The fourth argument is a pointer to any arbitrary user data that you want included in the FAMEvent structure returned by <FUNCTION>FAMNextEvent()</FUNCTION> when this file or directory changes.</PARAGRAPH>
+<PARAGRAPH>FAM then generates <ITALICS>FAM events</ITALICS> whenever it detects changes in monitored files or directories. <XREF IDREF="33384" TYPE="TITLE">&ldquo;Detecting Changes to Files and Directories&rdquo;</XREF> describes how to detect and interpret these events.</PARAGRAPH>
+<PARAGRAPH>Two similar routines are <FUNCTION>FAMMonitorDirectory2()</FUNCTION> and <FUNCTION>FAMMonitorFile2()</FUNCTION>:</PARAGRAPH>
+<CODE>
+int FAMMonitorDirectory2(FAMConnection *fc,
+&space;                       char *filename,
+&space;                       FAMRequest* fr);
+
+int FAMMonitorFile2(FAMConnection *fc,
+&space;                  char *filename,
+&space;                  FAMRequest* fr);
+</CODE>
+<PARAGRAPH>In these routines, the caller picks the request number, not <FILENAME>libfam</FILENAME>. The caller specifies the request number by putting it in the FAMRequest before calling the routine. For example:</PARAGRAPH>
+<CODE>
+FAMConnection fc;
+FAMRequest frq;
+...
+frq.reqnum = some_number_associated_with_tmp;
+if (FAMMonitorDirectory2(&amp;fc, &ldquo;/tmp&rdquo;, &amp;frq) &lt; 0)
+&space;   perror(&ldquo;can't monitor /tmp&rdquo;);
+</CODE>
+<PARAGRAPH>If you use the -2 routines, you must choose unique request numbers. See FAMAcknowledge below.</PARAGRAPH>
+<PARAGRAPH>It's up to you to determine which routines to use: the -2 routines or the original routines. </PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="62804">Suspending, Resuming, and Canceling Monitoring</TITLE><PARAGRAPH>Once you've begun monitoring a file or directory, you can cancel monitoring or temporarily suspend and later resume monitoring.<INDEXTARGET ID="08.FAM9"><!-- POSTPROCESSDATA: 08.FAM9|File Alteration Monitor:suspend monitoringFile Alteration Monitor:resume monitoringFile Alteration Monitor:cancel monitoring --></PARAGRAPH>
+<PARAGRAPH><FUNCTION>FAMSuspendMonitor()</FUNCTION> temporarily suspends monitoring a file or directory. <FUNCTION>FAMResumeMonitor()</FUNCTION> resumes monitoring the file or directory. Suspending file monitoring can be useful when your application does not need to display information about a file (for example, when your application is iconified).</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>FAM queues any changes that occur to the file or directory while monitoring is suspended. When your application resumes monitoring, FAM notifies it of any changes.</NOTE>
+<PARAGRAPH>The syntax for these functions is:</PARAGRAPH>
+<CODE>
+int FAMSuspendMonitor(FAMConnection *<VARIABLE>fc</VARIABLE>, FAMRequest *<VARIABLE>fr</VARIABLE>);
+
+int FAMResumeMonitor(FAMConnection *<VARIABLE>fc</VARIABLE>, FAMRequest *<VARIABLE>fr</VARIABLE>);
+</CODE>
+<PARAGRAPH><VARIABLE>fc</VARIABLE> is the FAMConnection returned by <FUNCTION>FAMOpen()</FUNCTION>, and <VARIABLE>fr</VARIABLE> is the FAMRequest returned by either <FUNCTION>FAMMonitorFile()</FUNCTION> or <FUNCTION>FAMMonitorDirectory()</FUNCTION>. Both functions return 0 if successful and -1 otherwise.</PARAGRAPH>
+<PARAGRAPH>When your application is finished monitoring a file or directory, it should call <FUNCTION>FAMCancelMonitor()</FUNCTION>:</PARAGRAPH>
+<EXAMPLE>
+int FAMCancelMonitor(FAMConnection *<VARIABLE>fc</VARIABLE>, FAMRequest *<VARIABLE>fr</VARIABLE>)
+</EXAMPLE>
+<PARAGRAPH><FUNCTION>FAMCancelMonitor()</FUNCTION> instructs FAM to no longer monitor the file or directory specified by <VARIABLE>fr</VARIABLE>. It returns 0 if successful and -1 otherwise.</PARAGRAPH>
+<PARAGRAPH>After you call <FUNCTION>FAMCancelMonitor()</FUNCTION>, FAM sends a FAMAcknowledge event. When you've seen the FAMAcknowledge event, you know it's safe to re-use the request number (if you're using the -2 form monitoring routines).</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="33384">Detecting Changes to Files and Directories</TITLE><PARAGRAPH>Whenever FAM detects changes in files or directories that it is monitoring, it generates a <INDEXTARGET ID="08.FAM10"><!-- POSTPROCESSDATA: 08.FAM10|files:detecting changes, FAMdirectories:detecting changes, FAMFile Alteration Monitor:detecting changes --><ITALICS>FAM event</ITALICS>. Your application can receive FAM events in one of two ways:</PARAGRAPH>
+<HANGLIST><HANGPAIR><HANGITEM>The Select approach</HANGITEM>
+<HANGBODY><PARAGRAPH>&lbreak;Your application performs a <FUNCTION>select</FUNCTION>(2) on the file descriptor in the FAMConnection structure returned by <FUNCTION>FAMOpen()</FUNCTION>. When this file descriptor becomes active, the application calls <FUNCTION>FAMNextEvent()</FUNCTION> to retrieve the pending FAM event.</PARAGRAPH>
+</HANGBODY>
+</HANGPAIR>
+<HANGPAIR><HANGITEM>The Polling approach</HANGITEM>
+<HANGBODY><PARAGRAPH>&lbreak;Your application periodically calls <FUNCTION>FAMPending()</FUNCTION> (typically when the system is waiting for input). When <FUNCTION>FAMPending()</FUNCTION> returns with a positive return value, your application calls <FUNCTION>FAMNextEvent()</FUNCTION> to retrieve the pending FAM events.</PARAGRAPH>
+</HANGBODY>
+</HANGPAIR>
+</HANGLIST>
+<PARAGRAPH><FUNCTION>FAMPending()</FUNCTION> has the following syntax:</PARAGRAPH>
+<CODE>
+int FAMPending(FAMConnection *<VARIABLE>fc</VARIABLE>)
+</CODE>
+<PARAGRAPH>It returns 1 if there is a FAM event queued, 0 if there is no queued event, and -1 if there is an error. <FUNCTION>FAMPending()</FUNCTION> returns immediately (that is, it does not wait for an event).</PARAGRAPH>
+<PARAGRAPH>Once you have determined that there is a FAM event queued, whether by using the select or polling approach, call <FUNCTION>FAMNextEvent()</FUNCTION> to retrieve it:</PARAGRAPH>
+<EXAMPLE>
+int FAMNextEvent(FAMConnection *<VARIABLE>fc</VARIABLE>, FAMEvent *<VARIABLE>fe</VARIABLE>)
+</EXAMPLE>
+<PARAGRAPH><FUNCTION>FAMNextEvent()</FUNCTION> returns 0 if successful and -1 if there is an error. The first argument to <FUNCTION>FAMNextEvent()</FUNCTION> is the FAMConnection structure initialized by <FUNCTION>FAMOpen()</FUNCTION>. The second argument is a pointer to a FAMEvent structure, which <FUNCTION>FAMNextEvent()</FUNCTION> fills in with information about the FAM event. The format of the FAMEvent structure is:</PARAGRAPH>
+<CODE>
+typedef struct {
+&nbsp;&nbsp;&nbsp;&nbsp;FAMConnection* <VARIABLE>fc</VARIABLE>;
+&nbsp;&nbsp;&nbsp;&nbsp;FAMRequest <VARIABLE>fr</VARIABLE>;
+&nbsp;&nbsp;&nbsp;&nbsp;char *<VARIABLE>hostname</VARIABLE>;
+&nbsp;&nbsp;&nbsp;&nbsp;char <VARIABLE>filename</VARIABLE>[PATH_MAX];
+&nbsp;&nbsp;&nbsp;&nbsp;void *<VARIABLE>userdata</VARIABLE>;
+&nbsp;&nbsp;&nbsp;&nbsp;FAMCodes <VARIABLE>code</VARIABLE>;
+&nbsp;&nbsp;&nbsp;&nbsp;} FAMEvent;
+</CODE>
+<PARAGRAPH><VARIABLE>fc</VARIABLE> is the FAMConnection structure initialized by <FUNCTION>FAMOpen()</FUNCTION>.</PARAGRAPH>
+<PARAGRAPH><VARIABLE>fr</VARIABLE> is the FAMRequest structure returned by either <FUNCTION>FAMMonitorFile()</FUNCTION> or <FUNCTION>FAMMonitorDirectory()</FUNCTION> when you requested that FAM monitor the file or directory that changed.</PARAGRAPH>
+<PARAGRAPH><VARIABLE>hostname</VARIABLE> is an obsolete field. Don't use it in your applications.</PARAGRAPH>
+<PARAGRAPH><VARIABLE>filename</VARIABLE> is either the full pathname of the file or directory that you monitored or the name of a file in a directory that you monitored.</PARAGRAPH>
+<PARAGRAPH><VARIABLE>userdata</VARIABLE> is the arbitrary data pointer that you provided when you called either <FUNCTION>FAMMonitorFile()</FUNCTION> or <FUNCTION>FAMMonitorDirectory()</FUNCTION> to monitor this file or directory. If you used the -2 routine, <FUNCTION>FAMMonitorDirectory2()</FUNCTION> or <FUNCTION>FAMMonitorFile2()</FUNCTION>, <VARIABLE>userdata</VARIABLE> is undefined. </PARAGRAPH>
+<PARAGRAPH><VARIABLE>code</VARIABLE> is an enumerated value of type FAMCodes that describes the change that occurred. It can take any of the following values:</PARAGRAPH>
+<HANGLIST><HANGPAIR><HANGITEM>FAMChanged</HANGITEM>
+<HANGBODY><PARAGRAPH>Some value of the file or directory that can be obtained with <FUNCTION>lstat</FUNCTION>(2) changed.</PARAGRAPH>
+</HANGBODY>
+</HANGPAIR>
+<HANGPAIR><HANGITEM>FAMDeleted</HANGITEM>
+<HANGBODY><PARAGRAPH>A file or directory being monitored was deleted.</PARAGRAPH>
+</HANGBODY>
+</HANGPAIR>
+<HANGPAIR><HANGITEM>FAMStartExecuting</HANGITEM>
+<HANGBODY><PARAGRAPH>&lbreak;A monitored, executable file started executing. The event occurs only the first time the file is executed.</PARAGRAPH>
+</HANGBODY>
+</HANGPAIR>
+<HANGPAIR><HANGITEM>FAMStopExecuting</HANGITEM>
+<HANGBODY><PARAGRAPH>&lbreak;A monitored, executable file that was running finished. If multiple processes from an executable are running, this event is generated only when the last one finishes.</PARAGRAPH>
+</HANGBODY>
+</HANGPAIR>
+<HANGPAIR><HANGITEM>FAMCreated</HANGITEM>
+<HANGBODY><PARAGRAPH>A file was created in a directory being monitored.</PARAGRAPH>
+</HANGBODY>
+</HANGPAIR>
+<HANGPAIR><HANGITEM>FAMAcknowledge</HANGITEM>
+<HANGBODY><PARAGRAPH>&lbreak;FAM generates a FAMAcknowledge event in response to a call to <FUNCTION>FAMCancelMonitor()</FUNCTION>. If you specify an invalid request, that is, a relative path, FAM automatically cancels the request and immediately sends a FAMAcknowledge event.</PARAGRAPH>
+</HANGBODY>
+</HANGPAIR>
+<HANGPAIR><HANGITEM>FAMExists</HANGITEM>
+<HANGBODY><PARAGRAPH>When the application requests that a file be monitored, FAM generates a FAMExists event for that file (if it exists). When the application requests that a directory be monitored, FAM generates a FAMExists event for that directory (if it exists) and every file contained in that directory.</PARAGRAPH>
+</HANGBODY>
+</HANGPAIR>
+<HANGPAIR><HANGITEM>FAMEndExist</HANGITEM>
+<HANGBODY><PARAGRAPH>When the application requests a file or directory be monitored, FAM generates a FAMEndExist event after the last FAMExists event. (Therefore if you monitor a file, FAM generates a single FAMExists event followed by a FAMEndExist event.)</PARAGRAPH>
+<NOTE><PREFIX>Note</PREFIX>Prior to IRIX 6.2, <FUNCTION>FAMNextEvent()</FUNCTION> did not initialize the <VARIABLE>filename</VARIABLE> field in a FAMEndExist event. You should use the request number to find the file or directory these events reference.</NOTE>
+</HANGBODY>
+</HANGPAIR>
+</HANGLIST>
+<SECTION3 LBL="" HELPID = ""><TITLE>Symbolic Links</TITLE><PARAGRAPH>If you specify the pathname of a symbolic link to <INDEXTARGET ID="08.FAM11"><!-- POSTPROCESSDATA: 08.FAM11|File Alteration Monitor:symbolic linkssymbolic links:File Alteration Monitor --><FUNCTION>FAMMonitorDirectory()</FUNCTION> or <FUNCTION>FAMMonitorFile()</FUNCTION>, FAM monitors only the symbolic link itself, not the target of the link. Although it might seem logical to automatically monitor the target of a symbolic link, consider that if the target is on an automounted filesystem, monitoring the target triggers and holds an automount. Another reason to monitor the link instead of the target is that the target may not exist.</PARAGRAPH>
+<PARAGRAPH>There is no general solution for monitoring targets of symbolic links. You might decide that it's appropriate for your application to monitor a target even if it's automounted.</PARAGRAPH>
+<TIP><PREFIX>Tip</PREFIX>The <FILENAME>libc</FILENAME> routine <COMMAND>realpath(3C)</COMMAND> is useful when you need to resolve a link into its ultimate target.</TIP>
+<TIP><PREFIX>Tip</PREFIX>Use <COMMAND>statvfs(2)</COMMAND> to recognize a remote file.</TIP>
+<PARAGRAPH>On the other hand, to avoid triggering and holding an automount, you can manually follow symbolic links until you reach either a local target, which you can then monitor, or a non-existent filesystem, in which case you might decide not to monitor the target. Another option is to test the target once to see if it is local, which triggers an automount only once if the target is automounted.</PARAGRAPH>
+<PARAGRAPH>For example, the following routine determines if a given path is nonexistent, a dangling link, local, or remote.</PARAGRAPH>
+<CODE>
+#include &lt;errno.h>
+#include &lt;limits.h>
+#include &lt;stdlib.h>
+#include &lt;sys/stat.h>
+#include &lt;sys/statvfs.h>
+
+/*
+&space;*  determine a file's location
+&space;*/
+
+enum location { ERROR, NONEXISTENT, DANGLING, LOCAL, REMOTE };
+
+enum location
+file_location(const char *path)
+{
+&space;    char target_path[PATH_MAX];
+&space;    struct stat statbuf;
+&space;    struct statvfs svfsbuf;
+
+&space;    if (!realpath(path, target_path))
+&space;    {
+&space;          /*
+&space;           *  realpath failed -- probably a permission
+&space;           *  problem, dangling link or nonexistent file.
+&space;           */
+&space;           if (errno == EACCES)
+&space;               return ERROR;
+&space;           if (lstat(path, &amp;statbuf) == 0)
+&space;               return DANGLING;
+&space;           else if (errno == ENOENT)
+&space;               return NONEXISTENT;
+&space;           else
+&space;               return ERROR;
+&space;     }
+&space;    /*
+&space;     *  Realpath succeeded.  Find out if file is local.
+&space;     */
+&space;     if (statvfs(target_path, &amp;svfsbuf) &lt; 0)
+&space;         return ERROR;
+&space;     if (svfsbuf.f_flag &amp; ST_LOCAL)
+&space;         return LOCAL;
+&space;     else
+&space;         return REMOTE;
+}
+</CODE>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="25612">FAM Examples</TITLE><PARAGRAPH>The following examples show event streams that FAM sends in certain situations. <INDEXTARGET ID="08.FAM12"><!-- POSTPROCESSDATA: 08.FAM12|File Alteration Monitor:examples --></PARAGRAPH>
+<PARAGRAPH><BOLD>Example: </BOLD>A client monitors an existing file. Later, another program appends data to the file. Even later, the client cancels the monitoring request.</PARAGRAPH>
+<CODE>
+User calls     FAMMonitorFile(... &ldquo;/a/b/c&rdquo; ...)
+FAM events:    FAMExists       /a/b/c
+&space;              FAMEndExist     /a/b/c
+
+Other program appends to file.
+FAM event:     FAMChanged      /a/b/c
+
+User calls     FAMCancelMonitor(...)
+FAM event:     FAMAcknowledge  /a/b/c
+</CODE>
+<PARAGRAPH><BOLD>Example: </BOLD>A client monitors a directory containing two files. Later, another program creates a third file.</PARAGRAPH>
+<CODE>
+User calls     FAMMonitorDirectory(... &ldquo;/a/b&rdquo; ...)
+FAM events:    FAMExists       /a/b
+&space;              FAMExists       file_one
+&space;              FAMExists       file_two
+&space;              FAMEndExist     /a/b
+Third file created.
+&space;              FAMCreated      file_three
+</CODE>
+<PARAGRAPH><BOLD>Example: </BOLD>A client monitors an executable file which is already running. Later, the program exits.</PARAGRAPH>
+<CODE>
+User calls     FAMMonitorFile(... &ldquo;/a/b/program&rdquo; ...)
+FAM events:    FAMExists       /a/b/program
+&space;              FAMEndExist     /a/b/program
+&space;              FAMStartExecuting /a/b/program
+Program exits.
+FAM event:     FAMStopExecuting /a/b/program
+</CODE>
+<PARAGRAPH><BOLD>Example: </BOLD>A client makes an invalid request.</PARAGRAPH>
+<CODE>
+User calls     FAMMonitorDirectory(... &ldquo;relative/path&rdquo; ...)
+FAM event:     FAMAcknowledge  relative/path
+</CODE>
+<PARAGRAPH><BOLD>Example:</BOLD> A client monitors a nonexistent file. Later, another program creates the file.</PARAGRAPH>
+<CODE>
+User calls     FAMMonitorFile(... &ldquo;/a/b/c&rdquo; ...)
+FAM events:    FAMDeleted      /a/b/c
+&space;              FAMEndExist
+File is created.
+FAM event:     FAMCreated      /a/b/c
+</CODE>
+<PARAGRAPH><BOLD>Example:</BOLD> A client monitors a directory containing some files. Another program deletes the directory, then creates a new file with the same name as the directory.</PARAGRAPH>
+<CODE>
+User calls     FAMMonitorDirectory(... &ldquo;/a/b&rdquo; ...)
+FAM events:    FAMExists       /a/b
+&space;              FAMExists       file_one
+&space;              FAMExists       file_two
+&space;              FAMEndExist     /a/b
+Directory and files are deleted.
+FAM events:    FAMDeleted      /a/b
+&space;              FAMChanged      /a/b
+&space;              FAMDeleted      file_one
+&space;              FAMDeleted      file_two
+File with same name created.
+FAM events:    FAMCreated      /a/b
+&space;              FAMChanged      /a/b
+</CODE>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="85266">Using FAM</TITLE><PARAGRAPH>As noted in <XREF IDREF="33384" TYPE="TITLE">&ldquo;Detecting Changes to Files and Directories&rdquo;</XREF>, your application can check for changes in files in directories that it monitors in two ways:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>use <FUNCTION>select()</FUNCTION> to wait until the FAM socket is active, indicating a change, which is described in <XREF IDREF="89877" TYPE="TITLE">&ldquo;Waiting for File Changes.&rdquo;</XREF>&space;</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>use <FUNCTION>FAMPending()</FUNCTION> to periodically poll FAM, which is explained in <XREF IDREF="49627" TYPE="TITLE">&ldquo;Polling for File Changes.&rdquo;</XREF>&space;</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>This section describes how to use both approaches.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="89877">Waiting for File Changes</TITLE><PARAGRAPH>Follow these steps to use FAM in your application, using the select approach to detect changes:<INDEXTARGET ID="08.FAM13"><!-- POSTPROCESSDATA: 08.FAM13|File Alteration Monitor:waiting for changes --></PARAGRAPH>
+<ORDEREDLIST><LIST><PARAGRAPH>Call <FUNCTION>FAMOpen()</FUNCTION> to create a connection to <COMMAND>fam</COMMAND>. This routine returns a FAMConnection structure used in all FAM procedures.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Call <FUNCTION>FAMMonitorFile()</FUNCTION> and <FUNCTION>FAMMonitorDirectory()</FUNCTION> to tell <COMMAND>fam</COMMAND> which files and directories to monitor.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Select on the <COMMAND>fam</COMMAND> socket file descriptor and call <FUNCTION>FAMNextEvent()</FUNCTION> when the <COMMAND>fam</COMMAND> socket is readable.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>When the application is finished monitoring a file or directory, call <FUNCTION>FAMCancelMonitor()</FUNCTION>. If you want to temporarily suspend monitoring of a file or directory, call <FUNCTION>FAMSuspendMonitor()</FUNCTION>. When you're ready to start monitoring again, call <FUNCTION>FAMResumeMonitor()</FUNCTION>.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>When the application no longer needs to monitor files and directories, call <FUNCTION>FAMClose()</FUNCTION> to release resources associated with files still being monitored and to close the connection to <COMMAND>fam</COMMAND>. This step is optional if you simply exit your application.</PARAGRAPH>
+</LIST>
+</ORDEREDLIST>
+<PARAGRAPH><XREF IDREF="45453" TYPE="TEXT">Example&nbsp;8-1</XREF> demonstrates this process in a simple program.</PARAGRAPH>
+<CODE><CAPTION LBL="8-1"><PREFIX>Example 8-1 </PREFIX><XREFTARGET ID="45453">Using Select With FAM </CAPTION>/*
+&nbsp;*&nbsp;&nbsp;&nbsp;monitor.c&nbsp;--&nbsp;monitor&nbsp;arbitrary&nbsp;file&nbsp;or&nbsp;directory
+&space;*&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;using&nbsp;fam
+&nbsp;*/
+&nbsp;
+#include&nbsp;&lt;fam.h>
+#include&nbsp;&lt;stdio.h>
+#include&nbsp;&lt;stdlib.h>
+#include&nbsp;&lt;sys/stat.h>
+#include &lt;sys/select.h>
+&nbsp;
+/*&nbsp;event_name()&nbsp;-&nbsp;return&nbsp;printable&nbsp;name&nbsp;of&nbsp;fam&nbsp;event&nbsp;code&nbsp;*/
+&nbsp;
+const&nbsp;char&nbsp;*event_name(int&nbsp;code)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;static&nbsp;const&nbsp;char&nbsp;*famevent[]&nbsp;=&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"",
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"FAMChanged",
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"FAMDeleted",
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"FAMStartExecuting",
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"FAMStopExecuting",
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"FAMCreated",
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"FAMMoved",
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"FAMAcknowledge",
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"FAMExists",
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"FAMEndExist"
+&nbsp;&nbsp;&nbsp;&nbsp;};
+&nbsp;&nbsp;&nbsp;&nbsp;static&nbsp;char&nbsp;unknown_event[10];
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(code&nbsp;&lt;&nbsp;FAMChanged&nbsp;||&nbsp;code&nbsp;>&nbsp;FAMEndExist)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;sprintf(unknown_event,&nbsp;"unknown&nbsp;(%d)",&nbsp;code);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;unknown_event;
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;famevent[code];
+}
+&nbsp;
+void&nbsp;main(int&nbsp;argc,&nbsp;char&nbsp;*argv[])
+{
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;i,&nbsp;nmon,&nbsp;rc, fam_fd;
+&nbsp;&nbsp;&nbsp;&nbsp;FAMConnection&nbsp;fc;
+&nbsp;&nbsp;&nbsp;&nbsp;FAMRequest&nbsp;*frp;
+&nbsp;&nbsp;&nbsp;&nbsp;struct&nbsp;stat&nbsp;status;
+&nbsp;&nbsp;&nbsp;&nbsp;FAMEvent&nbsp;fe;
+&nbsp;&nbsp;&nbsp;&nbsp;fd_set readfds;
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;Allocate&nbsp;storage&nbsp;for&nbsp;requests&nbsp;*/
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;frp&nbsp;=&nbsp;malloc(argc&nbsp;*&nbsp;sizeof&nbsp;*frp);
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!frp)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("malloc");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;exit(1);
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;Open&nbsp;fam&nbsp;connection&nbsp;*/
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;((FAMOpen(&amp;fc))&nbsp;&lt;&nbsp;0)&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("fam");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;exit(1);
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;Request&nbsp;monitoring&nbsp;for&nbsp;each&nbsp;program&nbsp;argument&nbsp;*/
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;(nmon&nbsp;=&nbsp;0,&nbsp;i&nbsp;=&nbsp;1;&nbsp;i&nbsp;&lt;&nbsp;argc;&nbsp;i++)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(stat(argv[i],&nbsp;&amp;status)&nbsp;&lt;&nbsp;0)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror(argv[i]);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;status.st_mode&nbsp;=&nbsp;0;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;((status.st_mode&nbsp;&amp;&nbsp;S_IFMT)&nbsp;==&nbsp;S_IFDIR)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;rc&nbsp;=&nbsp;FAMMonitorDirectory(&amp;fc,&nbsp;argv[i],&nbsp;frp&nbsp;+&nbsp;i,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;NULL);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;rc&nbsp;=&nbsp;FAMMonitorFile(&amp;fc,&nbsp;argv[i],&nbsp;frp&nbsp;+&nbsp;i,&nbsp;NULL);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(rc&nbsp;&lt;&nbsp;0)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("FAMMonitor&nbsp;failed");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;continue;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;nmon++;
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(!nmon)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;fprintf(stderr,&nbsp;"Nothing&nbsp;monitored.\n");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;exit(1);
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/* Initialize select data structure */
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;fam_fd = FAMCONNECTION_GETfd(&amp;fc);
+&nbsp;&nbsp;&nbsp;&nbsp;FD_ZERO(&amp;readfds);
+&nbsp;&nbsp;&nbsp;&nbsp;FD_SET(fam_fd, &amp;readfds);
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;Loop&nbsp;forever.&nbsp;*/
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;while(1)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if (select(fam_fd + 1, &amp;readfds,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;NULL, NULL, NULL) &lt; 0)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("select failed");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;exit(1);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if (FD_ISSET(fam_fd, &amp;readfds))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(FAMNextEvent(&amp;fc,&nbsp;&amp;fe)&nbsp;&lt;&nbsp;0)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("FAMNextEvent");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;exit(1);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;printf("%-24s&nbsp;%s\n",&nbsp;fe.filename,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;event_name(fe.code));
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;}
+}
+</CODE>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="49627">Polling for File Changes</TITLE><PARAGRAPH>Follow these steps to use FAM in your application, using the polling approach to detect changes:<INDEXTARGET ID="08.FAM14"><!-- POSTPROCESSDATA: 08.FAM14|File Alteration Monitor:polling for changespolling:for file changes --></PARAGRAPH>
+<ORDEREDLIST><LIST><PARAGRAPH>Call <FUNCTION>FAMOpen()</FUNCTION> to create a connection to <COMMAND>fam</COMMAND>. This routine returns a FAMConnection structure used in all FAM procedures.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Call <FUNCTION>FAMMonitorFile()</FUNCTION> and <FUNCTION>FAMMonitorDirectory()</FUNCTION> to tell <COMMAND>fam</COMMAND> which files and directories to monitor.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Call <FUNCTION>FAMPending()</FUNCTION> to determine when there is a pending FAM event and then call <FUNCTION>FAMNextEvent()</FUNCTION> when an event is detected.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>When the application is finished monitoring a file or directory, call <FUNCTION>FAMCancelMonitor()</FUNCTION>. If you want to temporarily suspend monitoring of a file or directory, call <FUNCTION>FAMSuspendMonitor()</FUNCTION>. When you're ready to start monitoring again, call <FUNCTION>FAMResumeMonitor()</FUNCTION>.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>When the application no longer needs to monitor files and directories, call <FUNCTION>FAMClose()</FUNCTION> to free resources associated with files still being monitored and to close the connection to <COMMAND>fam</COMMAND>. This step is optional if you simply exit your application.</PARAGRAPH>
+</LIST>
+</ORDEREDLIST>
+<PARAGRAPH>For example, you could use the polling approach in the <FILENAME>monitor.c</FILENAME> program listed in <XREF IDREF="45453" TYPE="TEXT">Example&nbsp;8-1</XREF> by deleting the code pertaining to the select data structure and replacing the <SCREENDISPLAY>while</SCREENDISPLAY> loop with the code shown in <XREF IDREF="25410" TYPE="TEXT">Example&nbsp;8-2</XREF>, which demonstrates this process in a simple program.</PARAGRAPH>
+<CODE><CAPTION LBL="8-2"><PREFIX>Example 8-2 </PREFIX><XREFTARGET ID="25410">Polling With FAM </CAPTION>while(1)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;rc = FAMPending(&amp;fc);
+&nbsp;&nbsp;&nbsp;&nbsp;if (rc == 0)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;else if (rc == -1)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("FAMPending");
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(FAMNextEvent(&amp;fc,&nbsp;&amp;fe)&nbsp;&lt;&nbsp;0)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("FAMNextEvent");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;exit(1);
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;printf("%-24s&nbsp;%s\n",&nbsp;fe.filename,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;event_name(fe.code));
+}
+</CODE>
+<PARAGRAPH>This is a particularly useful approach if you want to poll for changes from within an Xt work procedure. <XREF IDREF="63394" TYPE="TEXT">Example&nbsp;8-3</XREF> shows the skeleton code for such a work procedure.</PARAGRAPH>
+<CODE><CAPTION LBL="8-3"><PREFIX>Example 8-3 </PREFIX><XREFTARGET ID="63394">Polling FAM Within an Xt Work Procedure</CAPTION>Boolean&nbsp;monitorFiles(XtPointer&nbsp;clientData)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;rc&nbsp;=&nbsp;FAMPending(&amp;fc);
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(rc&nbsp;==&nbsp;0)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return(FALSE);
+&nbsp;&nbsp;&nbsp;&nbsp;else&nbsp;if&nbsp;(rc&nbsp;==&nbsp;-1)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;XtAppError(app_context,&nbsp;"FAMPending&nbsp;error");
+&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(FAMNextEvent(&amp;fc,&nbsp;&amp;fe)&nbsp;&lt;&nbsp;0)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;XtAppError(app_context,&nbsp;"FAMNextEvent&nbsp;error");
+&nbsp;&nbsp;&nbsp;&nbsp;}
+
+&nbsp;&nbsp;&nbsp;&nbsp;handleFileChange(fe);
+&nbsp;&nbsp;&nbsp;&nbsp;return(FALSE);
+}&space;
+</CODE>
+</SECTION2>
+</SECTION1>
+</CHAPTER>

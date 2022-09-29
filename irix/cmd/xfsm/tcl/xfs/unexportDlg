@@ -1,0 +1,408 @@
+###########################################################################
+#                                                                         #
+#               Copyright (C) 1995, Silicon Graphics, Inc.                #
+#                                                                         #
+#   These coded instructions, statements, and computer programs  contain  #
+#   unpublished  proprietary  information of Silicon Graphics, Inc., and  #
+#   are protected by Federal copyright law.  They  may  not be disclosed  #
+#   to  third  parties  or copied or duplicated in any form, in whole or  #
+#   in part, without the prior written consent of Silicon Graphics, Inc.  #
+#                                                                         #
+###########################################################################
+
+#%COMMENT_BEGIN
+# Filename:	unexportDlg
+# Version:	$Revision: 1.6 $
+# Synopsis:	Encapsulates the dialog that allows the user to unexport a
+#		file system.
+# Functions:	unexpDlg:realize
+#		unexpDlg:manage
+#		unexpDlg:unmanage
+#		unexpDlg:fill
+#		unexpDlg:getData
+#		unexpDlg:_create
+#		unexpDlg:_createGeneralArea
+#		unexpDlg:_dialogCb
+#		unexpDlg:_accept
+#		unexpDlg:_cancel
+#		unexpDlg:_newHostName
+#		unexpDlg:_fetchExportFS
+#%COMMENT_END
+
+#########################################
+#		Public			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	unexpDlg:realize
+# Synopsis:	Initializes any class-wide data and creates an instance of
+#		the dialog.  If an instance of this dialog already exists for
+#		the given handle, no action is taken.
+# Arguments:	- handle	An identifier that is used as a key for storing
+#				(and later retrieving) the created widgets and
+#				any instance specific data.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc unexpDlg:realize { handle parent } \
+{
+	global		_GW_unexp _GD_unexp
+
+	if {! [info exists _GW_unexp($handle,dialog)]} {
+		set _GD_unexp(buttons)	{accept apply cancel help}
+		set _GD_unexp(labels)	{XFS_FS_HOST}
+		set _GD_unexp(combos)	{XFS_FS_NAME}
+
+		set _GW_unexp($handle,dialog) [unexpDlg:_create $handle $parent]
+
+		####	This must happen after the dialog is realized
+		$_GW_unexp($handle,dialog) realizeWidget
+		$_GW_unexp($handle,dialog) getValues -width width -height height
+		.$_GW_unexp($handle,dialog) setValues \
+				-minWidth $width \
+				-minHeight $height \
+				-maxHeight $height
+
+		####	Panes
+		$_GW_unexp($handle,ga) getValues -height height
+		$_GW_unexp($handle,ga) setValues \
+				-paneMinimum $height \
+				-paneMaximum $height
+		$_GW_unexp($handle,buttons) getValues -height height
+		$_GW_unexp($handle,buttons) setValues \
+				-paneMinimum $height \
+				-paneMaximum $height
+	}
+}
+
+#%COMMENT_BEGIN
+# Function:	unexpDlg:manage
+# Synopsis:	Manages an instance of the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc unexpDlg:manage { handle } \
+{
+	global	_GW_unexp; $_GW_unexp($handle,dialog) manageChild
+}
+
+#%COMMENT_BEGIN
+# Function:	unexpDlg:unmanage
+# Synopsis:	Unmanages an instance of the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc unexpDlg:unmanage { handle } \
+{
+	global	_GW_unexp; $_GW_unexp($handle,dialog) unmanageChild
+}
+
+#%COMMENT_BEGIN
+# Function:	unexpDlg:fill
+# Synopsis:	Given an object signature, retrieve the export information
+#		for that object and fill the dialog
+# Arguments:	- handle	The identifier for the desired instance.
+#		- obj		The object signature.
+#%COMMENT_END
+proc unexpDlg:fill { handle obj } \
+{
+	global	_GW_unexp _GD_unexp
+
+	if {[llength $obj] == 1} {
+		set obj [lindex $obj 0]
+		obj:parse $obj o_class o_host o_nm o_type
+	} else {
+		set o_host [fsSrch:getHost fs]
+		set o_nm ""
+	}
+	unexpDlg:_newHostName $handle $o_host
+
+	if {[clength $o_nm] == 0} {
+	    set mntp [lindex [combo:getItems $_GW_unexp($handle,XFS_FS_NAME)] 0]
+	} else {
+	    set query "MOUNT_POINT:$o_nm"
+	    if {[catch {set mntp [fsInfoCmd simple $obj $query]} error]} {
+		regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		em:setMessageString fs "Unable to unexport $o_nm"
+		em:storeMsg fs error "\t$nerror"
+		return 0
+	    }
+	}
+	combo:selectItem $_GW_unexp($handle,XFS_FS_NAME) $mntp
+
+	return 1
+}
+
+#%COMMENT_BEGIN
+# Function:	unexpDlg:getData
+# Synopsis:	Reads the data from the dialog and stores it in keyword/value
+#		pair format.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- data		A reference to a variable in which to store
+#				the data.
+#		- object	A reference to a variable in which to store
+#				the object signature for the directory to
+#				be exported.
+#%COMMENT_END
+proc unexpDlg:getData { handle data object } \
+{
+	global		_GW_unexp _GD_unexp
+	upvar $data	dat
+	upvar $object	obj
+
+	set o_nm [string trim [combo:getValue $_GW_unexp($handle,XFS_FS_NAME)]]
+	if {$o_nm == ""} { return 0 }
+
+	lappend dat "XFS_FS_NAME:$o_nm"
+	lappend dat "XFS_FS_HOST:$_GD_unexp($handle,XFS_FS_HOST)"
+
+	$_GW_unexp($handle,XFS_RM_EXPORTS_ENTRY) getValues -set set
+	lappend dat "XFS_RM_EXPORTS_ENTRY:$set"
+
+	####	TODO:	Does the type matter here?
+	set o_type efs
+	set obj [list "$_GD_unexp($handle,XFS_FS_HOST) FS $o_nm $o_type"]
+
+	return 1
+}
+
+#########################################
+#		Private			#
+#########################################
+#%COMMENT_BEGIN
+# Function:	unexpDlg:_create
+# Synopsis:	Creates an instance of the dialog.
+# Arguments:	- handle	The identifier for the new instance.
+#		- parent	The parent for the created dialog.
+#%COMMENT_END
+proc unexpDlg:_create { handle parent } \
+{
+	global		_GW_unexp _GD_unexp
+	set name	unexpDlg
+
+	set dialog [xmFormDialog $parent.$name]
+	set pane [xmPanedWindow $dialog.$handle \
+			-sashWidth 1 \
+			-sashHeight 1 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_form]
+
+	set _GW_unexp($handle,ga) [unexpDlg:_createGeneralArea $handle $pane]
+	set _GW_unexp($handle,buttons) \
+		[xfs:createDialogButtons $pane $_GD_unexp(buttons) 0]
+
+	foreach i $_GD_unexp(buttons) {
+		$_GW_unexp($handle,buttons).$i \
+				activateCallback "unexpDlg:_dialogCb $handle $i"
+	}
+
+	$_GW_unexp($handle,ga) manageChild
+	$_GW_unexp($handle,buttons) manageChild
+	$pane manageChild
+
+	return $dialog
+}
+
+#%COMMENT_BEGIN
+# Function:	expDlg:_createGeneralArea
+# Synopsis:	Creates the hostname label/value, file system name/combo, and
+#		a toggle button to indicate whether or not to remove the
+#		/etc/exports entry for the exported directory.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- parent	The parent for the created widgets.
+#%COMMENT_END
+proc unexpDlg:_createGeneralArea { handle parent } \
+{
+	global          _GW_unexp _GD_unexp
+
+	set container [xmForm $parent.ga]
+	set grid [sgiGrid $container.grid -numRows 4 -numColumns 2 \
+			-defaultSpacing 2 \
+			-topAttachment attach_form \
+			-leftAttachment attach_form \
+			-rightAttachment attach_form \
+			-bottomAttachment attach_none]
+
+	set item XFS_FS_HOST; set row 0
+	xmLabel $grid.$item-label managed -row $row -column 0
+	set _GW_unexp($handle,$item) [xmLabel $grid.$item managed \
+			-row $row -column 1 -alignment alignment_beginning]
+
+
+	set item XFS_FS_NAME; set row 1
+	xmLabel $grid.$item-label managed -row $row -column 0
+	set _GW_unexp($handle,$item) [dtDropDownComboBox $grid.$item managed \
+			-row $row -column 1]
+
+	set item XFS_RM_EXPORTS_ENTRY; set row 3
+	set _GW_unexp($handle,$item) [xmToggleButton $grid.$item managed \
+			-row $row -column 1]
+
+	$grid rowMargin 2 10
+	$grid columnResizable 0 false
+	$grid manageChild
+
+	return $container
+}
+
+#########################################
+#	Dialog Callbacks		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	unexpDlg:_dialogCb
+# Synopsis:	The callback function defined on the dialog buttons.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- op		Indicates which button the user selected.
+#%COMMENT_END
+proc unexpDlg:_dialogCb { handle op } \
+{
+	global		_GW_unexp _GD_unexp
+
+	switch $op {
+		accept {
+			if {[unexpDlg:_accept $handle]} {
+				unexpDlg:unmanage $handle
+			}
+		}
+		apply  { unexpDlg:_accept $handle }
+		cancel { unexpDlg:_cancel $handle }
+		help   { sgiHelpMsg $_GW_unexp($handle,dialog) }
+	}
+}
+
+#########################################
+#	Callback Utilities		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	unexpDlg:_accept
+# Synopsis:	This is called when the user presses the "Accept" dialog
+#		button.  It gets the data from the dialog and then calls
+#		the server to unexport the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc unexpDlg:_accept { handle } \
+{
+	global		_GW_unexp _GD_unexp
+
+	if {! [unexpDlg:getData $handle data object]} {
+		return false
+	}
+
+	obj:parse [lindex $object 0] o_class o_host o_nm o_type
+	if {[catch {set ec [fsCmd unexport $object [join $data \n]]} error]} {
+		regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		em:setMessageString fs \
+		    "An error occured while unexporting $o_nm."
+		em:storeMsg fs error "Unable to unexport $o_nm:\n\t$nerror"
+		set rval false
+	} else {
+	    set hfn $_GD_unexp($handle,hfn)
+
+	    set idx [lsearch -exact $_GD_unexp($handle,$hfn,mntpts) $o_nm]
+
+	    if {$idx != -1} {
+		unset _GD_unexp($handle,$hfn,$o_nm,data)
+		lvarpop _GD_unexp($handle,$hfn,mntpts) $idx
+
+		combo:setItems $_GW_unexp($handle,XFS_FS_NAME) \
+				$_GD_unexp($handle,$hfn,mntpts)
+	        set _GD_unexp($handle,cvalue,XFS_FS_NAME) \
+			[combo:getSelectedItem $_GW_unexp($handle,XFS_FS_NAME)]
+	    }
+	    set rval true
+	}
+
+	return $rval
+}
+
+#%COMMENT_BEGIN
+# Function:	unexpDlg:_cancel
+# Synopsis:	This is called when the user presses the "Cancel" dialog
+#		button.  It currently unmanages the dialog.
+# Arguments:	- handle	The identifier for the desired instance.
+#%COMMENT_END
+proc unexpDlg:_cancel { handle } \
+{
+	global	_GW_unexp
+	$_GW_unexp($handle,dialog) unmanageChild
+}
+
+#########################################
+#		Utilities		#
+#########################################
+#%COMMENT_BEGIN
+# Function:	unexpDlg:_newHostName
+# Synopsis:	Sets the current hostname XmNlabelString resource to the
+#		given value.  It then gets and displays in the combo-box
+#		the list of entries in /etc/exports from the target host.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- host		The target host.
+#%COMMENT_END
+proc unexpDlg:_newHostName { handle host } \
+{
+	global		_GW_unexp _GD_unexp _GD_resources
+
+	if {$host == ""} {
+		set hfn [fsSrch:getHost fs]
+	} else {
+		hu:getIpAddress $host hfn hpd hip $_GD_resources(hostsFile)
+	}
+	set _GD_unexp($handle,XFS_FS_HOST) $hfn
+	$_GW_unexp($handle,XFS_FS_HOST) setValues -labelString $hpd
+
+	unexpDlg:_fetchExportFS $handle $hfn any true
+	combo:setItems $_GW_unexp($handle,XFS_FS_NAME) \
+			$_GD_unexp($handle,$hfn,mntpts)
+}
+
+#%COMMENT_BEGIN
+# Function:	unexpDlg:_fetchExportFs
+# Synopsis:	Gets the list of exported file systems/directories from
+#		a given host.
+# Arguments:	- handle	The identifier for the desired instance.
+#		- hfn		Hostname
+#		- state		An optional parameter that allows the caller
+#				to restrict the query to file systems that
+#				are in the given state (any, mounted,
+#				unmounted).
+#		- force		An optional parameter that indicates whether
+#				or not to use the cache for the given host
+#				(if it exists).  The default value is "false"
+#				which means: use the cache.
+#%COMMENT_END
+proc unexpDlg:_fetchExportFS { handle hfn {state any} {force false} } \
+{
+	global		_GD_unexp
+
+	if {$force == "false" && \
+	    [info exists _GD_unexp($handle,$hfn,mntpts)]} {
+		return
+	}
+
+	####	Get the list of remote/exported filesystems
+	set _GD_unexp($handle,hfn) $hfn
+	set _GD_unexp($handle,$hfn,names) ""
+	set _GD_unexp($handle,$hfn,mntpts) ""
+	if {[catch {set data [fsInfoCmd export "XFS_HOST:$hfn"]} error]} {
+		regsub -all -- "\n" [string trim $error] "\n\t" nerror
+		em:setMessageString fs "Unable to get export data from $hfn."
+		em:storeMsg fs error \
+			"Unable to get export data from $hfn:\n\t$nerror"
+	} else {
+	    set data [split [string trimright $data] \n]
+	    foreach item $data {
+		set aux [lassign [split $item :] key val]
+		if {$key != "XFS_MNT_DIR"} {
+			lappend _GD_unexp($handle,$hfn,$mntpt,data) $item
+			continue
+		} else {
+			set mntpt $val
+		}
+		if {[lsearch -exact $_GD_unexp($handle,$hfn,mntpts) \
+							$val] == -1} {
+			lappend _GD_unexp($handle,$hfn,mntpts) $val
+			lappend _GD_unexp($handle,$hfn,names) $val
+			lappend _GD_unexp($handle,$hfn,raw) $val
+		}
+		
+	    }
+	}
+}

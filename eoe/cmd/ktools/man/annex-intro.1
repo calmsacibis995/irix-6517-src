@@ -1,0 +1,237 @@
+.TH ANNEX-INTRO 1 "Annex box Commands" 	
+.SH NAME
+Annex-intro -- Background information about the ktools commands and annex box configuration
+
+.SH DESCRIPTION
+This manual page describes background information about the ktools, configuration information
+about the annex boxes, and miscellanous related information.
+
+.SS What's an Annex Box anyways?  
+
+Annex boxes are ethernet terminal servers that can connect up to 64
+terminals.  They are being used 'in reverse' -- console ports
+on lab machines are hooked up to the terminal lines off the Annex boxes.
+
+.PP
+Connections to the console ports on connected machines are made via
+.BR telnet ing
+to a specific port number on the Annex box.  For example, to connect to the
+host attatched to port 1 of os-annex.wpd:
+
+.PP
+.in +.5i
+telnet os-annex.wpd 5001
+.in -.5i
+
+However, this has the disadvantage of having to remember which hosts are
+connected to which ports on which annex box.  Given that there are 64 ports
+on most annex boxes, this idea quickly becomes useless.  Thus were born the 
+.BR ktools .
+
+.PP
+.SS Ktools: YAFE (Yet Another Front End)
+
+By telneting to port 5000 of the Annex box, it is possible to get a list of
+the current users by issuing a 'w' command.  Thus, 
+.B kwho
+was born.  Kwho simply contacts all the annexes listed in 
+.IR /usr/annex/portsfile , 
+gets a list of users, and prints it out.
+
+.PP
+Two additional status commands, 
+.BR klist " and " kfree
+grew out of the need to determine what was attatched to the annex boxes, and which
+machines were free.  They simply invoke kwho and then x-ref it with info in
+.IR /usr/annex/portsfile , 
+picking out the desired info.
+
+
+.PP
+.BR kcons " and " kgrab
+eliminate the need to remember port numbers for hosts.  They too use 
+.I /usr/annex/portsfile
+to determine the correlation between a host name, port number, and annex box.
+
+.PP
+With the advent of console-grabbing tools, there was no easy way to steal
+a console out from someone who had forgotten to let go of it before the weekend.  
+.B ksteal
+addresses this problem.  If the idle time is greater than 2 hours, the machine
+is assumed idle and is free for stealing.  For times when it was really necessary
+to get at a machine, a 
+.I -force
+option was added that ignores idle times.  All 
+.BR ksteal s
+send mail to the pilfered party.
+
+.PP
+To fully realize remote debugging, it is necessary to provide remote reset
+capability.  A relay board wired to each machine's reset button provides this.
+Not surprisingly,
+.B kreset
+is the front end to the relay board.  
+.B kreset 
+will only allow you to reset a machine that you have an active
+connection to.
+
+.SS CU access: PROM debugging and remote kernel debugging via kdbx.
+
+Telnet is a fine protocol for most things, but it doesn't have any way of
+downloading a file nor does it have an easy entry point for other programs to 
+get to, like a tty.  This is where
+.BR rtelnetd and cu
+step in.
+
+.B Rtelnetd
+is a billed as a reverse telnet, but all it really does is act as a medium between a
+pseudo-tty and the telnet connection to the Annex box.  Upon startup, it looks for a
+'rtelnetd' flag in the portsfile, and creates an entry in 
+.I /dev/annex
+for each machine that it finds with such a flag.  It then listens on all the devices 
+it created, and upon receiving an open on the device, spawns off a telnet connection
+to the appropriate port (and annex) and passes the data back and forth.
+
+This gives the capability to use any program that groks ttys (such as
+.BR cu ", and" kermit )
+on these pseudo-ttys.  
+.B cu
+has the capability to download files, which is very useful for downloading PROM code
+to a developing system.
+
+
+
+.SH Gory Details:  Behind the scenes.
+
+.SS Annex Boxing
+
+Annex boxes net boot.  Unfortunately, they don't use a standard tftp/bootp combo,
+they use a homebrew protocol, 
+.BR erpc ,
+which requires a deamon to run on a server so that Annexes can boot.  Currently,
+the server for all the annexes is 
+.BR maddog.wpd , 
+since it's a pain to gather all the pieces to get erpcd running.  
+.B Gotcha:
+Ocassionally, the erpcd will hang and need to be restarted.  This usually isn't 
+noticed until an Annex tries to boot.
+
+.SS Annex status info
+
+A program called 'na' is responsible for communicating with the Annex boxes and 
+updating status and configuration info such as user name, location, baud rate,
+etc.  
+.B kcons 
+and related programs talk to 
+.B na
+and update the user_name for kwho.  
+.B na
+is also used by 
+.B kreset
+to reset ports.  Find the 
+.I Annex Network Administrator's Guide
+for information on na.
+
+.SS Annex Configuration
+
+Configuring an Annex (adding, removing, or changing hosts) involves using 
+.BR na .
+This can be tedious when configuring a number of hosts, so naturally, there are 
+some front-ends to make life easier.  All these front-ends live in
+.IR maddog.wpd:/usr/annex .
+
+.B AddMachine
+should be used to add a machine to the annex box config.  It will prompt you 
+for all information that needs to be known about the new machine, and edit
+the portsfile correspondingly.  
+.B AddMachine
+lives in 
+.IR maddog.wpd:/usr/annex .
+
+.B Regenerate
+will grope through 
+.I /usr/annex/portsfile
+and come up with configuration files for each Annex box.  It places these
+files in 
+.IR <annex-name>.annex_config ,
+and then pushes it out to the Annexes.  Invoke with a 
+.I -d 
+to prevent pushing the new configs out, and give it a single Annex name
+to only update the configuration for that annex.
+
+.B REBUILDandDIST
+is the main front-end to updating the config files.  It runs 
+.B Regenerate
+to build and push out the new configuration files, then
+.BR rdist 's 
+the files out to all the hosts that have installed the ktools.
+
+.I /usr/annex/portsfile 
+is the master data file for the ktools,
+containing all sorts of gory info about the annex configuration.  There
+are ample comments at the beginning of the file, so refer to those
+comments for specific problems.  For the time being, each person that has 
+installed the ktools will have a local copy of the portsfile on their machine, 
+thus every time a new machine is added or a configuration change is made, the
+portsfile needs to be pushed out.  The installation script 
+.RB ( /usr/annex/INSTALL )
+changes the owner of everything in
+.I /usr/annex
+to be guest, so that an 
+.B rdist
+run as guest can update the portsfile.
+
+
+
+
+
+ in the OS
+Lab in Building 9U and the Hardware lab in Building 7U
+
+, allowing a
+telnet (or cu) session to console ports of the desired system.  
+
+This gives you the ability to do remote software installs, debugging,
+testing, anything that doesn't need a graphics head.
+
+
+.SH "KTOOLS" Background
+The "ktools" (
+.B kwho, klist, kfree, kcons, kgrab, kreset, 
+.B ksteal
+) 
+
+.SH FILES
+.I /usr/annex/portsfile
+\- to determine the annex boxes to contact, hardware configuration
+and notes of the systems.
+
+.SH "SEE ALSO"
+kcons(1),
+kgrab(1),
+kreset(1),
+ksteal(1),
+annex-intro(1)
+
+.SH NOTES
+.B kcons, kgrab, ksteal, 
+and 
+.B kreset
+invoke 
+.B kwho
+to determine the status of the system before proceeding with the
+desired action.
+
+.SH AUTHOR
+Original version by Curtis Anderson, re-written several times by Chan Wilson.
+
+.SH BUGS
+.B kwho
+attempts to contact all of the annex boxes listed in 
+.I /usr/annex/portsfile.
+ If it cannot contact an Annex box (either due to network problems or a dead Annex), 
+it will wait for an inordinate amount of time before continuing.  This is due to
+the large timeout on the 
+.I connect
+system call.
+

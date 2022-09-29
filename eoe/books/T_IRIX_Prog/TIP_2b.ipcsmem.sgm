@@ -1,0 +1,885 @@
+<!-- Produced by version 3.14 (11/22/96) of SGI Frame/SGML translator -->
+<CHAPTER LBL="3"><TITLE><XREFTARGET ID="28345">Sharing Memory Between Processes</TITLE><PARAGRAPH>There are three families of functions that let you create a segment of memory and share it among the address spaces of multiple processes. All produce the same result: a segment of memory that can be accessed or updated asynchronously by more than one process. You have to design protocols that prevent one process from changing shared data while another process is using the same data (see <INDEXTARGET ID="TIP_2b.ipcsmem1"><!-- POSTPROCESSDATA: TIP_2b.ipcsmem1|shared memory --><XREF IDREF="82386" TYPE="TITLE">Chapter&nbsp;4, &ldquo;Mutual Exclusion&rdquo;</XREF>).</PARAGRAPH>
+<PARAGRAPH>This chapter covers three major topics:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH><XREF IDREF="29423" TYPE="TITLE">&ldquo;POSIX Shared Memory Operations&rdquo;</XREF> describes the POSIX functions for sharing memory.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="62381" TYPE="TITLE">&ldquo;IRIX Shared Memory Arenas&rdquo;</XREF> describes IRIX shared memory arenas.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><XREF IDREF="17480" TYPE="TITLE">&ldquo;System V Shared Memory Functions&rdquo;</XREF> describes the SVR4 functions.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<SECTION1 LBL="" HELPID = ""><TITLE>Overview of Memory Sharing</TITLE><PARAGRAPH>The address space is the range of memory locations that a process can use without an error. (The concept of the address space is covered in detail in <XREF IDREF="82162" TYPE="TITLE">Chapter&nbsp;1, &ldquo;Process Address Space.&rdquo;</XREF>) In a pthreads program, all threads use the same address space and share its contents. In a program that starts multiple, lightweight processes with <FUNCTION>sproc()</FUNCTION>, all processes share the same address space and its contents. In these programs, the entire address space is shared automatically.</PARAGRAPH>
+<PARAGRAPH>Normally, distinct processes (created by the <FUNCTION>fork()</FUNCTION> or <FUNCTION>exec()</FUNCTION> system calls) have distinct address spaces, with no writable contents in common. The facilities described in this chapter allow you to define a segment of memory that can be part of the address space of more than one process. Then processes or threads running in different address spaces can share data simply by referring to the contents of the shared segment in memory.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>Shared Memory Based on mmap()</TITLE><PARAGRAPH>The basic IRIX system operation for shared memory is the <FUNCTION>mmap()</FUNCTION> function, with which a process makes the contents of a file part of its address space. The fundamental uses of <FUNCTION>mmap()</FUNCTION> are covered under <XREF IDREF="54272" TYPE="TITLE">&ldquo;Mapping Segments of Memory&rdquo;</XREF> (see also the <REFPAGE>mmap(2)</REFPAGE> reference page). When two or more processes map the same file into memory with the MAP_SHARED option, that single segment is part of both address spaces, and the processes can update its contents concurrently.</PARAGRAPH>
+<PARAGRAPH>The POSIX shared memory facility is a simple, formal interface to the use of <FUNCTION>mmap()</FUNCTION> to share segments. The IRIX support for shared arenas is an extension of <FUNCTION>mmap()</FUNCTION> to make it simpler to create a shared allocation arena and coordinate its use. The SVR4 facilities do not directly use <FUNCTION>mmap()</FUNCTION> but have similar results.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="53113">Sharing Memory Between 32-Bit and 64-Bit Processes</TITLE><PARAGRAPH>Larger Silicon Graphics systems support both 32-bit and 64-bit programs at the same time. It is possible for a memory segment to be mapped by programs using 32-bit addresses, and simultaneously mapped by programs that use 64-bit addresses. There is nothing to prevent such sharing.<INDEXTARGET ID="TIP_2b.ipcsmem2"><!-- POSTPROCESSDATA: TIP_2b.ipcsmem2|64-bit addressing:shared memory --></PARAGRAPH>
+<PARAGRAPH>However, such sharing can work satisfactorily only when the contents of the shared segment include no addresses at all. Pointer values stored by a 64-bit program can't be used by a 32-bit program and vice versa. Also the two programs will disagree about the size and offset of structure fields when structures contain addresses. For example, if you initialize an allocation arena with <FUNCTION>acreate()</FUNCTION> from a 64-bit program, a 32-bit program calling <FUNCTION>amalloc()</FUNCTION> on that same arena will almost certainly crash or corrupt the arena pointers.</PARAGRAPH>
+<PARAGRAPH>You can use POSIX shared memory, SVR4 shared memory, or basic <FUNCTION>mmap()</FUNCTION> to share a segment between a 32-bit and a 64-bit program, provided you take pains to ensure that both programs view the data contents as having the same binary structure, and that no addresses are shared. You cannot use an IRIX shared memory arena between 32-bit and 64-bit programs at all, because the <FUNCTION>usinit()</FUNCTION> function stores addresses in the arena.</PARAGRAPH>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="29423">POSIX Shared Memory Operations</TITLE><PARAGRAPH>Shared-memory support specified by POSIX is based on the functions summarized in <INDEXTARGET ID="TIP_2b.ipcsmem3"><!-- POSTPROCESSDATA: TIP_2b.ipcsmem3|<FUNCTION>mmap()</FUNCTION>:POSIX use --><INDEXTARGET ID="TIP_2b.ipcsmem4"><!-- POSTPROCESSDATA: TIP_2b.ipcsmem4|shared memory:POSIX --><XREF IDREF="81035" TYPE="TABLE">Table&nbsp;3-1</XREF>. </PARAGRAPH>
+<TABLE COLUMNS="2"><CAPTION LBL="3-1"><PREFIX>Table 3-1 </PREFIX><XREFTARGET ID="81035"> <EMPHASIS>(continued)        </EMPHASIS>POSIX Shared Memory Functions</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="81"><PARAGRAPH>Function Name</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Purpose and Operation</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>mmap(2) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Map a file or shared memory object into the address space.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>shm_open(2) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Create, or gain access to, a shared memory object.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>shm_unlink(2) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Destroy a shared memory object when no references to it remain open.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>The use of <FUNCTION>mmap()</FUNCTION> is described at length under <XREF IDREF="54272" TYPE="TITLE">&ldquo;Mapping Segments of Memory&rdquo;</XREF>. In essence, <FUNCTION>mmap()</FUNCTION> takes a file descriptor and makes the contents of the described object accessible as a segment of memory in the address space. In IRIX, a file descriptor can describe a disk file, or a device, or a special pseudo-device such as <FILENAME>/dev/kmem</FILENAME>. Thus <FUNCTION>mmap()</FUNCTION> can make a variety of objects part of the address space. POSIX adds one more type of mappable object, a persistent shared segment you create using the <FUNCTION>shm_open()</FUNCTION> function.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>Creating a Shared Object</TITLE><PARAGRAPH>The <FUNCTION>shm_open()</FUNCTION> function is very similar to the <FUNCTION>open()</FUNCTION> function and takes the same arguments (compare the <REFPAGE>shm_open(2)</REFPAGE> and <REFPAGE>open(2)</REFPAGE> reference pages). The arguments are as follows: </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="54"><PARAGRAPH><VARIABLE>path</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="60" WIDTH="333"><PARAGRAPH>Name of object, a character string in the form of a file pathname.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="54"><PARAGRAPH><VARIABLE>oflag</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="60" WIDTH="333"><PARAGRAPH>Option flags, detailed in the reference page and discussed in following text.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="54"><PARAGRAPH><VARIABLE>mode</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="60" WIDTH="333"><PARAGRAPH>Access mode for the opened object</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>In order to declare <FUNCTION>shm_open()</FUNCTION> and its arguments you need to include both <FILENAME>sys/mman.h</FILENAME> and <FILENAME>fcntl.h</FILENAME> header files.</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE>Shared Object Pathname</TITLE><PARAGRAPH>The POSIX standard says that a shared object name has the form of a file pathname, but the standard leaves it &ldquo;implementation defined&rdquo; whether the object is actually a file or not. In the IRIX implementation, a shared memory object is also a file. The pathname you specify for a shared memory object is interpreted exactly like the pathname of a disk file that you pass to <FUNCTION>open()</FUNCTION>. When you create a new object, you also create a disk file of the same name. (See <XREF IDREF="66952" TYPE="TITLE">&ldquo;POSIX IPC Name Space&rdquo;</XREF>.)</PARAGRAPH>
+<PARAGRAPH>You can display the size, ownership, and permissions of an existing shared segment using <COMMAND>ls -l</COMMAND>. You can dump its contents with a command such as <COMMAND>od -X</COMMAND>. You can remove it with <COMMAND>rm</COMMAND>.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Shared Object Open Flags</TITLE><PARAGRAPH>The flags you pass to <FUNCTION>shm_open()</FUNCTION> control its actions, as follows: </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>O_RDONLY</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="315"><PARAGRAPH>Access can be used only for reading.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>O_RDWR</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="315"><PARAGRAPH>Access can be read-write (however, you can enforce read-only access 
+when calling <FUNCTION>mmap()</FUNCTION>). </PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>O_CREAT</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="315"><PARAGRAPH>If the object does not exist, create it.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>O_TRUNC</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="315"><PARAGRAPH>If the object does exist and O_RDWR is specified, truncate it to zero 
+length.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>O_EXCL</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="315"><PARAGRAPH>If the object does exist and O_CREAT is specified, return the EEXIST 
+error code.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>The flags have the same meaning when opening a disk file with <FUNCTION>open()</FUNCTION>. However, a number of other flags allowed by <FUNCTION>open()</FUNCTION> are not relevant to shared memory objects.</PARAGRAPH>
+<PARAGRAPH>You can use the combination O_CREAT+O_EXCL to ensure that only one process initializes a shared object.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Shared Object Access Mode</TITLE><PARAGRAPH>The access mode that you specify when creating an object governs the users and groups that can open the object later, exactly as with a disk file.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Using the Shared Object File Descriptor</TITLE><PARAGRAPH>The value returned by <FUNCTION>shm_open()</FUNCTION> is a file descriptor and you can use it as such; for example you can apply the <FUNCTION>dup()</FUNCTION> function to make a copy of it. You can also use it as an argument to <FUNCTION>fcntl()</FUNCTION>, but most of the features of <FUNCTION>fcntl()</FUNCTION> are irrelevant to a shared memory object. (See the <REFPAGE>dup(2)</REFPAGE> and <REFPAGE>fcntl(2)</REFPAGE> reference pages.)</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Using a Shared Object</TITLE><PARAGRAPH>In order to use a shared object, your program first opens it with <FUNCTION>shm_open()</FUNCTION>, then maps it into memory with <FUNCTION>mmap()</FUNCTION>. The arguments to <FUNCTION>mmap()</FUNCTION> include</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>the file descriptor for the shared object</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>the size of the memory segment</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>access protection flags</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>The returned value is the base address of the segment in memory. You can then use it like any block of memory. For example, you could create an allocation arena in the segment using the <FUNCTION>acreate()</FUNCTION> function (see the <REFPAGE>amalloc(3)</REFPAGE> reference page). For more on the use of <FUNCTION>mmap()</FUNCTION>, read <XREF IDREF="29280" TYPE="TITLE">&ldquo;Segment Mapping Function mmap()&rdquo;</XREF> and <XREF IDREF="51714" TYPE="TITLE">&ldquo;Mapping a File for Shared Memory&rdquo;</XREF>.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Example Program</TITLE><PARAGRAPH>The program in <XREF IDREF="23511" TYPE="TEXT">Example&nbsp;3-1</XREF> allows you to experiment with <FUNCTION>shm_open()</FUNCTION> and <FUNCTION>mmap()</FUNCTION> from the command line. The program accepts the following command-line arguments: </PARAGRAPH>
+<TABLE COLUMNS="2"><TABLEBODY><ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH><VARIABLE>path</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="337"><PARAGRAPH>The pathname of a shared memory segment (file) that exists or that is to be 
+created.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH>-p <VARIABLE>perms</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="337"><PARAGRAPH>The access permissions to apply to a newly-created segment, for example 
+-p&nbsp;0664.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH>-s <VARIABLE>bytes</VARIABLE>&space;</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="337"><PARAGRAPH>The initial size at which to map the segment, for example -s 0x80000.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH>-c</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="337"><PARAGRAPH>Use the O_CREAT flag with <FUNCTION>open()</FUNCTION>, creating the segment if it doesn't exist.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH>-x </PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="337"><PARAGRAPH>Use the O_EXCL flag with <FUNCTION>open()</FUNCTION>, requiring the segment to not exist.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH>-t</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="337"><PARAGRAPH>Use the O_TRUNC flag with <FUNCTION>open()</FUNCTION>, truncating the file to zero length.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH>-r</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="337"><PARAGRAPH>Use the O_RDONLY flag with <FUNCTION>open()</FUNCTION> and PROT_READ with <FUNCTION>mmap()</FUNCTION>. If this 
+option is not used, the program uses O_RDWR with <FUNCTION>open()</FUNCTION> and 
+PROT_READ, PROT_WRITE, PROT_AUTOGROW with <FUNCTION>mmap()</FUNCTION>.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="49"><PARAGRAPH>-w</PARAGRAPH>
+</CELL>
+<CELL LEFT="55" WIDTH="337"><PARAGRAPH>Wait for keyboard input before exiting, allowing you to run other copies of 
+the program while this one has the segment mapped.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>To create a segment named <FILENAME>/var/tmp/test.seg</FILENAME>, use a command such as</PARAGRAPH>
+<EXAMPLE>
+shm_open -c -x -p 0644 -s 0x80000 /var/tmp/test.seg
+</EXAMPLE>
+<PARAGRAPH>To attach that segment read-only and then wait, use the command</PARAGRAPH>
+<EXAMPLE>
+shm_open -r -w /var/tmp/test.seg
+</EXAMPLE>
+<PARAGRAPH>From a different terminal window, enter the command</PARAGRAPH>
+<EXAMPLE>
+shm_open /var/tmp/test.seg
+</EXAMPLE>
+<PARAGRAPH>In the original window, press &lt;Enter> and observe that the value of the first word of the shared segment changed during the wait. </PARAGRAPH>
+<CODE><CAPTION LBL="3-1"><PREFIX>Example 3-1 </PREFIX><XREFTARGET ID="23511">POSIX Program to Demonstrate shm_open()</CAPTION>/*
+||&nbsp;&nbsp;Program&nbsp;to&nbsp;test&nbsp;shm_open(3).
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;shm_open&nbsp;&nbsp;&nbsp;&nbsp;[-p&nbsp;&lt;perms>]&nbsp;[-s&nbsp;&lt;bytes>]&nbsp;[-c]&nbsp;[-x]&nbsp;[-r]&nbsp;[-t]&nbsp;[-w]&nbsp;&lt;path>
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-p&nbsp;&lt;perms>&nbsp;&nbsp;access&nbsp;mode&nbsp;to&nbsp;use&nbsp;when&nbsp;creating,&nbsp;default&nbsp;0600
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-s&nbsp;&lt;bytes>&nbsp;&nbsp;size&nbsp;of&nbsp;segment&nbsp;to&nbsp;map,&nbsp;default&nbsp;64K
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-c&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;use&nbsp;O_CREAT
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-x&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;use&nbsp;O_EXCL
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-r&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;use&nbsp;O_RDONLY,&nbsp;default&nbsp;is&nbsp;O_RDWR
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-t&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;use&nbsp;O_TRUNC
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-w&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;wait&nbsp;for&nbsp;keyboard&nbsp;input&nbsp;before&nbsp;exiting
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&lt;path>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;the&nbsp;pathname&nbsp;of&nbsp;the&nbsp;queue,&nbsp;required
+*/
+#include&nbsp;&lt;sys/mman.h>&nbsp;&nbsp;&nbsp;/*&nbsp;shared&nbsp;memory&nbsp;and&nbsp;mmap()&nbsp;*/
+#include&nbsp;&lt;unistd.h>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;for&nbsp;getopt()&nbsp;*/
+#include&nbsp;&lt;errno.h>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;errno&nbsp;and&nbsp;perror&nbsp;*/
+#include&nbsp;&lt;fcntl.h>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;O_flags&nbsp;*/
+#include&nbsp;&lt;stdio.h>
+int&nbsp;main(int&nbsp;argc,&nbsp;char&nbsp;**argv)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;perms&nbsp;=&nbsp;0600;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;permissions&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;size_t&nbsp;size&nbsp;=&nbsp;65536;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;segment&nbsp;size&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;oflags&nbsp;=&nbsp;0;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;open&nbsp;flags&nbsp;receives&nbsp;-c,&nbsp;-x,&nbsp;-t&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;ropt&nbsp;=&nbsp;0;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;-r&nbsp;option&nbsp;seen&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;wopt&nbsp;=&nbsp;0;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;-w&nbsp;option&nbsp;seen&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;shm_fd;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;file&nbsp;descriptor&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;mprot&nbsp;=&nbsp;PROT_READ;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;protection&nbsp;flags&nbsp;to&nbsp;mmap&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;mflags&nbsp;=&nbsp;MAP_SHARED;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;mmap&nbsp;flags&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;void&nbsp;*attach;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;assigned&nbsp;memory&nbsp;adddress&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;char&nbsp;*path;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;->first&nbsp;non-option&nbsp;argument&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;c;
+&nbsp;&nbsp;&nbsp;&nbsp;while&nbsp;(&nbsp;-1&nbsp;!=&nbsp;(c&nbsp;=&nbsp;getopt(argc,argv,"p:s:cxrtw"))&nbsp;)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;switch&nbsp;(c)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'p':&nbsp;/*&nbsp;permissions&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perms&nbsp;=&nbsp;(int)&nbsp;strtoul(optarg,&nbsp;NULL,&nbsp;0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'s':&nbsp;/*&nbsp;segment&nbsp;size&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;size&nbsp;=&nbsp;(size_t)&nbsp;strtoul(optarg,&nbsp;NULL,&nbsp;0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'c':&nbsp;/*&nbsp;use&nbsp;O_CREAT&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;oflags&nbsp;|=&nbsp;O_CREAT;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'x':&nbsp;/*&nbsp;use&nbsp;O_EXCL&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;oflags&nbsp;|=&nbsp;O_EXCL;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'t':&nbsp;/*&nbsp;use&nbsp;O_TRUNC&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;oflags&nbsp;|=&nbsp;O_TRUNC;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'r':&nbsp;/*&nbsp;use&nbsp;O_RDONLY&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ropt&nbsp;=&nbsp;1;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'w':&nbsp;/*&nbsp;wait&nbsp;after&nbsp;attaching&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;wopt&nbsp;=&nbsp;1;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;default:&nbsp;/*&nbsp;unknown&nbsp;or&nbsp;missing&nbsp;argument&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;-1;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}&nbsp;/*&nbsp;switch&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;}&nbsp;/*&nbsp;while&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(optind&nbsp;&lt;&nbsp;argc)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;path&nbsp;=&nbsp;argv[optind];&nbsp;/*&nbsp;first&nbsp;non-option&nbsp;argument&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{&nbsp;printf("Segment&nbsp;pathname&nbsp;required\n");&nbsp;return&nbsp;-1;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(0==ropt)
+&nbsp;&nbsp;&nbsp;&nbsp;{&nbsp;/*&nbsp;read-write&nbsp;access,&nbsp;reflect&nbsp;in&nbsp;mprot&nbsp;and&nbsp;mflags&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;oflags&nbsp;|=&nbsp;O_RDWR;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;mprot&nbsp;|=&nbsp;PROT_WRITE;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;mflags&nbsp;|=&nbsp;MAP_AUTOGROW&nbsp;+&nbsp;MAP_AUTORESRV;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;{&nbsp;/*&nbsp;read-only&nbsp;access,&nbsp;mprot&nbsp;and&nbsp;mflags&nbsp;defaults&nbsp;ok&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;oflags&nbsp;|=&nbsp;O_RDONLY;
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;shm_fd&nbsp;=&nbsp;shm_open(path,oflags,perms);
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(-1&nbsp;!=&nbsp;shm_fd)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;attach&nbsp;=&nbsp;mmap(NULL,size,mprot,mflags,shm_fd,(off_t)0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(attach&nbsp;!=&nbsp;MAP_FAILED)&nbsp;/*&nbsp;mmap&nbsp;worked&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;printf("Attached&nbsp;at&nbsp;0x%lx,&nbsp;first&nbsp;word&nbsp;=&nbsp;0x%lx\n",
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;attach,&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*((pid_t*)attach));
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(mprot&nbsp;&amp;&nbsp;PROT_WRITE)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*((pid_t&nbsp;*)attach)&nbsp;=&nbsp;getpid();
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;printf("Set&nbsp;first&nbsp;word&nbsp;to&nbsp;0x%lx\n",*((pid_t*)attach));
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(wopt)&nbsp;/*&nbsp;wait&nbsp;a&nbsp;while,&nbsp;report&nbsp;possibly-different&nbsp;value&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;char&nbsp;inp[80];
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;printf("Waiting&nbsp;for&nbsp;return&nbsp;key&nbsp;before&nbsp;unmapping...");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;gets(inp);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;printf("First&nbsp;word&nbsp;is&nbsp;now&nbsp;0x%lx\n",*((pid_t*)attach));
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(munmap(attach,size))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("munmap()");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("mmap()");
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("shm_open()");
+&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;errno;
+}
+
+&space;
+</CODE>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="62381">IRIX Shared Memory Arenas</TITLE><PARAGRAPH>The shared memory arena is basic to all IRIX IPC mechanisms. IRIX semaphores, locks, and barriers are all represented as objects within a shared arena.<INDEXTARGET ID="TIP_2b.ipcsmem5"><!-- POSTPROCESSDATA: TIP_2b.ipcsmem5|shared memory:IRIX --></PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>Overview of Shared Arenas</TITLE><PARAGRAPH>A shared arena is a segment of memory that can be made part of the address space of more than one process. Each shared arena is associated with a disk file that acts as a backing store for the file (see <XREF IDREF="31393" TYPE="TITLE">&ldquo;Page Validation&rdquo;</XREF>). Each process that wants to share access to the arena does so by specifying the file pathname of the file. The file pathname acts as the public name of the memory segment. The file access permissions determine which user IDs and group IDs can share the file.</PARAGRAPH>
+<PARAGRAPH>The functions you use to manage a shared arena are discussed in the following topics and are summarized in <XREF IDREF="33022" TYPE="TABLE">Table&nbsp;3-2</XREF>. </PARAGRAPH>
+<TABLE COLUMNS="2"><CAPTION LBL="3-2"><PREFIX>Table 3-2 </PREFIX><XREFTARGET ID="33022"> <EMPHASIS>(continued)        </EMPHASIS>IRIX Shared Arena Management Functions</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="81"><PARAGRAPH>Function Name</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Purpose and Operation</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>usconfig(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Establish the default size of an arena, the number of concurrent processes 
+that can use it, and the features of IPC objects in it.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>usinit(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Create an arena or join an existing arena.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>usadd(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Join an existing arena.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="19447">Initializing Arena Attributes</TITLE><PARAGRAPH>A program creates a shared memory arena with the <INDEXTARGET ID="TIP_2b.ipcsmem6"><!-- POSTPROCESSDATA: TIP_2b.ipcsmem6|shared arena:initializing --><FUNCTION>usinit()</FUNCTION> function. However, many attributes of a new arena are set by preceding calls to <FUNCTION>usconfig()</FUNCTION>. The normal sequence of operations is to make several calls to <FUNCTION>usconfig()</FUNCTION> to establish arena attributes, then to make one call to <FUNCTION>usinit()</FUNCTION> to create the arena.</PARAGRAPH>
+<PARAGRAPH>You call <FUNCTION>usconfig() </FUNCTION>to establish the features summarized in <XREF IDREF="19860" TYPE="TABLE">Table&nbsp;3-3</XREF>. </PARAGRAPH>
+<TABLE COLUMNS="2"><CAPTION LBL="3-3"><PREFIX>Table 3-3 </PREFIX><XREFTARGET ID="19860"> <EMPHASIS>(continued)        </EMPHASIS>Arena Features Set Using usconfig()</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="108"><PARAGRAPH>usconfig() Flag Name</PARAGRAPH>
+</CELL>
+<CELL LEFT="115" WIDTH="279"><PARAGRAPH>Meaning</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="108"><PARAGRAPH>CONF_INITSIZE</PARAGRAPH>
+</CELL>
+<CELL LEFT="115" WIDTH="279"><PARAGRAPH>The initial size of the arena segment. The default is 64&nbsp;KB. Often you 
+know that more is needed.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="108"><PARAGRAPH>CONF_AUTOGROW</PARAGRAPH>
+</CELL>
+<CELL LEFT="115" WIDTH="279"><PARAGRAPH>Whether or not the arena can grow automatically as more IPC objects 
+or data objects are allocated (default: yes).</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="108"><PARAGRAPH>CONF_INITUSERS</PARAGRAPH>
+</CELL>
+<CELL LEFT="115" WIDTH="279"><PARAGRAPH>The largest number of concurrent processes that can use the arena. 
+The default is 8; if more processes than this will use IPC, the limit 
+must be set higher.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="108"><PARAGRAPH>CONF_CHMOD</PARAGRAPH>
+</CELL>
+<CELL LEFT="115" WIDTH="279"><PARAGRAPH>The effective file permissions on arena access. The default is 600, 
+allowing only processes with the effective UID of the creating process 
+to attach the arena.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="108"><PARAGRAPH>CONF_ARENATYPE</PARAGRAPH>
+</CELL>
+<CELL LEFT="115" WIDTH="279"><PARAGRAPH>Establish whether the arena can be attached by general processes or 
+only by members of one program (a share group).</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="108"><PARAGRAPH>CONF_LOCKTYPE</PARAGRAPH>
+</CELL>
+<CELL LEFT="115" WIDTH="279"><PARAGRAPH>Whether or not lock objects allocated in the arena collect metering 
+statistics as they are used.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="108"><PARAGRAPH>CONF_ATTACHADDR</PARAGRAPH>
+</CELL>
+<CELL LEFT="115" WIDTH="279"><PARAGRAPH>An explicit memory base address for the next arena to be created (see 
+<XREF IDREF="27102" TYPE="TITLE">&ldquo;Choosing a Segment Address&rdquo;</XREF>).</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="108"><PARAGRAPH>CONF_HISTON&lbreak;CONF_HISTOFF</PARAGRAPH>
+</CELL>
+<CELL LEFT="115" WIDTH="279"><PARAGRAPH>Start and stop collecting usage history (more bulky than metering 
+information) for semaphores in a specified arena.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="108"><PARAGRAPH>CONF_HISTSIZE</PARAGRAPH>
+</CELL>
+<CELL LEFT="115" WIDTH="279"><PARAGRAPH>Set the maximum size of semaphore history records.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>See the <REFPAGE>usconfig(3) </REFPAGE>reference page for a complete list of attributes. The use of metering and history information for locks and semaphores is covered in <XREF IDREF="82386" TYPE="TITLE">Chapter&nbsp;4, &ldquo;Mutual Exclusion.&rdquo;</XREF></PARAGRAPH>
+<TIP><PREFIX>Tip</PREFIX>In programs that use an arena and start a varying number of child processes, it is a common mistake to find that the eighth child process cannot join the arena. This occurs simply because <FUNCTION>usconfig()</FUNCTION> has not been called with CONF_INITUSERS to set the number of users higher than the default 8 before the arena was created.</TIP>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Creating an Arena</TITLE><PARAGRAPH>After setting the arena attributes with <FUNCTION>usconfig()</FUNCTION>, the program calls <FUNCTION>usinit()</FUNCTION>, specifying a file pathname string.</PARAGRAPH>
+<TIP><PREFIX>Tip</PREFIX>The <FUNCTION>mktemp()</FUNCTION> library function can be used to create a unique temporary filename (see the <REFPAGE>mktemp(3C)</REFPAGE> reference page).</TIP>
+<PARAGRAPH>If the specified file doesn't exist, <FUNCTION>usinit()</FUNCTION> creates it (and gives it the access permissions specified to <FUNCTION>usinit()</FUNCTION> with CONF_CHMOD). If a shared arena already exists based on that name, <FUNCTION>usinit()</FUNCTION> joins that shared arena. If the file exists but is not yet a shared arena, <FUNCTION>usinit()</FUNCTION> overwrites it. In any case, <FUNCTION>usinit()</FUNCTION> is subject to normal filesystem permission tests, and it returns an error if the process doesn't have read and write permission on the file (if it already exists) or permission to create the file (if it doesn't exist).</PARAGRAPH>
+<PARAGRAPH>Code to prepare an arena is shown in <XREF IDREF="98357" TYPE="TEXT">Example&nbsp;3-2</XREF>.</PARAGRAPH>
+<CODE><CAPTION LBL="3-2"><PREFIX>Example 3-2 </PREFIX><XREFTARGET ID="98357">Initializing a Shared Memory Arena</CAPTION>usptr_t 
+makeArena(size_t initSize, int nProcs)
+{
+&nbsp;&nbsp;&nbsp;int ret;
+&nbsp;&nbsp;&nbsp;char * tmpname = "/var/tmp/arenaXXXXXX";
+&nbsp;&nbsp;&nbsp;if (ret = usconfig(CONF_INITUSERS, nProcs))
+&nbsp;&nbsp;&nbsp;{ perror("usconfig(#users)"); return 0; }
+&nbsp;&nbsp;&nbsp;if (ret = usconfig(CONF_INITSIZE, initSize))
+&nbsp;&nbsp;&nbsp;{ perror("usconfig(size)"); return 0; }
+&nbsp;&nbsp;&nbsp;return usinit(mktemp(tmpname));
+}
+</CODE>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Joining an Arena</TITLE><PARAGRAPH>Only one process creates a shared arena. Other processes &ldquo;join&rdquo; or &ldquo;attach&rdquo; the arena. There are three ways of doing this. When the arena is not restricted to a single process family (either by file permissions or by CONF_ARENATYPE setting), any process that calls <FUNCTION>usinit()</FUNCTION> and passes the same pathname string gains access to the same arena at the same virtual base address. This process need not be related in any way to the process that created the arena.</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE>Restricting Access to an Arena</TITLE><PARAGRAPH>You can restrict arena access to a single process and the children it creates with <FUNCTION>sproc()</FUNCTION> (a share group; see <XREF IDREF="78136" TYPE="TITLE">&ldquo;Process Creation and Share Groups&rdquo;</XREF>) by calling <FUNCTION>usconfig()</FUNCTION> to set CONF_ARENATYPE to US_SHAREDONLY before creating the arena. When this is done, the file is unlinked immediately after the arena is created. Then a call to <FUNCTION>usinit()</FUNCTION> with the same pathname from a different process creates a different arena, one that is not shared with the first one. This has several side-effects that are detailed in <REFPAGE>usconfig(3)</REFPAGE>.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Arena Access From Processes in a Share Group</TITLE><PARAGRAPH>An arena is a segment in the address space of a process. When that process creates a new process using <FUNCTION>sproc()</FUNCTION>, the child process usually shares the same address space (see the <REFPAGE>sproc(2)</REFPAGE> reference page and <XREF IDREF="43999" TYPE="TITLE">Chapter&nbsp;12, &ldquo;Process-Level Parallelism&rdquo;</XREF>). The child process has access to the arena segment on the same basis as the parent process. However, the child process needs to join the arena formally.</PARAGRAPH>
+<PARAGRAPH>The child process should join the arena by calling <FUNCTION>usadd()</FUNCTION>, passing the address of the arena. The child should test the return code of this function, since it can reflect an error in either of two cases:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>The arena has not been created, or an incorrect arena address was passed.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The arena was not configured to allow enough using processes, and no more users can be allowed.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>A child process can join an arena automatically, simply by using a semaphore, lock, or barrier that was allocated within that arena. These function calls perform an automatic call to <FUNCTION>usadd()</FUNCTION>. However, they can also encounter the error that too many processes are already using the arena. It is best for the child process to check for this condition with an explicit call to <FUNCTION>usadd()</FUNCTION>.</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="87061">Allocating in an Arena</TITLE><PARAGRAPH>Allocating shared memory from a shared arena is much like the regular process of allocating memory using the <FUNCTION>malloc()</FUNCTION> and <FUNCTION>free() </FUNCTION>library routines. The functions related to allocation within an arena are summarized in <XREF IDREF="65760" TYPE="TABLE">Table&nbsp;3-4</XREF>. </PARAGRAPH>
+<TABLE COLUMNS="2"><CAPTION LBL="3-4"><PREFIX>Table 3-4 </PREFIX><XREFTARGET ID="65760"> <EMPHASIS>(continued)        </EMPHASIS>IRIX Shared Memory Arena Allocation Functions</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="95"><PARAGRAPH>Function Name</PARAGRAPH>
+</CELL>
+<CELL LEFT="100" WIDTH="295"><PARAGRAPH>Purpose and Operation</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="95"><PARAGRAPH>usmalloc(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="100" WIDTH="295"><PARAGRAPH>Allocate an object of specified size in an arena.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="95"><PARAGRAPH>uscalloc(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="100" WIDTH="295"><PARAGRAPH>Allocate an array of zero-filled units in an arena.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="95"><PARAGRAPH>usmemalign(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="100" WIDTH="295"><PARAGRAPH>Allocate an object of specified size on a specified alignment boundary in 
+an arena.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="95"><PARAGRAPH>usrealloc(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="100" WIDTH="295"><PARAGRAPH>Change the allocated size of an object in an arena.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="95"><PARAGRAPH>usrealloc(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="100" WIDTH="295"><PARAGRAPH>Change the allocated size of an array created with <FUNCTION>uscalloc()</FUNCTION>.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="95"><PARAGRAPH>usmallocblksize(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="100" WIDTH="295"><PARAGRAPH>Query the actual size of an object as allocated.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="95"><PARAGRAPH>usfree(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="100" WIDTH="295"><PARAGRAPH>Release an object allocated in an arena.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="95"><PARAGRAPH>usmallopt(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="100" WIDTH="295"><PARAGRAPH>Tune the allocation algorithm using constants described in <REFPAGE>amallopt(3)</REFPAGE>.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="95"><PARAGRAPH>usmallinfo(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="100" WIDTH="295"><PARAGRAPH>Query allocation statistics (see <REFPAGE>amallinfo(3)</REFPAGE> for structure fields).</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<PARAGRAPH>The address of an object allocated using <FUNCTION>usmalloc()</FUNCTION> or a related function is a valid address in any process that is attached to the shared arena. If the address is passed to a process that has not attached the arena, the address is not valid for that process and its use will cause a SIGSEGV.</PARAGRAPH>
+<PARAGRAPH>The <FUNCTION>usmalloc()</FUNCTION> family of functions is based on the arena-allocation function family described in the <REFPAGE>amalloc(3)</REFPAGE> reference page. The <FUNCTION>usmallopt()</FUNCTION> function is the same as the <FUNCTION>amallopt()</FUNCTION> function, and both provide several options for modifying the memory allocation methods in a particular arena. In a similar way, <FUNCTION>usmallinfo()</FUNCTION> is the same as <FUNCTION>amallinfo()</FUNCTION>, and both return detailed statistics on usage of memory allocation in one arena.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="55128">Exchanging the First Datum</TITLE><PARAGRAPH>The processes using a shared arena typically need to locate some fundamental data structure that has been allocated within the arena. For example, the parent process creates a foundation data structure in the arena, and initializes it with pointers to other objects within the arena. Any process starting to use the arena needs the address of the foundation structure in order to find all the other objects used by the application.</PARAGRAPH>
+<PARAGRAPH>The shared arena has a special one-pointer field for storing such a basic address. This area is accessed using the functions summarized in <XREF IDREF="75550" TYPE="TABLE">Table&nbsp;3-5</XREF>. </PARAGRAPH>
+<TABLE COLUMNS="2"><CAPTION LBL="3-5"><PREFIX>Table 3-5 </PREFIX><XREFTARGET ID="75550"> <EMPHASIS>(continued)        </EMPHASIS>IRIX Shared Memory First-Datum Functions</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="81"><PARAGRAPH>Function Name</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Purpose and Operation</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>usputinfo(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Set the shared-pointer field of an arena to a value.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>usgetinfo(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Retrieve the value of the shared-pointer field of an arena.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>uscasinfo(3) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Change the shared-pointer field using a compare-and-swap.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<NOTE><PREFIX>Note</PREFIX>The precision of the <FUNCTION>usgetinfo()</FUNCTION> field in an arena, 32 or 64 bits, depends on the execution model of the program that creates the arena. This is one reason that processes compiled to different models cannot share one arena (see <XREF IDREF="53113" TYPE="TITLE">&ldquo;Sharing Memory Between 32-Bit and 64-Bit Processes&rdquo;</XREF>).</NOTE>
+<PARAGRAPH>Often, the parent process creates and initializes the arena before it creates any of the child processes that will share the arena. In this case, you expect no race conditions. The parent can set the shared pointer using <FUNCTION>usputinfo()</FUNCTION> because no other process is using the arena at that time. Each child process can fetch the value with <FUNCTION>usgetinfo()</FUNCTION>.</PARAGRAPH>
+<PARAGRAPH>The purpose of <FUNCTION>uscasinfo()</FUNCTION> is to change the contents of the field in an atomic fashion, avoiding any race condition between concurrent processes in a multiprocessor. All three functions are discussed in detail in the <REFPAGE>usputinfo(3P)</REFPAGE> reference page.</PARAGRAPH>
+<TIP><PREFIX>Tip</PREFIX>The data type of the shared pointer field is void*, a 64-bit value when the program is compiled to the 64-bit model. If you need to cast the value to an integer, use the type <VARIABLE>__psint_t</VARIABLE>, a pointer-sized integer in any model.</TIP>
+<PARAGRAPH>In the less-common case when an arena is shared by unrelated processes, each process that calls <FUNCTION>usinit()</FUNCTION> might be the first one to create the arena&mdash;or might not. If the calling process is the first, it should initialize the basic contents and set the shared pointer. If it is not the first, it should use the initialized contents that another process has already prepared. This problem is resolved with <FUNCTION>uscasinfo()</FUNCTION>, as sketched by the code in <XREF IDREF="90665" TYPE="TEXT">Example&nbsp;3-3</XREF>. </PARAGRAPH>
+<CODE><CAPTION LBL="3-3"><PREFIX>Example 3-3 </PREFIX><XREFTARGET ID="90665">Setting Up an Arena With uscasinfo()</CAPTION>typedef struct arenaStuff {
+&nbsp;&nbsp;&nbsp;ulock_t&nbsp;&nbsp;&nbsp;updateLock; /* exclusive use of this structure */
+&nbsp;&nbsp;&nbsp;short&nbsp;&nbsp;&nbsp;  joinedProcs; /* number of processes joined */
+&nbsp;&nbsp;&nbsp;...pointers to other things allocated by setUpArena()... 
+} arenaStuff_t;
+/*
+|| The following function performs the one-time setup of the
+|| arenaStuff contents. It assumes that updateLock is held.
+*/
+extern void
+setUpArena(usptr_t *arena, arenaStuff_t *stuff);
+/*
+|| The following function joins a specified arena, creating it
+|| and initializing it if necessary.  It could be extended with
+|| values to pass to usconfig(3) before the arena is created.
+*/ 
+usptr_t*
+joinArena(char *arenaPath)
+{
+&nbsp;&nbsp;&nbsp;usptr_t *arena;
+&nbsp;&nbsp;&nbsp;arenaStuff_t *stuff;
+&nbsp;&nbsp;&nbsp;int ret;
+&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;|| Join the arena, creating it if necessary. Exit on error.
+&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;if (!arena = usinit(arenaPath))
+&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("usinit");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return arena;
+&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;|| Do the following as many times as necessary until the arena
+&nbsp;&nbsp;&nbsp;|| has been initialized.
+&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;for(ret=0; !ret; )
+&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if (stuff = (arenaStuff_t *)usgetinfo(arena))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;|| Another process has created the arena, and either has
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;|| initialized it or is initializing it right now. Acquire
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;|| the lock, which will block us until initializing is done.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ussetlock(stuff->updateLock);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/* here do anything needing exclusive use of arena */
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;++stuff->joinedProcs; /* another process has joined */
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;usunsetlock(stuff->updateLock); /* release arena */
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ret = 1; /* end the loop */
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;|| This process appears to be first to call usinit().
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;|| Allocate an arenaStuff structure with its updateLock
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;|| already held and 1 process joined, and try to swap it
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;|| into place as the active one. We expect no errors
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;|| in setting up arenaStuff. If one occurs, the arena is
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;|| simply unusable, and we return a NULL to the caller.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if (! (stuff = usmalloc(sizeof(arenaStuff_t),arena) ) )
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return stuff; /* should never occur */
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if (! (stuff->updateLock = usnewlock(arena) ) );
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return (usptr_t*)0; /* should never occur */
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if (! uscsetlock(stuff->updateLock, 1) )
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return (usptr_t*)0; /* should never occur */
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;stuff->joinedProcs = 1;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if (ret = uscasinfo(arena,0,stuff))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;|| Our arenaStuff is now installed. Initialize it.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;|| We hold the lock in arenaStuff as setUpArena expects.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;|| The loop ends because ret is now nonzero.
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;setUpArena(arena,stuff);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;usunsetlock(stuff->updateLock);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;|| uscasinfo() either did not find a current value of 0
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;|| (indicates a race with another process executing this
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;|| code) or it failed for some other reason. In any case,
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;|| release allocated stuff and repeat the loop (ret==0).
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;usfreelock(stuff->updatelock,arena);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;usfree(stuff,arena);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;} /* usgetinfo returned 0 */
+&nbsp;&nbsp;&nbsp;} /* while uscasinfo swap fails */
+&nbsp;&nbsp;&nbsp;/* arena->initialized arena, updateLock not held */
+&nbsp;&nbsp;&nbsp;return arena;
+}
+</CODE>
+<PARAGRAPH><XREF IDREF="90665" TYPE="TEXT">Example&nbsp;3-3</XREF> assumes that everything allocated in the arena is accessed through a collection of pointers, <VARIABLE>arenaStuff</VARIABLE>. The two problems to be solved are these:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>Which asynchronous process is the first to call <FUNCTION>usinit()</FUNCTION>, and therefore should allocate <VARIABLE>arenaStuff</VARIABLE> and initialize it with pointers to other objects?</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>How can the second and subsequent processes know when the initialization of <VARIABLE>arenaStuff</VARIABLE> is complete (it might take some time) and the arena is completely ready for use?</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>The solution in <XREF IDREF="90665" TYPE="TEXT">Example&nbsp;3-3</XREF> is based on the discussion in the <REFPAGE>uscasinfo(3P)</REFPAGE> reference page. Each process calls function <FUNCTION>joinArena()</FUNCTION>. If a call to <FUNCTION>usgetinfo()</FUNCTION> returns nonzero, it is the address of an <VARIABLE>arenaStuff_t</VARIABLE> that has been allocated by some other process. Possibly that process is concurrently executing, initializing the arena. The current process waits until the lock in the <VARIABLE>arenaStuff_t</VARIABLE> is released. On return from the <FUNCTION>ussetlock()</FUNCTION> call, the process has exclusive use of <VARIABLE>arenaStuff</VARIABLE> until it releases the lock. It uses this exclusive control to increment the count of processes using the arena.</PARAGRAPH>
+<PARAGRAPH>When <FUNCTION>usgetinfo()</FUNCTION> returns 0, the calling process is probably the first to create the arena, so it allocates an <VARIABLE>arenaStuff</VARIABLE> structure, and also allocates the essential lock and puts it in a locked state. Then it calls <FUNCTION>uscasinfo()</FUNCTION> to swap the <VARIABLE>arenaStuff</VARIABLE> address for the expected value of 0. When the swap succeeds, the process completes initializing the arena and releases the lock.</PARAGRAPH>
+<PARAGRAPH>The call to <FUNCTION>uscasinfo()</FUNCTION> could fail if, between the time the process receives a 0 from <FUNCTION>usgetinfo()</FUNCTION> and the time it calls <FUNCTION>uscasinfo()</FUNCTION>, another process executes this same code and installs its own <VARIABLE>arenaStuff</VARIABLE>. The process handles this unusual event by releasing the items it allocated and repeating the whole process.</PARAGRAPH>
+<PARAGRAPH>When unrelated processes join an arena with code like that shown in <XREF IDREF="90665" TYPE="TEXT">Example&nbsp;3-3</XREF>, they should terminate their use of the arena with code similar to <XREF IDREF="16282" TYPE="TEXT">Example&nbsp;3-4</XREF>.</PARAGRAPH>
+<CODE><CAPTION LBL="3-4"><PREFIX>Example 3-4 </PREFIX><XREFTARGET ID="16282">Resigning From an Arena</CAPTION>/*
+|| The following function reverses the operation of joinArena.
+|| Even if the calling process is the last one to hold the arena, 
+|| nothing drastic is done. This is because it is impossible to
+|| perform {usinit(); usgetinfo(); ussetlock();} as an atomic
+|| sequence.  Once an arena comes into being it must remain
+|| usable until the entire application shuts down. Unlinking the
+|| arena file can be the last thing that main() does.
+*/
+void
+resignArena(usptr_t *arena)
+{
+&nbsp;&nbsp;&nbsp;arenaStuff_t *stuff = (arenaStuff_t *)usgetinfo(arena);
+&nbsp;&nbsp;&nbsp;ussetlock(stuff->updateLock);
+&nbsp;&nbsp;&nbsp;-- stuff->joinedProcs;
+&nbsp;&nbsp;&nbsp;usunsetlock(stuff->updateLock);
+}
+</CODE>
+<PARAGRAPH>It might seem that, when the function <FUNCTION>resignArena()</FUNCTION> in <XREF IDREF="16282" TYPE="TEXT">Example&nbsp;3-4</XREF> finds that it has reduced the <VARIABLE>joinedProcs</VARIABLE> count to 0, it could deinitialize the arena, for example unlinking the file on which the arena is based. This is not a good idea because of the remote chance of the following sequence of events:</PARAGRAPH>
+<ORDEREDLIST><LIST><PARAGRAPH>Process A executes <FUNCTION>joinArena()</FUNCTION>, initializing the arena.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Unrelated process B executes <FUNCTION>joinArena()</FUNCTION> through the <FUNCTION>usinit()</FUNCTION> call, but is suspended for a higher-priority process before executing <FUNCTION>usgetinfo()</FUNCTION>.</PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Process A detects some error unrelated to arena use, and as part of termination, calls <FUNCTION>resignArena()</FUNCTION>. </PARAGRAPH>
+</LIST>
+<LIST><PARAGRAPH>Process B resumes execution with the call to <FUNCTION>usgetinfo()</FUNCTION>.</PARAGRAPH>
+</LIST>
+</ORDEREDLIST>
+<PARAGRAPH>If the <FUNCTION>resignArena()</FUNCTION> function did something irrevocable, such as unlinking or truncating the arena file, it would leave process B in an unexpected state.&space;</PARAGRAPH>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE><XREFTARGET ID="17480">System V Shared Memory Functions</TITLE><PARAGRAPH>The System V shared memory functions allow two or more processes to share memory. Unlike the IRIX method, in which the external name of a shared arena is also the name of a file, the external name of an SVR4 shared segment is an integer held in an IPC name table (see <INDEXTARGET ID="TIP_2b.ipcsmem7"><!-- POSTPROCESSDATA: TIP_2b.ipcsmem7|shared memory:SVR4 --><XREF IDREF="10403" TYPE="TITLE">&ldquo;SVR4 IPC Name Space&rdquo;</XREF>).</PARAGRAPH>
+<PARAGRAPH>The functions and commands used with SVR4 shared memory are discussed in the following topics and summarized in <XREF IDREF="25505" TYPE="TABLE">Table&nbsp;3-6</XREF>. </PARAGRAPH>
+<TABLE COLUMNS="2"><CAPTION LBL="3-6"><PREFIX>Table 3-6 </PREFIX><XREFTARGET ID="25505"> <EMPHASIS>(continued)        </EMPHASIS>SVR4 Shared Memory Functions</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="81"><PARAGRAPH>Function Name</PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Purpose and Operation</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>shmget(2) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Create a shared memory IPC object or return the ID of one.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>shmctl(2) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Get the status of a shared memory segment, change permissions or user IDs, 
+or lock or unlock a segment in memory.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>shmat(2) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Attach a shared memory segment to the address space.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="81"><PARAGRAPH>shmdt(2) </PARAGRAPH>
+</CELL>
+<CELL LEFT="90" WIDTH="306"><PARAGRAPH>Detach a shared memory segment from the address space.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<SECTION2 LBL="" HELPID = ""><TITLE>Creating or Finding a Shared Memory Segment</TITLE><PARAGRAPH>A process creates a shared memory segment, or locates an existing segment, using the <FUNCTION>shmget()</FUNCTION> system function. When it creates a segment, the arguments to this function establish:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>The numeric key of the segment.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The size of the segment.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The user ID and group ID of the segment creator and owner.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>The access permissions to the segment.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>When the function locates an existing segment, access to the segment is controlled by the access permissions and by the user ID and group ID of the calling process.</PARAGRAPH>
+<PARAGRAPH>Unlike an IRIX shared arena, a shared segment does not grow automatically as it is used. The size specified when it is created is fixed. The shared segment is initialized to binary zero. (As implemented in IRIX, the pages of the segment are created as they are first referenced; see <XREF IDREF="67507" TYPE="TITLE">&ldquo;Mapping a Segment of Zeros&rdquo;</XREF>.)</PARAGRAPH>
+<PARAGRAPH>The value returned by <FUNCTION>shmget()</FUNCTION> is the ID number of the segment. It is used to identify the segment to other functions.</PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE>Attaching a Shared Segment</TITLE><PARAGRAPH>The <FUNCTION>shmget()</FUNCTION> function creates the segment, or verifies that it exists, but does not actually make it a part of the process address space. That remains to be done with a call to <FUNCTION>shmat()</FUNCTION> (&ldquo;attach&rdquo;), passing the identifier returned by <FUNCTION>shmget()</FUNCTION>.</PARAGRAPH>
+<PARAGRAPH>You can pass a desired base address to <FUNCTION>shmat()</FUNCTION>, or you can pass NULL to have the system select the base address. It is best to let the system choose the base; this ensures that all processes have the same base address for the segment.</PARAGRAPH>
+<PARAGRAPH>A process can detach a segment from its address space by calling <FUNCTION>shmdt()</FUNCTION>.</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Managing a Shared Segment</TITLE><PARAGRAPH>The <FUNCTION>shmctl()</FUNCTION> function gives you the ability to get information about a segment, or to modify its attributes. These operations are summarized in <XREF IDREF="26720" TYPE="TABLE">Table&nbsp;3-7</XREF>.</PARAGRAPH>
+<TABLE COLUMNS="3"><CAPTION LBL="3-7"><PREFIX>Table 3-7 </PREFIX><XREFTARGET ID="26720"> <EMPHASIS>(continued)        </EMPHASIS>SVR4 Shared Segment Management Operations</CAPTION>
+<TABLEHEADING><CELL LEFT="0" WIDTH="72"><PARAGRAPH>Keyword</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="157"><PARAGRAPH>Operation</PARAGRAPH>
+</CELL>
+<CELL LEFT="245" WIDTH="157"><PARAGRAPH>Can Be Used By</PARAGRAPH>
+</CELL>
+</TABLEHEADING>
+<TABLEBODY><ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH>IPC_STAT</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="157"><PARAGRAPH>Get information about the segment.</PARAGRAPH>
+</CELL>
+<CELL LEFT="245" WIDTH="157"><PARAGRAPH>Any process having read access.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH>IPC_SET</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="157"><PARAGRAPH>Set owner UID, owner GID, or access 
+permissions.</PARAGRAPH>
+</CELL>
+<CELL LEFT="245" WIDTH="157"><PARAGRAPH>Creator UID, owner UID, or 
+superuser.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH>IPC_RMID</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="157"><PARAGRAPH>Remove the segment from the IPC 
+name space.</PARAGRAPH>
+</CELL>
+<CELL LEFT="245" WIDTH="157"><PARAGRAPH>Creator UID, owner UID, or 
+superuser.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH>SHM_LOCK</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="157"><PARAGRAPH>Lock the segment pages in memory.</PARAGRAPH>
+</CELL>
+<CELL LEFT="245" WIDTH="157"><PARAGRAPH>Superuser process only.</PARAGRAPH>
+</CELL>
+</ROW>
+<ROW><CELL LEFT="0" WIDTH="72"><PARAGRAPH>SHM_UNLOCK</PARAGRAPH>
+</CELL>
+<CELL LEFT="80" WIDTH="157"><PARAGRAPH>Unlock a locked segment.</PARAGRAPH>
+</CELL>
+<CELL LEFT="245" WIDTH="157"><PARAGRAPH>Superuser process only.</PARAGRAPH>
+</CELL>
+</ROW>
+</TABLEBODY>
+</TABLE>
+<SECTION3 LBL="" HELPID = ""><TITLE>Information About Shared Memory</TITLE><PARAGRAPH>The information structure returned by <FUNCTION>shmctl(</FUNCTION>IPC_STAT<FUNCTION>)</FUNCTION> is declared in the <FILENAME>sys/shm.h</FILENAME> header file. The first field, <VARIABLE>shm_perm</VARIABLE>, is an <VARIABLE>ipc_perm</VARIABLE> structure. This structure is declared in the <FILENAME>sys/ipc.h</FILENAME> header file.</PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Shared Memory Examples</TITLE><PARAGRAPH>The example programs in this section illustrate the use of some of the SVR4 shared memory system functions.<INDEXTARGET ID="TIP_2b.ipcsmem8"><!-- POSTPROCESSDATA: TIP_2b.ipcsmem8|shared memory:SVR4:example --></PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE>Example of Creating a Shared Segment</TITLE><PARAGRAPH>The program in <XREF IDREF="75612" TYPE="TEXT">Example&nbsp;3-5</XREF> illustrates the use of <FUNCTION>shmget()</FUNCTION>. You can specify command parameters to exercise any combination of <FUNCTION>shmget()</FUNCTION> function arguments.</PARAGRAPH>
+<CODE><CAPTION LBL="3-5"><PREFIX>Example 3-5 </PREFIX><FUNCTION><XREFTARGET ID="75612"></FUNCTION>shmget() System Call Example </CAPTION>/*
+||&nbsp;&nbsp;Program&nbsp;to&nbsp;test&nbsp;shmget(2)&nbsp;for&nbsp;creating&nbsp;a&nbsp;segment.
+||&nbsp;&nbsp;shmget&nbsp;[-k&nbsp;&lt;key>]&nbsp;[-s&nbsp;&lt;size>]&nbsp;[-p&nbsp;&lt;perms>]&nbsp;[-c]&nbsp;[-x]
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-k&nbsp;&lt;key>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;the&nbsp;key&nbsp;to&nbsp;use,&nbsp;default&nbsp;==&nbsp;0&nbsp;==&nbsp;IPC_PRIVATE
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-s&nbsp;&lt;size>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;size&nbsp;of&nbsp;segment,&nbsp;default&nbsp;is&nbsp;64KB
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-p&nbsp;&lt;perms>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;permissions&nbsp;to&nbsp;use,&nbsp;default&nbsp;is&nbsp;0600
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-x&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;use&nbsp;IPC_EXCL
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-c&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;use&nbsp;IPC_CREAT
+*/
+#include&nbsp;&lt;unistd.h>&nbsp;/*&nbsp;for&nbsp;getopt()&nbsp;*/
+#include&nbsp;&lt;sys/shm.h>&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;for&nbsp;shmget&nbsp;etc&nbsp;*/
+#include&nbsp;&lt;errno.h>&nbsp;&nbsp;/*&nbsp;errno&nbsp;and&nbsp;perror&nbsp;*/
+#include&nbsp;&lt;stdio.h>
+int&nbsp;main(int&nbsp;argc,&nbsp;char&nbsp;**argv)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;key_t&nbsp;key&nbsp;=&nbsp;IPC_PRIVATE;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;key&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;size_t&nbsp;size&nbsp;=&nbsp;65536;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;size&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;perms&nbsp;=&nbsp;0600;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;permissions&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;shmflg&nbsp;=&nbsp;0;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;flag&nbsp;values&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;struct&nbsp;shmid_ds&nbsp;ds;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;info&nbsp;struct&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;c,&nbsp;shmid;
+&nbsp;&nbsp;&nbsp;&nbsp;while&nbsp;(&nbsp;-1&nbsp;!=&nbsp;(c&nbsp;=&nbsp;getopt(argc,argv,"k:s:p:cx"))&nbsp;)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;switch&nbsp;(c)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'k':&nbsp;/*&nbsp;key&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;key&nbsp;=&nbsp;(key_t)&nbsp;strtoul(optarg,&nbsp;NULL,&nbsp;0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'s':&nbsp;/*&nbsp;size&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;size&nbsp;=&nbsp;(size_t)&nbsp;strtoul(optarg,&nbsp;NULL,&nbsp;0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'p':&nbsp;/*&nbsp;permissions&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perms&nbsp;=&nbsp;(int)&nbsp;strtoul(optarg,&nbsp;NULL,&nbsp;0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'c':
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;shmflg&nbsp;|=&nbsp;IPC_CREAT;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'x':
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;shmflg&nbsp;|=&nbsp;IPC_EXCL;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;default:&nbsp;/*&nbsp;unknown&nbsp;or&nbsp;missing&nbsp;argument&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;-1;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;shmid&nbsp;=&nbsp;shmget(key,size,shmflg|perms);
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(-1&nbsp;!=&nbsp;shmid)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;printf("shmid&nbsp;=&nbsp;%d&nbsp;(0x%x)\n",shmid,shmid);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(-1&nbsp;!=&nbsp;shmctl(shmid,IPC_STAT,&amp;ds))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;printf("owner&nbsp;uid/gid:&nbsp;%d/%d\n",
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ds.shm_perm.uid,ds.shm_perm.gid);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;printf("creator&nbsp;uid/gid:&nbsp;%d/%d\n",
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ds.shm_perm.cuid,ds.shm_perm.cgid);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("shmctl(IPC_STAT)");
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("shmget");
+&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;errno;
+} 
+</CODE>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Example of Attaching a Shared Segment</TITLE><PARAGRAPH>The program in <XREF IDREF="78009" TYPE="TEXT">Example&nbsp;3-6</XREF> illustrates the process of actually attaching to and using a shared memory segment. The segment must exist, and is specified by its ID or by its key. You can use the program in <XREF IDREF="75612" TYPE="TEXT">Example&nbsp;3-5</XREF> to create a segment for this program to use.</PARAGRAPH>
+<PARAGRAPH>The attachment is either read-write or read-only, depending on the presence of the <COMMAND>-r</COMMAND> command parameter. When the program attaches the segment read-write, it stores its own PID in the first word of the segment. Run the program several times; each time it reports the previous PID value and sets a new PID value. This illustrates that the contents of the segment persist between uses of the segment.</PARAGRAPH>
+<PARAGRAPH>You can use the <COMMAND>-w</COMMAND> parameter to have the program wait after attaching. This allows you to start more copies of the program so that multiple processes have attached the segment.</PARAGRAPH>
+<CODE><CAPTION LBL="3-6"><PREFIX>Example 3-6 </PREFIX><XREFTARGET ID="78009">shmat() System Call Example</CAPTION>/*
+||&nbsp;&nbsp;Program&nbsp;to&nbsp;test&nbsp;shmat().
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;shmat&nbsp;{-k&nbsp;&lt;key>&nbsp;|&nbsp;-i&nbsp;&lt;id>}&nbsp;[-a&nbsp;&lt;addr>]&nbsp;[-r]&nbsp;[-w]
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-k&nbsp;&lt;key>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;the&nbsp;key&nbsp;to&nbsp;use&nbsp;to&nbsp;get&nbsp;an&nbsp;ID..
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-i&nbsp;&lt;id>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;..or&nbsp;the&nbsp;ID&nbsp;to&nbsp;use
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-a&nbsp;&lt;addr>&nbsp;&nbsp;&nbsp;address&nbsp;to&nbsp;attach,&nbsp;default=0
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-r&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;attach&nbsp;read-only,&nbsp;default&nbsp;read/write
+||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-w&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;wait&nbsp;on&nbsp;keyboard&nbsp;input&nbsp;before&nbsp;detaching
+*/
+#include&nbsp;&lt;unistd.h>&nbsp;/*&nbsp;for&nbsp;getopt()&nbsp;*/
+#include&nbsp;&lt;sys/shm.h>&nbsp;/*&nbsp;for&nbsp;shmget&nbsp;etc&nbsp;*/
+#include&nbsp;&lt;errno.h>&nbsp;/*&nbsp;errno&nbsp;and&nbsp;perror&nbsp;*/
+#include&nbsp;&lt;stdio.h>
+int&nbsp;main(int&nbsp;argc,&nbsp;char&nbsp;**argv)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;key_t&nbsp;key&nbsp;=&nbsp;-1;&nbsp;/*&nbsp;key&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;shmid&nbsp;=&nbsp;-1;&nbsp;/*&nbsp;..or&nbsp;ID&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;void&nbsp;*addr&nbsp;=&nbsp;0;&nbsp;/*&nbsp;address&nbsp;to&nbsp;request&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;void&nbsp;*attach;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;address&nbsp;gotten&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;rwflag&nbsp;=&nbsp;0;&nbsp;/*&nbsp;read&nbsp;or&nbsp;r/w&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;wait&nbsp;=&nbsp;0;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/*&nbsp;wait&nbsp;before&nbsp;detach&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;int&nbsp;c,&nbsp;ret;
+&nbsp;&nbsp;&nbsp;&nbsp;while&nbsp;(&nbsp;-1&nbsp;!=&nbsp;(c&nbsp;=&nbsp;getopt(argc,argv,"k:i:a:rw"))&nbsp;)
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;switch&nbsp;(c)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'k':&nbsp;/*&nbsp;key&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;key&nbsp;=&nbsp;(key_t)&nbsp;strtoul(optarg,&nbsp;NULL,&nbsp;0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'i':&nbsp;/*&nbsp;id&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;shmid&nbsp;=&nbsp;(int)&nbsp;strtoul(optarg,&nbsp;NULL,&nbsp;0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'a':&nbsp;/*&nbsp;addr&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;addr&nbsp;=&nbsp;(void&nbsp;*)&nbsp;strtoul(optarg,&nbsp;NULL,&nbsp;0);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'r':&nbsp;/*&nbsp;read/write&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;rwflag&nbsp;=&nbsp;SHM_RDONLY;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;case&nbsp;'w':&nbsp;/*&nbsp;wait&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;wait&nbsp;=&nbsp;1;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;default:
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;-1;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(-1&nbsp;==&nbsp;shmid)&nbsp;/*&nbsp;key&nbsp;must&nbsp;be&nbsp;given&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;shmid&nbsp;=&nbsp;shmget(key,0,0);
+&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(-1&nbsp;!=&nbsp;shmid)&nbsp;/*&nbsp;we&nbsp;have&nbsp;an&nbsp;ID&nbsp;*/
+&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;attach&nbsp;=&nbsp;shmat(shmid,addr,rwflag);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(attach&nbsp;!=&nbsp;(void*)-1)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;printf("Attached&nbsp;at&nbsp;0x%lx,&nbsp;first&nbsp;word&nbsp;=&nbsp;0x%lx\n",
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;attach,&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*((pid_t*)attach));
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(rwflag&nbsp;!=&nbsp;SHM_RDONLY)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*((pid_t&nbsp;*)attach)&nbsp;=&nbsp;getpid();
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;printf("Set&nbsp;first&nbsp;word&nbsp;to&nbsp;0x%lx\n",*((pid_t*)attach));
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(wait)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;char&nbsp;inp[80];
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;printf("Press&nbsp;return&nbsp;to&nbsp;detach...");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;gets(inp);
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;printf("First&nbsp;word&nbsp;is&nbsp;now&nbsp;0x%lx\n",*((pid_t*)attach));
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if&nbsp;(shmdt(attach))
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("shmdt()");
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("shmat()");
+&nbsp;&nbsp;&nbsp;&nbsp;}
+&nbsp;&nbsp;&nbsp;&nbsp;else
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;perror("shmget()");
+&nbsp;&nbsp;&nbsp;&nbsp;return&nbsp;errno;
+} 
+</CODE>
+</SECTION3>
+</SECTION2>
+</SECTION1>
+</CHAPTER>

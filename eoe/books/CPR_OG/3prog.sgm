@@ -1,0 +1,286 @@
+<!-- Produced by version 3.13 (01/04/96) of SGI Frame/SGML translator -->
+<CHAPTER LBL="3"><TITLE><XREFTARGET ID="85437">Programming Checkpoint and Restart</TITLE><PARAGRAPH>This chapter describes how to write applications that checkpoint and restart processes gracefully. Code samples are provided, and code fragments at the end of the chapter show sample usage of IRIX CPR library routines.</PARAGRAPH>
+<PARAGRAPH>For applications with checkpoint-unsafe objects, the principal programming concern is setting up event handlers to perform clean-up at checkpoint time, and to restore network sockets, graphic state, tape I/O, and CD-ROM status (and so on) at restart time.</PARAGRAPH>
+<SECTION1 LBL="" HELPID = ""><TITLE>Design of Checkpoint and Restart</TITLE><PARAGRAPH>This section describes some design issues that governed the implementation of CPR.<INDEXTARGET ID="3prog1"><!-- POSTPROCESSDATA: 3prog1|design of checkpoint and restart --></PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>POSIX Compliance</TITLE><PARAGRAPH>IRIX Checkpoint and Restart is based on POSIX 1003.1m draft 11, and was initially implemented in IRIX release 6.4. Because POSIX draft standards often change radically from inception to approval, the interfaces in IRIX release 6.5 are not guaranteed to be fully compliant, nor can Silicon Graphics make any assurance that they will conform to the POSIX 1003.1m standard when it is eventually approved.<INDEXTARGET ID="3prog2"><!-- POSTPROCESSDATA: 3prog2|POSIX 1003.1m standard --></PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>IRIX Extensions</TITLE><PARAGRAPH>The <COMMAND>cpr</COMMAND> command is not specified in POSIX 1003.1m draft 11. It is an IRIX specific command provided for the convenience of customers; see <REFPAGE>cpr(1)</REFPAGE>. The POSIX draft standard covers only the programming interfaces for checkpoint and restart.<INDEXTARGET ID="3prog3"><!-- POSTPROCESSDATA: 3prog3|extensions to CPR in IRIX IRIX extensions to CPR --></PARAGRAPH>
+<PARAGRAPH>The <FUNCTION>ckpt_stat()</FUNCTION> function, which returns information about the status of checkpoint statefiles, is not specified in POSIX 1003.1m draft 11; see ckpt_stat(3). The <INDEXTARGET ID="3prog4"><!-- POSTPROCESSDATA: 3prog4|<FUNCTION>ckpt_stat()</FUNCTION> library routine --><FUNCTION>ckpt_setup()</FUNCTION> function specified in the POSIX draft is unimplemented; when applications call this routine, it is a no-op.<INDEXTARGET ID="3prog5"><!-- POSTPROCESSDATA: 3prog5|<FUNCTION>ckpt_setup()</FUNCTION> library routine --></PARAGRAPH>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE>Programming Issues</TITLE><PARAGRAPH>This section describes the CPR library interfaces and signals, and shows how to write programs that set up event handlers using <FUNCTION>atcheckpoint()</FUNCTION> to prepare for a checkpoint, and using <FUNCTION>atrestart()</FUNCTION> to restore non-checkpointable system objects at restart time. See <XREF IDREF="95268" TYPE="TITLE">&ldquo;Limitations and Caveats&rdquo;</XREF> for a list of non-checkpointable objects.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE>CPR Library Interfaces</TITLE><PARAGRAPH>Application interfaces for adding CPR event handlers are contained the C library, and are listed below. For more information, see <INDEXTARGET ID="3prog6"><!-- POSTPROCESSDATA: 3prog6|library routine atcheckpoint() --><REFPAGE>atcheckpoint(3C)</REFPAGE>.</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH><FUNCTION>atcheckpoint()<INDEXTARGET ID="3prog7"><!-- POSTPROCESSDATA: 3prog7|<FUNCTION>atcheckpoint()</FUNCTION> library routine --></FUNCTION>&mdash;add an event handler function for checkpointing</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><FUNCTION>atrestart()<INDEXTARGET ID="3prog8"><!-- POSTPROCESSDATA: 3prog8|<FUNCTION>atrestart()</FUNCTION> library routine --></FUNCTION>&mdash;add an event handler function for restarting</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>The checkpoint and restart library interfaces are contained in the <FILENAME>libcpr.so</FILENAME>&space;dynamic shared object (DSO). When using this library, include the <INDEXTARGET ID="3prog9"><!-- POSTPROCESSDATA: 3prog9|libcpr.so DSO --><INDEXTARGET ID="3prog10"><!-- POSTPROCESSDATA: 3prog10|DSO libcpr.so --><FILENAME>&lt;ckpt.h></FILENAME>&space;header file:<INDEXTARGET ID="3prog11"><!-- POSTPROCESSDATA: 3prog11|&lt;ckpt.h> header file --></PARAGRAPH>
+<CODE>
+#include &lt;ckpt.h>
+</CODE>
+<PARAGRAPH>The available library routines are listed below. For more information, see <INDEXTARGET ID="3prog12"><!-- POSTPROCESSDATA: 3prog12|library routines ckpt_* --><REFPAGE>ckpt_create(3)</REFPAGE>.</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH><FUNCTION>ckpt_create()<INDEXTARGET ID="3prog13"><!-- POSTPROCESSDATA: 3prog13|<FUNCTION>ckpt_create()</FUNCTION> library routine --></FUNCTION>&mdash;checkpoint a process or set of processes into statefiles</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><FUNCTION>ckpt_restart()<INDEXTARGET ID="3prog14"><!-- POSTPROCESSDATA: 3prog14|<FUNCTION>ckpt_restart()</FUNCTION> library routine --></FUNCTION>&mdash;resume execution of checkpointed process or process group</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><FUNCTION>ckpt_stat()<INDEXTARGET ID="3prog15"><!-- POSTPROCESSDATA: 3prog15|<FUNCTION>ckpt_stat()</FUNCTION> library routine --></FUNCTION>&mdash;retrieve status information about a checkpoint statefile</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><FUNCTION>ckpt_remove()<INDEXTARGET ID="3prog16"><!-- POSTPROCESSDATA: 3prog16|<FUNCTION>ckpt_remove()</FUNCTION> library routine --></FUNCTION>&mdash;delete a checkpoint statefile directory</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH><FUNCTION>ckpt_setup()<INDEXTARGET ID="3prog17"><!-- POSTPROCESSDATA: 3prog17|<FUNCTION>ckpt_setup()</FUNCTION> library routine --></FUNCTION>&mdash;control checkpoint creation attributes (currently a no-op)</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+<PARAGRAPH>In the discussion below, <ITALICS>set of processes</ITALICS> can mean one process, or a group of processes.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>SIGCKPT and SIGRESTART</TITLE><PARAGRAPH>When a program (such as the <COMMAND>cpr</COMMAND> command) calls <FUNCTION>ckpt_create()</FUNCTION> to create a checkpoint, that function sends a SIGCKPT signal to the set of processes specified by the checkpoint ID argument to <INDEXTARGET ID="3prog18"><!-- POSTPROCESSDATA: 3prog18|SIGCKPT signal --><FUNCTION>ckpt_create()</FUNCTION>. Applications add an event handler to catch SIGCKPT if they need to restore non-checkpointable objects such as network sockets, graphic state, or file pointers to CD-ROM. The default action is to ignore SIGCKPT.</PARAGRAPH>
+<PARAGRAPH>After sending a SIGCKPT signal, <FUNCTION>ckpt_create()</FUNCTION> waits for the application to finish its signal handling, before CPR proceeds with further checkpoint activities after SIGCKPT. At restart time, the first thing <FUNCTION>ckpt_restart()</FUNCTION> runs is the application's SIGRESTART signal handler, if one exists. This implies that checkpoint and restart can &ldquo;get stuck&rdquo; in the SIGCKPT and SIGRESTART handling routines.</PARAGRAPH>
+<PARAGRAPH>When a program calls <FUNCTION>ckpt_restart() </FUNCTION>to resume execution from a checkpoint, the restart function sends a SIGRESTART signal to the set of processes checkpointed in the statefile specified by the <INDEXTARGET ID="3prog19"><!-- POSTPROCESSDATA: 3prog19|SIGRESTART signal --><VARIABLE>path </VARIABLE>argument to <FUNCTION>ckpt_restart()</FUNCTION>. Applications add an event handler to catch SIGRESTART if they need to restore non-checkpointable objects such as sockets, graphic state, or CD-ROM files. The default action is to ignore SIGRESTART.</PARAGRAPH>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Adding Event Handlers</TITLE><PARAGRAPH>The SIGCKPT and SIGRESTART signals are not intended to be handled directly by an application. Instead, CPR provides two C library functions that allow applications to establish a list of functions for handling checkpoint and restart events.</PARAGRAPH>
+<PARAGRAPH>The <FUNCTION>atcheckpoint()</FUNCTION> routine takes one parameter&mdash;the name of your application's checkpoint handling function&mdash;and adds this function to the list of functions that get called upon receipt of SIGCKPT. Similarly, the <FUNCTION>atrestart()</FUNCTION> routine registers the specified callback function for execution upon receipt of SIGRESTART.</PARAGRAPH>
+<PARAGRAPH>These functions are recommended for use during initialization when applications expect to be checkpointed but contain checkpoint-unsafe objects. An application may register multiple checkpoint event handlers to be called when checkpoint occurs, and multiple restart event handlers to be called when restart occurs.</PARAGRAPH>
+<PARAGRAPH>At checkpoint time and at restart time, registered functions are called in the same order as the first-in-first-out order of their registration with <FUNCTION>atcheckpoint()</FUNCTION> or <FUNCTION>atrestart()</FUNCTION> respectively. This is an important consideration for applications that need to register multiple callback handlers for checkpoint or restart events.</PARAGRAPH>
+<CAUTION><PREFIX>Caution</PREFIX>If applications catch the SIGCKPT and SIGRESTART signals directly, it could undo all of the automatic CPR signal handler registration provided by <FUNCTION>atcheckpoint()</FUNCTION> and <FUNCTION>atrestart()</FUNCTION>, including CPR signal handlers that some libraries may reserve without the application programmer's knowledge.</CAUTION>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Preparing for Checkpoint</TITLE><PARAGRAPH>If an application needs to restore network sockets, graphic state, tape I/O, CD-ROM mounts, or some other non-checkpointable system object, it should set up automatic checkpoint and restart event handlers using the recommended library routines.</PARAGRAPH>
+<PARAGRAPH>The following sample code calls <FUNCTION>atcheckpoint()</FUNCTION> and <FUNCTION>atrestart() </FUNCTION>to set up functions for handling checkpoint and restart events. It is possible for this setup to fail on operating systems that do not (yet) support CPR.</PARAGRAPH>
+<CODE><CAPTION LBL="3-1"><PREFIX>Example 3-1 </PREFIX>Checkpoint and Restart Event Handling</CAPTION>#include &lt;stdlib.h>
+#include &lt;ckpt.h>
+extern void ckptSocket(void);
+extern void ckptXserver(void);
+extern void restartSocket(void);
+extern void restartXserver(void);
+main(int argc, char *argv[])
+{
+&space;   int err = 0;
+&space;   if ((atcheckpoint(ckptSocket) == -1) ||
+&space;       (atcheckpoint(ckptXserver) == -1) ||
+&space;       (atrestart(restartSocket) == -1) ||
+&space;       (atrestart(restartXserver) == -1))
+&space;           perror("Cannot setup checkpoint and restart handling");
+&space;   /* 
+&space;    *  processing ...
+&space;    */
+&space;   exit(0);
+}
+</CODE>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Handling a Checkpoint</TITLE><PARAGRAPH>Suppose your program mounts an ISO 9660 format CD-ROM, from which it reads data as a basis for more complex processing. Since the CD-ROM is not a checkpointable object, your program needs to record the file pointer position, close all open files on CD-ROM, and perhaps unmount the CD-ROM device.<INDEXTARGET ID="3prog20"><!-- POSTPROCESSDATA: 3prog20|CDROM checkpointing --><INDEXTARGET ID="3prog21"><!-- POSTPROCESSDATA: 3prog21|handling a checkpoint SIGCKPT signal --></PARAGRAPH>
+<PARAGRAPH>The following sample code marks the current file position in the open <VARIABLE>cdFile</VARIABLE>, saves it for restoration at restart time, closes <VARIABLE>cdFile</VARIABLE>, and unmounts the CD-ROM.</PARAGRAPH>
+<CODE><CAPTION LBL="3-2"><PREFIX>Example 3-2 </PREFIX>Routine to Handle Checkpoint</CAPTION>#include &lt;sys/types.h>
+#include &lt;sys/mount.h>
+#include &lt;stdio.h>
+extern char *cdFile;
+extern FILE fpCD;
+long cdOffset;
+catchCKPT()
+{
+&space;   cdOffset = ftell(fpCD);
+&space;   fclose(fpCD);
+&space;   umount("/CDROM");
+&space;   exit(0);
+}
+</CODE>
+<NOTE><PREFIX>Note</PREFIX>The checkpoint event handler should return directly to its calling routine&mdash;it must not contain any <FUNCTION>sigsetjmp()</FUNCTION> or <FUNCTION>siglongjmp()</FUNCTION> code.</NOTE>
+<SECTION3 LBL="" HELPID = ""><TITLE>Checkpoint Time-outs</TITLE><PARAGRAPH>For programs that must wait for some external condition before exiting the checkpoint event handling function, it might be wise to set a time-out. For example, if a program is waiting for data to arrive over a TCP socket that must be shut down before checkpoint, and the data never arrive, the program should not wait forever.<INDEXTARGET ID="3prog22"><!-- POSTPROCESSDATA: 3prog22|timeouts for checkpointing --></PARAGRAPH>
+<PARAGRAPH>The <FUNCTION>alarm()</FUNCTION> system call sends a SIGALRM signal to the calling program after a specified number of seconds. Since the default action for SIGALRM is for the program to exit, put this call near the top of the checkpoint handling routines to set a one-minute time-out.<INDEXTARGET ID="3prog23"><!-- POSTPROCESSDATA: 3prog23|<FUNCTION>alarm()</FUNCTION> system call --></PARAGRAPH>
+<CODE><CAPTION LBL="3-3"><PREFIX>Example 3-3 </PREFIX>Setting an Alarm in Callback</CAPTION>extern int sock; /* file descriptor for socket */
+catchCKPT()
+{
+&space;   alarm(60);
+&space;   close(sock);
+&space;   alarm(0);
+}
+</CODE>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE>Handling a Restart</TITLE><PARAGRAPH>Suppose your program that unmounted the ISO 9660 CD-ROM at checkpoint time is restarted with the <COMMAND>cpr</COMMAND> command. Now it needs to ensure that the CD-ROM is mounted, reopen the formerly active file, and seek to the previous file offset position. Once it accomplishes all that, your program is ready to continue reading data from the CD-ROM.<INDEXTARGET ID="3prog24"><!-- POSTPROCESSDATA: 3prog24|handling a restart SIGRESTART signal --></PARAGRAPH>
+<PARAGRAPH>The following sample code waits for the CD-ROM to become mounted, then reopens the <VARIABLE>cdFile</VARIABLE>, and seeks to the remembered offset position in <VARIABLE>cdFile</VARIABLE>.</PARAGRAPH>
+<CODE><CAPTION LBL="3-4"><PREFIX>Example 3-4 </PREFIX>Routine to Handle Restart</CAPTION>#include &lt;unistd.h>
+#include &lt;stdio.h>
+extern char *cdFile;
+extern FILE fpCD;
+extern long cdOffset;
+catchRESTART()
+{
+&space;   while (access("/CDROM/data", R_OK) == -1) {
+&space;       perror("please insert CDROM");
+&space;       sleep(60);
+&space;   }
+&space;   if ((fpCD = fopen(cdFile, "r")) == NULL)
+&space;       perror("cannot open cdFile"), exit(1);
+&space;   if (fseek(fpCD, cdOffset, SEEK_SET))
+&space;       perror("cannot seek to cdOffset"), exit(1);
+&space;   /*
+&space;    * etc. */
+}
+</CODE>
+<NOTE><PREFIX>Note</PREFIX>The restart event handler should return directly to its calling routine&mdash;it must not contain any <FUNCTION>sigsetjmp()</FUNCTION> or <FUNCTION>siglongjmp()</FUNCTION> code.</NOTE>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE>Checkpoint and Restart of System Objects</TITLE><PARAGRAPH>Due to the nature of UNIX process checkpoint and restart, it is hard, if not impossible, to claim that everything that an original process owns or connects with can be restored. The following list defines what is clearly supported (checkpoint safe), and what limitations are known to exist. For items not listed, application writers and customers must decide what is checkpoint-safe.</PARAGRAPH>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="63883">Checkpoint-Safe Objects</TITLE><PARAGRAPH>All known checkpoint-safe entities are listed below.<INDEXTARGET ID="3prog25"><!-- POSTPROCESSDATA: 3prog25|checkpoint-safe objects --></PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE>Supported Process Groupings</TITLE><PARAGRAPH>CPR works on UNIX processes, process groups, terminal control sessions, array sessions, process hierarchies (trees of processes started from a common ancestor), POSIX threads (see <REFPAGE>pthreads(5)</REFPAGE>), IRIX <FUNCTION>sproc()</FUNCTION> share groups (see <REFPAGE>sproc(2)</REFPAGE>), and random process sets.<INDEXTARGET ID="3prog26"><!-- POSTPROCESSDATA: 3prog26|process groupings, safe --></PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>User Memory</TITLE><PARAGRAPH>All user memory regions are saved and restored, including user stack and data regions. Note that user text, without being saved at checkpoint time, is remapped directly at restart from the application binaries and libraries. However, by using REPLACE as the file disposition default, even user texts can be saved. The saved texts may not replace the originals if the originals are not changed after the checkpoint. Locked memory regions are restored to remain locked at restart.<INDEXTARGET ID="3prog27"><!-- POSTPROCESSDATA: 3prog27|memory, safe user memory, safe --></PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>System States in Kernel</TITLE><PARAGRAPH>Most of the important kernel states are restored at restart to be identical to the original ones, such as basic process and user information, signal disposition and signal mask, scheduling information, owner credentials, accounting data, resource limits, current working directory, root directory, user semaphores (see <REFPAGE>usnewsema(3P)</REFPAGE>), and so on.<INDEXTARGET ID="3prog28"><!-- POSTPROCESSDATA: 3prog28|kernel states, safe --></PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>System Calls</TITLE><PARAGRAPH>All system calls are checkpoint safe as long as the applications are handling the system call returns and error numbers correctly. Fast system calls are allowed to finish before checkpoint proceeds. Slow system calls are interrupted and may return to the calling routine with partial results. Applications using system calls that can return partial results need to check for and be prepared to deal with partial results. Slow system calls with no results are transparently reissued at restart.<INDEXTARGET ID="3prog29"><!-- POSTPROCESSDATA: 3prog29|system calls, safe --></PARAGRAPH>
+<PARAGRAPH>A number of selected system calls are handled individually. The <FUNCTION>sleep()</FUNCTION> system call is reissued for the amount of time remaining at checkpoint time; see <REFPAGE>sleep(3C)</REFPAGE>. Restart of the <FUNCTION>alarm()</FUNCTION> system call is similar&mdash;the remainder of time recorded at checkpoint elapses before it times out; see <REFPAGE>alarm(2)</REFPAGE>.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>SIgnals</TITLE><PARAGRAPH>Undelivered signals and queued signals are saved at checkpoint and delivered at restart.<INDEXTARGET ID="3prog30"><!-- POSTPROCESSDATA: 3prog30|signals, safe --></PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE><XREFTARGET ID="26794">Open Files and Devices</TITLE><PARAGRAPH>Processes with regular open files or mapped files, including NFS mounted files, can be checkpointed and restarted without many restrictions as long as users choose the correct file disposition in the CPR attribute file, as described in the section <XREF IDREF="59841" TYPE="TITLE">&ldquo;Checkpoint and Restart Attributes&rdquo;</XREF>.<INDEXTARGET ID="3prog31"><!-- POSTPROCESSDATA: 3prog31|files and devices, safe devices and files, safe --></PARAGRAPH>
+<PARAGRAPH>All file locks are also restored at restart. If the file regions that the restarting process needs to lock have already been locked by another process, CPR tries to acquire the locks a few times before it aborts the restart.</PARAGRAPH>
+<PARAGRAPH>Supported special files are <FILENAME>/dev/tty</FILENAME>, <FILENAME>/dev/console</FILENAME>, <FILENAME>/dev/zero</FILENAME>, <FILENAME>/dev/null</FILENAME>, and <REFPAGE>ccsync(7M)</REFPAGE>.<INDEXTARGET ID="3prog32"><!-- POSTPROCESSDATA: 3prog32|special devices, safe --></PARAGRAPH>
+<PARAGRAPH>Inherited file descriptors are restored at restart. Applications using R10000 counters through the <FILENAME>/proc</FILENAME> interface are checkpoint safe, provided the <FILENAME>/proc</FILENAME> file descriptor is closed.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Open Pipes</TITLE><PARAGRAPH>Applications with SVR3 or SVR4 pipes open can be checkpointed and restarted without restrictions. Pipeline data and streams pipe message modes are also saved and restored.<INDEXTARGET ID="3prog33"><!-- POSTPROCESSDATA: 3prog33|pipes and pipe data, safe --></PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Shared Memory and Semaphores</TITLE><PARAGRAPH>Applications using SVR4 shared memory can be checkpointed and restarted; see <REFPAGE>shmop(2)</REFPAGE>. The original shared memory ID (<VARIABLE>shmid</VARIABLE>) is now restored&mdash;this was not the case in the IRIX 6.4 release.<INDEXTARGET ID="3prog34"><!-- POSTPROCESSDATA: 3prog34|System V shared memory, safe --></PARAGRAPH>
+<PARAGRAPH>Applications using POSIX semaphores, or shared arena semaphores and locks, can be checkpointed and restarted; see <REFPAGE>psema(D3X)</REFPAGE> or <REFPAGE>usinit(3P)</REFPAGE>, respectively.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Application Licensing</TITLE><PARAGRAPH>Applications using node-lock licenses (one license per machine) are generally safe for checkpoint and restart. Applications using floating licenses may be safe for checkpoint and restart, depending on the license library implementation. In IRIX 6.5 and later, the FLEXlm library includes <FUNCTION>atcheckpoint()</FUNCTION> and <FUNCTION>atrestart()</FUNCTION> event handlers.</PARAGRAPH>
+<PARAGRAPH>If your license library employs open-and-warm sockets without CPR-aware handlers, you should do one of the following:</PARAGRAPH>
+<BULLETLIST><BULLET><PARAGRAPH>Add <FUNCTION>atcheckpoint()</FUNCTION> and <FUNCTION>atrestart()</FUNCTION> event handlers to your application. The <FUNCTION>atcheckpoint()</FUNCTION> handler should disconnect license checking, and the <FUNCTION>atrestart()</FUNCTION> handler should reconnect license checking.</PARAGRAPH>
+</BULLET>
+<BULLET><PARAGRAPH>Ask your license software vendor to add similar handlers to their license library.</PARAGRAPH>
+</BULLET>
+</BULLETLIST>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Network Applications Using Array Services</TITLE><PARAGRAPH>Jobs started with POWER CHALLENGEarray or CHALLENGEarray services can be checkpointed and restarted, provided the jobs have a unique ASH (array session handle) number; see <REFPAGE>array_services(5)</REFPAGE>. Array services jobs may use several methods to generate a new ASH, including calling <FUNCTION>newarraysess()</FUNCTION>; see <REFPAGE>newarraysess(2)</REFPAGE>. </PARAGRAPH>
+<PARAGRAPH>During an array checkpoint, a checkpoint server is responsible for starting, monitoring, and synchronizing all checkpoint clients running on its different machines based on the given ASH. Statefiles are saved locally on each machine for all processes with the given ASH running on that machine. Restart occurs in a similar fashion, with the restart server synchronizing with all local restart clients to restore all processes on different machines.<INDEXTARGET ID="3prog35"><!-- POSTPROCESSDATA: 3prog35|array services, safe --></PARAGRAPH>
+<PARAGRAPH>An interactive array job with a controlling terminal on a given machine has to be checkpointed and restarted from that very same machine. Otherwise the controlling terminal cannot be restored.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Other Supported Functionality</TITLE><PARAGRAPH>Applications using <FUNCTION>blockproc()</FUNCTION> and <FUNCTION>unblockproc()</FUNCTION> are checkpoint safe; see <REFPAGE>blockproc(2)</REFPAGE>.<INDEXTARGET ID="3prog36"><!-- POSTPROCESSDATA: 3prog36|blockproc, safe unblockproc, safe --></PARAGRAPH>
+<PARAGRAPH>Memory regions added by calling <FUNCTION>prctl()</FUNCTION> with the PR_ATTACHADDR argument can be safely checkpointed and restarted; see <REFPAGE>prctl(2)</REFPAGE>.<INDEXTARGET ID="3prog37"><!-- POSTPROCESSDATA: 3prog37|prctl, safe PR_ATTACHADDR, safe --></PARAGRAPH>
+<PARAGRAPH>The Power Fortran join synchronization accelerator is checkpoint safe; see <REFPAGE>ccsync(7M)</REFPAGE>.<INDEXTARGET ID="3prog38"><!-- POSTPROCESSDATA: 3prog38|ccsync, safe Power Fortran join accelerator, safe --></PARAGRAPH>
+<PARAGRAPH>Applications using R10000 counters are checkpoint safe; see <REFPAGE>libperfex(3C)</REFPAGE> or <REFPAGE>perfex(1)</REFPAGE>.<INDEXTARGET ID="3prog39"><!-- POSTPROCESSDATA: 3prog39|R10000 counters, safe perfex library routines, safe --></PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Compatibility Between Releases</TITLE><PARAGRAPH>A statefile checkpointed in any current release will most likely be able to restart in future releases, owing to the object-oriented architecture of the CPR implementation.</PARAGRAPH>
+<PARAGRAPH>With certain limitations, an object of system functionality available in any current release will be remapped to some new replacement object at restart if the original object becomes obsolete in a future release.<INDEXTARGET ID="3prog40"><!-- POSTPROCESSDATA: 3prog40|release compatibility compatibility of releases --></PARAGRAPH>
+</SECTION3>
+</SECTION2>
+<SECTION2 LBL="" HELPID = ""><TITLE><XREFTARGET ID="95268">Limitations and Caveats</TITLE><PARAGRAPH>Various CPR restrictions and warnings are listed below.<INDEXTARGET ID="3prog41"><!-- POSTPROCESSDATA: 3prog41|checkpoint-unsafe objects --></PARAGRAPH>
+<SECTION3 LBL="" HELPID = ""><TITLE>SVR4 Semaphores and Messages</TITLE><PARAGRAPH>Applications using SVR4 semaphores, or SVR4 messages, cannot be checkpointed and restarted; see <REFPAGE>semop(2)</REFPAGE> or <REFPAGE>msgop(2)</REFPAGE>, respectively.<INDEXTARGET ID="3prog42"><!-- POSTPROCESSDATA: 3prog42|System V semaphores, unsafe System V messages, unsafe --></PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Networking Socket Connections</TITLE><PARAGRAPH>Generally speaking, an application with open socket connections (see <REFPAGE>socket(2)</REFPAGE>) should not be checkpointed and restarted without special CPR-aware signal handling code. An application needs to catch SIGCKPT and SIGRESTART, and run signal handlers to disconnect any open socket before checkpoint, and reconnect the socket after restart.<INDEXTARGET ID="3prog43"><!-- POSTPROCESSDATA: 3prog43|socket connections, unsafe network sockets, unsafe --></PARAGRAPH>
+<PARAGRAPH>Since the MPI (message passing interface) library uses sockets for network connections to the array services daemon <COMMAND>arrayd</COMMAND>, it is generally not possible to checkpoint MPI code. For more information, refer to the <DOCTITLE>MPI and PVM User's Guide</DOCTITLE>, or see <REFPAGE>mpi(5)</REFPAGE>.</PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Other Special Devices</TITLE><PARAGRAPH>Any device or special file not listed in section <XREF IDREF="26794" TYPE="TITLE">&ldquo;Open Files and Devices&rdquo;</XREF> as a checkpoint-safe device can be considered not supported for checkpoint and restart. This includes tape, CD-ROM, and other special real or pseudo devices. Again, applications need to close these devices before checkpoint by catching SIGCKPT, and reopen them after restart by catching SIGRESTART.<INDEXTARGET ID="3prog44"><!-- POSTPROCESSDATA: 3prog44|special devices, unsafe --></PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Graphics</TITLE><PARAGRAPH>X terminals, and other kinds of graphics terminals, are not supported. Applications with these devices open have to be CPR-aware and do proper clean-up by catching SIGCKPT and SIGRESTART and calling appropriate signal handling routines. (This is similar to how socket connections should be handled.)<INDEXTARGET ID="3prog45"><!-- POSTPROCESSDATA: 3prog45|graphics state, unsafe --></PARAGRAPH>
+</SECTION3>
+<SECTION3 LBL="" HELPID = ""><TITLE>Miscellaneous Restrictions</TITLE><PARAGRAPH>Applications with open directories cannot be properly checkpointed; see <REFPAGE>directory(3C)</REFPAGE>.</PARAGRAPH>
+<PARAGRAPH>A potential problem exists with <FUNCTION>setuid()</FUNCTION> programs. When restarting resources such as file descriptors, locks acquired with a different (especially higher) privilege may not succeed. For example, a root process may first open some files, and then call <FUNCTION>setuid(</FUNCTION><VARIABLE>guest</VARIABLE><FUNCTION>)</FUNCTION>. If this process is checkpointed after <FUNCTION>setuid()</FUNCTION>, the corresponding restart fails because the files opened by root cannot be accessed by guest. Similar restrictions apply for a non-root process' inherited resources, such as file descriptors from a privileged process.<INDEXTARGET ID="3prog46"><!-- POSTPROCESSDATA: 3prog46|setuid restrictions --></PARAGRAPH>
+</SECTION3>
+</SECTION2>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE>Saving State With ckpt_create()</TITLE><PARAGRAPH>The <FUNCTION>ckpt_create()</FUNCTION> function checkpoints a process or set of processes into a statefile. The following code shows sample usage of the <FUNCTION>ckpt_create()</FUNCTION> function.<INDEXTARGET ID="3prog47"><!-- POSTPROCESSDATA: 3prog47|<FUNCTION>ckpt_create()</FUNCTION> library routine --></PARAGRAPH>
+<CODE><CAPTION LBL="3-5"><PREFIX>Example 3-5 </PREFIX>Sample Usage of ckpt_create() Function</CAPTION>#include &lt;ckpt.h>
+static int
+do_checkpoint(ckpt_id_t id, u_long type, char *pathname)
+{
+&space;   int rc;
+&space;   printf("Checkpointing id %d (type %s) to directory %s\n",
+&space;       id, ckpt_type_str(CKPT_REAL_TYPE(type)), pathname);
+&space;   if ((rc = ckpt_create(pathname, id, type, 0, 0)) != 0) {
+&space;       printf("Failed to checkpoint process %lld\n", id);
+&space;       return (rc);
+&space;   }
+&space;   return (0);
+}
+</CODE>
+<PARAGRAPH>The global variable <VARIABLE>cpr_flags</VARIABLE>, defined in <FILENAME>&lt;ckpt.h></FILENAME>, permits programmers to specify checkpoint-related options. The following flags may be bitwise ORed into <VARIABLE>cpr_flags</VARIABLE> before a call to <FUNCTION>ckpt_create()</FUNCTION>:</PARAGRAPH>
+<HANGLIST><HANGPAIR><HANGITEM>CKPT_CHECKPOINT_CONT</HANGITEM>
+<HANGBODY><PARAGRAPH>&lbreak;Have checkpoint target processes continue running after this checkpoint is finished. This overrides the default WILL policy, and the WILL policy specified in a user's CPR attribute file.</PARAGRAPH>
+</HANGBODY>
+</HANGPAIR>
+<HANGPAIR><HANGITEM>CKPT_CHECKPOINT_KILL</HANGITEM>
+<HANGBODY><PARAGRAPH>&lbreak;Kill checkpoint target processes after this checkpoint is finished. This is the default WILL policy, but overrides a CONT setting in a user's CPR attribute file.</PARAGRAPH>
+</HANGBODY>
+</HANGPAIR>
+<HANGPAIR><HANGITEM>CKPT_CHECKPOINT_UPGRADE</HANGITEM>
+<HANGBODY><PARAGRAPH>&lbreak;Use this flag only when issuing a checkpoint immediately before an operating system upgrade. This forces a save of all executable files and DSO libraries used by the current processes, so that target processes can be restarted in an upgraded environment. This flag must be used again if restarted processes are again checkpointed in the new environment.</PARAGRAPH>
+</HANGBODY>
+</HANGPAIR>
+<HANGPAIR><HANGITEM>CKPT_OPENFILE_DISTRIBUTE</HANGITEM>
+<HANGBODY><PARAGRAPH>&lbreak;Instead of saving open files under <FILENAME>statefile</FILENAME>, save open files in the same directory where they reside, and assign a unique name to identify them. For example, if a checkpointed process had the <FILENAME>/etc/passwd</FILENAME> file open with this flag set, the open file would be saved in <FILENAME>/etc/passwd.ckpt.pidXXX</FILENAME>. Although security could be a concern, this mode is useful when disk space is at a premium.</PARAGRAPH>
+</HANGBODY>
+</HANGPAIR>
+</HANGLIST>
+<PARAGRAPH>Since <VARIABLE>cpr_flags</VARIABLE> is a process-wide global variable, make sure to reset or clear flags appropriately before a second call to <FUNCTION>ckpt_create()</FUNCTION>.</PARAGRAPH>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE>Resuming With ckpt_restart()</TITLE><PARAGRAPH>The <FUNCTION>ckpt_restart()</FUNCTION> function resumes execution of a checkpointed process or processes. The following code shows sample usage of the <FUNCTION>ckpt_restart()</FUNCTION> function.<INDEXTARGET ID="3prog48"><!-- POSTPROCESSDATA: 3prog48|<FUNCTION>ckpt_restart()</FUNCTION> library routine --></PARAGRAPH>
+<CODE><CAPTION LBL="3-6"><PREFIX>Example 3-6 </PREFIX>Sample Usage of ckpt_restart() Function</CAPTION>#include &lt;ckpt.h>
+static int
+do_restart(char *path)
+{
+&space;   printf("Restarting processes from directory %s\n", path);
+&space;   if (ckpt_restart(path, 0, 0) &lt; 0) {
+&space;       printf("Restart %s failed\n", path);
+&space;       return (-1);
+&space;   }
+}
+</CODE>
+<PARAGRAPH>The global variable <VARIABLE>cpr_flags</VARIABLE>, defined in <FILENAME>&lt;ckpt.h></FILENAME>, permits programmers to specify restart-related options. The following flag may be bitwise ORed into <VARIABLE>cpr_flags</VARIABLE> before a call to <FUNCTION>ckpt_restart()</FUNCTION>:</PARAGRAPH>
+<HANGLIST><HANGPAIR><HANGITEM>CKPT_RESTART_INTERACTIVE</HANGITEM>
+<HANGBODY><PARAGRAPH>&lbreak;Make a process or group of processes interactive (that is, subject to UNIX job-control), if the original processes were interactive. The calling process or the calling process' group leader becomes the group leader of restarted processes, but the original process group ID cannot be restored. Without this flag, the default is to restart target processes as an independent process group with the original group ID restored.</PARAGRAPH>
+</HANGBODY>
+</HANGPAIR>
+</HANGLIST>
+<PARAGRAPH>Since <VARIABLE>cpr_flags</VARIABLE> is a process-wide global variable, make sure to reset or clear flags appropriately before a second call to <FUNCTION>ckpt_restart()</FUNCTION>.</PARAGRAPH>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE>Checking Status With ckpt_stat()</TITLE><PARAGRAPH>The <FUNCTION>ckpt_stat()</FUNCTION> function retrieves status information about a checkpoint statefile. The following code shows sample usage of the <FUNCTION>ckpt_stat()</FUNCTION> function.<INDEXTARGET ID="3prog49"><!-- POSTPROCESSDATA: 3prog49|<FUNCTION>ckpt_stat()</FUNCTION> library routine --></PARAGRAPH>
+<CODE><CAPTION LBL="3-7"><PREFIX>Example 3-7 </PREFIX>Sample Usage of ckpt_stat() Function</CAPTION>#include &lt;ckpt.h>
+static int
+ckpt_info(char *path)
+{
+&space;   ckpt_stat_t *sp, *sp_next;
+&space;   int rc;
+&space;   if ((rc = ckpt_stat(path, &amp;sp)) != 0) {
+&space;       printf("Cannot get information on CPR file %s\n", path);
+&space;       return (rc);
+&space;   }
+&space;   printf("\nInformation About Statefile %s (%s):\n",
+&space;       path, rev_to_str(sp->cs_revision));
+&space;   while (sp) {
+&space;       printf(" Process:\t\t%s\n", sp->cs_psargs);
+&space;       printf(" PID,PPID:\t\t%d,%d\n", sp->cs_pid, sp->cs_ppid);
+&space;       printf(" PGRP,SID:\t\t%d,%d\n", sp->cs_pgrp, sp->cs_sid);
+&space;       printf(" Working at dir:\t%s\n", sp->cs_cdir);
+&space;       printf(" Num of Openfiles:\t%d\n", sp->cs_nfiles);
+&space;       printf(" Checkpointed @\t%s\n", ctime(&amp;sp->cs_stat.st_mtime));
+&space;       sp_next = sp->cs_next;
+&space;       free(sp);
+&space;       sp = sp_next;
+&space;   }
+&space;   return (0);
+}
+</CODE>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE>Removing Checkpoints With ckpt_remove()</TITLE><PARAGRAPH>The <FUNCTION>ckpt_remove()</FUNCTION> function deletes a checkpoint statefile directory.</PARAGRAPH>
+<PARAGRAPH>The following code shows sample usage of the <FUNCTION>ckpt_remove()</FUNCTION> function.<INDEXTARGET ID="3prog50"><!-- POSTPROCESSDATA: 3prog50|<FUNCTION>ckpt_remove()</FUNCTION> library routine --></PARAGRAPH>
+<CODE><CAPTION LBL="3-8"><PREFIX>Example 3-8 </PREFIX>Sample Usage of ckpt_remove() Function</CAPTION>#include &lt;ckpt.h>
+static int
+do_remove(char *path)
+{
+&space;   int rc = 0;
+&space;   if ((rc = ckpt_remove(path)) != 0) {
+&space;       printf("Remove checkpoint statefile %s failed\n", path);
+&space;       return (rc);
+&space;   }
+}
+</CODE>
+</SECTION1>
+<SECTION1 LBL="" HELPID = ""><TITLE>Preparing Checkpoints With ckpt_setup()</TITLE><PARAGRAPH>This function, described in the POSIX draft standard, is implemented as a no-op.</PARAGRAPH>
+<PARAGRAPH>The following code shows the current implementation of the <FUNCTION>ckpt_create()</FUNCTION> function.<INDEXTARGET ID="3prog51"><!-- POSTPROCESSDATA: 3prog51|<FUNCTION>ckpt_setup()</FUNCTION> library routine --></PARAGRAPH>
+<CODE><CAPTION LBL="3-9"><PREFIX>Example 3-9 </PREFIX>Implementation of ckpt_setup() Function</CAPTION>int ckpt_setup(struct ckpt_args *args[], size_t nargs)
+{
+&space;   return(0);
+}
+</CODE>
+</SECTION1>
+</CHAPTER>

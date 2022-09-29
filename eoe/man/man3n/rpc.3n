@@ -1,0 +1,395 @@
+'\"macro stdmacro
+.if n .pH g3n.rpc @(#)rpc	40.9 of 5/29/91
+.\" Copyright 1991 UNIX System Laboratories, Inc.
+.\" Copyright 1989, 1990 AT&T
+.nr X
+.if \nX=0 .ds x} rpc 3N "" "\&"
+.if \nX=1 .ds x} rpc 3N ""
+.if \nX=2 .ds x} rpc 3N "" "\&"
+.if \nX=3 .ds x} rpc "" "" "\&"
+.TH \*(x}
+.SH NAME
+\f4rpc\f1 \- library routines for remote procedure calls
+.SH DESCRIPTION
+RPC routines allow C language programs to make procedure
+calls on other machines across a network.
+First, the client calls a procedure to send a
+data packet to the server.
+On receipt of the packet,
+the server calls a dispatch routine
+to perform the requested service,
+and then sends back a reply.
+.P
+The following sections describe data objects use by the RPC package.
+.SS Nettype
+Some of the high-level RPC
+interface routines take a
+\f2nettype\fP
+string as one of the parameters
+[for example,
+\f4clnt_create\f1,
+\f4svc_create\f1,
+\f4rpc_reg\f1,
+\f4rpc_call\f1].
+This string defines a class of transports which can be used
+for a particular application.
+The transports are tried in
+left to right order in the
+\f4NETPATH\f1
+variable or in top to down order in the
+\f4/etc/netconfig\f1
+file.
+.LP
+\f2nettype\f1
+can be one of the following:
+.TP 1i
+\f4netpath\f1
+Choose from the transports which have been
+indicated by their token names in the
+\f4NETPATH\f1
+variable.
+If
+\f4NETPATH\f1
+is unset
+or \f4NULL\fP,
+it defaults to
+\f4visible\f1.
+\f4netpath\f1
+is the default
+\f2nettype\fP.
+.TP
+\f4visible\f1
+Choose the transports which have the visible flag (\f4v\fP)
+set in the
+\f4/etc/netconfig\f1
+file.
+.TP
+\f4circuit_v\f1
+This is same as
+\f4visible\f1
+except that it chooses only the
+connection oriented transports
+from the entries in
+\f4/etc/netconfig\f1
+file.
+.TP
+\f4datagram_v\f1
+This is same as
+\f4visible \f1
+except that it chooses only the
+connectionless datagram transports
+from the entries in
+\f4/etc/netconfig\f1
+file.
+.TP
+\f4circuit_n \f1
+This is same as
+\f4netpath \f1
+except that it chooses only the
+connection oriented datagram transports
+.TP
+\f4datagram_n \f1
+This is same as
+\f4netpath \f1
+except that it chooses only the
+connectionless datagram transports.
+.TP
+\f4udp\f1
+It refers to Internet UDP.
+.TP
+\f4tcp \f1
+It refers to Internet TCP.
+.TP
+\f4raw \f1
+This is for memory based RPC,
+mainly for performance evaluation.
+.LP
+If 
+\f2nettype\fP
+is 
+\f4NULL\fP,
+it defaults to
+\f4netpath\f1.
+.bp
+.SS "Data Structures"
+Some of the data structures used by the RPC package are shown below.
+.SS "The AUTH Structure"
+.ft 4
+.ps -1
+.vs -1
+.nf
+union des_block {
+    struct {
+        u_int32 high;
+        u_int32 low;
+    } key;
+    char c[8];
+};
+typedef union des_block des_block;
+extern bool_t xdr_des_block();
+
+/*
+ * Authentication info. Opaque to client.
+ */
+struct opaque_auth {
+    enum_t  oa_flavor;  /* flavor of auth */
+    caddr_t oa_base;    /* address of more auth stuff */
+    u_int   oa_length;  /* not to exceed MAX_AUTH_BYTES */
+};
+
+/*
+ * Auth handle, interface to client side authenticators.
+ */
+typedef struct {
+    struct  opaque_auth  ah_cred;
+    struct  opaque_auth  ah_verf;
+    union   des_block    ah_key;
+    struct auth_ops {
+        void	(*ah_nextverf)();
+        int	(*ah_marshal)();  /* nextverf & serialize */
+        int	(*ah_validate)(); /* validate verifier */
+        int	(*ah_refresh)();  /* refresh credentials */
+        void	(*ah_destroy)();  /* destroy this structure */
+    } *ah_ops;
+    caddr_t ah_private;
+} AUTH;
+.fi
+.ft
+.ps
+.vs
+.SS "The CLIENT Structure"
+.ps -1
+.vs -1
+.ft 4
+.nf
+/*
+ * Client rpc handle.
+ * Created by individual implementations
+ * Client is responsible for initializing auth, see e.g. auth_none.c.
+ */
+typedef struct {
+    AUTH           *cl_auth;             /* authenticator */
+    struct clnt_ops {
+        enum clnt_stat  (*cl_call)();    /* call remote procedure */
+        void            (*cl_abort)();   /* abort a call */
+        void            (*cl_geterr)();  /* get specific error code */
+        bool_t          (*cl_freeres)(); /* frees results */
+        void            (*cl_destroy)(); /* destroy this structure */
+        bool_t          (*cl_control)(); /* the ioctl() of rpc */
+    } *cl_ops;
+    caddr_t         cl_private;          /* private stuff */
+    char            *cl_netid;           /* network token */
+    char            *cl_tp;              /* device name */
+} CLIENT;
+.fi
+.ft
+.ps
+.vs
+.SS "The SVCXPRT Structure"
+.ft 4
+.ps -1
+.vs -1
+.nf
+enum xprt_stat {
+    XPRT_DIED,
+    XPRT_MOREREQS,
+    XPRT_IDLE
+};
+
+/*
+ * Server side transport handle
+ */
+typedef struct {
+    int                 xp_fd;
+#define xp_sock         xp_fd
+#endif
+    u_short             xp_port;         /* associated port number.
+                                          * Obsolete, but still used to
+                                          * specify whether rendezvouser
+                                          * or normal connection
+                                          */
+.sp .5
+    struct xp_ops {
+        bool_t         (*xp_recv)();     /* receive incoming requests */
+        enum xprt_stat (*xp_stat)();     /* get transport status */
+        bool_t         (*xp_getargs)();  /* get arguments */
+        bool_t         (*xp_reply)();    /* send reply */
+        bool_t         (*xp_freeargs)(); /* free mem allocated for args */
+        void           (*xp_destroy)();  /* destroy this struct */
+    } *xp_ops;
+    int         xp_addrlen;              /* length of remote addr. Obsolete */
+    char        *xp_tp;                  /* transport provider device name */
+    char        *xp_netid;               /* network token */
+    struct netbuf       xp_ltaddr;       /* local transport address */
+    struct netbuf       xp_rtaddr;       /* remote transport address */
+    char                xp_raddr[16];    /* remote address. Obsolete */
+    struct opaque_auth xp_verf;          /* raw response verifier */
+    caddr_t             xp_p1;           /* private: for use by svc ops */
+    caddr_t             xp_p2;           /* private: for use by svc ops */
+    caddr_t             xp_p3;           /* private: for use by svc lib */
+} SVCXPRT;
+.fi
+.ps
+.vs
+.ft
+.SS  "The XDR Structure"
+.ft 4
+.ps -1
+.vs -1
+.nf
+/*
+ * Xdr operations.  XDR_ENCODE causes the type to be encoded into the
+ * stream.  XDR_DECODE causes the type to be extracted from the stream.
+ * XDR_FREE can be used to release the space allocated by an XDR_DECODE
+ * request.
+ */
+enum xdr_op {
+    XDR_ENCODE=0,
+    XDR_DECODE=1,
+    XDR_FREE=2
+};
+
+/*
+ * This is the number of bytes per unit of external data.
+ */
+#define BYTES_PER_XDR_UNIT	(4)
+#define RNDUP(x)  ((((x) + BYTES_PER_XDR_UNIT - 1) / BYTES_PER_XDR_UNIT) \e
+            * BYTES_PER_XDR_UNIT)
+
+/*
+ * A xdrproc_t exists for each data type which is to be encoded or decoded.
+ *
+ * The second argument to the xdrproc_t is a pointer to an opaque pointer.
+ * The opaque pointer generally points to a structure of the data type
+ * to be decoded.  If this pointer is 0, then the type routines should
+ * allocate dynamic storage of the appropriate size and return it.
+ * bool_t	(*xdrproc_t)(XDR *, caddr_t *);
+ */
+typedef	bool_t (*xdrproc_t)();
+
+/*
+ * The XDR handle.
+ * Contains operation which is being applied to the stream,
+ * an operations vector for the particular implementation (for example, 
+ * see xdr_mem.c), and two private fields for the use of the 
+ * particular implementation.
+ */
+typedef struct {
+    enum xdr_op x_op;            /* operation; fast additional param */
+    struct xdr_ops {
+        bool_t  (*x_getlong)();  /* get a long from underlying stream */
+        bool_t  (*x_putlong)();  /* put a long to " */
+        bool_t  (*x_getbytes)(); /* get some bytes from " */
+        bool_t  (*x_putbytes)(); /* put some bytes to " */
+        u_int   (*x_getpostn)(); /* returns bytes off from beginning */
+        bool_t  (*x_setpostn)(); /* lets you reposition the stream */
+        long *  (*x_inline)();   /* buf quick ptr to buffered data */
+        void    (*x_destroy)();  /* free privates of this xdr_stream */
+    } *x_ops;
+    caddr_t     x_public;        /* users' data */
+    caddr_t     x_private;       /* pointer to private data */
+    caddr_t     x_base;          /* private used for position info */
+    int         x_handy;         /* extra private word */
+} XDR;
+.fi
+.ps
+.vs
+.ft
+.SS "Index to Routines"
+The following table lists RPC routines and the manual reference
+pages on which they are described:
+.TS H
+c c
+lf4 lf4.
+RPC Routine	Manual Page
+_
+.TH
+auth_destroy	rpc_clnt_auth\f1(3N)\fP
+authdes_getucred	secure_rpc\f1(3N)\fP
+authdes_seccreate	secure_rpc\f1(3N)\fP
+authnone_create	rpc_clnt_auth\f1(3N)\fP
+authsys_create	rpc_clnt_auth\f1(3N)\fP
+authsys_create_default	rpc_clnt_auth\f1(3N)\fP
+clnt_call	rpc_clnt_calls\f1(3N)\fP
+clnt_control	rpc_clnt_create\f1(3N)\fP
+clnt_create	rpc_clnt_create\f1(3N)\fP
+clnt_destroy	rpc_clnt_create\f1(3N)\fP
+clnt_dg_create	rpc_clnt_create\f1(3N)\fP
+clnt_freeres	rpc_clnt_calls\f1(3N)\fP
+clnt_geterr	rpc_clnt_calls\f1(3N)\fP
+clnt_pcreateerror	rpc_clnt_create\f1(3N)\fP
+clnt_perrno	rpc_clnt_calls\f1(3N)\fP
+clnt_perror	rpc_clnt_calls\f1(3N)\fP
+clnt_raw_create	rpc_clnt_create\f1(3N)\fP
+clnt_spcreateerror	rpc_clnt_create\f1(3N)\fP
+clnt_sperrno	rpc_clnt_calls\f1(3N)\fP
+clnt_sperror	rpc_clnt_calls\f1(3N)\fP
+clnt_tli_create	rpc_clnt_create\f1(3N)\fP
+clnt_tp_create	rpc_clnt_create\f1(3N)\fP
+clnt_vc_create	rpc_clnt_create\f1(3N)\fP
+getnetname	secure_rpc\f1(3N)\fP
+host2netname	secure_rpc\f1(3N)\fP
+key_decryptsession	secure_rpc\f1(3N)\fP
+key_encryptsession	secure_rpc\f1(3N)\fP
+key_gendes	secure_rpc\f1(3N)\fP
+key_setsecret	secure_rpc\f1(3N)\fP
+netname2host	secure_rpc\f1(3N)\fP
+netname2user	secure_rpc\f1(3N)\fP
+rpc_broadcast	rpc_clnt_calls\f1(3N)\fP
+rpc_call	rpc_clnt_calls\f1(3N)\fP
+rpc_reg	rpc_svc_calls\f1(3N)\fP
+svc_create	rpc_svc_create\f1(3N)\fP
+svc_destroy	rpc_svc_create\f1(3N)\fP
+svc_dg_create	rpc_svc_create\f1(3N)\fP
+svc_fd_create	rpc_svc_create\f1(3N)\fP
+svc_freeargs	rpc_svc_reg\f1(3N)\fP
+svc_getargs	rpc_svc_reg\f1(3N)\fP
+svc_getreqset	rpc_svc_reg\f1(3N)\fP
+svc_getrpccaller	rpc_svc_reg\f1(3N)\fP
+svc_raw_create	rpc_svc_create\f1(3N)\fP
+svc_reg	rpc_svc_calls\f1(3N)\fP
+svc_run	rpc_svc_reg\f1(3N)\fP
+svc_sendreply	rpc_svc_reg\f1(3N)\fP
+svc_tli_create	rpc_svc_create\f1(3N)\fP
+svc_tp_create	rpc_svc_create\f1(3N)\fP
+svc_unreg	rpc_svc_calls\f1(3N)\fP
+svc_vc_create	rpc_svc_create\f1(3N)\fP
+svcerr_auth	rpc_svc_err\f1(3N)\fP
+svcerr_decode	rpc_svc_err\f1(3N)\fP
+svcerr_noproc	rpc_svc_err\f1(3N)\fP
+svcerr_noprog	rpc_svc_err\f1(3N)\fP
+svcerr_progvers	rpc_svc_err\f1(3N)\fP
+svcerr_systemerr	rpc_svc_err\f1(3N)\fP
+svcerr_weakauth	rpc_svc_err\f1(3N)\fP
+user2netname	secure_rpc\f1(3N)\fP
+xdr_accepted_reply	rpc_xdr\f1(3N)\fP
+xdr_authsys_parms	rpc_xdr\f1(3N)\fP
+xdr_callhdr	rpc_xdr\f1(3N)\fP
+xdr_callmsg	rpc_xdr\f1(3N)\fP
+xdr_opaque_auth	rpc_xdr\f1(3N)\fP
+xdr_rejected_reply	rpc_xdr\f1(3N)\fP
+xdr_replymsg	rpc_xdr\f1(3N)\fP
+xprt_register	rpc_svc_calls\f1(3N)\fP
+xprt_unregister	rpc_svc_calls\f1(3N)\fP
+.TE
+.SH FILES
+.TP 20
+\f4/etc/netconfig
+.SH SEE ALSO
+.na
+\f4environ\f1(5),
+\f4getnetconfig\f1(3N),
+\f4getnetpath\f1(3N),
+\f4rpc_clnt_auth\fP(3N),
+\f4rpc_clnt_calls\fP(3N),
+\f4rpc_clnt_create\fP(3N),
+\f4rpc_svc_calls\fP(3N),
+\f4rpc_svc_create\fP(3N),
+\f4rpc_svc_err\fP(3N),
+\f4rpc_svc_reg\fP(3N),
+\f4rpc_xdr\fP(3N),
+\f4rpcbind\f1(3N),
+\f4secure_rpc\f1(3N),
+\f4xdr\f1(3N),
+\f4netconfig\f1(4)
+.ad

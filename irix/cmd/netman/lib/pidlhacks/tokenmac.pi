@@ -1,0 +1,370 @@
+/*
+ * Copyright 1992 Silicon Graphics, Inc.  All rights reserved.
+ *
+ *	tokenmac
+ *
+ *	$Revision: 1.1 $
+ *	$Date: 1992/07/07 18:43:30 $
+ *
+ * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Silicon Graphics, Inc.;
+ * the contents of this file may not be disclosed to third parties, copied or
+ * duplicated in any form, in whole or in part, without the prior written
+ * permission of Silicon Graphics, Inc.
+ *
+ * RESTRICTED RIGHTS LEGEND:
+ * Use, duplication or disclosure by the Government is subject to restrictions
+ * as set forth in subdivision (c)(1)(ii) of the Rights in Technical Data
+ * and Computer Software clause at DFARS 252.227-7013, and/or in similar or
+ * successor clauses in the FAR, DOD or NASA FAR Supplement. Unpublished -
+ * rights reserved under the Copyright Laws of the United States.
+ */
+
+%{
+/*
+ * Hand crafted reminder:
+ *	- Search for "if (mac_do_subvector(ds))" and change
+ *	  'if' to 'while'. They are in 2 different places.
+ */
+%}
+
+//
+// Token Ring Medium Control
+// 
+
+import tokenring;
+
+protocol tokenmac "Token Ring Medium Access Control" : tokenring(0)
+{
+    // Function Classes
+    enum funclass {
+	RingStation, DLCLANMGR, ConfigReportServer=4,
+	RingParmServer, RingErrMonitor
+    };
+
+    // Common/Specific Indicator (The book is not clear which is which)
+    enum csbit {
+	Common, Specific
+    };
+
+    // Required/Optional Indicator
+    enum robit {
+	Required, Optional
+    };
+
+    // MVID Command Byte
+    enum mvidcmd {
+	Response, Beacon=2, ClaimToken, RingPurge, ActiveMonitorPresent,
+	StandbyMonitorPresent, DuplicateAddrTest, LobeTest,
+	TransmitForward, RemoveRingStation=0xb, ChangeParameters,
+	InitRingStation, RequestRingStationAddr, RequestRingStationState,
+	RequestRingStationAttach, RequestInit=0x20, ReportRingStationAddr=0x22,
+	ReportRingStationState, ReportRingStationAttach,
+	ReportNewActiveMonitor, ReportNAUNchange,
+	ReportNeighborNotificationIncomplete, ReportActiveMonitorError,
+	ReportSoftError, ReportTransmitForward
+    };
+
+    // Subvector Type
+    enum subvectype {
+	BeaconType=1, NAUN, LocalRingNum, AssignPhysicalLocation,
+	SoftErrReportTimerValue, EnabledFunctionClasses, AllowedAccessPriority,
+	Correlator, LastNeighborNotificationAddr, PhysicalLocation,
+	ResponseCode=0x20, Reserved, ProductInstanceID,
+	RingStationMicrocodeLevel, WrapData=0x26, FrameForward,
+	StationIdentifier, RingStationStatusSubvector,
+	TransmitStatusCode, GroupAddr, FunctionalAddr, IsolatingErrorCounts,
+	NonIsolatingErrorCounts, ErrorCode=0x30
+    };
+
+    // Beacon Subvec
+    enum breason {
+	RecoveryModeSet=1, SignalLossErr, StreamSignalNotClaimToken,
+	StreamSignalClaimTokenOrHardErr
+    };
+
+    // Error Code
+    enum errorcode {
+	MonitorErr=1, DuplicateMonitor, DuplicateAddr
+    };
+
+    // Product Code
+    enum prodcode {
+	IBMhardware=1, IBMorNonIBMharware=3, IBMsoftware=4,
+	NonIBMhardware=9, NonIBMsoftware=0xc, IBMorNonIBMsoftware=0xe
+    };
+
+    // Format Type
+    enum prodinst {
+	MachineSerialNum=0x10, MachineAndModelSerialNum=0x11,
+	MachineSerialNumAdditional=0x12
+    };
+
+    // Response Code
+    enum respcode {
+	Position=1, MissingMajorVector=0x8001, MajorVectorLenErr,
+	UnrecognizedMVID, InappropriateSourceClass, SubvectorLenErr,
+	TransmitForwardInvalid, MissingRequiredSubvector,
+	MACFrameTooBig, FunctionRequestedDisabled
+    };
+
+    // SVID Format
+    struct svidfrmt {
+	csbit		cs "Common/Specific Indicator" : 1;
+	robit		ro "Required/Optional Indicator" : 1;
+	subvectype	codept "Code Point" : 6;
+    };
+
+
+    // MAC Major Vector
+    u_short		ll "Major Vector Length" -v;
+    funclass		dcl "Destination Function Class" : 4 -v;
+    funclass		scl "Source Function Class" : 4 -v;
+    mvidcmd		mvid "Command Byte" : 8;
+// The 'while' loop should be used, instead of 'if'. Patched by hand.
+    //while (mac_do_subvector ())
+    if (mac_do_subvector ($ds))
+    {
+	// MAC Subvector
+	if (len != 0xff)
+	{
+	    u_char	len "Subvector Length" -v;
+	    // Not very clear in the manual, pg 5-6
+	    svidfrmt	svid "Subvector Type" -v;
+	    switch (svid.codept)
+	    {
+		case BeaconType:
+		    breason	beacon "Type" : 16;
+
+		case NAUN:
+		    //opaque	naun "Address" [6];
+		    u_char	naun "Address" [6];
+
+		case LocalRingNum:
+		    u_short	lrn "of Sending Station";
+
+		case AssignPhysicalLocation:
+		    u_long	apl "of Target Ring Station";
+
+		case SoftErrReportTimerValue:
+		    u_short	stv "Timeout Value";
+
+		case EnabledFunctionClasses:
+		    u_short	efc "Class Num Enabled To Transmit";
+
+		case AllowedAccessPriority:
+		    u_short	pad "Padding" : 14 -vv;
+		    u_short	aap "Maximaum Allowed" : 2;
+
+		case Correlator:
+		    u_short	cor "Relate Request and Response";
+
+		case LastNeighborNotificationAddr:
+		    //opaque	lnna "Address" [6];
+		    u_char	lnna "Address" [6];
+
+		case PhysicalLocation:
+		    u_long	pl "of Sending Ring Station";
+
+		case ResponseCode:
+		    respcode	rc "Response Code" : 16;
+		    funclass	rdcl "Destination Function Class" : 4;
+		    funclass	rscl "Source Function Class" : 4;
+		    mvidcmd	rmvid "Command Byte" : 8;
+
+		case Reserved:
+		    u_short	res "Reserved" expect 0;
+
+		case ProductInstanceID:
+		    u_char	pad : 4 -vv;
+		    prodcode	pcl "Product Classification" : 4;
+		    prodinst	fty "Format type" : 8 -v;
+		    //opaque	mty "Machine Type, EBCDIC" [4] -v;
+		    //opaque	mnum "Machine Model Num, EBCDIC" [3] -v;
+		    //opaque	snum "Serial Num Modifier, EBCDIC" [2] -v;
+		    //opaque	seqn "Sequence Num, EBCDIC" [7] -v;
+		    u_char	mty "Machine Type, EBCDIC" [4] -v;
+		    u_char	mnum "Machine Model Num, EBCDIC" [3] -v;
+		    u_char	snum "Serial Num Modifier, EBCDIC" [2] -v;
+		    u_char	seqn "Sequence Num, EBCDIC" [7] -v;
+
+		case RingStationMicrocodeLevel:
+		    //opaque	rsml "of Sending Station, EBCDIC" [10];
+		    u_char	rsml "of Sending Station, EBCDIC" [10];
+
+		case WrapData:
+		    //opaque	wd "for Lobe Test" [1500];
+		    u_char	wd "for Lobe Test" [1500] -vv;
+
+		case FrameForward:
+		    // Differ between long/short svid
+		    //opaque	macf "Mac Frame" [len-2];
+		    u_char	macf "Mac Frame" [len-2] -vv;
+
+		case StationIdentifier:
+		    //opaque	sid "Address" [6];
+		    u_char	sid "Address" [6];
+
+		case RingStationStatusSubvector:
+		    //opaque	rsss "Status" [6];
+		    u_char	rsss "Status" [6];
+
+		case TransmitStatusCode:
+		    u_short	tsc "Strip Status";
+
+		case GroupAddr:
+		    //opaque	ga "Lower 4 Bytes of Addr" [4];
+		    u_char	ga "Lower 4 Bytes of Addr" [4];
+
+		case FunctionalAddr:
+		    //opaque	fa "Recognized by this Station" [4];
+		    u_char	fa "Recognized by this Station" [4];
+
+		case IsolatingErrorCounts:
+		    u_char	lerr "Line Error";
+		    u_char	ierr "Internal Error";
+		    u_char	berr "Burst Error";
+		    u_char	acerr "A/C Error";
+		    u_char	adt "Abort Delimiter Transmitted";
+		    u_char	resv "Reserved" -vv;
+
+		case NonIsolatingErrorCounts:
+		    u_char	lferr "Lost Frame Error";
+		    u_char	rj "Receiver Congestion";
+		    u_char	fcerr "Frame Copied Error";
+		    u_char	ferr "Frequency Error";
+		    u_char	terr "Token Error";
+		    u_char	resv -vv;
+
+		case ErrorCode:
+		    errorcode	ec "Code" : 16;
+	    }
+	}
+	else
+	{
+	    u_char	llong "Long Subvector Indicator" -vv;
+	    // Not very clear in the manual, pg 5-6
+	    svidfrmt	lsvid "Subvector Type" -v;
+	    u_short	llen "Subvector Length" -v;
+	    switch (lsvid.codept)
+	    {
+		case BeaconType:
+		    breason	beacon "Type" : 16;
+
+		case NAUN:
+		    //opaque	naun "Address" [6];
+		    u_char	naun "Address" [6];
+
+		case LocalRingNum:
+		    u_short	lrn "of Sending Station";
+
+		case AssignPhysicalLocation:
+		    u_long	apl "of Target Ring Station";
+
+		case SoftErrReportTimerValue:
+		    u_short	stv "Timeout Value";
+
+		case EnabledFunctionClasses:
+		    u_short	efc "Class Num Enabled To Transmit";
+
+		case AllowedAccessPriority:
+		    u_short	pad "Padding" : 14 -vv;
+		    u_short	aap "Maximaum Allowed" : 2;
+
+		case Correlator:
+		    u_short	cor "Relate Request and Response";
+
+		case LastNeighborNotificationAddr:
+		    //opaque	lnna "Address" [6];
+		    u_char	lnna "Address" [6];
+
+		case PhysicalLocation:
+		    u_long	pl "of Sending Ring Station";
+
+		case ResponseCode:
+		    respcode	rc "Response Code" : 16;
+		    funclass	rdcl : 4;
+		    funclass	rscl : 4;
+		    mvidcmd	rmvid : 8;
+
+		case Reserved:
+		    u_short	res "Reserved" expect 0;
+
+		case ProductInstanceID:
+		    u_char	pad : 4 -vv;
+		    prodcode	pcl "Product Classification" : 4;
+		    prodinst	fty "Format type" : 8 -v;
+		    //opaque	mty "Machine Type, EBCDIC" [4] -v;
+		    //opaque	mnum "Machine Model Num, EBCDIC" [3] -v;
+		    //opaque	snum "Serial Num Modifier, EBCDIC" [2] -v;
+		    //opaque	seqn "Sequence Num, EBCDIC" [7] -v;
+		    u_char	mty "Machine Type, EBCDIC" [4] -v;
+		    u_char	mnum "Machine Model Num, EBCDIC" [3] -v;
+		    u_char	snum "Serial Num Modifier, EBCDIC" [2] -v;
+		    u_char	seqn "Sequence Num, EBCDIC" [7] -v;
+
+		case RingStationMicrocodeLevel:
+		    //opaque	rsml "of Sending Station, EBCDIC" [10];
+		    u_char	rsml "of Sending Station, EBCDIC" [10];
+
+		case WrapData:
+		    //opaque	wd "for Lobe Test" [1500];
+		    u_char	wd "for Lobe Test" [1500] -vv;
+
+		case FrameForward:
+		    // Differ between long/short svid
+		    //opaque	macf "Mac Frame" [llen-4];
+		    u_char	macf "Mac Frame" [llen-4] -vv;
+
+		case StationIdentifier:
+		    //opaque	sid "Address" [6];
+		    u_char	sid "Address" [6];
+
+		case RingStationStatusSubvector:
+		    //opaque	rsss "Status" [6];
+		    u_char	rsss "Status" [6];
+
+		case TransmitStatusCode:
+		    u_short	tsc "Strip Status";
+
+		case GroupAddr:
+		    //opaque	ga "Lower 4 Bytes of Addr" [4];
+		    u_char	ga "Lower 4 Bytes of Addr" [4];
+
+		case FunctionalAddr:
+		    //opaque	fa "Recognized by this Station" [4];
+		    u_char	fa "Recognized by this Station" [4];
+
+		case IsolatingErrorCounts:
+		    u_char	lerr "Line Error";
+		    u_char	ierr "Internal Error";
+		    u_char	berr "Burst Error";
+		    u_char	acerr "A/C Error";
+		    u_char	adt "Abort Delimiter Transmitted";
+		    u_char	resv "Reserved" -vv;
+
+		case NonIsolatingErrorCounts:
+		    u_char	lferr "Lost Frame Error";
+		    u_char	rj "Receiver Congestion";
+		    u_char	fcerr "Frame Copied Error";
+		    u_char	ferr "Frequency Error";
+		    u_char	terr "Token Error";
+		    u_char	resv -vv;
+
+		case ErrorCode:
+		    errorcode	ec "Code" : 16;
+	    }
+	}
+    }
+}
+
+%{
+static int
+mac_do_subvector (DataStream *ds)
+{
+    return ds->ds_count > 0;
+    /* Get the position (value can be passed) of 'll' and get
+       the current position. If current minus ll = value of ll
+       return false else return true, ie more to decode. */
+    /* see appletalk end. ds->ds_count>0 afp */
+}
+%}

@@ -1,0 +1,114 @@
+#
+# $Revision: 1.12 $
+#
+# Commonrules for library top level makefiles
+# Handle:
+#	MULTIDIR - library has no source at top level, all source
+#		   is under BASELIBSRCDIR (without the .a)
+#	ALTLIBS  - library has alternate compilation forms
+#		   this REQUIRES a multiple directory setup for source
+#
+
+.PRECIOUS:$(TARGETS)
+
+#if (defined(MULTIDIR) || (defined(ALTLIBS) && !empty(ALTLIBS)))
+$(BASELIB):$(BASELIBSRCDIR)DESCEND
+$(ALTLIBS):$(.TARGET:S/.a/DESCEND/)
+
+#
+# By using a .EXEC target the fact that we descend doesn't automatically
+# force the libraries logical mod time to change (thus causing things like
+# .so libs that depend on the .a to rebuild)
+#
+$(DESCENDERS)!$(.TARGET:S/DESCEND/SETUPDIR/) .EXEC
+	cd $(.TARGET:S/DESCEND//); $(MAKE)
+#
+# get -n to work a bit - this will cause the tlinks to link even if -n
+# is specified
+#
+.MAKE:$(DESCENDERS) $(SETUPDIRS)
+
+# The base lib needs no setup
+$(NOSETUPDIRS)!
+
+# there are only targets at the top level
+rmtargets!$(COMMONPREF)$$@
+
+clobber!$(COMMONPREF)$$@
+	$(RMSOURCES)
+	$(SUBDIRS_MAKERULE)
+
+clean!$(COMMONPREF)$$@
+	$(SUBDIRS_MAKERULE)
+
+#
+# handy rule to simply rebuild .a's that have .so's
+#
+dsos! $(LIBS:N?*ns.a:.a=.so)
+
+#endif
+
+#if defined(ALTLIBS) && !empty(ALTLIBS)
+#
+# We really want to tlink every time just to be sure, by using a .EXEC
+# target we don't get penalized for this
+#
+
+$(SETUPDIRS)!.EXEC
+	$(LINKSOURCES) $(BASELIBSRCDIR) $(.TARGET:S/SETUPDIR//)
+	rm -f $(.TARGET:S/SETUPDIR//)/versiondefs
+	ln -sf ../$(.TARGET:S/SETUPDIR/versiondefs/) $(.TARGET:S/SETUPDIR//)/versiondefs
+	$(SUBDIRS_LINKRULE)
+
+#endif
+
+include ${COMMONRULES}
+
+# add dependency on export files - this isn't quite correct since
+# it means that ALL .a's and all so's depend on every export file ..
+$(TARGETS):$(DSOEXPORTS) \
+		$(DSOEXPORTS_32) \
+		$(DSOEXPORTS_32_ABI) \
+		$(DSOEXPORTS_N32) \
+		$(DSOEXPORTS_64) \
+		$(DSOEXPORTS_64_ABI)
+
+#
+# Inference rule for creating a share object from a library.
+#
+.SUFFIXES: .a .so 
+
+#
+# The real messy rule at the end is a backward compat rule
+# Note that when building .so versions of ABI libs, we don't link
+# against any other libraries - this is mainly because we can't
+# link against libc.so (the abi version).
+# At some point it might be necessary to permit linking against
+# some DSO's while not linking against libc ...
+#
+.a.so:
+	$(LD) \
+	$(.IMPSRC:M?*_32.a:S/$(.IMPSRC)/$(LDOPTS_32) $(LDDSOOPTS_32)/) \
+	$(.IMPSRC:M?*_32_M2.a:S/$(.IMPSRC)/$(LDOPTS_32_M2) $(LDDSOOPTS_32)/) \
+	$(.IMPSRC:M?*_32_abi.a:S/$(.IMPSRC)/$(LDOPTS_32_ABI) $(LDDSOOPTS_32_ABI)/) \
+	$(.IMPSRC:M?*_r32.a:S/$(.IMPSRC)/$(LDOPTS_R32) $(LDDSOOPTS_R32)/) \
+	$(.IMPSRC:M?*_n32.a:S/$(.IMPSRC)/$(LDOPTS_N32) $(LDDSOOPTS_N32)/) \
+	$(.IMPSRC:M?*_n32_M3.a:S/$(.IMPSRC)/$(LDOPTS_N32_M3) $(LDDSOOPTS_N32)/)\
+	$(.IMPSRC:M?*_n32_M4.a:S/$(.IMPSRC)/$(LDOPTS_N32_M4) $(LDDSOOPTS_N32)/)\
+	$(.IMPSRC:M?*_64.a:S/$(.IMPSRC)/$(LDOPTS_64) $(LDDSOOPTS_64)/) \
+	$(.IMPSRC:M?*_64_M3.a:S/$(.IMPSRC)/$(LDOPTS_64_M3) $(LDDSOOPTS_64)/) \
+	$(.IMPSRC:M?*_64_M4.a:S/$(.IMPSRC)/$(LDOPTS_64_M4) $(LDDSOOPTS_64)/) \
+	$(.IMPSRC:M?*_64_abi.a:S/$(.IMPSRC)/$(LDOPTS_64_ABI) $(LDDSOOPTS_64_ABI)/) \
+	$(.IMPSRC:M?*.a:N?*_64?*:N?*_32?*:N?*_n32?*:N?*_abi?*:N?*_r32?*:S/$(.IMPSRC)/$(LDOPTS_32) $(LDDSOOPTS_32)/) \
+	$(.IMPSRC) \
+	$(.IMPSRC:N?*_abi.a:S/$(.IMPSRC)/$(LDLIBS)/) \
+	-o $(.TARGET)
+
+#
+# If we're a single level single version library,
+# include libleaf{defs,rules}
+#
+#if !(defined(MULTIDIR) || (defined(ALTLIBS) && !empty(ALTLIBS)))
+INCLUDEDATROOT=yes
+include $(LIBLEAFRULES)
+#endif

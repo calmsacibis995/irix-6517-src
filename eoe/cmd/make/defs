@@ -1,0 +1,285 @@
+#ident	"@(#)make:defs	1.25"
+
+#include <stdio.h>
+#include <string.h>
+#include <sys/types.h>	/* time_t */
+#include <dirent.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <limits.h>
+#include <errno.h>
+#include <msgs/uxsgicore.h>
+
+/***	defs.h	-	global make header file	***/
+
+/**		Function Macros			**/
+
+#define PRESTIME()	prestime()
+#define ALLOC(x)	(struct x *)intalloc(sizeof(struct x))
+#ifndef MAXPATHLEN
+#define MAXPATHLEN 1024
+#endif
+#define ANY(a, b)	strchr(a, b)
+#define	SRCHNAME(s)	hashfind(s)
+#define STREQ(a, b)	(strcmp((a), (b)) == 0)
+#define IS_ON(a)	( Mflags & (a) )
+#define IS_OFF(a)	( !IS_ON(a) )
+#define TURNOFF(a)	(Mflags &= ~(a))
+#define TURNON(a)	(Mflags |= (a))
+
+/**		Macros for array sizes			**/
+#define	SUFF_SIZE	20	/* max. size for suffix rule string */
+#define BUF_SIZE	512	/* max. size for a string */
+#define ARGV_SIZE	200	/* Init. size for argv, used by exec. */
+#define	MAX_INC		40	/* Max. include of include  by a makefile */
+#define CHAR_LIST	256	/* Max funny characters = 2**8 */
+
+
+/**		Macros for special characters		**/
+
+#define PROMPT  "\t"	/* other systems -- pick what you want */
+
+#define NEWLINE	'\n'
+#define CNULL	'\0'
+#define BLANK	' '
+#define TAB	'\t'
+#define DOT	'.'
+#define WIGGLE	'~'
+#define AT	'@'
+#define MINUS	'-'
+#define PLUS	'+'
+#define EQUALS	'='
+#define SLASH	'/'
+#define STAR	'*'
+#define LCURLY	'{'
+#define RCURLY	'}'
+#define LPAREN	'('
+#define RPAREN	')'
+#define LSQUAR	'['
+#define RSQUAR	']'
+#define QUESTN	'?'
+#define KOLON	':'
+#define SKOLON	';'
+#define DOLLAR	'$'
+#define GREATR	'>'
+#define POUND	'#'
+#define EXCLAM	'!'
+#define BACKSLASH	'\\'
+
+/**		Flags		**/
+
+#define CORRECT   00000001		/* enforce makefile correctness */
+#define ENVOVER   00000002		/* environ overides file defines */
+#define EXPORT    00000004		/* export current variable to env */
+#define PRTR      00000010		/* print macros and target descriptions */
+#define SIL       00000020		/* execute silently */
+#define NOEX      00000040		/* don't execute commands */
+#define INTRULE   00000100		/* use internal rules */
+#define TOUCH     00000200		/* touch (update) out-of-date files */
+#define GET       00000400		/* do a $(GET) if file not found */
+#define QUEST	  00001000		/* set `-q' flag */
+#define INARGS    00002000		/* currently reading cmd args */
+#define IGNERR    00004000		/* ignore errors */
+#define KEEPGO    00010000		/* continue on other branches */
+#define GF_KEEP   00020000		/* keep auto get files */
+#define MH_DEP    00040000		/* use old question about whether cmd exists */
+#define UCBLD     00100000		/* unconditional build */
+#define TRACK     00200000		/* track the object files */
+#define POSIX	  00400000		/* use POSIX/XPG rules */
+#define DBUG      01000000		/* debug flag */
+#define WARN      02000000		/* set on warning msgs. */
+#define PAR	  04000000		/* set on parallel */
+#define DBUG2    010000000	/* debug flag -D */
+#define NULLSFX  020000000	/* allow NULL suffix explicit dependencies */
+#define BLOCK   0100000000	/* set on parallel's target output blocking */
+
+/*	flags for get()		*/
+
+
+#define NO 	0
+#define YES 	1
+
+	/* Parallel defintions	*/
+
+#define	D_INIT		0		/* Don't know what to do yet with this target */
+#define	D_START		1		/* Start processing to update this target */
+#define D_MUTEX		2		/* This target in MUTEX now; Do not eval it*/
+#define D_NOEVAL	3		/* This target is not ready to be eval. yet */
+#define D_DONAME	4		/* Call from pwait; this target is ready to be eval now*/
+#define	D_READY		5		/* This target ready to be rebuild now */
+#define	D_PROC		6		/* This target's dep. in process now */
+#define	D_REBUILD	7		/* This target need rebuild */
+#define	D_RUN			8		/* A background process is runing to update this target */
+#define	D_RUN_IGN	9		/* See above; But this command uses the ignore option */
+#define	D_NEXT		10 	/* Next command of a command block in process now */
+#define D_CHECK		11
+#define D_OK			12	/* This target was already in update stat;nothing to do */
+#define	D_UPDATE	13	/* This target is up to date now - DONE */
+#define	D_ERROR		14	/* An Error accured while updating this target */
+
+#define IS_RUN(t)	(t->done == D_RUN || t->done == D_RUN_IGN)
+#define IS_PROC(t)	(IS_RUN(t) || t->done == D_PROC || t->done == D_REBUILD)
+#define IS_UP(t)	( t->done == D_UPDATE || t->done == D_ERROR)
+#define IS_DONE(t)	( IS_UP(t) || t->done == D_OK)
+
+#define PARALLEL	2 	/* default max. no. of parallel proc. */
+
+
+#ifndef sgi
+#define OUTMAX  15000
+#endif
+#define MAXVPATHLEN	 MAXPATHLEN*1
+#define MAXVPATHDIR	10	/* Max number of viewpath directories */
+#define LRGINT 077777
+
+#define ALLDEPS  	1	/* : */
+#define SOMEDEPS 	2	/* :: */
+
+#define META 		01
+#define TERMINAL	02
+
+/* define FSTATIC to be static on systems with C compilers
+ * supporting file-static; otherwise define it to be null
+ */
+#define FSTATIC static
+
+/**		Type definitions		**/
+
+typedef char *	CHARSTAR;
+typedef struct lineblock *	LINEBLOCK;
+typedef struct depblock *	DEPBLOCK;
+
+typedef struct shblock {
+	struct shblock *nextsh;
+	CHARSTAR shbp;
+} *SHBLOCK;
+
+typedef struct macrol{
+	struct macrol *nextmacro;
+	char mnamep[2];
+	CHARSTAR mdefp;
+} *MACROL;
+
+typedef struct shenv{
+	struct shenv *nextshenv;
+	DEPBLOCK depp;
+	SHBLOCK shp;
+	MACROL macrolp;
+} *SHENV;
+
+typedef struct nameblock {
+
+	struct nameblock *nextname,	/* pointer to next nameblock */
+			 *backname;	/* pointer to predecessor */
+	CHARSTAR namep,		/* ASCII name string and*/
+		alias;		/*  alias, when namep translates to
+				 * 	another pathstring.
+				 */
+	CHARSTAR valias;	/* old style VPATH alias */
+	SHENV shenvp;	/* pointer to the macros that has to be restore in parallel */
+	FILE *tbfp; 	/* tmp block file pointer ; hold the blocking output */
+	LINEBLOCK linep;	/* pointer to dependents */
+	time_t	modtime;	/* set by exists() */
+	char	done,		/* 	finished?		*/
+		septype,	/*	single or double ':' 	*/
+		rundep;		/* 	runtime translation done? */
+
+} *NAMEBLOCK;
+
+
+typedef struct ready_list{
+	struct ready_list *nextready;
+	NAMEBLOCK tarp;
+} *READY_LIST;
+
+typedef struct run_list{
+	struct run_list *nextrun;
+	NAMEBLOCK tarp;
+	int pid; /* shell process id that build this target in parallel*/
+} *RUN_LIST;
+
+struct lineblock {
+	LINEBLOCK nextline;
+	DEPBLOCK depp;
+	SHBLOCK shp;
+};
+
+struct depblock {
+	DEPBLOCK nextdep;
+	NAMEBLOCK depname;
+};
+
+typedef struct chain {
+	struct chain *nextchain;
+	union {
+		CHARSTAR charstar;
+		NAMEBLOCK nameblock;
+	} datap;
+} *CHAIN;
+
+typedef struct varblock {
+	struct varblock *nextvar;
+	CHARSTAR varname;
+	union {
+		CHARSTAR charstar;
+		CHAIN chain;
+	} varval;
+
+	char	noreset,
+		used,
+		envflg,
+		v_aflg;
+} *VARBLOCK;
+
+typedef struct pattern {
+	struct pattern *nextpattern;
+	CHARSTAR patval;
+} *PATTERN;
+
+typedef struct s_opendir {
+	struct s_opendir *nextopendir;
+	DIR	*dirfc;
+	CHARSTAR dirn;
+} *OPENDIR;
+
+CHARSTAR copys(CHARSTAR);
+CHARSTAR copstr(CHARSTAR, CHARSTAR);
+CHARSTAR concat(CHARSTAR, CHARSTAR, CHARSTAR);
+CHARSTAR compath(CHARSTAR);
+CHARSTAR dname(CHARSTAR);
+CHARSTAR sname(CHARSTAR);
+
+void cat(CHARSTAR, ...);
+
+int *intalloc(int);			/* misc.c */
+NAMEBLOCK makename(CHARSTAR);		/* misc.c */
+NAMEBLOCK hashfind(CHARSTAR);		/* misc.c */
+VARBLOCK varptr(CHARSTAR);		/* misc.c */
+void	mkexit(int);			/* misc.c */
+void	fatal(CHARSTAR);		/* misc.c */
+void	fatal1(CHARSTAR, ...);		/* misc.c */
+char	*ck_malloc(int);		/* misc.c */
+time_t	prestime(void);			/* doname.c */
+
+extern char funny[CHAR_LIST];		/* main.c */
+extern char *cur_makefile;
+extern int parallel;
+extern char tmp_block[];
+extern int nproc;
+extern NAMEBLOCK firstname;
+extern OPENDIR	firstod;
+extern CHARSTAR *environ;
+/*
+extern CHARSTAR *linesptr;
+*/
+extern int	Mflags,
+		okdel,
+		k_error,
+		end;		/* loader value for end of core */
+
+extern FILE 	*fin;
+extern char	Nullstr[];
+
+extern CHARSTAR subst(CHARSTAR a, CHARSTAR b, int subflg);
+extern long outmax;
+extern void yprintf(FILE *, ...);

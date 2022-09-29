@@ -1,0 +1,397 @@
+.TH pciio_pio D3
+.SH NAME
+pciio_pio: pciio_pio_addr,
+pciio_piotrans_addr,
+pciio_piomap_alloc,
+pciio_piomap_addr,
+pciio_piomap_done,
+pciio_piomap_free,
+pciio_piospace_alloc,
+pciio_piospace_free \- programmed I/O to PCI bus
+.SH SYNOPSIS
+.nf
+.ft 3
+#include <sys/PCI/pciio.h>
+.sp .8v
+caddr_t
+pciio_pio_addr(
+	vertex_hdl_t \f2vhdl\fP,
+	device_desc_t \f2desc\fP,
+	pciio_space_t \f2space\fP,
+	iopaddr_t \f2addr\fP,
+	size_t \f2size\fP,
+	pciio_piomap_t *\f2mapp\fP,
+	unsigned \f2flags\fP)
+.sp .8v
+caddr_t
+pciio_piotrans_addr(
+	vertex_hdl_t \f2vhdl\fP,
+	device_desc_t \f2desc\fP,
+	pciio_space_t \f2space\fP,
+	iopaddr_t \f2addr\fP,
+	size_t \f2size\fP,
+	unsigned \f2flags\fP)
+.sp .8v
+pciio_piomap_t
+pciio_piomap_alloc(
+	vertex_hdl_t \f2vhdl\fP,
+	device_desc_t \f2desc\fP,
+	pciio_space_t \f2space\fP,
+	iopaddr_t \f2addr\fP,
+	size_t \f2size\fP,
+	size_t \f2max\fP,
+	unsigned \f2flags\fP)
+.sp .8v
+caddr_t
+pciio_piomap_addr(
+	pciio_piomap_t \f2map\fP,
+	iopaddr_t \f2addr\fP,
+	size_t \f2size\fP);
+.sp .8v
+void
+pciio_piomap_done(pciio_piomap_t \f2map\fP)
+.sp .8v
+void
+pciio_piomap_free(pciio_piomap_t \f2map\fP)
+.sp .8v
+iopaddr_t
+pciio_piospace_alloc(
+	vertex_hdl_t \f2vhdl\fP,
+	device_desc_t \f2desc\fP,
+	pciio_space_t \f2space\fP,
+	size_t \f2size\fP,
+	size_t \f2align\fP)
+.sp .8v
+void
+pciio_piospace_free(
+	vertex_hdl_t \f2vhdl\fP,
+	pciio_space_t \f2space\fP,
+	iopaddr_t \f2addr\fP,
+	size_t \f2size\fP)\f1
+.ft 1
+.fi
+.SS Arguments
+.IP "\f2addr\f1" 8n
+The offset within the given
+.IR space .
+.IP "\f2align\f1" 8n
+A desired alignment in PCI address space.
+.IP "\f2desc\f1" 8n
+A device descriptor, usually zero.
+.IP "\f2flags\f1" 8n
+Flags describing the use of the PIO map.
+.IP "\f2max\f1" 8n
+The maximum size within
+.I space
+to be mapped at any one time.
+.IP "\f2map\fP" 8n
+The map address returned by
+.IR pciio_piomap_alloc ().
+.IP "\f2mapp\f1" 8n
+A pointer variable to receive the address of an allocated map.
+.IP "\f2size\f1" 8n
+The size of the region to be mapped.
+.IP "\f2space\f1" 8n
+Specifies the target PCI address space.
+.IP "\f2vhdl\f1" 8n
+The PCI connection point as given to the
+.IR attach ()
+entry point.
+.SH DESCRIPTION
+When a device driver wishes to use
+Programmed I/O (PIO) to communicate with
+a device, the system needs to have a chance
+to set up any appropriate mapping registers.
+The work to be done varies with the available hardware
+and with the version of IRIX.
+The functions described here provide an abstract interface to
+the creation of PIO mapping objects, an interface that is
+consistent across most hardware.
+These functions always do the least possible work
+given the available hardware.
+.P
+There are two models for setting up a PIO map,
+one simple but fallible, and one more general.
+In both models, the final goal is to retrieve a physical
+address that, when used as the operand of a store or fetch,
+will access a word in PCI bus address space rather than
+in CPU memory address space.
+.SS "Simple Model"
+The simple model provides
+permanent mappings through fixed mapping
+resources that may or may not exist in a given system at a given time.
+.IR pciio_piotrans_addr ()
+attempts to use shared hardware resources to construct a physical
+address that, whenever used, routes the transaction
+to the proper target on the PCI bus.
+This is not always possible.
+When it is not, the function returns NULL.
+.P
+When it works,
+.IR pciio_piotrans_addr ()
+allows the driver to do PIO with the fewest complications.
+Typically
+.IR pciio_piotrans_addr ()
+always succeeds in some platforms, and always fails in others.
+However, a driver that uses it should be coded as if it
+could succeed or fail alternately in the same system (which it could).
+.SS "General Model"
+It is not always possible to establish
+a PIO mapping using common shared system
+resources, so the concept of a PIO channel
+that preallocates scarce mapping resources
+is provided.
+.P
+Such a channel is allocated using
+.IR pciio_piomap_alloc (),
+which is given the limits of the
+region that will be mapped, and the
+maximum size to be mapped at any time
+within that region.
+The model assumes that many channels may be created,
+but that not all channels will be actively in use
+at any time.
+.P
+.IR pciio_piomap_addr ()
+is used to actually establish
+the proper mappings for a PIO target.
+Given the offset within the target
+address space and the size of the
+region for PIO, it returns
+the base address to be used for accessing
+that region.
+.P
+After all PIO transactions to that region are executed,
+.IR pciio_piomap_done ()
+should be called to idle any mapping
+hardware and possibly to flush out
+any pipes or buffers along the path
+that might do unexpected things when
+mapping registers are modified.
+.P
+Later,
+.IR pciio_piomap_addr ()
+can again be called,
+specifying the same or a new target area.
+.P
+When a driver is completely finished with
+a PIO channel -- either because the channel
+is used only for initialization of the
+device, or because the device or the driver
+is being shut down -- the PIO channel resources
+should be released using
+.IR pciio_piomap_free ().
+.SS "Utility Functions"
+.IR pciio_pio_addr ()
+is a wrapper function that calls
+.IR pciio_piotrans_addr ()
+to establish a mapping.
+If that call fails, it then
+allocates a map using
+.IR pciio_piomap_alloc ()
+(or uses the preallocated map passed in
+via the \f2mapp\f1 pointer),
+and fills it in using
+.IR pciio_piomap_addr (),
+returning the resulting piomap
+via the map pointer \f2mapp\f1.
+This function encapsulates the common two-step process
+of attempting a simple address translation and falling back
+to the more general process in the event the simple approach fails.
+.P
+.IR pciio_piospace_alloc ()
+can be used to find a block of PCI address space
+that nobody else is using, which can then be
+used for whatever the device and driver wish to
+use it for.
+The PCI infrastructure preallocates PCI address
+space regions based on the device configuration BASE registers at the time the
+bus is discovered.
+As a result this function is needed only to manage a device
+that does not completely declare its address space usage
+in its hardware configuration registers.
+.P
+.IR pciio_piospace_free ()
+is used to release any allocations that were
+previously made by
+.IR pciio_piospace_alloc ().
+.SS "Specifying PCI Address Spaces"
+The
+.I space
+parameter takes on of the following values:
+.IP PCIIO_SPACE_WIN(n) 12n
+specifies one of the regions on the PCI bus
+decoded by the PCI card's BASE registers.
+The address specified is the offset
+within the decoded area, and the entire
+PIO region must fit within the decoded area.
+.IP PCIIO_SPACE_CFG 12n
+requests a pointer handle that can be
+used to access the configuration space
+for the card, via the
+.IR pciio_config_get ()
+and
+.IR pciio_config_set ()
+functions documented in pciio_config(D3).
+.P
+Other space types are rarely needed but can be used:
+.IP PCIIO_SPACE_IO 12n
+requests a mapping into somewhere in the PCI bus I/O address space.
+.IP PCIIO_SPACE_MEM 12n
+requests a mapping into somewhere
+in the PCI bus Memory space.
+Since PCI bus address space is preallocated by the kernel,
+this is a dangerous function to use.
+.SS "PIO Attribute Flags"
+The
+.I flags
+argument specifies some uses of the map.
+.IP PCIIO_FIXED 12n
+states that all translations will
+be done using fixed shared resources;
+the results of those translations
+will remain valid permanently,
+even if the map resource is
+subsequently used to obtain
+additional mappings.
+.IP PCIIO_NOSLEEP 12n
+requests that any resources that are needed from
+the system are allocated without
+sleeping.
+If any resource allocation
+would have required the infrastructure
+to sleep, the service call will return
+a failure code.
+.SH EXAMPLES
+Here is a contrived example of how
+one might initialize a very strange
+PCI card.
+It is not clear that this
+would be the best way to do it, but
+it does give an example of the relationship
+between the various functions.
+.Ex
+pcifoo_attach(vertex_hdl_t vhdl)
+{
+	unsigned	*cfgspace;
+	struct pcifoo_devregs *devregs;
+	pciio_piomap_t pmap;
+	pciio_piomap_t cmap;
+	struct pcifoo_chan_config *tune;
+	...
+	/* Get the configuration space base
+	 * pointer.
+	 */
+	cfgspace = pciio_piotrans_addr
+		(vhdl, 0, PCIIO_SPACE_CFG, 0, 256, 0);
+	if (cfgspace == NULL) {
+		cmn_err(CE_ALERT,
+			"pcifoo_attach: pciio_piotrans_addr failed");
+		return -1;
+	}
+	/* Get a pointer we can use for PIO to our
+	 * device's control registers. This call
+	 * attempts to use fixed shared resources,
+	 * but will allocate unshared mapping resources
+	 * if required.
+	 */
+	devregs = pciio_pio_addr
+		(vhdl, 0,
+		PCIIO_SPACE_WIN(0), 0,
+		sizeof (struct pcifoo_devregs),
+		&pmap, 0);
+	if (devregs == NULL) {
+		cmn_err(CE_ALERT,
+			"pcifoo_attach: pciio_pio_addr failed");
+		return -1;
+	}
+	/* save cfgspace and devregs for use;
+	 * save pmap for pciio_dmamap_free
+	 * call if/when we are unregistered.
+	 */
+	...
+	/* pretend our "channel" space is too big
+	 * to successfully map with piotrans, so
+	 * we have to use piomap, and that it is
+	 * too big for us to get it in one call
+	 * to piomap_addr.
+	 */
+	cmap = pciio_piomap_alloc(vhdl, 0,
+		PCIIO_SPACE_WIN(2), 0, CHAN_SEP * CHANS,
+		sizeof (struct pcifoo_chan_config), 0);
+	for (chan = 0; chan < chans; ++chan) {
+		tune = (struct pcifoo_chan_config *)
+			pciio_piomap_addr(cmap, CHAN_SEP * chan,
+				sizeof (struct pcifoo_chan_config));
+		/* now fiddle with this particular channel */
+		tune->chan = chan + 2;
+		tune->volume = 5;
+		tune->balance = 0;
+		pciio_piomap_done(cmap);
+	}
+	pciio_piomap_free(cmap);
+	...
+}
+.Ee
+.SH NOTES
+.LP
+Do not point the
+.I mapp
+parameter to the
+.IR pciio_pio_addr ()
+function at your only copy of a map pointer,
+since it will write a NULL through this pointer
+when direct translations work.
+.LP
+It is not necessary to separately establish
+mappings for each individual PIO target register.
+It is customary and more efficient to use a single mapping to cover
+the entire register set of a device.
+.\" .SH FILES
+.SH "SEE ALSO"
+pciio(D3),
+pciio_config(D3),
+pciio_dma(D3),
+pciio_error(D3),
+pciio_get(D3),
+pciio_intr(D3).
+.SH DIAGNOSTICS
+.IR pciio_piotrans_addr ()
+returns a null pointer when
+shared (fixed) resources can not be
+used to construct a valid physical
+address that maps to the desired
+range of PCI addresses.
+.P
+.IR pciio_pio_addr ()
+returns a null pointer when
+the target PCI address can not be
+mapped either with shared (fixed)
+resources, or with unshared mapping
+resources.
+If this happens, and
+the object being mapped is large,
+it might be possible to set up
+mappings to smaller regions of
+the target space.
+.P
+.IR pciio_piomap_alloc ()
+returns a null pointer when resources
+can not be allocated to establish PIO
+mappings to the described region, or
+if the function parameters are inconsistant.
+.P
+.IR pciio_piomap_addr ()
+returns a null pointer when the specified
+target address can not be mapped using
+the specified PIO channel.
+This would usually
+be due to specifying a target block that is
+outside the previously specified target area
+or is larger than the previously specified
+maximum mapping size.
+It may also return a null pointer if the
+PIO channel is currently in use and has
+not been marked idle by a
+.IR pciio_piomap_done ()
+call.

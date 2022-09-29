@@ -1,0 +1,229 @@
+info.c
+------
+grio_info_get_file_resvs	-	Returns # reservations on a 
+	specific file in the given filesys by searching global resv
+	list
+
+grio_info_get_proc_resvs	-	Returns # reservations done
+	by a specific process by searching global resv list
+
+grio_info_get_dev_resvs		-	Returns remaining bandwidth
+	on a specific device
+
+iosize.c
+--------
+get_grio_iosize_for_filesys	-	Search the iosize_list cache
+	for the iosize of input filesys. If not found, get all the
+	disks associated with the FS, check that all their iosizes 
+	are equal, and insert the information in the cache.
+
+vdisk_cache.c
+-------------
+get_vdisk_fd			-	Given a vdev, first search in 
+	cache, then insert if needed a mknod'ed file descriptor 
+	referencing the vdev.
+
+get_vdev			-	Iterate over the vdev_table
+	cache, returning an entry at a time
+
+get_subvol_info			-	If the search in the cache for
+	subvol info on the vdev fails, allocate a cache entry for it
+	and issue DIOCGETSUBVOLINFO to get info on this xlv subvol
+
+vdisk.c
+-------
+is_file_realtime		-	Issue syssgi GRIO_GET_FILE_RT
+	call to determine whether the specific file is RT.
+
+get_file_system_block_size	-	Issue syssgi GRIO_GET_FS_BLOCK_SIZE
+	call to determine the blocksz of the FS
+
+get_extents_for_file		-	Issue syssgi GRIO_GET_FILE_EXTENTS
+	to determine file extents
+
+get_vdisk_subvol		-	Return the RT subvol device 
+	handle for the vdev
+
+file_in_element			-	Given the file extents and the
+	xlv RT subvol elements, determine whether the file has any
+	part on this volume element
+
+add_new_striped_disks_to_list	-	Populate a disk list with the
+	disk parameters of the xlv volume element
+
+get_all_disks_in_vdisk		-	From the device number of the
+	xlv volume, get the RT subvol handle, and thence the subvol 
+	info. Populate a list with the disk device numbers of the
+	disk partitions comprising the RT subvol
+
+reserve_vdisk_bandwidth		-	Check that request time parameters
+	are sane, request is on a RT file, then get the RT handle for
+	the FS, and get the RT subvol info. Depending on the request,
+	invoke vod/generic reservation procedures
+
+unreserve_vdisk_bandwidth	-	Get all disk partitions in the
+	RT subvol of the vdev, and for each disk, unreserve any request
+	from this stream id all along the path, returning the leftover
+	bandwidth for the last disk
+
+generic_reservation		-	For file guarantee, get the
+	file extents. Go thru the first plex of the RT subvol, putting
+	the component disks in a list if the file spans the disk or if
+	the guarantee is on the FS. Convert the user's bw interval into
+	usecs, and round up requested number of bytes by the FS block
+	size, and if required by the xlv stripe size too. Then reserve 
+	the requested bw on each of the disks, freeing up all prior 
+	reservations if one disk fails the guarantee
+
+vod_reservation			-	Similar to above, except more
+	checks on reservation time slice
+
+vdisk_make_reservations		-	For each disk in the passed in
+	list, try to reserve system bw in the ggd tree
+
+
+reservation.c
+-------------
+next_file_start_time		-	From the global list, return the 
+	time any pending reservation that should have been activated before 
+	or should be activated now
+
+next_file_expire_time		-	From the global list, return the
+	time any active reservation that should have been deactivated before
+	or should be deactivated now
+
+get_time_until_next_file_operation	Check the next time a reservation
+	should be activated or deactivated. Based on this, a value is
+	returned to the kernel about when ggd should be poked awake so that
+	it can activate/deactivate reservations
+
+add_new_reservation		-	Add the recently granted reservation
+	into the global list
+
+expire_reservation		-	Mark the reservation deleted in
+	the global list, based on the input stream id. It will be taken
+	off the list soon
+
+start_guaranteed_stream		-	syssgi GRIO_ADD_STREAM_INFO call
+	for a specific reservation to tell the kernel about the stream 
+	and the associated FS
+
+end_guaranteed_stream		-	syssgi GRIO_REMOVE_STREAM_INFO call
+	to deactivate the guaranteed rate stream from the system
+
+start_guaranteed_disk_stream	-	
+
+remove_expired_reservations	-	Go thru the global resv list, 
+	deleting reservations which are expired, deactivating the stream 
+	if the reservation was activated before
+
+start_new_reservations		-	Go thru the global resv list,
+	activating reservations which should be activated by now but
+	still has not been
+
+update_file_reservations	-	Deactivate reservations whose 
+	periods are over, and activate reservations whose time is here
+
+start_guaranteed_disk_stream	-	syssgi GRIO_ADD_STREAM_DISK_INFO 
+	call to tell the kernel about the active stream on this disk
+
+start_new_disk_reservations	-	Looking at the device reservation
+	list, if this is a START type record, and it should have been
+	activated but has not been till now, activate the stream on the
+	disk
+
+
+tree.c
+------
+build_performance_tree		-	Read the cfg file to build the
+	ggd device tree, specifically updating each components' maxiops,
+	optiosize, HARD guarantee flag, set disk noretry option, syssgi
+	GRIO_ADD_DISK_INFO to tell kernel about RT disks
+
+determine_device_rate_guarantees-	Looks at each component and
+	determines its guarantee type and puts the info in the device 
+	node
+
+
+prims.c
+-------
+guarantee_avail			-	Determine whether the specific
+	type of guarantee is available on input component
+
+convert_size_and_time		-	Convert 1 "reqsize" byte request
+	in "reqtime" ticks into some number of "basesize" byte requests
+	in "basetime" ticks for VOD requests
+
+get_resv_from_id		-	Scan the list of reservations
+	and return the first reservation in the list that has a 
+	matching stream id and disk device
+
+add_to_lcm_list			-	Add the input time to the list
+	if it is not already there
+
+add_resevs_to_lcm_list		-	Scan the device reservation list 
+	and add the users' guarantee interval of the reservations active 
+	at or before the input time to the lcm list
+
+compute_lcm			-	Compute the multiple of the values 
+	in the lcm list
+
+add/remove_reservation		- 	Add/remove the reservation to the 
+	global or nodal list
+
+remove_reservation_with_id	-	Remove all the reservations from 
+	the specified device list matching input stream id
+
+add_start_stop_reservations	-	Add two reservation records into 
+	the device list, marking the START and END of the reservation, 
+	that is, the times when the reservation should be activated and
+	deactivated
+
+remove_expired_reservations	-	Remove both the START and END type 
+	reservations for expired reservations from the device list
+
+count_nonvod_reservation	-	Depending on the reservation
+	record in the device list, add or subtract the bw used by the
+	input NONVOD reservation (CODE CHECK)
+
+determine_nonvod_reserved_bandwidth	Calculate the amount of bandwidth 
+	that is reserved on the given device from start_time to end_time 
+	by NONVOD type rate reservations. Make a list of the user
+	guarantee intervals for all reservations in the device list
+	before end_time, LCM out to get a common interval, and go 
+	thru each one calculating how much iops it will need. Return the
+	max iops in the common interval period, ie the busiest bw
+
+determine_used_bandwidth	-	On the specific device, find
+	the max reserved vod and nonvod reservations, and return the
+	result as bytes per a common interval
+
+reserve_bandwidth		-	Round up the user's request 
+	size to multiple of device optiosize, invoke the reservation
+	granting procedures, and add the START/END reservation records
+	to the device list if it succeeds
+
+reserve_subtree_bandwidth	-	Given a device, find the path 
+	to it and try to reserve bw on the components in the path, 
+	freeing up all prior reservations if one component fails
+
+reserve_tree_bandwidth		-	Given a device, reserve bw on
+	all components needed to reach it, if a reservation for this id
+	does not already exist
+
+unreserve_[sub]tree_bandwidth	-	Make a list of all the
+	components in the path to the given device, and take off the
+	reservations with the given stream id from the reservation
+	list of the component devices
+
+update_tree_reservations	-	For all devices, remove
+	expired reservations from the device list. Start any new
+	disk streams that should be started, and also update the
+	information summary for this node if prio wants to look at it
+
+The foll are disk geometry specific routines:
+can_add_vod_reservation
+can_add_nonvod_reservation
+determine_remaining_bandwidth
+determine_vod_reserved_bandwidth_on_all_fs_except
+determine_vod_iops_reserved_on_fs

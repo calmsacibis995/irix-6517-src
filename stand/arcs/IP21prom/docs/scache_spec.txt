@@ -1,0 +1,763 @@
+File Name: scache_spec.txt
+Note: This email information is the scache diag sepc.
+      If you have any question, please contact Bill Huffman or Sue Liu
+
+
+
+Received: from localhost. mti.sgi.com by joy.mti.sgi.com via SMTP (930416.SGI/911001.SGI)
+	for @mti.mti.sgi.com:tpos@asd.sgi.com id AA00006; Tue, 12 Oct 93 18:40:14 -0700
+Message-Id: <9310130140.AA00006@joy.mti.sgi.com>
+To: tphw@joy.mti.sgi.com, sgi.ngs@asd.sgi.com, everesthw@asd.sgi.com,
+        tpos@asd.sgi.com
+Cc: huffman@joy.mti.sgi.com
+Subject: Changes in Local Register Address Space for IP21
+Date: Tue, 12 Oct 93 18:40:13 PDT
+From: Bill Huffman <huffman@joy.mti.sgi.com>
+Status: R
+
+
+Ladies and Gentlemen,
+
+Currently the IP21 local registers appear at non-cachable, physical
+addresses in the range 00_1800_0000 to 00_1FFF_FFFF.  In the second
+rev of the BBCC chip, they will continue to appear at this address
+range and will also appear at non-cachable, physical addresses in the
+range 04_1800_0000 to 04_1FFF_FFFF.  This range is between the small
+I/O windows and the large I/O windows on the E-Bus and does not need
+to be accessed for any other reason.
+
+The Reset Vector will remain at physical address 00_1FC0_0000 but the
+code should jump immediately to 9000_0004_1FC0_0008 and run from the
+high memory image of Prom code from then on.  In addition, all read
+and write accesses to local registers in the prom, the kernel, or
+anywhere else should be made through the (new) high memory image.
+
+The reason for this change is that, if a non-cachable access hits in
+the Dcache in TFP, the cached value is used.  In addition, the low
+memory image of the local register space overlaps cachable memory.
+Non-cachable accesses to local register space, therefore, return
+unrelated memory data if it happens to be in the Dcache.  The current
+software work-around of forcing that potential value out of the
+Dcache before reading the local register is slow and will not work
+when the timer, write gatherer, join counter, or any other register
+is mapped into user space.
+
+This change means that no software work-around will be necessary for
+this problem except mapping local register accesses to use the high
+memory image of local space.
+
+	-- Bill
+
+
+
+
+From huffman@joy.mti.sgi.com  Thu Oct 14 13:31:34 1993
+Received: from whizzer.wpd.sgi.com by gate-testlady.wpd.sgi.com via SMTP (930416.SGI/911001.SGI)
+	for sue id AA25289; Thu, 14 Oct 93 13:31:34 -0700
+Received: from relay.sgi.com by whizzer.wpd.sgi.com via SMTP (921026.SGI.NOSTRIP/911001.SGI)
+	for sue@gate-testlady.wpd.sgi.com id AA25113; Thu, 14 Oct 93 13:31:16 -0700
+Received: from mti.mti.sgi.com by relay.sgi.com via SMTP (920330.SGI/920502.SGI)
+	for sue@whizzer.wpd.sgi.com id AA07747; Thu, 14 Oct 93 13:31:06 -0700
+Received: from joy.mti.sgi.com by mti.mti.sgi.com via SMTP (920110.SGI/911001.SGI)
+	for @sgi.com:sue@wpd id AA09523; Thu, 14 Oct 93 13:30:52 -0700
+Received: from localhost. mti.sgi.com by joy.mti.sgi.com via SMTP (930416.SGI/911001.SGI)
+	for @mti.mti.sgi.com:sue@wpd id AA01855; Thu, 14 Oct 93 13:30:37 -0700
+Message-Id: <9310142030.AA01855@joy.mti.sgi.com>
+To: tpos@joy.mti.sgi.com, benf@joy.mti.sgi.com, sue@whizzer,
+        mdeneroff@joy.mti.sgi.com, presant@joy.mti.sgi.com,
+        lmc@joy.mti.sgi.com, kchoy@joy.mti.sgi.com, dem@joy.mti.sgi.com,
+        jscanlon@joy.mti.sgi.com, joshi@joy.mti.sgi.com
+Cc: phsu@joy.mti.sgi.com, parry@joy.mti.sgi.com, huffman@joy.mti.sgi.com
+Subject: Boot Prom Cache Testing and Initialization
+Date: Thu, 14 Oct 93 13:30:35 PDT
+From: Bill Huffman <huffman@joy.mti.sgi.com>
+Status: R
+
+
+I would like to describe here the requirements I can see for the boot
+prom in the area of cache test and initialization.  First is a list
+of things to be done in the order they should be done.  After that is
+a more detailed discussion of each of the items in the first list.
+
+ 1) Force set 3 ON and Writeback Disable ON
+ 2) Invalidate Icache and Dcache
+ 3) Flush Store Address Queue
+ 4) Size the Gcache
+ 5) Test Gcache Tag Address
+ 6) Test Gcache Tag Data
+ 7) First Initialization of Gcache Tag
+ 8) First Test of Dcache/Gcache Address
+ 9) First Test of Dcache/Gcache Data
+10) Second Initialization of Gcache Tag
+11) Second Test of Dcache/Gcache Address
+12) Second Test of Dcache/Gcache Data
+13) Additional Dcache Tests
+14) Clear Dcache/Gcache
+15) Invalidate Dcache
+16) Third Initialization of Gcache Tag
+17) Force set 3 OFF and Writeback Disable OFF
+18) Never touch Dcache/Gcache tags again
+
+In more detail:
+
+ 1) Force set 3 ON and Writeback Disable ON
+	Assuming this is after a hardware reset, this condition will
+	already be fulfilled.  Otherwise these two bits must be
+	turned on and all coherence (and even sanity) in the Gcache
+	will be lost.
+
+	Note that immediately after the reset entry at
+	9000_0000_1FC0_0000 a jump should be made to
+	9000_0004_1FC0_0008 which will access the next location in
+	the Prom but without some cache aliasing effects. 
+	Non-cacheable accesses to the range between
+	xxxx_xx00_1800_0000 and  xxxx_xx00_1FFF_FFFF must never be
+	done again after the reset vector or the NMI vector.  
+
+ 2) Invalidate Icache and Dcache
+	The Icache must be invalidated by executing some code
+	within each block at a PC within 9000_0004_1FCx_xxxx.
+	The Dcache must be invalidated by writing invalid in every
+	cache tag using the COP0 locations.
+
+	Note that any data loads -- even non-cacheable ones from the
+	Eprom or Earom -- are not guaranteed to work correctly
+	before this step is completed because of the IU feature
+	(bug) which causes non-cacheable loads which hit in the
+	Dcache simply to use the data from the Dcache.  All data
+	must be accessed using load immediates or a load must first
+	be done 16k away from the desired location and that data
+	thrown away.
+
+	After this point, care should be taken that no cacheable
+	address should come into the Dcache which matches any
+	non-cacheable access which may later be done; otherwise the
+	same precautions will need to be taken.
+
+ 3) Flush Store Address Queue
+	The Store Address Queues are flushed using 32 writes to an
+	even location (Address<3> clear) and 32 writes to an odd
+	location (Address<3> set).  The addresses used are two
+	unused local address space registers and the writes are
+	non-cacheable.  The data is not important.
+
+ 4) Size the Gcache
+	The Gcache tag ram size options are 1,2,4,8,and 16 MB.
+	First load the data in the "Write Data" column in the
+	order shown into each of the three tag rams (even, odd,
+	and bus tag) at the index shown in the "Addr Index"
+	column.
+
+	Note that the Addresses are multiples of 512 and that
+	the actual address at which the index is accessed is 8
+	times larger.  Note also that (unlike the current code)
+	only 16 indexes need be written not 8192 and that only
+	the tags need to be written and not the state as well.
+
+	Note that this data cannot be placed in the Tag
+	positions for Address<21:20> because those bits are
+	written from the address of the store not the data.
+	The data should be written in the Tag positions for
+	Address<27:24>.
+
+	         Write   Read    Read    Read    Read    Read
+	Addr:    Data:   16MB    8MB     4MB     2MB     1MB
+	Index
+	   0       f     f        7       3       1       0
+	 512       e     e        6       2       0       0
+	1024       d     d        5       1       1       0
+	1536       c     c        4       0       0       0
+	2048       b     b        3       3       1       0
+	2560       a     a        2       2       0       0
+	3072       9     9        1       1       1       0
+	3584       8     8        0       0       0       0
+	4096       7     7        7       3       1       0
+	4608       6     6        6       2       0       0
+	5120       5     5        5       1       1       0
+	5632       4     4        4       0       0       0
+	6144       3     3        3       3       1       0
+	6656       2     2        2       2       0       0
+	7168       1     1        1       1       1       0
+	7680       0     0        0       0       0       0
+
+	If the data is then read back (after all data has been
+	written) it should match one of the patterns in the five
+	read columns.  The column it matches gives the size of the
+	cache.  Note that if the Data is read from Index 0 and
+	incremented it will become the size of the cache in MB.
+
+	Each of the three tag RAMs should be read.  If they all
+	give the same size, then that is the cache size.  If they
+	give different sizes, then either the Tag RAM jumpers are
+	incorrect or there is a fault on the board or in one of the
+	chips.
+
+	This sizing determines whether all the index jumpers for
+	the three tag RAMs are installed consistently.  The Gcache
+	data tests below determine whether this size is consistent
+	with the data RAMs.  There are two other jumpers for the
+	two tag addresses which must be installed consistently with
+	the tag index jumpers.  One of the tag RAM address bits on
+	each processor tag RAM must be connected either to
+	Address<39> or Address<19> from the IU.
+
+	This can be tested for cache sizes four megabytes and larger
+	by showing that Address<39> can be written and read back
+	in both set and clear state while Address<19> is written
+	with the opposite state.  It can be tested for two megabyte
+	caches by the same test with Address<39> and Address<19> 
+	reversed.
+
+	The correct value for the size should be loaded into the
+	Gcache size register in the local register space and always
+	afterward that register should be used as the source of
+	size information so that the tags are not inappropriately
+	modified.
+
+ 5) Test Gcache Tag Address
+	The goal here is to write data with address (including
+	the set address) into each of the tags and each of the
+	states in each of the three tag RAMs and then read all
+	of them back and check that all are correct.  This is
+	to test the addressing to and within the three tag RAMs.
+
+	There are three unusual things which must be handled in
+	this test.  The first is that instruction reads will
+	modify the values placed in set 3 of some of the tags.
+	The simplest solution to this is to run the test in
+	the "externally non-cacheable internally cacheable" mode
+	indicated by PCs of the form 8000_0004_1FCx_xxxx
+	and to run the entire test twice making sure that the
+	result is ignored the first time and that the entire
+	test (including all subroutines) will fit in the 16kB
+	direct mapped Icache at the same time.  Note that
+	the test must not skip any code on the first pass (like
+	the pass fail test) that will be run on the second pass
+	before all values have been compared; the test must
+	simply fall out of the loop the second time with a pass
+	or fail value in a register.
+
+	The second is that tag RAM reads will modify the values
+	placed in set 3 of some of the tags.  The simplest
+	solution to this is to run the test on sets 0, 1, and 2
+	in the form of writing all locations in all three sets
+	and then reading all locations back.  The test of set 3
+	is then run in the form of reading each location back
+	immediately after writing it before it may have been
+	modified by another read.  This is slightly less capable
+	of finding faults but easier than a full solution.
+
+	The full solution is to write the values to all four sets
+	and then read all the values back in a very particular
+	order which begins with the location in Set 3 which reads
+	through itself and the other 63 locations which read
+	through the same line and expand from there.  These
+	locations are different in the three tag RAMs.
+
+	The third is that, while writes to the tag RAM address are
+	straight forward, writes to the tag RAM state are complex
+	because the method for writing the dirty bits to
+	non-identical values requires two writes -- one for all the
+	sectors with dirty bits clear and one for all the sectors 
+	with dirty bits set.  This method uses the write enable
+	bits within the data.
+
+	Note also that Tag Address<20:21> are actually written
+	from the Address of the store rather than the data,
+	regardless of the size of the Gcache.
+
+ 6) Test Gcache Tag Data
+	The data test is done in a very similar way to the address
+	test.  All three of the unusual features are handled in the
+	same way.
+
+ 7) First Initialization of Gcache Tag
+	This step initializes the tag RAMs for the next few tests.
+
+	In order to avoid memory reads going onto the backplane, 
+	the data RAM tests are divided into two groups.  Each
+	group does the same test but skips the part of Set 3 
+	which the test itself is read through so that no cacheable
+	reads or writes go to the area which has been invalidated
+	by instruction reads and cause a read on the backplane.
+
+	From the time this initialization is begun until just
+	before the second initialization below, not a single
+	non-cacheable read should be done from any address except
+	the Eprom space which will read through the area of RAM
+	which is being skipped (eg. the code itself).  Values like
+	the size of the Gcache need to be kept in registers during
+	this interval.
+
+ 	Before any of the Tag RAMs are written, two non-cacheable
+	reads from the Eprom space at the current PC must be done
+	to initialize the Annex pipe so that it doesn't mess up the
+	values after they are written.
+
+	The value of the tag RAM address used for set three is
+	chosen so that any instruction fetches which occur during
+	this step will put exactly the same value into the the
+	location.  The state, virtual synonym, and dirty bits
+	should also be set so that the instructions will load the
+	identical value.
+
+	The tag RAM addresses should be as follows:
+
+	Set	Tag
+	  0	0x041CC
+	  1	0x041DC
+	  2	0x041EC
+	  3	0x041FC
+
+	Address<21:20> will be written from the address used to
+	access the tags and need not be varied explicitly for
+	caches larger than 4MB. 
+
+	The dirty bits do not matter; the state bits should all
+	be exclusive; and the virtual synonym bits should be set
+	to address<15:12> (part of the index) so that no virtual
+	synonym misses will occur when used with virtual equals
+	physical mapping.
+
+ 8) First Test of Dcache/Gcache Address
+	The Gcache data RAMs may now be tested by using cacheable
+	accesses to four address regions, each of which is one
+	fourth of the total Gcache size.  The four regions begin at
+	the following addresses:
+
+	A800_0004_1CC0_0000
+	A800_0004_1DC0_0000
+	A800_0004_1EC0_0000
+	A800_0004_1FC0_0000
+
+	Each location (64 bits) in the cache may be written with
+	data equal to address and when complete they may all be
+	read back and checked.
+
+	A small section of the cache must be skipped for both
+	writes and reads because the instructions for this region
+	of code will read through and corrupt the Gcache.  If these
+	locations are accessed with cacheable addresses, reads of
+	main memory will occur on the backplane.
+
+ 9) First Test of Dcache/Gcache Data
+	Again the data test should be run just like the address
+	test with the same region skipped.
+
+10) Second Initialization of Gcache Tag
+	The initialization and test must be run a second time to
+	test that portion of the cache which was skipped the first
+	time.  The second initialization and test must use separate
+	code which is aligned so that different cache lines (512
+	bytes each) are skipped the second time. 
+
+11) Second Test of Dcache/Gcache Address
+	The second test is just like the first but resides in a
+	different cache line and skips different cache lines.
+
+12) Second Test of Dcache/Gcache Data
+	The second test is just like the first but resides in a
+	different cache line and skips different cache lines.
+
+13) Additional Dcache Tests
+	Any additional Dcache tests which cover things not covered
+	by the Gcache tests above (which read through the Dcache)
+	may be done here and use the address range
+	A800_0004_1CC0_0000 to A800_0004_1CC3_FFFF (which is 16
+	times the size of the Dcache) so that they use the
+	validated exclusive portion of the Gcache and not the
+	portion the instructions use.
+
+14) Clear Dcache/Gcache
+	If it is desired to clear the data in the caches, that may
+	be done here.  It is not necessary both because it is 
+	impossible for a user program to read any of the data in
+	the cache which will have been entirely invalidated and
+	because the entire Gcache as well as the entire Dcache will
+	have been written with test patterns anyway.
+
+	When the cache tests are complete the entire Gcache (and
+	therefore the Dcache) may be written with zeros if desired.
+	Again, the same four address ranges that are used for the
+	Gcache Address test should be used for writing the Gcache.
+
+	The section skipped in the second pass of testing must be
+	skipped here also to avoid operations on the backplane.  If
+	it is desired to zero the locations not used for
+	instructions, nop's may be executed to the end of the
+	Gcache line or the Gcache may be zeroed (except for the
+	skipped part) with the first set of tests as well.
+
+15) Invalidate Dcache
+	The Dcache must be invalidated here so that memory at the
+	addresses used in the test will be seen later.  This is
+	done as before by use of the CPO0 registers for writing the
+	tags and valid bits.
+
+16) Third Initialization of Gcache Tag
+	For all processors except the master the procedure for the
+	first two initializations of the Gcache should be repeated
+	except that the states should all be written to  invalid
+	instead of exclusive.  These processors will not run C code
+	and will not need a stack.
+
+	The master processor should be initialized in the same way
+	as the slaves except that a stack region should be created
+	at whatever index and address tag is convenient and of
+	whatever size (up to the size of one set) may be
+	convenient.  The stack should be created now because we
+	do not want to write the Gcache tags again later.
+
+	The stack provision is made by picking a section of Set 1
+	(it must not be set 0 or 3).  The Tag Address and state
+	writes may be done after the complete slave style
+	initialization has been accomplished.  The state should be
+	exclusive and the dirty bits do not matter.  Again the
+	virtual synonym bits must be set to Address<15:12> to avoid
+	reads on the backplane.  The Set Allow register must be set
+	not to allow access to Set 1.  (Note that Force Set Three
+	is still on until the next step.)  Before running User
+	Mode, Set Allow should be set back to allow all sets in
+	replacement.
+
+	The stack made in this way will work whether there is
+	a memory board in the system or not.  The states are
+	already exclusive and do not have to be filled from memory
+	and the set allow does not include Set 1 so that the
+	stack cannot be kicked out.  Set 0 will be kicked out
+	by non-cacheable accesses which miss in the cache, so it
+	is not used; Set 3 will be kicked out in Force Set
+	Three Mode, so it is not used.
+
+	All the cache lines in the system are now in legal states;
+	Some of them are exclusive in the master processor and
+	invalid elsewhere while the rest are invalid everywhere. 
+	In addition, at every index in every cache, the address
+	tags in the four sets are all different.
+
+14) Force set 3 OFF and Writeback Disable OFF
+	At this point these bits should be turned off and never
+	turned back on again.  From now on, all loads will access
+	values coherent with main memory and all stores will change
+	main memory.
+
+15) Never explicitly touch Dcache/Gcache tags again
+	Any operations done explicitly to the Tag RAMs after this
+	point will probably cause irreparable harm and should
+	not be done.
+
+
+
+
+From dem@thrill.mti.sgi.com  Wed Nov 10 15:30:30 1993
+Received: from whizzer.wpd.sgi.com by gate-testlady.wpd.sgi.com via SMTP (930416.SGI/911001.SGI)
+	for sue id AA07025; Wed, 10 Nov 93 15:30:30 -0800
+Received: from mti.mti.sgi.com by whizzer.wpd.sgi.com via SMTP (/911001.SGI)
+	for sue@gate-testlady.wpd.sgi.com id AA22367; Wed, 10 Nov 93 15:30:00 -0800
+Received: from thrill.mti.sgi.com by mti.mti.sgi.com via SMTP (920110.SGI/911001.SGI)
+	for sue@wpd.sgi.com id AA23593; Wed, 10 Nov 93 15:29:55 -0800
+Received: from localhost. mti.sgi.com by thrill.mti.sgi.com via SMTP (930416.SGI/911001.SGI)
+	for @mti.mti.sgi.com:sue@wpd.sgi.com id AA10557; Wed, 10 Nov 93 15:29:54 -0800
+Message-Id: <9311102329.AA10557@thrill.mti.sgi.com>
+To: sue@whizzer
+Subject: Gcache diags
+Date: Wed, 10 Nov 93 15:29:54 -0800
+From: David McCracken <dem@thrill.mti.sgi.com>
+Status: R
+
+Hi.
+
+The following diags might be useful to you.  Most of them are in
+testgen format, which is a combination of perl and assembly language.
+Let me know if you have any questions.
+
+1) /hosts/thrill.mti/x/lab/gcache2/gcache2.p -- This diag tests 32
+lines of the gcache very stenuously.  First it walks a one across each
+of the tag and state fields.  Then it initializes the tags to a known
+state and walks a one across all of the data ram in the gcache.
+
+2) /hosts/thrill.mti/x/lab/scache1/scache1.p -- This diag tests the
+entire gcache (sort of).  It is not self-checking.  It requires a
+logic analyzer to make sure it is working correctly.  However, it does
+contain some gcache and dcache initialization code.
+
+3) /hosts/thrill.mti/x/lab/dcache1/dcache1.p -- This diag makes sure
+that the valid bits of the dcache are working correctly.  First it
+tests the entire dcache using dctw and dctr instructions.  Then it
+makes sure that uncached loads are able to invalidate lines in the
+dcache. 
+
+If you have any questions about Bill Huffman's instructions, let me
+know.  I've put in some time over the last few weeks trying to figure
+out what he was saying, and how it might best be implemented.
+
+Hope this helps.
+
+- David McCracken
+
+
+
+From huffman@joy.mti.sgi.com  Thu Dec 16 20:58:11 1993
+Received: from cthulhu.engr.sgi.com by gate-testlady.engr.sgi.com via SMTP (930416.SGI/911001.SGI)
+	for sue id AA01554; Thu, 16 Dec 93 20:58:11 -0800
+Received: from mti.mti.sgi.com by cthulhu.engr.sgi.com via SMTP (930416.SGI/911001.SGI)
+	for sue@gate-testlady.engr.sgi.com id AA08544; Thu, 16 Dec 93 20:57:21 -0800
+Received: from joy.mti.sgi.com by mti.mti.sgi.com via SMTP (920110.SGI/911001.SGI)
+	for tpos@cthulhu.engr.sgi.com id AA23193; Thu, 16 Dec 93 20:56:32 -0800
+Received: from localhost. mti.sgi.com by joy.mti.sgi.com via SMTP (930416.SGI/911001.SGI)
+	for @mti.mti.sgi.com:mdeneroff@giraffe.asd.sgi.com id AA12123; Thu, 16 Dec 93 20:56:24 -0800
+Message-Id: <9312170456.AA12123@joy.mti.sgi.com>
+To: tphw@joy.mti.sgi.com, jbrennan@joy.mti.sgi.com, mdeneroff@joy.mti.sgi.com
+Cc: huffman@joy.mti.sgi.com
+Subject: Question about TFP
+Date: Thu, 16 Dec 93 20:56:23 PST
+From: Bill Huffman <huffman@joy.mti.sgi.com>
+Status: R
+
+
+I have a question about the processor:
+
+    When a store hits a shared line and causes an invalidate which
+    loses the arbitration to another invalidate, it is normally
+    re-tried as a read exclusive.  Are there any circumstances under
+    which _anything_ else happens?  The only one I know of is that a
+    store conditional will not retry at all after the lost arbitration
+    because the link bit will be clear.  I wonder, for instance,
+    whether an interrupt might be taken between the failed invalidate
+    and its retry causing the retry to be much later and a different
+    access to follow the invalidate?
+
+This one case has only been possible since the "live-lock fix" in the
+IU and has caused a possible bug in the CC because it may be possible
+to overflow a queue if the code has several store conditionals in a
+row to different sectors each of which is in shared state to begin
+with and loses arbitration for upgrade to exclusive.  I am trying to
+understand what really can happen here.
+
+	-- Bill
+
+
+
+
+From mtang@mtang.mti.sgi.com  Thu Dec 16 23:33:13 1993
+Received: from cthulhu.engr.sgi.com by gate-testlady.engr.sgi.com via SMTP (930416.SGI/911001.SGI)
+	for sue id AA01671; Thu, 16 Dec 93 23:33:13 -0800
+Received: from mti.mti.sgi.com by cthulhu.engr.sgi.com via SMTP (930416.SGI/911001.SGI)
+	for sue@gate-testlady.engr.sgi.com id AA09330; Thu, 16 Dec 93 23:32:24 -0800
+Received: from mtang.mti.sgi.com by mti.mti.sgi.com via SMTP (920110.SGI/911001.SGI)
+	for tpos@cthulhu.engr.sgi.com id AA25388; Thu, 16 Dec 93 23:31:32 -0800
+Received: by mtang.mti.sgi.com (930416.SGI/911001.SGI)
+	for @mti.mti.sgi.com:mdeneroff@giraffe.asd.sgi.com id AA06256; Thu, 16 Dec 93 23:31:18 -0800
+From: "Man Kit Tang" <mtang@mtang.mti.sgi.com>
+Message-Id: <9312162331.ZM6254@mtang.mti.sgi.com>
+Date: Thu, 16 Dec 1993 23:31:18 -0800
+In-Reply-To: Bill Huffman <huffman@joy.mti.sgi.com>
+        "Question about TFP" (Dec 16,  8:56pm)
+References: <9312170456.AA12123@joy.mti.sgi.com>
+X-Mailer: Z-Mail-SGI (3.0S.1026 26oct93 MediaMail)
+To: Bill Huffman <huffman@joy.mti.sgi.com>, tphw@joy.mti.sgi.com,
+        jbrennan@joy.mti.sgi.com, mdeneroff@joy.mti.sgi.com
+Subject: Re: Question about TFP
+Cc: tphw@mtang.mti.sgi.com, jbrennan@mtang.mti.sgi.com,
+        mdeneroff@mtang.mti.sgi.com, mtang@mtang.mti.sgi.com
+Content-Type: text/plain; charset=us-ascii
+Mime-Version: 1.0
+Status: R
+
+On Dec 16,  8:56pm, Bill Huffman wrote:
+> Subject: Question about TFP
+> From huffman@joy.mti.sgi.com  Thu Dec 16 20:57:11 1993
+> To: tphw@joy.mti.sgi.com, jbrennan@joy.mti.sgi.com, mdeneroff@joy.mti.sgi.com
+> Cc: huffman@joy.mti.sgi.com
+> Subject: Question about TFP
+> Date: Thu, 16 Dec 93 20:56:23 PST
+> From: Bill Huffman <huffman@joy.mti.sgi.com>
+> 
+> 
+> I have a question about the processor:
+> 
+>     When a store hits a shared line and causes an invalidate which
+>     loses the arbitration to another invalidate, it is normally
+>     re-tried as a read exclusive.  Are there any circumstances under
+>     which _anything_ else happens?  The only one I know of is that a
+>     store conditional will not retry at all after the lost arbitration
+>     because the link bit will be clear.  I wonder, for instance,
+>     whether an interrupt might be taken between the failed invalidate
+>     and its retry causing the retry to be much later and a different
+>     access to follow the invalidate?
+> 
+> This one case has only been possible since the "live-lock fix" in the
+> IU and has caused a possible bug in the CC because it may be possible
+> to overflow a queue if the code has several store conditionals in a
+> row to different sectors each of which is in shared state to begin
+> with and loses arbitration for upgrade to exclusive.  I am trying to
+> understand what really can happen here.
+> 
+> 	-- Bill
+> 
+> 
+>-- End of excerpt from Bill Huffman
+
+I am not sure if I understand the question.  The "live-lock fix" involves
+switching store-conditional without link-bit set into share-read, so,
+store-conditional should never turn into exclusive-read. 
+
+-mkt
+
+
+
+From huffman@joy.mti.sgi.com  Thu Jan 13 19:50:22 1994
+Received: from cthulhu.engr.sgi.com by gate-testlady.engr.sgi.com via SMTP (930416.SGI/911001.SGI)
+	for sue id AA19227; Thu, 13 Jan 94 19:50:22 -0800
+Received: from mti.mti.sgi.com by cthulhu.engr.sgi.com via SMTP (930416.SGI/911001.SGI)
+	for sue@gate-testlady.engr.sgi.com id AA00303; Thu, 13 Jan 94 19:46:03 -0800
+Received: from joy.mti.sgi.com by mti.mti.sgi.com via SMTP (920110.SGI/911001.SGI)
+	for tpos@cthulhu.engr.sgi.com id AA15360; Thu, 13 Jan 94 19:46:02 -0800
+Received: from localhost. mti.sgi.com by joy.mti.sgi.com via SMTP (930416.SGI/911001.SGI)
+	for @mti.mti.sgi.com:tpos@cthulhu.engr.sgi.com id AA03999; Thu, 13 Jan 94 19:46:00 -0800
+Message-Id: <9401140346.AA03999@joy.mti.sgi.com>
+To: tpos@joy.mti.sgi.com
+Cc: huffman@joy.mti.sgi.com
+Subject: Flushing G-Cache
+Date: Thu, 13 Jan 94 19:46:00 PST
+From: Bill Huffman <huffman@joy.mti.sgi.com>
+Status: R
+
+
+I seem to remember a long time ago I suggested that we flush address
+A out of the G-Cache by doing a Non-Cached load of A.  The load might
+get stale data, I said, but the good data would be flushed out to
+memory.
+
+It turns out there is a quirk in the A chip which was made to cover
+for a quirk in the IP19 CC which will cause the system to hang fairly
+often if we do that.  Any address which has ever been accessed
+cachably must be flushed out of all caches in the system (maybe
+including the IO4 cache) before it may be accessed cachably by any
+element of the system.
+
+Steve: If you still want a flush routine we will have to do the
+fallback flush which is longer and slower.  Talk to me if you don't
+remember.
+
+	-- Bill
+
+
+
+
+From benf@schizo  Thu Jan 13 21:36:12 1994
+Received: from cthulhu.engr.sgi.com by gate-testlady.engr.sgi.com via SMTP (930416.SGI/911001.SGI)
+	for sue id AA19276; Thu, 13 Jan 94 21:36:12 -0800
+Received: from mti.mti.sgi.com by cthulhu.engr.sgi.com via SMTP (930416.SGI/911001.SGI)
+	for sue@gate-testlady.engr.sgi.com id AA00955; Thu, 13 Jan 94 21:31:57 -0800
+Received: from joy.mti.sgi.com by mti.mti.sgi.com via SMTP (920110.SGI/911001.SGI)
+	for tpos@cthulhu.engr.sgi.com id AA17060; Thu, 13 Jan 94 21:31:51 -0800
+Received: from box.mti.sgi.com by joy.mti.sgi.com via SMTP (930416.SGI/911001.SGI)
+	for @mti.mti.sgi.com:tpos@cthulhu.engr.sgi.com id AA04067; Thu, 13 Jan 94 21:31:48 -0800
+Received: from schizo.engr.sgi.com by box.mti.sgi.com via SMTP (920330.SGI/911001.SGI)
+	for huffman@joy.mti.sgi.com id AA10023; Thu, 13 Jan 94 21:31:47 -0800
+Received: by schizo.engr.sgi.com (921113.SGI/910709.SGI.autocf)
+	for tpos@joy.mti.sgi.com id AA29995; Thu, 13 Jan 94 21:31:45 -0800
+From: benf@schizo (Ben Fathi)
+Message-Id: <9401140531.AA29995@schizo.engr.sgi.com>
+Subject: Re: Flushing G-Cache
+To: huffman@joy.mti.sgi.com (Bill Huffman)
+Date: Thu, 13 Jan 1994 21:31:45 -0800 (PST)
+Cc: tpos@joy.mti.sgi.com, huffman@joy.mti.sgi.com
+In-Reply-To: <9401140346.AA03999@joy.mti.sgi.com> from "Bill Huffman" at Jan 13, 94 07:46:00 pm
+X-Mailer: ELM [version 2.4 PL22]
+Content-Type: text
+Content-Length: 884       
+Status: R
+
+> I seem to remember a long time ago I suggested that we flush address
+> A out of the G-Cache by doing a Non-Cached load of A.  The load might
+> get stale data, I said, but the good data would be flushed out to
+> memory.
+> 
+> It turns out there is a quirk in the A chip which was made to cover
+> for a quirk in the IP19 CC which will cause the system to hang fairly
+> often if we do that.  Any address which has ever been accessed
+> cachably must be flushed out of all caches in the system (maybe
+> including the IO4 cache) before it may be accessed cachably by any
+> element of the system.
+> 
+> Steve: If you still want a flush routine we will have to do the
+> fallback flush which is longer and slower.  Talk to me if you don't
+> remember.
+> 
+> 	-- Bill
+
+We currently don't use the gcache flush routine. I don't think we've
+come up with a valid reason for needing it, either.
+
+	ben
+
+
+
+
+
+From huffman@joy.mti.sgi.com  Fri Mar 18 10:31:41 1994
+Received: from cthulhu.engr.sgi.com by gate-testlady.engr.sgi.com via SMTP (930416.SGI/911001.SGI)
+	for sue id AA25355; Fri, 18 Mar 94 10:31:41 -0800
+Received: from mti.mti.sgi.com by cthulhu.engr.sgi.com via SMTP (930416.SGI/911001.SGI)
+	for sue@gate-testlady.engr.sgi.com id AA17004; Fri, 18 Mar 94 10:29:20 -0800
+Received: from thepub.mti.sgi.com by mti.mti.sgi.com via SMTP (920110.SGI/911001.SGI)
+	for tpos@cthulhu.engr.sgi.com id AA14357; Fri, 18 Mar 94 10:28:23 -0800
+Received: from joy.mti.sgi.com by thepub.mti.sgi.com via SMTP (931110.SGI/911001.SGI)
+	for @mti.mti.sgi.com:mdeneroff@giraffe.asd.sgi.com id AA20048; Fri, 18 Mar 94 10:28:13 -0800
+Received: by joy.mti.sgi.com (930416.SGI/911001.SGI)
+	for tphw@thepub.mti.sgi.com id AA22213; Fri, 18 Mar 94 10:28:10 -0800
+Date: Fri, 18 Mar 94 10:28:10 -0800
+From: huffman@joy.mti.sgi.com (Bill Huffman)
+Message-Id: <9403181828.AA22213@joy.mti.sgi.com>
+To: reuel@blivet.asd.sgi.com, dbg@asd.sgi.com
+Cc: tphw@thepub.mti.sgi.com
+Subject: Help with write-gatherer/code scheduling for gfx
+Status: R
+
+
+Reuel and Dominic,
+
+The current state of things is that there are four things you
+should be doing with the "v3f" code that you were not doing
+before:
+
+ 1) You should avoid having the write gatherer stores go to the
+    same index of the D-Cache (16 kBytes) as the flag; they keep
+    invalidating the flag and it has to be refetched.
+
+ 2) You should add one instruction to make all data alignments
+    work equally well.  After the "li" instruction add a
+    "andi  reg,a0,0x000c" where "reg" is any register.  Then use
+    reg as the base register for each of the "swc1" instructions,
+    making sure the offsets are GE_ODD, GE_ODD+4, and GE_EVEN for
+    the three instructions.  This will make sure the "lwc1, swc1"
+    pairs are always one even and one odd.
+
+ 3) You should make sure the beginning of the subroutine is
+    alligned to a 16 byte boundary.
+
+ 4) You should probably make sure the SMM (Sequential Memory Mode)
+    bit is off so that there is no stalling of integer memory op's
+    after floating memory op's.
+
+There is another problem that appears if a single call to the same
+subroutine is in a loop.  The problem is that the Write Gatherer
+stores collide with the "jalr" calling the _following_ copy of the
+subroutine.  If there is another call to the same subroutine in the
+loop, the branch cache will miss on the return and separate the
+Write Gatherer stores from the next call by 4 additional cycles
+which will avoid the problem unless the calling overhead is very
+low.  The penalty is 6 cycles when this happens.
+
+Since the calling loop is compiled and cannot change and the
+subroutine doesn't know whether there is another copy, it is not
+clear how to fix this.  We should discuss this more.
+
+	-- Bill
+
+
+
+
+

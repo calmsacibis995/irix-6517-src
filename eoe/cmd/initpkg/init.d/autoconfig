@@ -1,0 +1,149 @@
+#!/sbin/sh
+#Tag 0x00000800
+
+#
+# Automatically re-configure the kernel. This script uses the
+# /etc/config/autoconfig.options file to tell lboot to either
+# prompt for permission to reconfigure the kernel or not. The
+# default autoconfig.options file contains a '-T', which indicates
+# to lboot to reconfigure the kernel without prompting for
+# permission. A 't' indicates to lboot to prompt for permission
+# first.
+#
+# When autoconfig runs at system startup, it uses -T or -t to indicate
+# to lboot that it should use 'Smart' mode. In 'Smart' mode, lboot
+# determines whether or not it should build a new kernel by looking
+# at the dates of files in /var/sysgen and comparing to the date of
+# /unix. In 'Smart' mode, lboot also auto-registers dynamically loadable
+# kernel modules, such as tpsc, hpcplp, hpc3plp, ticlts, dial, sball, 
+# tablet, wacom, etc. 
+#
+# If the LBOOTOPTS below are changed, so that they don't pass -T or -t
+# to lboot, autoconfig will not perform its 'Smart' mode tasks, as 
+# described above.
+#
+# "$Revision: 1.52 $"
+
+LBOOTOPTS=
+FORCE=
+LD_LIBRARY_PATH=
+#
+# If autoconfig.options is 0 or is missing, then default to -T.
+# Also, if it contains bogus information, default to -T.
+#
+if [ -f /etc/config/autoconfig.options ]; then
+	FORCE=`cat /etc/config/autoconfig.options 2> /dev/null`
+else
+	FORCE=""
+fi
+if test "$FORCE" = ""; then
+	FORCE="-T"
+fi
+
+TARGET=${UNIX:=/unix}
+
+USAGE="`basename $0`: [-vf] [-p toolroot] [-d /var/sysgen] [-o lbootopts] [start|stop]"
+
+while getopts "vnfp:d:o:" c; do
+    case $c in
+    v) if test "$verbose" = "-v"; then
+	    set -x
+	else
+	    verbose="-v"
+	    LBOOTOPTS="$LBOOTOPTS -v"
+	fi
+	;;
+    n) LBOOTOPTS="$LBOOTOPTS -e";;
+    f) FORCE=""
+       TARGET=${TARGET}.install;;
+    p) TOOLROOT="$OPTARG";;
+    d) SYSGEN="$OPTARG";;
+    o) if test "$OPTARG" = "-t" -o "$OPTARG" = "-T"; then
+	    FORCE=$OPTARG
+	else
+	    LBOOTOPTS="$LBOOTOPTS $OPTARG"
+	fi
+	;;
+    \?) echo $USAGE; exit 1;;
+    esac
+done
+shift `expr $OPTIND - 1`
+
+SYSGEN=${SYSGEN:-/var/sysgen}
+BOOTAREA=${BOOTAREA:-${SYSGEN}/boot}
+SYSTEM=${SYSTEM:-${SYSGEN}/system}
+MASTERD=${MASTERD:-${SYSGEN}/master.d}
+STUNEFILE=${STUNEFILE:-${SYSGEN}/stune}
+MTUNEDIR=${MTUNEDIR:-${SYSGEN}/mtune}
+WORKDIR=${WORKDIR:-${SYSGEN}}
+
+
+# TOOLROOT and ROOT control where lboot looks for tools and does its work
+#   TOOLROOT is normally set in the system file.
+TOOLROOT=${TOOLROOT:-$SYSGEN/root}
+export TOOLROOT
+
+
+LBOOT=/usr/sbin/lboot
+SETSYM=/usr/sbin/setsym
+
+LBOOTOPTS="$LBOOTOPTS $FORCE -m $MASTERD -b $BOOTAREA -w $WORKDIR -s $SYSTEM -u $TARGET -c $STUNEFILE -n $MTUNEDIR"
+
+cd /
+
+
+case $1 in
+    ""|start)
+	for nm in $LBOOT $TOOLROOT/usr/bin/cc $TOOLROOT/usr/bin/ld; do
+	    if test ! -x $nm; then
+		echo "`basename $0`: cannot find $nm" 1>&2
+		exit 1
+	    fi
+	done
+	for nm in $BOOTAREA $MASTERD $SYSTEM; do
+	    if test ! -d $nm; then
+		echo "`basename $0`: cannot find $nm" 1>&2
+		exit 1
+	    fi
+	done
+
+	# note - set -e in a case stmt doesn't work right in /bin/sh
+	rm -rf ${UNIX}.install
+
+	/sbin/suattr -C CAP_DEVICE_MGT+ip -c "$LBOOT $LBOOTOPTS"
+	if [ $? != 0 ]
+	then
+		# dont print anything since a no answer to Automatically ..
+		# causes lboot to exit 1
+		exit 1
+	fi
+
+	#
+	#  The following puts labels on files created in ${SYSGEN}
+	#  while in the mini-root when trix is installed.
+	#
+	if [ -f $BOOTAREA/mac.a ] ; then
+		echo "labeling ${SYSGEN}" 1>&2
+		/sbin/suattr -C all=epi -c "/usr/bin/find ${SYSGEN} -follow -print |xargs /sbin/attrinit -mac=dblow" > /dev/null
+	fi
+
+	if test -w ${UNIX}.install; then
+		chmod a+r ${UNIX}.install
+		if test -x $SETSYM ; then
+			$SETSYM ${UNIX}.install > /dev/null 2>&1
+			# Ignore any error return from setsym, so autoconfig
+			# will not exit non-zero if setsym has a problem.
+			true
+		fi
+	fi
+	;;
+
+    stop)
+	exit 1
+	;;
+
+    *)
+	echo "$USAGE"
+	exit 1
+	;;
+esac

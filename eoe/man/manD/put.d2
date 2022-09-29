@@ -1,0 +1,179 @@
+.if n .pH ddi.rm/d2/gen/put @(#)put	43.12 of 12/9/92
+.\" Copyright 1992, 1991 UNIX System Laboratories, Inc.
+.TH put D2
+.IX "\f4put\fP(D2)"
+.SH "NAME"
+\f4put\fP \- receive messages from the preceding queue
+.SH "SYNOPSIS"
+.nf
+.na
+.ft 4
+#include <sys/types.h>
+#include <sys/stream.h>
+#include <sys/stropts.h>
+#include <sys/ddi.h>
+.sp 0.25
+int \f2prefix\fPrput(queue_t *\f2q\fP, mblk_t *\f2mp\fP);  /* read side */
+.sp 0.25
+int \f2prefix\fPwput(queue_t *\f2q\fP, mblk_t *\f2mp\fP);  /* write side */
+.ft 1
+.ad
+.fi
+.SS Arguments
+.RS 0
+.TP
+\f2q\fP
+Pointer to the queue.
+.TP
+\f2mp\fP
+Pointer to the message block.
+.RE
+.SH "DESCRIPTION"
+The primary task of the \f4put\fP routine is to coordinate the 
+passing of messages from one queue to the next in a stream.
+The \f4put\fP routine is called by the preceding component (module,
+driver, or stream head) in the stream.
+\f4put\fP routines are designated ``write'' or ``read'' depending on
+the direction of message flow.
+.SS "Return Values"
+Ignored
+.SH USAGE
+This entry point is required in all STREAMS drivers and modules.
+.P
+Both modules and drivers must have write \f4put\fP routines.
+Modules must have read \f4put\fP routines, but drivers don't
+really need them because their interrupt handler can do the
+work intended for the read \f4put\fP routine.
+A message is passed to the \f4put\fP routine.
+If immediate processing is desired,
+the \f4put\fP routine can process the message, or it can
+enqueue it so that the service routine [see \f4srv\fP(D2)]
+can process it later.
+.P
+The \f4put\fP routine must do at least one of the following
+when it receives a message:
+.RS 0
+.IP
+pass the message to the next component in the stream by calling
+the \f4putnext\fP(D3) function
+.IP
+process the message, if immediate processing is required (for
+example, high priority messages)
+.IP
+enqueue the message with the \f4putq\fP(D3) function
+for deferred processing by the service routine
+.RE
+.P
+Typically, the \f4put\fP routine will switch on the message type, which
+is contained in \f4mp->b_datap->db_type\fP, taking different actions
+depending on the message type.
+For example, a \f4put\fP routine might process high priority messages
+and enqueue normal messages.
+.P
+The \f4putq\fP function can be used as a
+module's \f4put\fP routine when no special processing is required and all
+messages are to be enqueued for the service routine.
+.P
+Although it can be done in the service routine,
+drivers and modules usually handle queue flushing in their \f4put\fP routines.
+.P
+The canonical flushing algorithm for driver write put routines is as follows:
+.P
+.nf
+.ft 4
+.ps -1
+.vs -1
+queue_t *q;	/* the write queue */
+if (*mp->b_rptr & FLUSHBAND) { /* if driver recognizes bands */
+	if (*mp->b_rptr & FLUSHW) {
+		flushband(q, FLUSHDATA, *(mp->b_rptr + 1));
+		*mp->b_rptr &= ~FLUSHW;
+	}
+	if (*mp->b_rptr & FLUSHR) {
+		flushband(RD(q), FLUSHDATA, *(mp->b_rptr + 1));
+		qreply(q, mp);
+	} else {
+		freemsg(mp);
+	}
+} else {
+	if (*mp->b_rptr & FLUSHW) {
+		flushq(q, FLUSHDATA);
+		*mp->b_rptr &= ~FLUSHW;
+	}
+	if (*mp->b_rptr & FLUSHR) {
+		flushq(RD(q), FLUSHDATA);
+		qreply(q, mp);
+	} else {
+		freemsg(mp);
+	}
+}
+.ft 1
+.fi
+.ps
+.vs
+.P
+The canonical flushing algorithm for module write put routines is as follows:
+.P
+.nf
+.ft 4
+.ps -1
+.vs -1
+queue_t *q;	/* the write queue */
+if (*mp->b_rptr & FLUSHBAND) { /* if module recognizes bands */
+	if (*mp->b_rptr & FLUSHW)
+		flushband(q, FLUSHDATA, *(mp->b_rptr + 1));
+	if (*mp->b_rptr & FLUSHR)
+		flushband(RD(q), FLUSHDATA, *(mp->b_rptr + 1));
+} else {
+	if (*mp->b_rptr & FLUSHW)
+		flushq(q, FLUSHDATA);
+	if (*mp->b_rptr & FLUSHR)
+		flushq(RD(q), FLUSHDATA);
+}
+if (!SAMESTR(q)) {
+	switch (*mp->b_rptr & FLUSHRW) {
+	case FLUSHR:
+		*mp->b_rptr = (*mp->b_rptr & ~FLUSHR) | FLUSHW;
+		break;
+	case FLUSHW:
+		*mp->b_rptr = (*mp->b_rptr & ~FLUSHW) | FLUSHR;
+		break;
+	}
+}
+putnext(q, mp);
+.ft 1
+.fi
+.ps
+.vs
+.P
+The algorithms for the read side are similar.
+In both examples, the \f4FLUSHBAND\fP flag need only be checked
+if the driver or module cares about priority bands.
+.P
+Drivers and modules should not call \f4put\fP routines directly.
+.P
+Drivers should free any messages they do not recognize.
+.P
+Modules should pass on any messages they do not recognize.
+.P
+Drivers should fail any unrecognized \f4M_IOCTL\fP messages
+by converting them into \f4M_IOCNAK\fP messages and sending them upstream.
+.P
+Modules should pass on any unrecognized \f4M_IOCTL\fP messages.
+.SS "Synchronization Constraints"
+\f4put\fP routines do not have user context and so may not call
+any function that sleeps.
+.SH REFERENCES
+.na
+\f4datab\fP(D4),
+\f4flushband\fP(D3),
+\f4flushq\fP(D3),
+\f4msgb\fP(D4),
+\f4putctl\fP(D3),
+\f4putctl1\fP(D3),
+\f4putnext\fP(D3),
+\f4putq\fP(D3),
+\f4qreply\fP(D3),
+\f4queue\fP(D4),
+\f4srv\fP(D2)
+.ad

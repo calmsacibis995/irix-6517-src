@@ -1,0 +1,118 @@
+#!/usr/sbin/perl
+
+$curfunc = "";		# name of current function
+$pc = "";
+$storeok = 0;		# we've seen a cache instruction in this basic block
+$BDLstoreok = 0;	# Branch delay slot of previous basic block
+$curblock = 0;		# Current basic block
+$blocks = 0;		# how many basic blocks
+
+# cache speculative execution barrier instructions
+@cachekeys = qw(
+    cache
+    dmfc0
+    dmtc0
+    mfc0
+    mtc0
+    c0
+);
+@cache{@cachekeys} = (1) x @cachekeys;
+
+# branch instructions
+@branchkeys = qw(
+    b
+    j
+    jal
+    jalr
+    jr
+    beq
+    bgez
+    bgtz
+    blez
+    bltz
+    bne
+    bltzal
+    bgezal
+    bgtzal
+    blezal
+);
+@branch{@branchkeys} = (1) x @branchkeys;
+
+# store instructions
+@storekeys = qw(
+    sb
+    sc
+    scd
+    sd
+    sdl
+    sdr
+    sh
+    sw
+    swl
+    swr
+);
+@store{@storekeys} = (1) x @storekeys;
+
+open(BRANCHTARG, "branchtarg") or die "Can't open branchtarg file\n";
+while (<BRANCHTARG>) {
+	($block{$blocks} = $_) =~ s/^(.*)\n/$1/;
+	$blocks++;
+}
+
+while (<>) {
+    if (/^[_a-zA-Z][_a-zA-Z0-9]*:$/) {
+	($curfunc = $_) =~ s/:\n//;
+	$storeok = 0;
+	$BDLstoreok = 0;
+	next;
+    }
+    if ($curfunc eq "") {
+	# Still reading initial disassembly header
+	next;
+    }
+    if (($instr = $_) !~ s/^.* ([_a-z0-9]*)\t.*\n/$1/) {
+	if ($instr !~ s/^.* ([_a-z0-9]*)\n/$1/) {
+	    print "$ARGV, $., $curfunc: warning: unknown line format:\n";
+	    print ">> $_";
+	    next;
+	}
+    }
+    if (($pc = $_) !~ s/^.*(0x[0-9a-f]*):.*\n/$1/) {
+	print "$curfunc: warning: could not extract pc:\n";
+        next;
+    }
+    if ($pc eq $block{$curblock}) {
+	# We have reached a new basic block
+	$storeok = 0;
+	$BDLstoreok = 0;
+	$curblock++;
+    }
+    if (exists $cache{$instr}) {
+	$storeok = 1;
+	next;
+    }
+    if (exists $store{$instr} && !($storeok || $BDLstoreok)
+	&& !(/,-?[0-9]+\(gp\)\n/ || /,-?[0-9]+\(sp\)\n/ || /,-?[0-9]+\(zero\)\n/)) {
+	print "$., $pc $curfunc: store without cache barrier.\n";
+	print ">> $_";
+	next;
+    }
+    if ($instr eq "pref" && !($storeok || $BDLstoreok) 
+	&& (/1,.*\n/ || /3,.*\n/ || /5,.*\n/ || /7,.*\n/)) {
+	print "$., $pc $curfunc: prefetch hint generates store without barrier.\n";
+	print ">> $_";
+	next;
+    }
+    if (exists $branch{$instr}) {
+	$BDLstoreok = $storeok;
+	$storeok = 0;
+	next;
+    } else {
+	$BDLstoreok = 0;
+    }
+} continue {
+    if (eof) {
+	# reset line number counter $.
+	close ARGV;
+    }
+}
